@@ -7,7 +7,7 @@ namespace AgentBridge.Protocol;
 public sealed class SessionEvidence
 {
     public static IReadOnlyCollection<string> Members { get; } = Array.AsReadOnly(new[]
-        { "stale", "attention", "openAsks", "unsentLength", "unsentHash", "observedAt", "lastReplyAt", "provenance", "senderVerified" });
+        { "stale", "attention", "openAsks", "unsentLength", "unsentHash", "observedAt", "lastReplyAt", "provenance", "senderVerified", "owner", "pr", "finished" });
     readonly Dictionary<string, JsonElement> fields;
     SessionEvidence(Dictionary<string, JsonElement> fields) => this.fields = fields;
     public Dictionary<string, JsonElement> Copy() => new(fields);
@@ -34,6 +34,7 @@ public sealed class SessionEvidence
                 "provenance" => Only(v, "source", "sendMarker", "unsentHash") && v.TryGetProperty("source", out var source)
                     && Text(source, "host-observed", "relay-supplied") && (!v.TryGetProperty("sendMarker", out var marker) || Boolean(marker))
                     && (!v.TryGetProperty("unsentHash", out var hash) || Hash(hash)),
+                "owner" or "pr" or "finished" => Outcome(p.Name, v),
                 _ => false,
             };
             if (!valid || !result.TryAdd(p.Name, v.Clone())) { throw new InvalidDataException("refused: invalid session evidence"); }
@@ -49,6 +50,27 @@ public sealed class SessionEvidence
         }
         return result.Count == 0 ? null : new(result);
     }
+
+    // The A1 owner, pr and finished evidence (v1-sessions.md): unknown is never confirmed none or
+    // false, so each state carries exactly its own member. A principal is display text from
+    // another host, held to printable ASCII like a session name.
+    public static bool Outcome(string member, JsonElement v) =>
+        v.ValueKind == JsonValueKind.Object && v.TryGetProperty("state", out var state) && state.ValueKind == JsonValueKind.String
+        && state.GetString() switch
+        {
+            "unknown" => Only(v, "state"),
+            "none" => member == "pr" && Only(v, "state"),
+            "known" => member switch
+            {
+                "owner" => Only(v, "state", "principal") && v.TryGetProperty("principal", out var who) && who.ValueKind == JsonValueKind.String
+                    && who.GetString() is { Length: > 0 and <= 128 } principal && principal.All(c => c is >= ' ' and <= '~'),
+                "pr" => Only(v, "state", "number") && v.TryGetProperty("number", out var pr) && pr.ValueKind == JsonValueKind.Number
+                    && pr.TryGetInt32(out var number) && number > 0,
+                "finished" => Only(v, "state", "value") && v.TryGetProperty("value", out var done) && Boolean(done),
+                _ => false,
+            },
+            _ => false,
+        };
 
     static bool Boolean(JsonElement v) => v.ValueKind is JsonValueKind.True or JsonValueKind.False;
     static bool Text(JsonElement v, params string[] choices) => v.ValueKind == JsonValueKind.String && choices.Contains(v.GetString(), StringComparer.Ordinal);

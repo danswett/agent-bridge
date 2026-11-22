@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readHello, readSession } from '../../js/protocol.js';
 import { ALLOWED_VERIFICATION_URIS, RESOLVED_SHOWN_MS, agentText, plainText, allowedVerificationUri, flowExpired, readAttention, readCode, readDone, readStartResult, shownUserCode, spelled, tokenShaped } from '../../js/auth-state.js';
 import { needsYou } from '../../js/needs-you.js';
-import { bannerVerb, bannerWords, signInBanners } from '../../js/ui/sign-in-view.js';
+import { bannerSaid, bannerVerb, bannerWords, signInBanners } from '../../js/ui/sign-in-view.js';
 
 const GITHUB = 'https://github.com/login/device';
 // Credentials' shapes, made up and put together here, so no scanner takes the file for a leak.
@@ -278,5 +278,23 @@ test('signed in and waiting for the sessions to confirm is never recovered, and 
   assert.deepEqual([again.state, bannerWords(again).line, bannerVerb(again)], ['needed', '1 session affected: S1', 'Sign in']);
   // Neither counts in Needs you while confirming.
   assert.deepEqual(needsYou(links(['pending'])[0].sessions.map((session) => ({ hostId: 'm', session }))), []);
+});
+
+test('signed in before the host says pending holds Sign in and says so, never Show code or "Waiting for sign-in" (#902)', () => {
+  const key = 'm\ncopilot\noctocat';
+  const at = Date.now();
+  const held = new Map([[key, { state: 'done', outcome: 'signedIn', flow: null, code: null, at }]]);
+  const links = (recovery) => [{ hostId: 'm', name: 'Machine A', sessions: sessions(2, signInAttention({ recovery })), canSignIn: true }];
+  // The host still says another sign-in is under way: the verb and line a signin.done alone would otherwise flip.
+  const [b] = signInBanners(links('signingIn'), { flows: held });
+  assert.deepEqual([b.state, bannerWords(b).head, bannerWords(b).line, bannerVerb(b)], ['needed', 'Copilot on Machine A \u00b7 @octocat', 'Signed in \u00b7 waiting for 2 sessions to confirm', 'Sign in']);
+  // Said once as confirming, so the host's pending says nothing more.
+  assert.deepEqual(bannerSaid(b), { state: 'confirming', words: 'Copilot on Machine A: Signed in \u00b7 waiting for 2 sessions to confirm' });
+  const [pending] = signInBanners(links('pending'), { flows: held });
+  assert.deepEqual([pending.state, bannerSaid(pending).state, bannerVerb(pending)], ['confirming', 'confirming', null]);
+  // Without the hold, or once it has lapsed with no pending, the banner follows the host: Show code.
+  assert.equal(bannerVerb(signInBanners(links('signingIn'))[0]), 'Show code');
+  const [lapsed] = signInBanners(links('signingIn'), { flows: held, now: at + 60000 });
+  assert.deepEqual([bannerVerb(lapsed), bannerWords(lapsed).line], ['Show code', 'Waiting for sign-in']);
 });
 

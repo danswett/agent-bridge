@@ -2,6 +2,7 @@ using System.Reflection;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
+using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -9,7 +10,7 @@ public sealed class QueueSubmitTests : IAsyncLifetime
 {
     const string Id = "22222222-2222-4222-8222-222222222222";
     readonly Fixture f = new();
-    readonly QualificationControllerTests.Run run = new();
+    readonly QualificationControllerTests.Run run = new(Fixture.T0.ToFileTime());
     readonly ConsoleFake console = new();
     SessionSource source = null!;
     ReplyService service = null!;
@@ -23,9 +24,8 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2));
         f.Processes.Run(AgentKind.Copilot, 42, startedAt: Fixture.T0);
         source = f.Source(); await source.RefreshAsync();
-        run.Probe.Identity = run.Probe.Identity!.Replace("identity 42 100 ", $"identity 42 {Fixture.T0.ToFileTime()} ");
         controller = run.Controller();
-        Assert.Equal(QueueCapability.Verified, (await controller.StartAsync(run.Authority.Id)).Capability);
+        Assert.Equal(QueueCapability.Verified, (await run.Start(controller)).Capability);
         service = new(new DeliveryGate(), source, f.Processes, new NoBridge(), new NoGuard(), console,
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false,
                 ConfirmTimeout = TimeSpan.Zero });
@@ -61,7 +61,7 @@ public sealed class QueueSubmitTests : IAsyncLifetime
         else if (change == "unsupported")
         {
             var other = new QualificationControllerTests.Run(); other.Probe.Submission = QualificationSubmission.Unsupported;
-            controller = other.Controller(); await controller.StartAsync(other.Authority.Id); Wire(controller);
+            controller = other.Controller(); await other.Start(controller); Wire(controller);
         }
         else if (change == "expired") { run.Authority.Clock.Advance(TimeSpan.FromMinutes(1)); }
         else if (change == "missing") { Wire(null); }
@@ -107,7 +107,7 @@ public sealed class QueueSubmitTests : IAsyncLifetime
     public async Task An_owner_draft_is_occupied_and_is_never_overwritten()
     {
         console.Draft = "owner draft";
-        Assert.Equal(ReplyRefusal.ComposerUnverified, (await Send()).Refusal);
+        Assert.Equal(ReplyRefusal.Occupied, (await Send()).Refusal);
         Assert.Equal("owner draft", console.Draft); Assert.Equal(0, console.TextWrites);
     }
 
@@ -162,6 +162,17 @@ public sealed class QueueSubmitTests : IAsyncLifetime
             Assert.Equal(modifiers, type.GetField("ControlKeyState")!.GetValue(record));
             Assert.Equal(1 - i, type.GetField("KeyDown")!.GetValue(record));
         }
+    }
+
+    [Theory]
+    [InlineData("", null)][InlineData("fail partial 0", false)][InlineData("fail partial 1", true)][InlineData("wrote 1", true)]
+    public void The_workers_Enter_announcement_preserves_uncertainty_and_partial_write_evidence(string after, bool? entered)
+    {
+        var program = Assembly.Load("agent-bridge-injector").GetType("AgentBridge.Injector.Program")!;
+        var announcement = (string)program.GetMethod("SubmissionAnnouncement", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [1, '1'])!;
+        var evidence = new WorkerInjector.ReplyWriteEvidence(new KeyPlan([new("report", false, 0, 0), new("", true, 0, 0)]));
+        foreach (var line in new[] { "writing 0", "wrote 0", announcement, after }) { evidence.Read(line); }
+        Assert.Equal(entered, evidence.Apply(new(InjectionStatus.Interrupted, "worker stopped")).EnterWritten);
     }
 
     sealed class NoBridge : IAgentHaBridgeProbe { public string? Active() => null; }

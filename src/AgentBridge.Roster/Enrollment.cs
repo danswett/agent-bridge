@@ -65,4 +65,14 @@ public static class Enrollment
     public static byte[] QrApprover(byte[] q, byte[] h) => HMACSHA256.HashData(q, Framing.F(Framing.Label(Framing.QrApproverLabel), h));
 
     public static bool MacMatches(byte[] expected, byte[] received) => CryptographicOperations.FixedTimeEquals(expected, received);
+
+    public static byte[] CapSignTranscript(string account, string generation, byte[] h, byte[] nA, byte[] nN, byte[] device) =>
+        Framing.Sha256(Framing.F(Framing.Label(Framing.EnrollCapSignLabel), Framing.Utf8(account), Framing.Utf8(generation), h, nA, nN, device));
+
+    // The joiner's check of a returned v3 add (devices.md "Enrollment transcript"): signed by the
+    // approver it confirmed, by code or qr, carrying T3 and exactly its frozen device bytes D.
+    public static bool AcceptsCapSignAdd(Entry add, string approverId, byte[] frozenDevice, byte[] t3) =>
+        add.Body is { Version: 3, Op: EntryOp.Add } body && body.By == approverId
+        && body.Approval is { Method: "code" or "qr", Transcript: { } t } && MacMatches(t3, t)
+        && EntryBody.DeviceBytes(add.BodyBytes).AsSpan().SequenceEqual(frozenDevice);
 }

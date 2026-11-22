@@ -500,6 +500,8 @@ const NOT_REPLAYED = {
   AgentRevokeRequest: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
   AgentRevokeResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
   AgentCredentialResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  SamePcPinRequest: 'host.roster.pin is same-PC app/local pipe only; no PWA or relay channel serves it (#3450)',
+  SamePcPinResult: 'host.roster.pin is same-PC app/local pipe only; no PWA or relay channel serves it (#3450)',
 
   JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
   JournalStage: 'part of JournalEntry, read by readEntry',
@@ -510,6 +512,7 @@ const NOT_REPLAYED = {
   RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
+  ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
 };
 
 // ---- the replay ----

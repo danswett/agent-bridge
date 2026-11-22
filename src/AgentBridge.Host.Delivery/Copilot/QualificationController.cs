@@ -30,21 +30,23 @@ internal sealed class QualificationController(QualificationGrants? authority = n
     readonly SemaphoreSlim gate = new(1, 1);
     QualificationGrant? grant;
     QueueTarget? snapshot;
+    QueueQualification.Challenge? challenge;
     QualificationRecord? active;
     long started;
     TimeSpan window;
     DateTimeOffset expires;
 
-    internal async Task<QualificationStart> StartAsync(Guid grantId)
+    internal async Task<QualificationStart> StartAsync(Guid grantId, QueueTarget? target, QueueQualification.Challenge? approvedChallenge)
     {
         await gate.WaitAsync();
         try
         {
             if (grant is not null || probe is null || receipts is null)
             { return new(QueueCapability.Unknown, null, "qualification control unavailable or already started"); }
-            var decision = grants.Consume(grantId);
+            var decision = grants.Consume(grantId, target, approvedChallenge);
             if (decision.Grant is null) { return new(QueueCapability.Unknown, null, decision.Refusal); }
             grant = decision.Grant;
+            challenge = approvedChallenge;
             try
             {
                 var now = time.GetUtcNow();
@@ -54,12 +56,11 @@ internal sealed class QualificationController(QualificationGrants? authority = n
                 started = time.GetTimestamp(); expires = now + window;
                 using var deadline = new CancellationTokenSource(window, time);
                 var capability = QueueCapability.Unknown;
-                QueueQualification.Challenge? challenge = null;
                 try
                 {
                     var source = await QueueQualification.CaptureAtLaunchAsync(probe.CaptureAsync, probe.Read, time).WaitAsync(deadline.Token);
                     snapshot = source.Snapshot;
-                    challenge = await source.IssueAsync(window).WaitAsync(deadline.Token);
+                    challenge = await source.IssueAsync(window, challenge).WaitAsync(deadline.Token);
                     if (challenge is not null && await BoundAsync())
                     {
                         var sent = await probe.SendAsync(challenge.Text, BoundAsync, deadline.Token).WaitAsync(deadline.Token);
@@ -121,13 +122,13 @@ internal sealed class QualificationController(QualificationGrants? authority = n
 
     async Task<bool> BoundAsync()
     {
-        if (grant is null || snapshot is null || probe is null || !Fresh() || !grants.IsCurrent(grant)) { return false; }
+        if (grant is null || snapshot is null || probe is null || !Fresh() || !grants.IsCurrent(grant, snapshot, challenge)) { return false; }
         var remaining = window - time.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero) { return false; }
         try
         {
             var raw = await probe.CaptureAsync().WaitAsync(remaining, time);
-            return QueueTarget.Decode(raw) == snapshot && Fresh() && grants.IsCurrent(grant);
+            return QueueTarget.Decode(raw) == snapshot && Fresh() && grants.IsCurrent(grant, snapshot, challenge);
         }
         catch (TimeoutException) { return false; }
     }

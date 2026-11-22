@@ -1,7 +1,8 @@
 // The values the code exchange and the QR paths compute (docs/protocol/devices.md, "Enrollment"),
 // as the C# library's Enrollment: both sides of an exchange must compute them alike.
-import { hex } from './codec.js';
+import { hex, equal } from './codec.js';
 import { frame, utf8, sha256, hmacSha256, LABEL } from './framing.js';
+import { deviceBytes } from './entry.js';
 
 export const NONCE_BYTES = 32;
 export const QR_SECRET_BYTES = 16;
@@ -47,3 +48,18 @@ export const inviteHint = async (q) => hex((await hmacSha256(q, frame(utf8(LABEL
 
 export const qrJoiner = (q, h) => hmacSha256(q, frame(utf8(LABEL.qrJoiner), h));
 export const qrApprover = (q, h) => hmacSha256(q, frame(utf8(LABEL.qrApprover), h));
+
+// T3 = SHA-256(F(label, account, generation, h, nA, nN, D)), D the joiner's exact device bytes.
+export const capSignTranscript = (account, generation, h, nA, nN, device) =>
+  sha256(frame(utf8(LABEL.enrollCapSign), utf8(account), utf8(generation), h, nA, nN, device));
+
+// The joiner's check of a returned v3 add (devices.md "Enrollment transcript"): signed by the
+// approver it confirmed, by code or qr, carrying T3 and exactly its frozen device bytes D.
+export function acceptsCapSignAdd(add, approverId, frozenDevice, t3) {
+  const b = add.body;
+  if (b.version !== 3 || b.op !== 'add' || b.by !== approverId || !['code', 'qr'].includes(b.approval.method)) return false;
+  const t = b.approval.transcript;
+  let diff = t.length ^ t3.length;
+  for (let i = 0; i < Math.min(t.length, t3.length); i++) diff |= t[i] ^ t3[i];
+  return diff === 0 && equal(deviceBytes(add.bodyBytes), frozenDevice);
+}

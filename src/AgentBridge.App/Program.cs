@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Usage;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -8,10 +9,21 @@ namespace AgentBridge.App;
 
 public static class Program
 {
+    internal static RunMarker? Marker { get; private set; }
+
+    internal static void CompleteRun()
+    {
+        try { Marker?.Complete(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not cleared: {error.GetType().Name}"); }
+    }
+
     [STAThread]
     static int Main(string[] args)
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) => CrashLog.Write(e.ExceptionObject as Exception);
+
+        // #3343: a copy of the app outside the installation, handed an update; before Velopack's own.
+        if (InPlaceHandoff.Parse(args) is { } handoff) { return InstallHandedOver(handoff); }
 
         // First: Velopack starts the installed exe with hook arguments on install, update and
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
@@ -40,6 +52,18 @@ public static class Program
         using var single = SingleInstance.TryClaim(options);
         if (single is null) { return 0; }
 
+        if (options.SelfTest is null)
+        {
+            var version = JournalEvents.Version(typeof(Program).Assembly) ?? "0.0.0";
+            try
+            {
+                Marker = RunMarker.Start(Path.Combine(Paths.AppData, "runs", options.Demo ? "demo" : options.Profile), version);
+                foreach (var warning in Marker.RecoveryWarnings) { AppLog.Write(warning); }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"run marker not started: {e.GetType().Name}"); }
+            AppLog.Write($"app started: {version}");
+        }
+
         // Only an installed app owns the AUMID and the toast activator; a development copy or
         // the demo registers nothing on the machine.
         var installed = !options.Demo && options.IsDefaultProfile && Lifecycle.Installed;
@@ -60,6 +84,17 @@ public static class Program
         // exit code 1, and this tells the app's own code from what happened after it.
         if (options.SelfTest is not null) { AppLog.Write($"self-test: the app ends with exit code {App.ExitCode}"); }
         return App.ExitCode;
+    }
+
+    // Update.exe's apply, or in place when a held file refuses it; then the app again either way (InPlaceHandoff.Run).
+    // What this starts runs in the root: it must not keep the helper folder in use.
+    static int InstallHandedOver(InPlaceHandoff handoff)
+    {
+        System.Diagnostics.Process Start(string exe, IReadOnlyList<string> a) =>
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, a) { WorkingDirectory = handoff.Root, CreateNoWindow = true })!;
+        return handoff.Run(LifecycleGuard.Refusal, AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) + "-staged",
+            a => { using var p = Start(Path.Combine(handoff.Root, "Update.exe"), a); p.WaitForExit(); return p.ExitCode; },
+            () => InstallBlockers.HeldFiles(handoff.Root), a => Start(Path.Combine(handoff.Root, "current", "AgentBridge.exe"), a).Dispose(), AppLog.Write);
     }
 }
 

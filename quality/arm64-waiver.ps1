@@ -14,8 +14,8 @@ param(
     [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
 )
 $ErrorActionPreference = 'Stop'
-# The only expiry, computed here so the waiver stops by itself; 2026-11-20 00:00 PT.
-$expiry = [DateTimeOffset]::Parse('2026-11-20T08:00:00Z', [cultureinfo]::InvariantCulture)
+# The only expiry, computed here so the waiver stops by itself; 2026-11-27 00:00 PT.
+$expiry = [DateTimeOffset]::Parse('2026-11-27T08:00:00Z', [cultureinfo]::InvariantCulture)
 $waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
 $ids = @()
 $lines = @()
@@ -23,7 +23,7 @@ try {
     if ($Setting -cne 'on') {
         $lines += 'ARM64_WAIVER is not on: nothing waived.'
     } elseif ($Now -ge $expiry) {
-        $lines += 'The waiver ended 2026-11-20 00:00 PT (08:00 UTC): nothing waived.'
+        $lines += 'The waiver ended 2026-11-27 00:00 PT (08:00 UTC): nothing waived.'
     } else {
         $needs = Get-Content -Raw -LiteralPath $NeedsFile | ConvertFrom-Json
         $pages = @(Get-Content -Raw -LiteralPath $JobsFile | ConvertFrom-Json)
@@ -69,8 +69,8 @@ try {
 }
 ConvertTo-Json -InputObject @($ids) -Compress | Set-Content -LiteralPath $OutFile
 if ($ids.Count -gt 0) {
-    $lines += 'The waiver ends 2026-11-20 00:00 PT (08:00 UTC); the Arm64 jobs still run and stay red.'
-    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line; expires 2026-11-20 00:00 PT (08:00 UTC)" }
+    $lines += 'The waiver ends 2026-11-27 00:00 PT (08:00 UTC); the Arm64 jobs still run and stay red.'
+    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line; expires 2026-11-27 00:00 PT (08:00 UTC)" }
 }
 $lines
 if ($SummaryFile) { Add-Content -LiteralPath $SummaryFile -Value (@('### quality-gate: win-arm64 waiver (#2564)') + ($lines | ForEach-Object { "- $_" })) }

@@ -9,7 +9,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // detector only once a real, redacted sample of its records has been captured.
 //
 // Claude Code and Codex: TODO(#800). No sample of either's sign-in failure or turn-ending error
-// was on VM1 (#800, 2026-11-04), so neither is detected yet, and no string is guessed for them.
+// was seen (#800, 2026-11-04), so neither is detected yet, and no string is guessed for them.
 // Whether a Copilot session.error (the main agent's) ends its turn: every one but a model
 // call's, retried within the turn, and a hook's (cli-main.js 1.0.105). The parser ends the turn
 // and its questions on it (SessionState.FailTurn); the answer path's watch of what is waiting
@@ -29,7 +29,7 @@ public static class CopilotTurnErrors
 
 internal static class AgentErrors
 {
-    // Copilot CLI's session.error. VM1's three sign-in failures (#800, 2026-11-04 15:06, 16:29
+    // Copilot CLI's session.error. Three sign-in failures (#800, 2026-11-04 15:06, 16:29
     // and 16:45 PT) read { errorType: "authorization", statusCode: 401, remediation: "sign_in" };
     // any one of the three is taken as sign-in, so a CLI that drops one still reads. The CLI
     // ends the turn on every session.error but a model call's (retried within the turn) and a

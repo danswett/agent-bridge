@@ -1,5 +1,22 @@
 # How the host launches sessions
 
+## Host CLI: read launch status
+
+`agent-bridge-host launches status --request <guid> [--json] [--profile <name>]` reads
+one request; `launches list [--since <minutes>] [--json] [--profile <name>]` lists retained
+results (default 15 minutes; range 0-43200). Both use the same-user local pipe, never act.
+Fields: `request`, `outcome`, `session` (16 lowercase hex or null), `permissions`
+(`ask`, `allowAll` or null), `registered` (live full-ID match, never name), `time`.
+Status exits: 0 started/registered; 3 unknown; 5 refused/failed; 6 unavailable/invalid
+(stderr stage/reason); 7 accepted but not confirmed registered, including busy; bad args 2.
+List exits 0 on a valid list. The private, atomic `launch-status/results.json` retains
+128 content-free results and the HA caller UUID mapping through late registration.
+Unexpired outcomes are never evicted: capacity rejects the new row with a host-log warning;
+only rows at least 15 minutes old expire. Records are principal/request keyed; an ambiguous
+UUID query returns unknown. Invalid status records are logged, never abort launch completion.
+Corruption reads empty with a log warning. Deduplication, provenance and authorization
+are unchanged; unknown never authorizes a relaunch.
+
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
 agent session from another device, the way agent-ha-bridge's launch card does. A session from
 another machine is a launch too: [host-transfer.md](host-transfer.md). So is a press of Launch on
@@ -17,6 +34,17 @@ when settings validation disabled the connector. Credential-issuance and process
 errors log only the exception type, never its potentially credential-bearing message.
 Non-HA launches and all credential handling stay unchanged;
 providing this URL does not itself establish that an HA agent credential is available.
+
+## Fleet launch provenance
+
+The host's fleet launch route persists `grant: "fleet"` in `launch-provenance.json`
+before dispatch, then binds it to the discovered session and exact process/start time.
+Ordinary launches and older unattributed records never acquire that grant. Origin
+proof survives reopening the store, but conflicting person/process records, unfinished
+launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
+This reconciles the predecessor provenance work for
+[agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
+host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 
@@ -90,7 +118,7 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   so the agent's console is a normal window on the person's desktop. No window title is set
   on Windows.
 * **Width.** The host's launches (Windows) open the agent's console in a normal window, shown
-  as any program started from the desktop is, and set no width. When Windows Terminal is the
+  as any program started from the desktop is. When Windows Terminal is the
   default terminal it takes the console over (tabs, scrollbars, a live title), and the person
   can type into it at the machine; otherwise the console host shows it. The width is whatever
   that window gives. #1160 made the host start every launch minimized and widen its console to
@@ -100,7 +128,17 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   into it. That promise of 250 columns is given up. Where a form's tab bar (the console's width
   less four) is too wide for the window, Copilot draws a windowed bar and the host checks
   the labels it shows, answering the form field by field (host-answers.md, #1554).
-  The injector still has `--widen` (host-answers.md), which no launch calls.
+  Copilot launches (including Agency) now request a modest minimum of 100 columns and
+  30 visible rows through the injector's `--launch-size` mode. It grows the buffer before
+  growing the visible window, preserves larger dimensions, and verifies both afterwards.
+  One attempt runs immediately after launch and one when the host first reads the screen;
+  neither retries, including on failure. Both bind the PID to its exact creation time.
+  This may visibly enlarge a narrow window, but does not minimize it or change terminal
+  settings. A terminal or display that refuses the resize is logged; later manual resizes
+  are not overridden. Screen reads still use the full buffer width, and reply checks still
+  refuse a narrow working box or an unknown, shell or vim-normal mode
+  ([related issue](https://github.com/danswett/agent-bridge/issues/1013)).
+  The buffer-only `--widen` (host-answers.md) remains unchanged and no launch calls it.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)
@@ -376,7 +414,10 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
-`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+`crash`. That legacy wire name means an unexpected stop, not a confirmed crash: an external stop
+or the launcher's job closing leaves the same record. Continue says "the host stopping unexpectedly";
+an unrecognized in-memory cause uses "an interruption", never a guessed crash.
+A Copilot session a person closed while the host was down, with nothing its agent records, reads
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 

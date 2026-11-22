@@ -45,7 +45,7 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
             if (plan.ProceedAsync is { } fence && await fence() is { } changed) { return Nothing($"stopped before typing: {changed}"); }
-            return await RunAsync(processId, plan);
+            return await RunAsync(processId, plan, cancellationToken);
         }
         catch (Exception e) when (e is not InjectorWorkerException) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         finally { One.Release(); }
@@ -64,7 +64,13 @@ public sealed class WorkerInjector : IConsoleInjector
     // agent-bridge-injector <pid> --widen <columns> <created>: one attach that types nothing and
     // makes the console's screen buffer at least that wide, only while <pid> is the process
     // created then; "width <n>" as read back, then "ok".
-    public async Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+    public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        SizeAsync(processId, createdAt, columns, "--widen", cancellationToken);
+
+    public Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        SizeAsync(processId, createdAt, columns, "--launch-size", cancellationToken);
+
+    async Task<ConsoleWidth> SizeAsync(int processId, DateTimeOffset createdAt, int columns, string mode, CancellationToken cancellationToken)
     {
         if (!File.Exists(path)) { return new ConsoleWidth(null, $"the injector is missing beside the host ({FileName})", false); }
         await One.WaitAsync(cancellationToken);
@@ -80,7 +86,7 @@ public sealed class WorkerInjector : IConsoleInjector
                 StandardOutputEncoding = Encoding.UTF8,
             };
             start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
-            start.ArgumentList.Add("--widen");
+            start.ArgumentList.Add(mode);
             start.ArgumentList.Add(columns.ToString(CultureInfo.InvariantCulture));
             start.ArgumentList.Add(createdAt.ToFileTime().ToString(CultureInfo.InvariantCulture));
             Process? process;
@@ -229,8 +235,11 @@ public sealed class WorkerInjector : IConsoleInjector
         }
     }
 
-    async Task<InjectionResult> RunAsync(int processId, KeyPlan plan)
+    async Task<InjectionResult> RunAsync(int processId, KeyPlan plan, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var patience = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        patience.CancelAfter(plan.Duration + TimeSpan.FromSeconds(15));
         var start = new ProcessStartInfo(path)
         {
             UseShellExecute = false,
@@ -256,11 +265,14 @@ public sealed class WorkerInjector : IConsoleInjector
         try
         {
             var wrote = false;
+            var evidence = new ReplyWriteEvidence(plan);
             string? final = null;
-            var errors = process.StandardError.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync(patience.Token);
+            _ = errors.ContinueWith(t => log($"injector stderr read failed: {t.Exception!.GetBaseException().Message}"),
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             try
             {
-                await process.StandardInput.WriteAsync(plan.ToWorkerScript());
+                await process.StandardInput.WriteAsync(plan.ToWorkerScript().AsMemory(), patience.Token);
                 process.StandardInput.Close();
             }
             // A worker that has already gone is reported by its output below.
@@ -268,27 +280,25 @@ public sealed class WorkerInjector : IConsoleInjector
 
             void Read(string line)
             {
+                evidence.Read(line);
                 if (line.StartsWith("writing", StringComparison.Ordinal)) { wrote = true; }
                 else if (line == "ok" || line.StartsWith("fail ", StringComparison.Ordinal)) { final = line; }
             }
 
-            using var patience = new CancellationTokenSource(plan.Duration + TimeSpan.FromSeconds(15));
             try
             {
                 while (await process.StandardOutput.ReadLineAsync(patience.Token) is { } line) { Read(line); }
                 await process.WaitForExitAsync(patience.Token);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException e)
             {
-                try { process.Kill(); } catch (InvalidOperationException) { }
-                await process.WaitForExitAsync();
-                // Whatever it announced before it was stopped still counts.
-                foreach (var line in (await process.StandardOutput.ReadToEndAsync()).Split('\n')) { Read(line.TrimEnd('\r')); }
-                return wrote ? Interrupted("the injector stopped responding while typing") : Nothing("the injector stopped responding before typing");
+                ended = true;
+                var exited = await EndAsync(process);
+                return Cancelled(e, exited);
             }
             await errors;
 
-            if (final == "ok") { return new InjectionResult(InjectionStatus.Typed, "ok"); }
+            if (final == "ok") { return evidence.Apply(new InjectionResult(InjectionStatus.Typed, "ok")); }
             if (final is not null)
             {
                 var parts = final.Split(' ');
@@ -296,8 +306,8 @@ public sealed class WorkerInjector : IConsoleInjector
                 var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
                 // A later send held to the screen, refused after an earlier one went: what went
                 // stays, and nothing after it does.
-                if (wrote && (stage, code) == ("screen", 0)) { return Interrupted(ScreenChangedPartway); }
-                return wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code));
+                if (wrote && (stage, code) == ("screen", 0)) { return evidence.Apply(Interrupted(ScreenChangedPartway)); }
+                return evidence.Apply(wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code)));
             }
             var exit = process.ExitCode;
             // STATUS_CONTROL_C_EXIT: what Windows ends an attached process with when the
@@ -305,11 +315,11 @@ public sealed class WorkerInjector : IConsoleInjector
             var closed = unchecked((uint)exit) == 0xC000013A;
             if (wrote)
             {
-                return Interrupted(closed ? "the session's console closed while the answer was being typed" : $"the injector stopped unexpectedly while typing (exit 0x{exit:X8})");
+                return evidence.Apply(Interrupted(closed ? "the session's console closed while the answer was being typed" : $"the injector stopped unexpectedly while typing (exit 0x{exit:X8})"));
             }
             return Nothing(closed ? "the session's console closed before anything was typed" : $"the injector stopped before typing (exit 0x{exit:X8})");
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not InjectorWorkerException)
         {
             // Anything unforeseen leaves the worker perhaps still typing: it is ended, and the
             // exception carries the proof of its end for the host's stop fence (DeliveryGate).
@@ -320,6 +330,44 @@ public sealed class WorkerInjector : IConsoleInjector
         {
             if (!ended) { process.Dispose(); }
         }
+    }
+
+    internal sealed class ReplyWriteEvidence(KeyPlan plan)
+    {
+        readonly bool supported = plan.Sends is [{ Enter: false }, { Text.Length: 0, Enter: true }];
+        int? text;
+        bool? enter = false;
+        bool writingText, writingEnter;
+
+        public void Read(string line)
+        {
+            if (!supported) return;
+            if (line == "writing 0") { writingText = true; text = null; }
+            else if (line == "wrote 0") { writingText = false; text = plan.Sends[0].Text.Length; }
+            else if (line == "writing 1 enter") { writingEnter = true; enter = null; }
+            else if (line == "wrote 1" && writingEnter) { writingEnter = false; enter = true; }
+            else if (line.StartsWith("fail partial ", StringComparison.Ordinal)
+                && int.TryParse(line.AsSpan(13), CultureInfo.InvariantCulture, out var records) && records >= 0)
+            {
+                // Each UTF-16 character is a key-down/up pair; the down is the effect.
+                if (writingText && records <= 2L * plan.Sends[0].Text.Length) text = records / 2 + records % 2;
+                else if (writingEnter && records <= 2) enter = records > 0;
+            }
+        }
+
+        public InjectionResult Apply(InjectionResult result) => !supported ? result : result with
+        {
+            TextWritten = text,
+            EnterWritten = enter,
+            TextFingerprint = text is { } count ? InjectionResult.Fingerprint(plan.Sends[0].Text[..count]) : null,
+        };
+    }
+
+    internal static InjectionResult Cancelled(Exception error, Task exited)
+    {
+        if (!exited.IsCompletedSuccessfully) { throw new InjectorWorkerException(error, exited); }
+        // A cancelled read can leave a flushed writing announcement buffered and unread.
+        return Interrupted("the injector was cancelled and its worker has exited");
     }
 
     // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its

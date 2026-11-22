@@ -58,6 +58,35 @@ import { moveView, moves } from '../move.js';
 import { ScrollFollow } from './scroll-follow.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
+// The original agent-ha-bridge card's list; selection survives redraws and reopening a session.
+const SPINNER_VERBS = [
+  'Thinking', 'Pondering', 'Slithering', 'Brewing', 'Conjuring', 'Noodling', 'Percolating',
+  'Mulling', 'Cogitating', 'Simmering', 'Ruminating', 'Tinkering', 'Churning', 'Musing',
+  'Crafting', 'Forging', 'Marinating', 'Synthesizing', 'Deliberating', 'Puttering',
+];
+export function cardStatusFacts(s, words, stale = false) {
+  const facts = [...words.facts];
+  if (!stale && words.rule === 3) {
+    const index = s.id.split('').reduce((n, c) => (n + c.charCodeAt(0)) % SPINNER_VERBS.length, 0);
+    facts[0] = SPINNER_VERBS[index];
+  }
+  const n = s.activity.compactions;
+  if (n > 0) { facts.push(n === 1 ? 'compacted once' : `compacted ${n} times`); }
+  return facts;
+}
+
+export function pauseCardSpinners(doc, elements) {
+  const changed = () => {
+    for (const el of elements) {
+      if (doc.visibilityState === 'hidden') { el.dataset.pageHidden = 'true'; }
+      else { delete el.dataset.pageHidden; }
+    }
+  };
+  changed();
+  doc.addEventListener('visibilitychange', changed);
+  return () => doc.removeEventListener('visibilitychange', changed);
+}
+
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
 const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated', 'last-activity']);
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
@@ -522,10 +551,12 @@ export class SessionCard {
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
     this.#buildRow();
     this.#buildView();
+    this.#stopSpinners = pauseCardSpinners(this.view.ownerDocument, [this.element, this.view]);
     this.update(session);
     this.#unmove = moves.subscribe((id) => { if (id === this.#s?.id) { this.update(this.#s); } });
   }
   #unmove = null;
+  #stopSpinners = null;
 
   get id() { return this.#s.id; }
   get session() { return this.#s; }
@@ -897,9 +928,9 @@ export class SessionCard {
     e.barTitle.textContent = title;
     setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
     setGlyph(e.barGlyph, words.glyph, { size: 16, driven: words.driven });
-    if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
+    if (this.#changed('meta', [s.id, words.text, words.tone, words.driven, s.activity.compactions, !!stale, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = words.tone;
-      setFacts(e.statusText, words.facts);
+      setFacts(e.statusText, cardStatusFacts(s, words, !!stale));
       const driver = words.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
@@ -1495,6 +1526,7 @@ export class SessionCard {
   dispose() {
     this.#columnSize?.disconnect();
     this.#unmove?.();
+    this.#stopSpinners?.();
     this.#panel?.destroy();
     this.#panel = null;
     this.#reply?.destroy();

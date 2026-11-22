@@ -4,6 +4,7 @@ using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Reaping;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -44,9 +45,10 @@ namespace AgentBridge.Host;
 // devBox: keeping a Microsoft Dev Box from hibernating on disconnect (DevBoxSettings,
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
 //
-// agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "off" (the
-// default) or "own-account"; allowAllTargets false (the default) or true. Anything else, or a file
-// that cannot be read, is off and false. Read afresh by CurrentAgentMessaging: no restart needed.
+// agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "own-account"
+// (the default for an absent key, owner decision Nov 19, 2026) or "off"; allowAllTargets false (the default) or true, with allow-all sessions
+// also requiring an exact id in allowAllTargetSessions; allowAllLaunchedTargets separately grants live host launches. Invalid values and unreadable files fail closed. Read afresh by
+// CurrentAgentMessaging: no restart needed.
 //
 // agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
 // a section that cannot be read denies everything and is said; a bad key takes its narrowest value.
@@ -68,8 +70,8 @@ namespace AgentBridge.Host;
 // absent. A value that is not true or false turns everything off, as remoteApproval's does.
 //
 // security.roster: what is done with the account's signed device roster (SecuritySettings,
-// HostRoster). Only "off" so far: verify and log, enforce nothing; anything else is said and read
-// as off.
+// HostRoster, HostRosterObserve). "off" (default) verifies and logs; "observe" also feeds the pinned
+// reader, read-only; enforce nothing either way; anything else is said and read as off.
 //
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
@@ -103,8 +105,8 @@ public sealed record HostSettings(bool RemoteApproval)
     public SecuritySettings Security { get; init; } = SecuritySettings.Default;
     public IReadOnlyList<string> SecurityProblems { get; init; } = [];
 
-    // The temporary AP5-lite messaging mode (#728): off unless turned on here, and off whenever
-    // the file cannot be read (Off keeps the default).
+    // The temporary AP5-lite messaging mode (#728): on for an absent key, and off whenever the
+    // file cannot be read (Off sets Closed).
     public AgentMessagingSettings AgentMessaging { get; init; } = AgentMessagingSettings.Default;
 
     public IReadOnlyList<string> AgentMessagingProblems { get; init; } = [];
@@ -137,6 +139,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public string LoadStatus => $"relay load sharing is {(LoadEnabled ? "on" : "off")} (load.enabled); machine totals and per-session numbers only";
 
     public bool ReadOnly { get; init; }
+    public SessionReaperSettings Reaper { get; init; } = SessionReaperSettings.Default;
     public bool TrustedPeers { get; init; }
     // permissions.remoteManage: a person's device may restart this host and repair its hooks
     // through the relay (docs/protocol/v1-sessions.md, "Managing a machine"; #801). On unless turned off here; the one
@@ -169,6 +172,7 @@ public sealed record HostSettings(bool RemoteApproval)
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
         Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
+        AgentMessaging = AgentMessagingSettings.Closed,
     };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
@@ -213,6 +217,7 @@ public sealed record HostSettings(bool RemoteApproval)
             var (security, securityProblems) = SecuritySettings.Read(root.TryGetProperty("security", out var sec) ? sec : null);
             var settings = Default with
             {
+                Reaper = SessionReaperSettings.Read(root),
                 FleetLaunchRule = ReadFleetLaunchRule(root),
                 Agents = agents,
                 AgentsProblems = agentsProblems.Count == 0 ? [] : agentsProblems,
