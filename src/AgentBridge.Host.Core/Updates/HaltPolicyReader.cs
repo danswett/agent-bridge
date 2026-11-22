@@ -10,7 +10,8 @@ namespace AgentBridge.Host.Core.Updates;
 
 public sealed record HaltPolicyRelease(string Tag, string Channel, bool Prerelease, string Feed, string Sha256, long Size);
 public sealed record HaltPolicyEnvelope(long Sequence, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
-    IReadOnlyList<string> Halted, IReadOnlyList<HaltPolicyRelease> Releases, string BodyHash);
+    IReadOnlyList<string> Halted, IReadOnlyList<HaltPolicyRelease> Releases, string BodyHash)
+{ public byte[] Body { get; init; } = []; }
 
 // Every failure is unavailable protection, never an empty checked policy; the reason is for logs.
 public sealed class HaltPolicyUnavailableException(string reason, Exception? inner = null) : IOException(reason, inner);
@@ -49,7 +50,7 @@ public static partial class HaltPolicyReader
         var body = await FetchAsync(http, JsonUrl, JsonLargest, time ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
         var catalog = await FetchAsync(http, CatalogUrl, CatalogLargest, time ?? TimeProvider.System, cancellationToken).ConfigureAwait(false);
         HaltCatalogEvidence evidence;
-        try { evidence = verifier.Inspect(catalog, body); }
+        try { evidence = verifier.Inspect(catalog, body) ?? throw new HaltPolicyUnavailableException("catalog verifier gave no evidence"); }
         catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested) { throw new HaltPolicyUnavailableException("halt policy catalog unverifiable", e); }
         RequirePin(evidence, identityEku);
         return Parse(body);
@@ -85,7 +86,7 @@ public static partial class HaltPolicyReader
             HaltPolicyRelease[] releases = [.. Items(root, "releases", ReleasesLargest).Select(Release)];
             if (halted.Distinct(StringComparer.Ordinal).Count() != halted.Length || releases.DistinctBy(r => (r.Channel, r.Prerelease)).Count() != releases.Length)
             { throw new HaltPolicyUnavailableException("halt policy repeats an entry"); }
-            return new(sequence, issued, expires, halted, releases, Convert.ToHexStringLower(SHA256.HashData(body)));
+            return new(sequence, issued, expires, halted, releases, Convert.ToHexStringLower(SHA256.HashData(body))) { Body = body };
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or KeyNotFoundException)
         { throw new HaltPolicyUnavailableException("halt policy malformed", e); }
@@ -152,7 +153,7 @@ public static partial class HaltPolicyReader
         }
         catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
         { throw new HaltPolicyUnavailableException("halt policy download passed its deadline", e); }
-        catch (Exception e) when (e is HttpRequestException or IOException and not HaltPolicyUnavailableException)
+        catch (Exception e) when (e is not OperationCanceledException and not HaltPolicyUnavailableException)
         { throw new HaltPolicyUnavailableException("halt policy download failed", e); }
     }
 
