@@ -42,9 +42,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     }
     internal async Task<FleetLaunchContext> PrepareAsync(AgentCredential caller, FleetLaunchInput input)
     {
-        if (!credentials.IsLive(caller) || caller.Kind != "session" || caller.Scope != AgentProtocol.ScopeReadReplyLaunch
-            || caller.Depth != 0 || caller.LaunchId == AgentCredentials.AdoptedLaunch) { throw new FleetLaunchDenied("policy"); }
-        var subject = new GrantSubject(account() ?? "", device, caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc));
+        var subject = Subject(credentials, account() ?? "", device, caller);
         var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
         var context = new FleetLaunchContext(input, subject, binding);
         var old = counters.Lookup(input.Grant, input.Request, subject, binding);
@@ -152,10 +150,16 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     { GrantCounterProblem.Full => "duplicate-store-full", GrantCounterProblem.Binding => "duplicate-id",
         GrantCounterProblem.Hourly or GrantCounterProblem.Daily or GrantCounterProblem.Live => "grant-exhausted",
         GrantCounterProblem.Clock => "grant-expired", _ => StoreReason(result.StoreProblem) };
-    static string StoreReason(GrantStoreProblem problem) => problem switch
+    internal static GrantSubject Subject(AgentCredentials credentials, string account, string device, AgentCredential caller)
+    {
+        if (!credentials.IsLive(caller) || caller.Kind != "session" || caller.Scope != AgentProtocol.ScopeReadReplyLaunch
+            || caller.Depth != 0 || caller.LaunchId == AgentCredentials.AdoptedLaunch) { throw new FleetLaunchDenied("policy"); }
+        return new(account, device, caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc));
+    }
+    internal static string StoreReason(GrantStoreProblem problem) => problem switch
     { GrantStoreProblem.NotFound or GrantStoreProblem.Missing => "grant-missing", GrantStoreProblem.Revoked => "grant-revoked",
         GrantStoreProblem.Expired or GrantStoreProblem.NotYetValid => "grant-expired", _ => "audit-unavailable" };
-    static GrantProcessObservation Observe(int pid)
+    internal static GrantProcessObservation Observe(int pid)
     {
         try
         {
