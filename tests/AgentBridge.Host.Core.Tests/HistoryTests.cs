@@ -239,8 +239,10 @@ public class HistoryTests
         if (shape == "duplicate-prompt") { prompt = prompt.Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
         Fixture.Append(transcript, prompt, CodexReply("same", "Original answer", 2));
         if (shape == "task_started") { Fixture.Append(transcript, Codex.Event(new { type = "task_started" }, 3)); }
-        var unreadable = shape switch { "unmarked-unreadable" => "not json", "unmarked-json" => "{\"invalid\":}", "non-object" => "[]", _ => null };
-        if (unreadable is not null) { Fixture.Append(transcript, unreadable); }
+        if (shape is "unmarked-unreadable" or "unmarked-json" or "non-object")
+        {
+            Fixture.Append(transcript, shape switch { "unmarked-unreadable" => "not json", "unmarked-json" => "{\"invalid\":}", _ => "[]" });
+        }
         Fixture.Append(transcript, CodexReply("same", "Later answer", 4, true));
         await using var source = f.Source();
         await source.RefreshAsync();
@@ -266,8 +268,9 @@ public class HistoryTests
             new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 600) }.ToJsonString(),
             CodexReply("same", "Later answer", 4, true));
         var seed = new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>());
-        var turn = new HistoryReader(new HistoryBudgets { MaxLineBytes = 512 }, new byte[32])
-            .Read(Id, AgentKind.Codex, transcript, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false).Turns!.Single();
+        var result = new HistoryReader(new HistoryBudgets { MaxLineBytes = 512 }, new byte[32])
+            .Read(Id, AgentKind.Codex, transcript, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false);
+        var turn = result.Turns!.Single();
         Assert.Equal(["Original answer", "Later answer"], turn.Parts.Select(p => p.Text));
         Assert.True(turn.Truncated);
     }
