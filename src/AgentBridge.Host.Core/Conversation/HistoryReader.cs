@@ -44,8 +44,8 @@ internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegate
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
 // cursor (or the end) to the prompts that start the page's turns, by byte search, parsing only the
-// lines that search picks; then forwards through each turn, parsing only the lines its dialect
-// wants. Read-only and shared, as the tail reads: the agent keeps writing meanwhile, and only
+// lines that search picks; then forwards through each turn. Codex also validates ignored records
+// so unreadable gaps invalidate reply identity. Read-only and shared, as the tail reads: only
 // whole lines before where this read began are read.
 internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 {
@@ -626,22 +626,27 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             context.TurnBegins();
             dialect.TurnBegins();
             var at = s.At;
+            var codex = dialect is CodexHistory;
             Forward(from, spanEnd, (line, _) =>
             {
-                if (!dialect.Wants(line.Span)) { return true; }
+                var wants = dialect.Wants(line.Span);
+                if (!wants && !codex) { return true; }
                 using var doc = Parse(line);
-                if (doc is null)
+                if (doc is null || codex && doc.RootElement.ValueKind != JsonValueKind.Object)
                 {
                     turn.Truncated = true;
+                    if (codex) { into.ReplyScope(false); }
                     return true;
                 }
+                if (!wants) { return true; }
                 at = Json.Time(doc.RootElement, "timestamp") ?? at;
                 // A turn whose own start could not be read is placed by the first time after it.
                 if (s.At is null && at is { } first && turn.At == DateTimeOffset.UnixEpoch) { turn.At = first; }
                 into.Record(Attachments.Base64Url(TurnIds.Raw(line.Span)));
                 if (!Decoding(() => dialect.Apply(doc.RootElement, at ?? DateTimeOffset.UnixEpoch, into, context))) { turn.Truncated = true; }
                 return true;
-            }, aligned: from == s.End || AfterNewline(from));
+            }, aligned: from == s.End || AfterNewline(from),
+                dropped: codex ? (_, _) => { turn.Truncated = true; into.ReplyScope(false); return true; } : null);
         }
 
         // Whether a record starts at pos: a window cut exactly at one has no fragment to drop, and

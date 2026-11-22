@@ -345,7 +345,8 @@ conflicting or malformed native turn ids, duplicate identity fields, unread/skim
 or more than 4,096 item ids omit it until a readable prompt. Neither text, time nor
 record order correlates unidentified records. Legacy text dedup remains unchanged.
 History seeds correlation from validated prompt/native-turn fields and invalidates it
-on `task_started` too: unknown identity never updates an earlier response by item id.
+on `task_started`, unreadable/nonobject records and dropped lines too:
+unknown identity never updates an earlier response by item id.
 These are history identities, not delivery sender identities; [message delivery](../message-delivery.md)
 remains the canonical delivery design, without routing or authentication changes.
 
