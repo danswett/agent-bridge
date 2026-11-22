@@ -62,7 +62,7 @@ public sealed class GrantReadProducerTests : IDisposable
     public void Readiness_that_ends_during_the_store_read_seals_unavailable()
     {
         var calls = 0;
-        var producer = new GrantReadProducer(() => new GrantSnapshotResult(GrantStoreProblem.None, 0, null, [], []), () => ++calls < 2, () => Signer, () => true);
+        var producer = new GrantReadProducer(() => new GrantSnapshotResult(GrantStoreProblem.RotationRequired, 0, null, [], []), () => ++calls < 2, () => Signer, () => true);
         Assert.Equal(FleetGrantReadProblem.Unavailable, Sealed(producer));
     }
 
