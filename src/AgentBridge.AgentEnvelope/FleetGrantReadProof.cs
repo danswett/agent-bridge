@@ -22,6 +22,7 @@ public static class FleetGrantReadProof
 
     public static FleetGrantReadResult Seal(JsonElement reply, FleetGrantProofContext context, IEnvelopeSigner signer)
     {
+        if (reply.ValueKind == JsonValueKind.Undefined) { throw new InvalidDataException("read-problem"); }
         var snapshot = reply.Clone();
         return new(snapshot, FleetGrantProof.Seal(Bytes(snapshot, context), context, signer));
     }
@@ -30,6 +31,7 @@ public static class FleetGrantReadProof
         FleetGrantProofContext expected)
     {
         if (result is null) { throw new InvalidDataException("read-problem"); }
+        if (result.Reply.ValueKind == JsonValueKind.Undefined) { throw new InvalidDataException("read-problem"); }
         var expectedBody = Bytes(result.Reply.Clone(), expected);
         var body = FleetGrantProof.Verify(result.Proof, trustedHostSign, expected);
         if (!body.AsSpan().SequenceEqual(expectedBody)) { throw new InvalidDataException("read-problem"); }

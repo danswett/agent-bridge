@@ -104,4 +104,31 @@ public sealed class FleetGrantReadProofTests : IDisposable
             new(FleetGrantReadProof.Reply(FleetGrantReadProblem.None), raw), Point, context));
         Assert.Throws<ArgumentOutOfRangeException>(() => FleetGrantReadProof.Reply((FleetGrantReadProblem)4));
     }
+
+    [Fact]
+    public void A_wrong_host_key_wrong_label_trailing_byte_or_undefined_reply_is_refused_as_invalid_data()
+    {
+        var result = Seal(FleetGrantReadProblem.RotationRequired);
+        using var other = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var point = other.ExportParameters(false).Q;
+        Assert.Throws<InvalidDataException>(() =>
+            FleetGrantReadProof.Verify(result, [4, .. point.X!, .. point.Y!], context));
+        foreach (var body in new[]
+        {
+            Framing.F(Framing.Label("agent-bridge fleet read problem v2"), [1]),
+            [.. Framing.F(Framing.Label("agent-bridge fleet read problem v1"), [1]), 0],
+        })
+        {
+            var raw = FleetGrantProof.Seal(body, context, new EcdsaEnvelopeSigner(key));
+            Assert.Throws<InvalidDataException>(() =>
+                FleetGrantReadProof.Verify(result with { Proof = raw }, Point, context));
+        }
+        Assert.Throws<InvalidDataException>(() =>
+            FleetGrantReadProof.Verify(result with { Reply = default }, Point, context));
+        Assert.Throws<InvalidDataException>(() =>
+            FleetGrantReadProof.Seal(default, context, new EcdsaEnvelopeSigner(key)));
+        using var extra = JsonDocument.Parse("{\"problem\":\"rotationRequired\",\"extra\":1}");
+        Assert.Throws<InvalidDataException>(() =>
+            FleetGrantReadProof.Verify(result with { Reply = extra.RootElement }, Point, context));
+    }
 }

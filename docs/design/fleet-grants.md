@@ -300,7 +300,7 @@ A `grant.read` reply carries a REQUIRED closed `Problem` inside the seal:
 `FleetGrantReadProblem` = None 0, RotationRequired 1, Unavailable 2, Other 3.
 The reply JSON is exactly `{"problem":"<name>"}` with the exact, case-sensitive
 names `none`, `rotationRequired`, `unavailable`, `other`; a missing, null, number,
-unknown, extra, duplicate or differently cased value refuses. There is no default,
+unknown, extra, duplicate or differently cased name or value refuses. There is no default,
 and the diagnostic `GrantReadResult.Problem` string, an audit line or an unsigned
 flag never supplies it.
 
@@ -315,6 +315,7 @@ problem only after the signature and the exact body match; anything else throws
 is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
