@@ -104,9 +104,13 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
   Body HMAC encoding uses strict UTF-8: invalid UTF-16 is refused, never replaced with U+FFFD during verification.
 ## Lanes and key path (slice 2)
 Slice 2 is split: **2a** is the inert host-only lane scheduler, overflow notices and journal-backed
-sequence reservation/high-water recovery; **2b** owns submit keys (`none`, `Enter`, `Queue`,
-ctrl+q VK `Q` left-ctrl), the per-terminal capability table, queued/pending HA ack and exit 6,
-and restart classification/replay. No 2a production entry, real keys or capability probe exists.
+sequence reservation/high-water recovery; **2b1** supplies submit keys (`none`, `Enter`, `Queue`,
+ctrl+q VK `Q` left-ctrl) and the per-terminal capability table; **2b2** owns production
+offer/query by UUID, final fenced/flushed handoff, truthful states and restart classification/replay.
+The dispatcher must not hold ReplyService's shared claim/typing slot across its callback.
+No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
+Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
+Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
 - **Urgent lane:** owner and system; agent-urgent from slice 3. Text, then Enter (steer), one at a time
   via `DeliveryGate`, by class (owner, system, agent), then arrival. Bound 10 per session: an owner item
   always enters, moving the newest agent (then system) urgent to the queueable lane, journaled and the
@@ -182,11 +186,15 @@ A key that cannot be read is never replaced; a post-handoff write failure retain
    between envelopes stays one entry; half-typed box text waits; a missing reason is refused; the 4th
    urgent in an hour is demoted; supersede keeps the newest; an expired item notifies.
 ## Slices (one builder, sequential, each at most 250 changed lines, all sensitive)
+Slice 2b2a fixes [#3681](https://github.com/danswett/agent-bridge/issues/3681): `SubmitWritten`
+records Queue submission uncertainty without pretending Enter was written; text/submit splitting
+uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing it requires `Submit=None`.
 | Slice | Content | Estimate | Due (PT) |
 |---|---|---|---|
 | 1 | `DeliveryEnvelope`, `n`, `at`, escape, authenticated `from` end to end, journal writer (**moved earlier**: every later drop needs it) | ~180 | after acceptance, #2574 |
 | 2a | Host-only lane scheduler, bounds, reserved `seq` and high-water recovery, idle/empty-box gate, shared `DeliveryGate`; fake-only, unwired plain child of slice 1 | <=400 | after 1 |
-| 2b | Submit key (`none`/`Enter`/`Queue`, ctrl+q VK `Q` left-ctrl), per-terminal capability table, queued/pending HA ack and exit 6, restart replay; accepted `queued` only once the shared store exists | <=400 | after 2a, hotfix, 2469 |
+| 2b1 | Submit key (`none`/`Enter`/`Queue`, ctrl+q VK `Q` left-ctrl), default-Unknown per-terminal capability table; no production scheduler wiring or live qualification | <=400 | after 2a |
+| 2b2 | Production offer/query by UUID, canonical pre-key flushed handoff, callback without ReplyService gate reentry, truthful states and UUID replay; accepted `queued` only once the shared store exists | <=400 | plain child of pushed 2b1 |
 | 3 | Priority authority, `reply-session.ps1 -Priority -Reason`, per-principal quota, journaled grants | ~130 | after 2 |
 | 4 | Topic, TTL, summary line, confirmation by id, gap detector, bounded retry; over 250: 4b takes confirmation and retry | ~200 | after 3 |
 ## Live test (SRE Lead, disposable sessions; builder's harness): 1, 3, 4, 5 after slice 2; 2 after 4
