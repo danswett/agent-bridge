@@ -154,6 +154,30 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(0, injector.Calls);
     }
     [Theory]
+    [InlineData("workspace", false)]
+    [InlineData("agent", false)]
+    [InlineData("agent", true)]
+    [InlineData("unknown", false)]
+    public async Task An_exact_exception_never_overrides_the_verified_target_scope(string scope, bool dispatch)
+    {
+        grant = grant with { Id = Guid.NewGuid(), StopTargets = [Target] };
+        Assert.True(store.Issue(grant).Usable);
+        void OutsideScope()
+        {
+            if (scope == "workspace") { Settings("other"); }
+            else
+            {
+                var agent = scope == "agent" ? AgentKind.Claude : AgentKind.Unknown;
+                source.Sessions[0] = source.Sessions[0] with { Agent = agent };
+                f.Processes.Run(agent, 700, startedAt: started);
+            }
+        }
+        if (dispatch) { source.BeforeEnding = () => { OutsideScope(); return Task.CompletedTask; }; }
+        else { OutsideScope(); }
+        var result = await End();
+        Assert.Equal(("refused", "scope", 0), (result.Outcome, result.Reason, injector.Calls));
+    }
+    [Theory]
     [InlineData("revoke")]
     [InlineData("prompt")]
     [InlineData("question")]

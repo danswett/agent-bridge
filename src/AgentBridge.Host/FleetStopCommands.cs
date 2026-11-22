@@ -78,18 +78,23 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 var (settings, problem) = HostSettings.Load(folder);
                 if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { return "policy"; }
                 if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled) { return "kill-switch"; }
-                var approved = source.Get(target.Session)?.Cwd is { } cwd && Path.IsPathFullyQualified(cwd)
+                var observed = source.GetForStop(target.Session);
+                var agent = observed?.Agent.ToString().ToLowerInvariant();
+                var approved = observed?.Cwd is { } cwd && Path.IsPathFullyQualified(cwd)
                     ? Folders.Exactly(settings.Launch.Workspaces, cwd) ?? Worktrees.Managed(settings.Launch.Workspaces, cwd)?.Workspace : null;
-                if (approved is null || workspace is not null && workspace != approved
+                if (approved is null || agent is null || !LaunchProtocol.Agents.Contains(agent) || workspace is not null && workspace != approved
                     || settings.Agents.ExcludedWorkspaces.Contains(approved.Label)) { return "scope"; }
                 workspace = approved;
                 if (settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(target.Session)
                     || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(target.Session) ?? ""))
                 { return "scope"; }
+                // Stop checks machine/workspace/agent; launch-only selections are inert.
+                var scope = new GrantScope([device], [approved.Label], [agent],
+                    ["default"], ["default"], ["medium"], ["default"], ["ask"]);
                 var policy = new HostPolicySnapshot(account() ?? "", new(device, Path.GetFileName(folder)), subject,
-                    grant.Scope, grant.Caps, false, true, Launches: [.. own], StopTargets: [target]);
-                if (!GrantEvaluator.Evaluate(grant, policy, new(subject, "stop", device, grant.Scope.Workspaces[0],
-                    grant.Scope.Agents[0], Target: target), DateTimeOffset.UtcNow).Allowed) { return "scope"; }
+                    scope, grant.Caps, false, true, Launches: [.. own], StopTargets: [target]);
+                if (!GrantEvaluator.Evaluate(grant, policy, new(subject, "stop", device, approved.Label,
+                    agent, Target: target), DateTimeOffset.UtcNow).Allowed) { return "scope"; }
                 if (state.Counters?.Reservations.Any(r => r.Request == input.Request) == true) { return "duplicate-id"; }
                 return null;
             }
