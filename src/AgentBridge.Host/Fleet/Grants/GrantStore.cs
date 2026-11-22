@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -23,7 +24,7 @@ public sealed class GrantStore
         PropertyNameCaseInsensitive = false, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         RespectRequiredConstructorParameters = true, MaxDepth = 16
     };
-    internal sealed record Intent(Guid Operation, Guid Grant, long Generation, string Action);
+    internal sealed record Intent(Guid Operation, Guid Grant, long Generation, string Action, GrantOperation? Use = null);
     internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents,
         GrantCounterState? Counters = null);
     readonly string folder, path;
@@ -77,8 +78,44 @@ public sealed class GrantStore
         return new(result.Problem, grants);
     }
 
-    internal static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
-        Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action)] };
+    public GrantSnapshotResult Snapshot()
+    {
+        GrantSnapshotResult Refused(GrantStoreProblem problem) => new(problem, 0, null, [], []);
+        try
+        {
+            try { if ((File.GetAttributes(folder) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != FileAttributes.Directory) { return Refused(GrantStoreProblem.Unreadable); } }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            { return Refused(GrantStoreProblem.RotationRequired); }
+            var auditFolder = Path.Combine(folder, AgentAuditLog.FolderName);
+            using var held = File.Exists(path + ".lock") || File.Exists(path) ? AgentAuditLog.Lock(path, read: true) : null;
+            using var auditHeld = File.Exists(auditFolder + ".lock") ? AgentAuditLog.Lock(auditFolder, read: true) : null;
+            if (auditHeld is null && Directory.Exists(auditFolder)) { return Refused(GrantStoreProblem.AuditIncomplete); }
+            if (File.Exists(Path.Combine(auditFolder, "rotation.pending"))) { return Refused(GrantStoreProblem.AuditIncomplete); }
+            var state = Load(allowNew: false, readOnly: true);
+            var now = time.GetUtcNow();
+            var counters = state.Counters ?? new GrantCounterState(now, []);
+            if (now < counters.ObservedAt) { now = counters.ObservedAt; }
+            var grants = state.Grants.Select(grant =>
+            {
+                var reservations = counters.Reservations.Where(r => r.Grant == grant.Id).ToArray();
+                var operations = state.Intents.Where(i => i.Grant == grant.Id).ToArray();
+                return new GrantSnapshot(grant, GrantCounters.Count(counters, grant.Id, now),
+                    [.. reservations.Where(r => r.State is GrantReservationState.Pending or GrantReservationState.Abandoned).Select(r => r.Request)],
+                    [.. reservations.Where(r => r.State == GrantReservationState.Committed).Select(r => r.Target!.Session).Distinct()],
+                    operations.Count(i => i.Action == "grant.reserve" || i.Use is { IsRequest: true }),
+                    operations.LastOrDefault(i => i.Use is not null)?.Use);
+            }).ToImmutableArray();
+            return new(GrantStoreProblem.None, state.Generation, state.Counters?.ObservedAt, grants, [.. state.Tombstones]);
+        }
+        catch (StoreFault e) { return Refused(e.Problem); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        { return Refused(GrantStoreProblem.Unreadable); }
+        catch (CryptographicException) { return Refused(GrantStoreProblem.BadMac); }
+        catch (JsonException) { return Refused(GrantStoreProblem.Malformed); }
+    }
+
+    internal static State Next(State state, Guid id, string action, GrantOperation? use = null) => state with { Generation = state.Generation + 1,
+        Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action, use)] };
     internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime, DateTimeOffset? observedAt = null)
     {
         if (state.Tombstones.Contains(id)) { return new(GrantStoreProblem.Revoked); }
@@ -145,6 +182,10 @@ public sealed class GrantStore
                 || state.Intents.Length is 0 or > 512 || state.Generation != state.Intents.Length
                 || state.Grants.Any(g => !GrantValidator.ValidateShape(g).Valid)
                 || state.Grants.Select(g => g.Id).Distinct().Count() != state.Grants.Length
+                || state.Intents.Any(i => i?.Use is { } use && (use.Request == Guid.Empty
+                    || !(Guid.TryParseExact(use.Caller, "D", out var caller) || Guid.TryParseExact(use.Caller, "N", out caller))
+                    || caller == Guid.Empty || !Enum.IsDefined(use.Outcome) || !Enum.IsDefined(use.StoreProblem)
+                    || i.Action is not ("grant.reserve" or "grant.update")))
                 || state.Tombstones.Any(id => id == Guid.Empty || state.Grants.Any(g => g.Id == id))
                 || state.Tombstones.Distinct().Count() != state.Tombstones.Length || !GrantCounters.Valid(state.Counters))
             { throw new StoreFault(GrantStoreProblem.Malformed); }

@@ -22,6 +22,12 @@ public sealed record GrantDocument(int Version, Guid Id, string Account, GrantIs
     ImmutableArray<GrantSubject> Subjects, ImmutableArray<string> Actions, GrantScope Scope, GrantCaps Caps,
     DateTimeOffset NotBefore, long Generation, DateTimeOffset? ExpiresAt = null,
     ImmutableArray<GrantRole> Roles = default, ImmutableArray<StopTarget> StopTargets = default, bool AllowAllLaunch = false);
+public sealed record GrantOperation(Guid Request, string Caller, GrantCounterProblem Outcome,
+    GrantStoreProblem StoreProblem = GrantStoreProblem.None, bool IsRequest = true);
+public sealed record GrantSnapshot(GrantDocument Grant, GrantUsage Usage, ImmutableArray<Guid> PendingRequestIds,
+    ImmutableArray<string> LiveSessionIds, int RequestCount, GrantOperation? LastOperation);
+public sealed record GrantSnapshotResult(GrantStoreProblem Problem, long Generation, DateTimeOffset? ObservedAt,
+    ImmutableArray<GrantSnapshot> Grants, ImmutableArray<Guid> RevokedIds);
 
 // Inputs are authenticated, receiver-owned snapshots; this pure layer does not verify person proof or inspect processes.
 public sealed record HostPolicySnapshot(string Account, GrantAudience Audience, GrantSubject AuthenticatedCaller,

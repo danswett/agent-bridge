@@ -224,6 +224,12 @@ The list/details screen shows issuer, subjects, actions/scope, expiry, spent
 hour/day counts, pending/live sessions, last caller/outcome, and remaining budget.
 Counters come from the receiver, never an agent's report; read is not an acting
 grant. Audit details omit prompt text, tokens, secrets and raw command lines.
+Snapshot reads do not advance the watermark, reconcile reservations or write
+state. Documents, counters, pending/live bindings and safe last-operation metadata
+come from verified receiver state. Receiver proofs use the existing roster-bound
+HostSign key and a distinct domain binding account, profile, receiver, action,
+fresh request UUID and exact payload bytes. The app verifies against independently
+trusted receiver keys, never a key or verification flag supplied by the proof.
 
 Revoke takes the same person path and persists an audit intent and tombstone
 before acknowledging success. New reservations and queued operations refuse.
