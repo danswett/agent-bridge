@@ -100,6 +100,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     static bool IsSubagent(JsonElement e) => Json.Str(e, "agentId") is { Length: > 0 };
 
+    string? ReplyId(JsonElement data) => RecordId is { } id
+        ? Conversation.TurnIds.Part(id, Text.NonBlank(Json.Str(data, "reasoningText")) is null ? 0 : 1) : null;
+
     // Who wrote a main-agent user.message, from its data.source (activity.userMessageFrom, #489).
     // Copilot writes none for a prompt typed in its window, and "user" for one typed with an
     // attachment; "schedule-<n>" for a scheduled prompt and "agent-<id>" for one an agent sent.
@@ -245,7 +248,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
-                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; S.ResponseId = ReplyId(data); }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -352,6 +355,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponse = null;
         S.OwnResponseCut = false;
         S.ResponseTurn = null;
+        S.ResponseId = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
         S.Notice = null;
@@ -553,7 +557,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     {
                         var content = MainText(data);
                         S.MainSaid(content, Text.NonBlank(Json.Str(data, "reasoningText")), at);
-                        if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                        if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; S.ResponseId = ReplyId(data); }
                     }
                     // The CLI's notice of the error that ended the turn is written after it, and
                     // starts nothing: read as a reply, it set the session working again for good.
