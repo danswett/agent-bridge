@@ -49,7 +49,7 @@ as a future change; signed replacement selection remains unimplemented.
 { "id": 4, "op": "fleet.find", "data": { "sessionId": "agent_bridge_1234567890abcdef" } }
 ```
 
-The exclusive `sessionId` accepts a live node, its bare 16 lowercase hex digits, or a full canonical UUID published by the roster and bound to that node. No UUID truncation, name or substring matching. Supplying `name` or `machineName` refuses, even beside a valid ID. Optional `machine` is an exact device ID (32 hex digits), never a display name. Replies retain the following trust/completeness precedence:
+The exclusive `sessionId` accepts a live node, its bare 16 lowercase hex digits, or a full canonical UUID published by the roster and bound to that node. No UUID truncation, name or substring matching. Supplying `name` or `machineName` refuses, even beside a valid ID. Optional `machine` is an exact device ID (32 hex digits; publishers use canonical lowercase and comparisons are exact), never a display name. Replies retain the following trust/completeness precedence:
 
 | `result` | Meaning | Body |
 | --- | --- | --- |
