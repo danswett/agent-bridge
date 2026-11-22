@@ -31,6 +31,7 @@ public sealed class SameHostLiteTests
     {
         public SessionStatus Status = SessionStatus.Idle;
         public bool Allowed = true;
+        public Action? OnRead, BeforeType;
         public bool Available => true;
         public List<ReplyRequest> Replies = [];
         public Task<GateDecision> CheckAsync(VerifiedEnvelope envelope, string target) =>
@@ -51,11 +52,17 @@ public sealed class SameHostLiteTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken ct = default, DeliveryWatch? watch = null)
         {
+            // As ReplyService does at the typing slot and before injecting: a fence that fails types nothing.
+            BeforeType?.Invoke();
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "no longer current")); }
             Replies.Add(request);
             return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered, ""));
         }
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default) =>
-            Task.FromResult(new ConsoleScreen(EmptyBox, null));
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken ct = default)
+        {
+            OnRead?.Invoke();
+            return Task.FromResult(new ConsoleScreen(EmptyBox, null));
+        }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default) =>
             throw new InvalidOperationException("unit tests never inject");
     }
@@ -70,7 +77,7 @@ public sealed class SameHostLiteTests
         LiteReceiver? receiver;
         public LiteReceiver Receiver()
         {
-            var delivery = new LiteDeliver([TargetSession], TargetSession, TargetSession, TargetSession, _ => { });
+            var delivery = new LiteDeliver([TargetSession], TargetSession, TargetSession, TargetSession, _ => { }, account: () => AccountId);
             return receiver ??= new LiteReceiver(Mode, delivery);
         }
         public Task<LiteOutcome> Send(string? machine = null)
@@ -174,6 +181,23 @@ public sealed class SameHostLiteTests
         var sender = new AgentLiteSender(r.Mode, link, _ => true,
             () => { r.AccountId = new string('c', 32); return (new EcdsaEnvelopeSigner(r.Key), [0x04, .. q.X!, .. q.Y!]); }, StaticKey);
         Assert.NotEqual(LiteKind.Delivered, (await sender.SendAsync(Caller, new LiteSendInput(Self, Target, "hello"), default)).Kind);
+        Assert.Empty(r.TargetSession.Replies);
+    }
+
+    // #3595 P1: the local link checks the account once, before the await that reads the composer and waits for the typing
+    // slot. A sign-out or switch during that wait must type nothing, not the old account's signed text.
+    [Theory]
+    [InlineData("composer", "other")]
+    [InlineData("composer", "signed out")]
+    [InlineData("typing slot", "other")]
+    [InlineData("typing slot", "signed out")]
+    public async Task An_account_change_during_local_delivery_types_nothing(string when, string change)
+    {
+        using var r = new Rig();
+        Action switchAccount = () => r.AccountId = change == "other" ? new string('c', 32) : "";
+        if (when == "composer") { r.TargetSession.OnRead = switchAccount; } else { r.TargetSession.BeforeType = switchAccount; }
+        var result = await r.Send();
+        Assert.Equal((LiteKind.Refused, LiteReceiver.NotSameAccount), (result.Kind, result.Code));
         Assert.Empty(r.TargetSession.Replies);
     }
 }
