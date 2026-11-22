@@ -89,6 +89,20 @@ public sealed class GrantListTests
         Assert.True(Assert.Single(vm.Rows).CanRevoke); Assert.Equal(counters, Assert.Single(vm.Rows).Counters);
     }
     [Theory]
+    [InlineData("RotationRequired")] [InlineData("rotation-required")]
+    [InlineData("AuditIncomplete")] [InlineData("unavailable")]
+    [InlineData("PRIVATE_TOKEN RAW_COMMAND")]
+    public async Task Legacy_problem_strings_without_verified_first_issue_evidence_keep_the_list_and_revoke_unavailable(string problem)
+    {
+        var receiver = new FakeReceiver(); var vm = new GrantListViewModel(receiver);
+        await vm.RefreshAsync(); var row = Assert.Single(vm.Rows); var counters = row.Counters;
+        receiver.ReadProblem = problem; await vm.RefreshAsync();
+        Assert.False(vm.Available); Assert.False(vm.Busy); Assert.False(row.CanRevoke);
+        Assert.Equal(counters, row.Counters); Assert.Empty(row.Receipt); Safe(Visible(vm));
+        var asked = false; await vm.RevokeAsync(row, _ => { asked = true; return Task.FromResult(true); });
+        Assert.False(asked); Assert.Equal(0, receiver.Prepares); Assert.Equal(0, receiver.Confirms);
+    }
+    [Theory]
     [InlineData("id")] [InlineData("generation")] [InlineData("receiver")] [InlineData("account")]
     [InlineData("profile")] [InlineData("action")] [InlineData("digest")] [InlineData("tombstone")]
     public async Task A_receipt_with_any_wrong_binding_or_no_tombstone_leaves_revocation_pending(string wrong)
