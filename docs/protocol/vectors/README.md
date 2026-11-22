@@ -17,6 +17,7 @@ Do not hand-edit `sessions.json`: the generator-equality test would reject it.
 | File | Records |
 |---|---|
 | `sessions.json` | `hello`, sessions and their parts, `sessions.list`, `sessions.subscribe` and its events (`session.patch` included), answers, replies, `session.stop` |
+| `delivery.json` | Local `DeliverySender`, `DeliveryHeader` and `DeliveryEntry` helpers from [message delivery](../../message-delivery.md); not channel requests or wire sender authority |
 | `attachments.json` | `attachment.start`, `attachment.chunk`, `attachment.discard` and their results |
 | `push.json` | `push.subscribe`, `push.unsubscribe`, `push.list` and the notice a push carries |
 | `launch.json` | `launch.options`, `session.launch`, folder-trust questions and `launch.trust.answer` |
@@ -70,6 +71,9 @@ read as written: any required field missing or field of the wrong type refuses i
 
 A vector that needs more than its record names a `context`, which the file's `contexts` holds
 once. For example, the question an answer answers. A vector is named `<Record>/<name>`.
+
+`"direction": "local"` covers in-memory delivery helpers, read strictly by C# rather than as
+host channel records. Their JSON examples do not expose `ReplyRequest.Sender` on the wire.
 
 `knownDifferences` lists each place where an implementation does not yet do what a vector says,
 with the issue that decides which side moves:
