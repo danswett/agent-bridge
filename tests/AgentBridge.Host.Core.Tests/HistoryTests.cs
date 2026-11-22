@@ -69,6 +69,34 @@ public class HistoryTests
 
     static string Prompt(HistoryTurn t) => t.Prompt!.Text;
 
+    sealed record LegacyOwn(string? Response);
+    sealed record LegacyActivity(string? Response, string? ResponseTurn, LegacyOwn? Own);
+
+    [Theory]
+    [InlineData(4194304)]
+    [InlineData(4096)]
+    public async Task Copilot_live_reply_identity_matches_history_without_changing_legacy_reply_fields(long tailBytes)
+    {
+        await using var s = new Copilot_(options: o => new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome,
+            ClaudeRegistrationRoots = o.ClaudeRegistrationRoots, CodexRegistrationRoots = o.CodexRegistrationRoots,
+            UseFileSystemWatcher = false, PollInterval = o.PollInterval, InitialTailBytes = tailBytes, HistoryKeyFile = o.HistoryKeyFile,
+        });
+        var session = await s.After(Copilot.User("Owner question", 1),
+            Copilot.Assistant("Original answer", 2),
+            Copilot.Assistant("Pulse answer", 3, reasoning: "Thinking"),
+            Copilot.Assistant(new string('x', 6000), 4, agentId: "delegate"));
+        var replies = (await s.Page()).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Original answer", "Pulse answer"], replies.Select(p => p.Text));
+        Assert.Equal(replies[1].Id, session.Activity.ResponseId);
+        var oldClient = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(session.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+        Assert.Equal("Pulse answer", oldClient.Own?.Response ?? oldClient.Response);
+        Assert.Equal(session.Activity.ResponseTurn, oldClient.ResponseTurn);
+        await s.RestartAsync();
+        Assert.Equal(replies[1].Id, s.Source.Get(Id)!.Activity.ResponseId);
+    }
+
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 

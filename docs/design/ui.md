@@ -736,6 +736,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **New sessions** go to the top of Sessions once, then stay put, in no group unless they
   continue a grouped session ("Groups", below). A machine's first list is
   placed together, newest first, once the machine has sent all of it.
+  **CHANGE C5 (proposed, not built):** a verified successor follows the stable-slot
+  exception below, not new-row insertion.
 - **Moving** is the person's only (#592; §5.3's lift and make room):
   - **Touch holds first:** a long press anywhere on the card, 500 ms on iOS and 400 ms on Android
     (the platform's timing; the PWA matches its device, 500 ms elsewhere). A 150 ms hold on the
@@ -893,12 +895,14 @@ launch lineage may come later, on top of this, once hosts report it.
   else the one before it, else New), and it is announced politely ("*name* deleted. 3 sessions
   moved to Sessions"). An empty group stays until it is deleted.
 - **Kept and roaming:** groups are kept with your order (above). Their names, their order and
-  which sessions are in them roam with your order, pins and sort once #759 lands: keyed by
+  which sessions are in them roam with your order and pins once #759 lands: keyed by
   machine id + session id, last writer wins per change, in the same record as the order and
   under its privacy rules (ids and the names you gave, never titles or paths). Collapsed or
   expanded is per device and never roams; a group
   first seen on a device, made there or arriving from another, starts expanded. Until #759
   lands, all of it is per device.
+  **CHANGE C6 (canonical reconciliation):** sort choice does not roam, as #759's
+  canonical record design already specifies.
 - **A resumed session keeps its group by its resume lineage.** A session's membership outlives
   its ending: it is kept for 30 days after the session was last listed, so a resume finds it.
   - Resumed on its own machine, by anyone (a client's `session.launch` with `resume`, or at the
@@ -912,6 +916,51 @@ launch lineage may come later, on top of this, once hosts report it.
     (a new id from a transfer no client saw, an agent that started afresh, or membership
     already dropped) is a new session: the top of Sessions, in no group. A host never reports
     lineage today; if it does later, it is used the same way.
+
+#### Verified successors (CHANGE C4-C5)
+
+**Proposed Nov 21, 2026, 22:26 PT; owner approval required, not implementation.**
+[Recycling](https://github.com/danswett/agent-bridge/issues/1504) extends the existing
+[group decision](https://github.com/danswett/agent-bridge/issues/767), for ALL user groups
+and all applicable orders. No named group, role label or coordinator gets special rules.
+The legacy resume rules above remain until adoption; verified role succession uses
+[the canonical identity/record rules](session-order-roaming.md#11-stable-presentation-identity-change-c1),
+not a matching title, prompt, fork/transfer result or session's self-claim.
+
+The approved successor occupies the same logical row: same pin, exact manual position
+(including its position in Pinned), and every order's kept user-group membership.
+It does not join the foot of Pinned or the top of its group/Sessions merely by launching.
+Unpin still uses the existing explicit-person-action rule. Group names, group order and
+collapse do not change. This device's order remains independent; sync remains optional.
+Most recent/Machine keep their existing derived sort rules; a changed actual host can
+change Machine sort or make the row leave a selected machine tab. Never display a false host.
+
+Before the signed handover commits, retain the predecessor's slot; a prepared successor
+has no inherited presentation. During vacancy, stale proof or competing current claims,
+keep its choices in a read-only slot with "Waiting for continuation" or "Identity conflict".
+Candidate details cannot assign the pin/groups. Dormant slots are not live-session or
+Needs-you counts; empty user groups and their saved memberships remain.
+
+A valid binding change enters the model immediately, but rendering waits for the existing
+pointer, drag, grabbed-row, menu and motion holds. Preserve scroll and row selection.
+Cancel any drag of the replaced activation, announcing "Session replaced. Move cancelled.";
+apply no move to the new activation. Close its old row menu instead of dispatching an action
+to the successor. Focus on a row moves to its neutral row heading, never an answer control.
+An open conversation, reply draft or approval remains attached to its exact old SESSION ID;
+show "Session replaced" with an explicit Open successor action, never silently navigate,
+copy a draft, submit a pending send or reuse an approval. Fresh snapshot and synchronous
+target checks still gate every action; sharing a presentation identity conveys no authority.
+
+Details show verified "Continues <predecessor>" and the person-visible handover receipt.
+"Treat this session separately" and "Follow this identity again" follow the scoped,
+persistent opt-out rules in [the same record design](session-order-roaming.md#14-person-visibility-and-undo-change-c4).
+Undo is preference-only: it never activates/stops a holder, re-pins the old session or
+grants a successor permissions. Ordinary unlinked sessions keep today's new-session defaults.
+Manage continuity also offers Move saved choices to this session and Forget saved slot;
+scope, overwrite preview, idempotence and device-acknowledged cleanup follow that record design.
+Dormant slots consume saved-row quota but no live/Ended count; prior adopted activations
+remain in slot details, not duplicate Ended/group rows. Adoption explicitly warns that a
+manual provider-ID resume stays separate until the person approves its continuation.
 
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
@@ -1738,6 +1787,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
+  Returning within 8 px of the Windows conversation's measured end re-engages following
+  on the next reply or history update, including after a screen-reader retreat.
+  This end-entry tolerance is separate from the 1 px movement tolerance; it does not
+  widen pin-release exemptions or override active navigation, scrolling or holds.
   A question brought into view, a block requested by a screen reader or any other move back from
   the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
   even before navigation first moves.

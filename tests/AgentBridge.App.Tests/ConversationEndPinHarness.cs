@@ -97,7 +97,7 @@ namespace Microsoft.UI.Xaml.Controls
         readonly List<(object Event, Input.PointerEventHandler Handler, bool HandledToo)> handlers = [];
         public double VerticalOffset { get; set; } = 100;
         public double ScrollableHeight { get; set; } = 200;
-        public double ViewportHeight { get; } = 100;
+        public double ViewportHeight { get; set; } = 100;
         public List<double> Targets { get; } = [];
         public bool AcceptChange { get; set; } = true;
 
@@ -173,10 +173,11 @@ namespace AgentBridge.App
         public SessionView()
         {
             pinEnd = true;
-            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = 100 + historyShown.Count * 100 };
+            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = MeasuredExtent ?? 100 + historyShown.Count * 100 };
             HookConversationInput(Scroller);
         }
         public Microsoft.UI.Xaml.Controls.ScrollViewer Scroller => ConversationScroll!;
+        public double? MeasuredExtent { get; set; }
         public bool Pinned => pinEnd;
         public bool IsScrolling => scrolling;
         public int Releases => pinReleases;
@@ -185,7 +186,7 @@ namespace AgentBridge.App
         public Core.ConversationFollow FollowState => follow;
         public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
-        public void Moved(double offset) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); anchoring = null; }
+        public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); if (final) { anchoring = null; } }
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() { scrolling = false; CompleteNavigation(); }
         public bool HasAnchor => anchor is not null;
@@ -196,6 +197,14 @@ namespace AgentBridge.App
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void DrainForProbe() => DispatcherQueue.Drain();
+        public void KeepPlaceForProbe() => KeepPlace(false, Scroller.VerticalOffset);
+        public void ReplyForProbe() => KeepPlace(HistoryAtEnd(), Scroller.VerticalOffset);
+        public void GestureForProbe(string gesture)
+        {
+            panning = gesture == "pan";
+            scrolling = gesture == "scroll";
+            keyTarget = gesture == "key" ? 50 : null;
+        }
         public void DetachForProbe() => UnwatchHistory();
         public void SwitchForProbe()
         {
