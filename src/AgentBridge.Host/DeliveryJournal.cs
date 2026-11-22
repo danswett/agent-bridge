@@ -54,7 +54,7 @@ public sealed partial class DeliveryJournal : IDisposable
                 throw new InvalidDataException("Delivery journal evidence cannot enter legacy replay.");
             }
             var id = (r.Session, r.Header.Id);
-            if (r.Header.N != 0)
+            if (r.Header.N != 0 && (refused || state is not (DeliveryState.Enqueued or DeliveryState.Demoted)))
             { unverified.Add(id); log("delivery journal body unavailable; replay is unconfirmed and inert for authority"); }
             else { unverified.Remove(id); }
             latest[id] = r;
