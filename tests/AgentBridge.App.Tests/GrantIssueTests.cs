@@ -28,7 +28,7 @@ public sealed class GrantIssueTests
         var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document)));
         receiver.Prepared = new(new(Id, 1, receiver.Receiver, "default", document, digest,
             new(2, 8, 4), "Current receiver limits: 2/hour, 8/day, 4 live; ask only.", []), null);
-        receiver.Issued = new(new(Id, 1, receiver.Receiver, digest), null);
+        receiver.Issued = new(new(Id, 1, receiver.Receiver, digest, false), null);
         return receiver;
     }
     static Task Prepare(GrantIssueViewModel vm) => vm.PrepareAsync(JsonSerializer.SerializeToElement(new { }));
