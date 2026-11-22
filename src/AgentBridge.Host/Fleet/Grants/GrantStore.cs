@@ -99,7 +99,7 @@ public sealed class GrantStore
             using var auditHeld = readOnly ? AgentAuditLog.Lock(Path.Combine(folder, "audit"), read: true) : null;
             if (failure != GrantStoreProblem.None) { return new(failure); }
             State state;
-            var rotated = false;
+            var rotated = !readOnly && audit.FinishRotation(key) && firstGrant is not null;
             try { state = Load(allowNew, readOnly); }
             catch (StoreFault e) when (e.Problem == GrantStoreProblem.RotationRequired && firstGrant is { } id)
             {

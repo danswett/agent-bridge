@@ -128,10 +128,10 @@ public sealed class AuditRotationTests : IDisposable
         Assert.True(File.Exists(Journal));
         // A host that cannot verify the pending rotation refuses to write rather than skip it.
         Assert.False(new AgentAuditLog(Folder, clock).Append(Ordinary) || new AgentAuditLog(Folder, clock).Bootstrap());
-        if (step % 2 == 0) { Assert.True(Log().Append(Ordinary)); }
-        var issued = Store().Issue(grant);
+        if (step is 0 or 2 or 4) { Assert.True(Log().Append(Ordinary)); }
+        var issued = new GrantStore(Folder, device, new AgentAuditLog(Folder, clock), Scope, clock).Issue(grant);
         Assert.True(issued.Usable);
-        Assert.Equal(step % 2 == 1, issued.Rotated);
+        Assert.Equal(step is not (0 or 2 or 4), issued.Rotated);
         Assert.False(File.Exists(Journal));
         Assert.Equal(2, Directory.GetFiles(Retired).Length);
         Assert.Equal("this profile's audit was already rotated", Rotate(Log(), device));

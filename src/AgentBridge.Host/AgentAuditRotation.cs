@@ -60,6 +60,9 @@ public sealed partial class AgentAuditLog
         { log($"agent audit rotation refused: {e.GetType().Name}"); return "the audit could not be rotated; see the host log"; }
     }
     // A crash mid-rotation leaves the journal: every later write finishes that rotation first, never a second one.
+    internal bool FinishRotation(P256KeyPair key) { try { lock (gate) { var folder = AuditFolder(); using var held = Lock(folder);
+        if (!File.Exists(JournalFile(folder))) { return false; } Resume(folder, key); return true; } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or CryptographicException) { return false; } }
     void Resume(string folder, P256KeyPair? key = null)
     {
         if (!File.Exists(JournalFile(folder))) { return; }

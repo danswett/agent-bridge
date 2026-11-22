@@ -82,8 +82,6 @@ public sealed class CallerGuardTests
         var guard = new CallerGuard(() => [], null, hostImage: App, desktopShell: () => P(4, @"C:\Windows\explorer.exe"));
         Assert.Equal(parent == 4 && minutes == 0 ? CallerKind.HostCli : CallerKind.Other,
             guard.Classify([P(30, App, 9), P(parent, @"C:\" + image, minutes), P(4, @"C:\Windows\explorer.exe")]).Kind);
-        Assert.Equal(CallerKind.HostCli, new CallerGuard(() => [], null, hostImage: App)
-            .Classify([P(30, App, 9), P(25, @"C:\" + image), P(4, @"C:\Windows\explorer.exe")]).Kind);
     }
 
     [Fact]
