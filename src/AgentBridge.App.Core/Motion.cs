@@ -164,8 +164,9 @@ public static class SelectionMotion
 // streaming in, a question laid out) does not make them someone who scrolled back.
 public sealed class ConversationFollow
 {
-    // A pixel or so short of the end still reads as the end: offsets are fractional at scale.
+    // Movement filtering is narrower than returning to the end after layout settles.
     public const double Slack = 1;
+    public const double EndFollowSlack = 8;
 
     readonly HashSet<uint> contacts = [];
     readonly HashSet<uint> over = [];
@@ -187,7 +188,7 @@ public sealed class ConversationFollow
     {
         if (this.offset is { } was && Math.Abs(was - offset) < Slack) { return; }
         this.offset = offset;
-        AtEnd = offset >= scrollable - Slack;
+        AtEnd = offset >= scrollable - EndFollowSlack;
     }
 
     // Another session shown, from its top: where the last one was left says nothing about it.
