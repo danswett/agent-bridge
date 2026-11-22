@@ -28,7 +28,7 @@ public sealed class AgentLiteSender(
     byte[] staticPublic, TimeProvider? time = null, TimeSpan? ackTimeout = null, TimeSpan? watchEvery = null) : ILiteSender
 {
     public const string OfflineText = "that machine is offline; nothing was queued";
-    public const string NoCredential = "credential", NoSigner = "no-sign-key", NotPeer = LiteReceiver.NotPeer, Malformed = LiteReceiver.Malformed, Ambiguous = "ambiguousMachine";
+    public const string NoCredential = "credential", NoSigner = "no-sign-key", NotPeer = LiteReceiver.NotPeer, Malformed = LiteReceiver.Malformed, BadMachine = "badMachine", NoSuchMachine = "noSuchMachine";
     public const string TimedOut = "timeout", ModeSwitchedOff = "mode switched off", ChannelLost = "channel lost", BadAck = "unreadable acknowledgement";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
@@ -51,15 +51,14 @@ public sealed class AgentLiteSender(
             : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
             || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
-        // Presence comes from the relay, never from the caller: a device id names only the host with that id (never one
-        // whose name looks like it), and any other input is a host name that must name exactly one present host.
+        // Presence comes from the relay; names are display only and cannot retarget an absent device ID.
         // One account is read here and held through signing and the opened channel, so a sign-in meanwhile sends nothing.
         var account = link.Account;
-        var byId = Wire.IsDeviceId(input.Machine);
-        var ids = link.Presence.Where(p => p.Kind == "host" && p.Id != link.Self && (byId ? p.Id == input.Machine
-            : string.Equals(p.Name, input.Machine, StringComparison.OrdinalIgnoreCase))).Select(p => p.Id).Distinct().ToList();
-        if (ids.Count > 1) { return Out(LiteKind.Refused, Ambiguous); }
-        if (ids.Count == 0 || string.IsNullOrEmpty(account)) { return Out(LiteKind.Undeliverable, OfflineText); }
+        if (!Wire.IsDeviceId(input.Machine)) { return Out(LiteKind.Refused, MachineRefusal(input.Machine, BadMachine, "must be an exact device ID; names never route")); }
+        var ids = input.Machine == link.Self ? [link.Self]
+            : link.Presence.Where(p => p.Kind == "host" && p.Id == input.Machine).Select(p => p.Id).Distinct().ToList();
+        if (string.IsNullOrEmpty(account)) { return Out(LiteKind.Undeliverable, OfflineText); }
+        if (ids.Count == 0) { return Out(LiteKind.Refused, MachineRefusal(input.Machine, NoSuchMachine, "is unknown or offline; nothing was queued")); }
         var peerId = ids[0];
         var signed = signer();
         // Making the key can wait up to 30 s on its file lock; messaging turned off or a caller that lapsed meanwhile signs nothing.
@@ -111,6 +110,12 @@ public sealed class AgentLiteSender(
         finally { watching.Cancel(); await watcher; }
     }
 
+    internal static string MachineRefusal(string? machine, string code, string reason)
+    {
+        var id = machine is { Length: > 64 } ? machine[..(char.IsHighSurrogate(machine[63]) ? 63 : 64)] + "..." : machine ?? "<missing>";
+        return $"refused: {code}: machine ID {JsonSerializer.Serialize(id)} {reason}";
+    }
+
     // The host's own sender; credentials are judged by the store.
     public static AgentLiteSender ForHost(string profileFolder, ILiteMode mode, ILiteLink link, AgentCredentials? credentials, byte[] staticPublic) =>
         new(mode, link, c => credentials?.IsLive(c) == true, HostSigner(profileFolder, mode), staticPublic);
@@ -139,18 +144,28 @@ public sealed class AgentLiteSender(
 }
 
 // The link on the live relay connection, attached and detached as the host connects and disconnects.
-public sealed class RelayLiteLink : ILiteLink
+public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink
 {
     sealed record Current(RelayClient Relay, ChannelHub Hub);
     Current? now;
+    readonly byte[]? localStatic = localStatic?.ToArray();
+    readonly string localId = localStatic is null ? "" : Wire.DeviceId(localStatic);
 
     public void Attach(RelayClient? relay, ChannelHub? hub) => Volatile.Write(ref now, relay is null || hub is null ? null : new Current(relay, hub));
-    public string Self => now?.Relay.DeviceId ?? "";
-    public string Account => now?.Relay.AccountId ?? "";
+    public string Self => now?.Relay.DeviceId ?? localId;
+    public string Account => now?.Relay.AccountId ?? localAccount?.Invoke() ?? "";
     public IReadOnlyList<PresenceEntry> Presence => now?.Relay.Presence ?? [];
 
     public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct)
     {
+        if (localReceiver is not null && peerId == localId)
+        {
+            var currentAccount = localAccount?.Invoke() ?? "";
+            if (string.IsNullOrEmpty(currentAccount) || account != currentAccount || Self != localId) { throw new LitePeerOfflineException("local account changed"); }
+            ct.ThrowIfCancellationRequested();
+            return await localReceiver.ReceiveAsync(new LiteChannel(localId, "host", localStatic, localId, currentAccount, true),
+                JsonSerializer.SerializeToElement(request), ct);
+        }
         var l = Volatile.Read(ref now) ?? throw new LitePeerOfflineException("not connected to the relay");
         SecureChannel ch;
         try { ch = await l.Hub.OpenAsync(peerId, TimeSpan.FromSeconds(10)); }
