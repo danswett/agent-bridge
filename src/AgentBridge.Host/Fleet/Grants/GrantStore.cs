@@ -77,7 +77,8 @@ public sealed class GrantStore
         if (grant is null) { return new(GrantStoreProblem.NotFound); }
         if (grant.Generation != generation) { return new(GrantStoreProblem.Generation); }
         var now = observedAt ?? time.GetUtcNow();
-        return checkTime && now < grant.NotBefore ? new(GrantStoreProblem.NotYetValid)
+        return checkTime && (now < grant.NotBefore || state.Counters is { } counters && now < counters.ObservedAt)
+            ? new(GrantStoreProblem.NotYetValid)
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
 

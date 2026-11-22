@@ -245,7 +245,8 @@ public sealed class GrantCountersTests : IDisposable
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
-        Assert.True(Store().Revoke(grant.Id, 1).Usable);
+        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
     }
 
     [Theory]
