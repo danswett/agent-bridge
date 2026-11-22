@@ -7,14 +7,14 @@ using AgentBridge.Host.Delivery.Windows;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen | --widen <columns> <created> | --launch-size <columns> <created> | --identity <created>]
+// agent-bridge-injector <pid> [--screen | --widen <columns> <created> | --launch-size <columns> <created> | --identity <created> | --bound <created>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
 // agent-ha-bridge's ConsoleInjector.Send has long delivered with. It reports on stdout,
 // one line each, flushed:
 //
-//   writing <n>[ enter]   before every write to the console, so whoever started it knows
+//   writing <n>[ enter|q|u] before every write to the console, so whoever started it knows
 //                         a key may have landed whatever happens next
 //   wrote <n>             send n is complete
 //   ok                    every send is complete
@@ -42,7 +42,7 @@ namespace AgentBridge.Injector;
 // ends every process attached to a console when that console's window closes (spike S1).
 internal static unsafe partial class Program
 {
-    const string Header = "agent-bridge-keys 1";
+    const string Header = "agent-bridge-keys 2";
 
     static Stream output = Stream.Null;
 
@@ -53,7 +53,7 @@ internal static unsafe partial class Program
         var columns = 0;
         long created = 0;
         if (args.Length is not (1 or 2 or 3 or 4) || (args.Length == 2 && args[1] != "--screen")
-            || (args.Length == 3 && (args[1] != "--identity" || !long.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
+            || (args.Length == 3 && (args[1] is not ("--identity" or "--bound") || !long.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || (args.Length == 4 && (args[1] is not ("--widen" or "--launch-size") || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue
                 || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
@@ -62,7 +62,7 @@ internal static unsafe partial class Program
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
-        if (args.Length == 3) { return Identity(pid, created); }
+        if (args.Length == 3 && args[1] == "--identity") { return Identity(pid, created); }
         if (args.Length == 4) { return Widen(pid, (short)columns, created, args[1] == "--launch-size"); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
@@ -73,7 +73,7 @@ internal static unsafe partial class Program
         Ignore();
         for (var i = 0; i < sends.Count; i++)
         {
-            if (Send(pid, i, sends[i]) is { } failure)
+            if (Send(pid, i, sends[i], created) is { } failure)
             {
                 Say(failure);
                 return 3;
@@ -83,14 +83,14 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
+    sealed record KeySend(string Text, char Submit, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
 
     static List<KeySend>? Read(Stream input)
     {
         using var buffer = new MemoryStream();
         input.CopyTo(buffer);
         var lines = Encoding.UTF8.GetString(buffer.ToArray()).Split('\n');
-        if (lines.Length == 0 || lines[0].TrimEnd('\r') != Header) { return null; }
+        if (lines.Length == 0 || lines[0].TrimEnd('\r') is not (Header or "agent-bridge-keys 1")) { return null; }
         var sends = new List<KeySend>();
         foreach (var raw in lines.Skip(1))
         {
@@ -101,6 +101,8 @@ internal static unsafe partial class Program
             try
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
+                if (parts[2] is not ("0" or "1" or "q" or "u")
+                    || parts[2] is "q" or "u" && (lines[0].TrimEnd('\r') != Header || text.Length > 0)) { return null; }
                 var expect = new List<(int, string)>();
                 var checks = new List<(char, int, string[])>();
                 for (var k = 5; k < parts.Length; k += 2)
@@ -109,7 +111,7 @@ internal static unsafe partial class Program
                     if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '-' or '_' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
                     else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
-                sends.Add(new KeySend(text, parts[2] == "1",
+                sends.Add(new KeySend(text, parts[2][0],
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
                     int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect, checks));
             }
@@ -119,7 +121,19 @@ internal static unsafe partial class Program
         return sends;
     }
 
-    static string? Send(uint pid, int index, KeySend send)
+    static string? Send(uint pid, int index, KeySend send, long created)
+    {
+        var held = created == 0 ? 0 : OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        try
+        {
+            if (created != 0 && (held == 0 || !GetExitCodeProcess(held, out var code) || code != StillActive
+                || !GetProcessTimes(held, out var actual, out _, out _, out _) || actual != created)) { return "fail process 0"; }
+            return SendCore(pid, index, send);
+        }
+        finally { if (held != 0) { CloseHandle(held); } }
+    }
+
+    static string? SendCore(uint pid, int index, KeySend send)
     {
         // A process holds one console at a time, and AttachConsole fails while it has one.
         FreeConsole();
@@ -155,13 +169,14 @@ internal static unsafe partial class Program
                 Say($"writing {index}");
                 if (Write(input, send.Text) is { } failed) { return failed; }
             }
-            if (send.Enter)
+            if (send.Submit != '0')
             {
                 // A separate keystroke after a pause: a burst of characters is a paste, and
                 // an Enter inside it would not submit.
                 if (send.EnterDelayMs > 0) { Thread.Sleep(send.EnterDelayMs); }
-                Say($"writing {index} enter");
-                if (Write(input, "\r") is { } failed) { return failed; }
+                Say(SubmissionAnnouncement(index, send.Submit));
+                var chord = send.Submit == 'q' ? "\u0011" : send.Submit == 'u' ? "\u0015\u000b" : "\r";
+                if (Write(input, chord, send.Submit != '1') is { } failed) { return failed; }
             }
         }
         finally
@@ -224,6 +239,8 @@ internal static unsafe partial class Program
         { Say("fail identity 0"); return 3; }
         finally { CloseHandle(process); }
     }
+
+    static string SubmissionAnnouncement(int index, char submit) => $"writing {index} {(submit == '1' ? "enter" : submit.ToString())}";
 
     static string B64(string value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
 
@@ -394,22 +411,28 @@ internal static unsafe partial class Program
     // outside the BMP is its surrogate pair, two key events. The records go to the API by
     // pointer, never marshalled, so nothing can pass UnicodeChar through a code page
     // (agent-ha-bridge's struct, declared without CharSet, did, and turned "–" and CJK into "?").
-    static string? Write(nint input, string text)
+    static string? Write(nint input, string text, bool control = false)
     {
-        var records = new InputRecord[text.Length * 2];
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            var vk = c == '\r' ? VkReturn : (ushort)0;
-            records[2 * i] = new InputRecord { EventType = KeyEvent, KeyDown = 1, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-            records[2 * i + 1] = new InputRecord { EventType = KeyEvent, KeyDown = 0, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-        }
+        var records = Records(text, control);
         fixed (InputRecord* first = records)
         {
             if (!WriteConsoleInputW(input, first, (uint)records.Length, out var written)) { return $"fail write {Marshal.GetLastPInvokeError()}"; }
             if (written != records.Length) { return $"fail partial {written}"; }
         }
         return null;
+    }
+
+    static InputRecord[] Records(string text, bool control)
+    {
+        var records = new InputRecord[text.Length * 2];
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            var vk = control ? (ushort)(c + 64) : c == '\r' ? VkReturn : (ushort)0;
+            records[2 * i] = new InputRecord { EventType = KeyEvent, KeyDown = 1, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c, ControlKeyState = control ? 8u : 0 };
+            records[2 * i + 1] = new InputRecord { EventType = KeyEvent, KeyDown = 0, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c, ControlKeyState = control ? 8u : 0 };
+        }
+        return records;
     }
 
     static void Say(string line)

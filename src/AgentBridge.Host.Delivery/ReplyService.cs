@@ -92,6 +92,7 @@ public sealed class ReplyOptions
 //     pressed again while the reply still sits in the input box.
 public sealed partial class ReplyService : ISessionReplier
 {
+    internal QualificationController? QueueController { get; set; }
     readonly ISessionSource source;
     readonly IProcessInspector processes;
     readonly IAgentHaBridgeProbe probe;
@@ -390,7 +391,9 @@ public sealed partial class ReplyService : ISessionReplier
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
-        var process = stillCurrent is null && request.ClearConfirmation is null ? null : source.ProcessOf(session.Id);
+        var queueable = request.Intent == ReplyIntent.Queueable || request.Mode == ReplyMode.Queue;
+        var controller = QueueController;
+        var process = stillCurrent is null && !queueable && request.ClearConfirmation is null ? null : source.ProcessOf(session.Id);
         var target = processes.GetAgentProcesses(AgentKind.Copilot).FirstOrDefault(p => p.Id == pid);
         if (target is null) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
@@ -418,6 +421,20 @@ public sealed partial class ReplyService : ISessionReplier
         // turn only covers what has been written since.
         var input = inputs.GetOrAdd(transcript, path => new CopilotInput(path));
         input.Read();
+        async Task<string?> QueueFence()
+        {
+            var qualified = controller is not null && await controller.MatchesAsync(pid, process?.StartedAt);
+            var latest = input.Read();
+            return !qualified || request.Intent != ReplyIntent.Queueable
+                || source.Get(session.Id) is not { Agent: AgentKind.Copilot, Question: null, Status: SessionStatus.Idle or SessionStatus.Working } live
+                || live.ProcessId != pid || source.ProcessOf(session.Id) != process
+                || !processes.GetAgentProcesses(AgentKind.Copilot).Any(p => p.Id == pid && p.StartedAt == process?.StartedAt)
+                || requireIdle && live.Status != SessionStatus.Idle || stillCurrent is not null && !stillCurrent()
+                || probe.Active() is not null || guard.Refuse(pid) is not null || LaunchHeld?.Invoke(session.Id) is not null
+                || !latest.Readable || latest.Asking || latest.Resumed || words.TrimStart().StartsWith('!')
+                ? "queue capability or delivery target is unknown or no longer current" : null;
+        }
+        if (queueable && await QueueFence() is { } unavailable) { return Done(Refused(unavailable)); }
 
         // One delivery typed at a time across sessions, and the last checks are made once its
         // turn has come, not when it arrived.
@@ -519,7 +536,8 @@ public sealed partial class ReplyService : ISessionReplier
                 line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
                 new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
             ]);
-            if (stillCurrent is not null)
+            if (queueable) { keys = keys with { Sends = [keys.Sends[0]], ProceedAsync = QueueFence, TargetCreatedAt = process?.StartedAt }; }
+            if (stillCurrent is not null && !queueable)
             {
                 string? FinalEffect()
                 {
@@ -546,7 +564,11 @@ public sealed partial class ReplyService : ISessionReplier
             }
 
             timeline.InjectStart();
-            try { result = await injector.InjectAsync(pid, keys); }
+            try
+            {
+                result = await injector.InjectAsync(pid, keys);
+                if (queueable && result.Status == InjectionStatus.Typed) { result = await FinishQueueAsync(pid, words, QueueFence, process?.StartedAt); }
+            }
             catch (Exception e)
             {
                 return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"reply delivery to {Short(session.Id)} is uncertain after an injector failure; no background recovery will type further keys", e), null, KeysWent: true);
@@ -573,7 +595,7 @@ public sealed partial class ReplyService : ISessionReplier
                 new Attempt(Unconfirmed("reply delivery is uncertain after the input box changed; automatic recovery has ended and will not type further keys"), null, KeysWent: true),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
             _ => Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
-                seen => ConfirmAsync(transcript, from, words, staged, timeline, seen)),
+                async seen => (await ConfirmAsync(transcript, from, words, staged, timeline, seen)) with { Mode = queueable ? ReplyMode.Queue : null }),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
