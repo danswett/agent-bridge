@@ -147,6 +147,30 @@ for (const stale of [false, true]) {
   });
 }
 
+test('an accepted truncated Codex revision survives an older full page', async () => {
+  let release;
+  let pending = null;
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
+  } }) });
+  await store.open('h', ID);
+  const say = (response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated: true } }));
+  say('Partial old', 1);
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Older full answer', at: '2026-11-22T11:00:00Z' }] }];
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  say('Partial new', 2);
+  release();
+  await loading;
+  assert.equal(store.get('h', ID).turns[0].parts[0].text, 'Partial new');
+  assert.equal(store.get('h', ID).turns[0].parts[0].truncated, true);
+});
+
 for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
   test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
     const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,
