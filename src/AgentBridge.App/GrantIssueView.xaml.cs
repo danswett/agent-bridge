@@ -29,6 +29,7 @@ public sealed partial class GrantIssueView : UserControl
             shownDigest = viewModel.Digest;
             shownState = viewModel.State;
             PersonDigest.Text = "";
+            RotationNotice.Text = "";
             Bindings.Update();
         }
     }
@@ -36,6 +37,8 @@ public sealed partial class GrantIssueView : UserControl
     void OnChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (viewModel is null) { return; }
+        RotationNotice.Text = viewModel.Active && viewModel.Receipt is { Rotated: true }
+            ? "notice: this machine's pre-grant audit log was retired and a new one started (automatic-first-grant)" : "";
         if (shownDigest != viewModel.Digest)
         { shownDigest = viewModel.Digest; PersonDigest.Text = ""; }
         if (shownState != viewModel.State)
@@ -59,7 +62,6 @@ public sealed partial class GrantIssueView : UserControl
         using (document)
         {
             busy = true;
-            IsSubmitting = true;
             var source = SourceDocument.Text;
             try
             {
@@ -82,6 +84,7 @@ public sealed partial class GrantIssueView : UserControl
         if (reviewedDocument != SourceDocument.Text)
         { InputProblem.Text = "The document changed. Review it again before confirming."; return; }
         busy = true;
+        IsSubmitting = true;
         try { await model.ConfirmAsync(PersonDigest.Text); }
         catch (Exception error) when (ExpectedFailure(error))
         {
