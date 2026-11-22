@@ -100,6 +100,108 @@ public class HistoryTests
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 
+    static string CodexReply(string? id, string text, int at, bool responseItem = false, string turn = "native-turn") => responseItem
+        ? Codex.Item(new { type = "message", id, role = "assistant", content = new[] { new { type = "output_text", text } }, internal_chat_message_metadata_passthrough = new { turn_id = turn } }, at)
+        : Codex.Event(new { type = "item_completed", turn_id = turn, item = new { type = "AgentMessage", id, content = new[] { new { type = "Text", text } } } }, at);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Codex_explicit_item_identity_keeps_equal_replies_stream_updates_and_history_after_restart(bool responseFirst)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        string? lastId;
+        await using (var source = f.Source())
+        {
+            Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
+                CodexReply("first", "Same answer", 2, responseFirst), CodexReply("first", "Same answer", 3, !responseFirst));
+            await source.RefreshAsync();
+            var firstId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotNull(firstId);
+            Assert.Equal(firstId, (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single().Id);
+            Fixture.Append(transcript, CodexReply("second", "Same answer", 4, responseFirst), CodexReply("second", "Same answer", 5, !responseFirst));
+            await source.RefreshAsync();
+            var secondId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotEqual(firstId, secondId);
+            Fixture.Append(transcript, CodexReply("second", "Same answer continued", 6, responseFirst));
+            await source.RefreshAsync();
+            Assert.Equal(secondId, source.Get(Id)!.Activity.ResponseId);
+            Fixture.Append(transcript, CodexReply("third", "responseId=forged", 7, responseFirst));
+            await source.RefreshAsync();
+            var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+            Assert.Equal(["Same answer", "Same answer continued", "responseId=forged"], parts.Select(p => p.Text));
+            Assert.Equal([firstId, secondId, source.Get(Id)!.Activity.ResponseId], parts.Select(p => p.Id));
+            var legacy = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(source.Get(Id)!.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+            Assert.Equal("responseId=forged", legacy.Response);
+            lastId = source.Get(Id)!.Activity.ResponseId;
+        }
+        await using var restarted = f.Source();
+        await restarted.RefreshAsync();
+        Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
+        Assert.Equal(lastId, (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Last().Id);
+    }
+
+    [Fact]
+    public async Task Codex_history_retains_equal_text_distinct_item_ids_without_identifying_task_complete()
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question" }, 1),
+            CodexReply("first", "Same", 2), CodexReply("second", "Same", 3),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Same" }, 4));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal(2, (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Count);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    [InlineData("complete")]
+    [InlineData("conflicting-turn")]
+    [InlineData("conflicting-new-item")]
+    [InlineData("multiple-ids")]
+    [InlineData("no-turn")]
+    [InlineData("unreadable")]
+    [InlineData("skimmed")]
+    public async Task Codex_unknown_item_identity_never_aliases_by_text_time_or_last_agent_message(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        var next = shape switch
+        {
+            "missing" => Codex.Event(new { type = "agent_message", message = "Answer" }, 3),
+            "empty" => CodexReply("", "Answer", 3),
+            "complete" => Codex.Event(new { type = "task_complete", last_agent_message = "Answer" }, 3),
+            "conflicting-turn" => CodexReply("first", "Answer", 3, true, "other-turn"),
+            "conflicting-new-item" => CodexReply("second", "Answer", 3, true, "other-turn"),
+            "multiple-ids" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\"", "\"id\":\"first\",\"id\":\"first\""),
+            "no-turn" => CodexReply("first", "Answer", 3),
+            "unreadable" => "{\"type\":\"response_item\",\"payload\":",
+            "skimmed" => new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        var initial = shape == "no-turn" ? Array.Empty<string>() : [Codex.Event(new { type = "user_message", message = "Question" }, 1), CodexReply("first", "Answer", 2)];
+        Fixture.Append(transcript, [.. initial, next]);
+        if (shape is "unreadable" or "skimmed") { Fixture.Append(transcript, CodexReply("first", "Answer", 4, true)); }
+        await using var source = f.Source(tailBytes: shape == "skimmed" ? 4096 : 4 * 1024 * 1024);
+        await source.RefreshAsync();
+        Assert.Equal("Answer", source.Get(Id)!.Activity.Response);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next" }, 5), CodexReply("first", "Fresh answer", 6));
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
     [Fact]
     public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
     {
