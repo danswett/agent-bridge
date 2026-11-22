@@ -1,3 +1,4 @@
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Host;
 using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Transport;
@@ -148,5 +149,17 @@ public sealed class GrantSnapshotTests : IDisposable
         File.WriteAllBytes(path, good);
         Assert.Equal(GrantStoreProblem.None, store.Snapshot().Problem);
         Assert.True(store.TryGetUsable(grant.Id, grant.Generation).Usable);
+    }
+
+    [Fact]
+    public void A_deleted_profile_folder_after_a_prior_issue_is_unavailable_unless_independent_evidence_proves_never_issued()
+    {
+        Issue(new(1, 3, 2));
+        Directory.Delete(Folder, true);
+        var snapshot = Open().Snapshot();
+        Assert.Equal(GrantStoreProblem.RotationRequired, snapshot.Problem);
+        Assert.Equal(FleetGrantReadProblem.Unavailable, GrantReadProducer.Map(snapshot, () => false));
+        Assert.Equal(FleetGrantReadProblem.Unavailable, GrantReadProducer.Map(snapshot, () => throw new IOException()));
+        Assert.Equal(FleetGrantReadProblem.RotationRequired, GrantReadProducer.Map(snapshot, () => true));
     }
 }
