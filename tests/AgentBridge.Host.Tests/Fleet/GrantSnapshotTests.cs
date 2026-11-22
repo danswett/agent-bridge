@@ -17,7 +17,7 @@ public sealed class GrantSnapshotTests : IDisposable
     GrantSubject Subject() => new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()));
     GrantDocument Issue(GrantCaps caps, bool twoCallers = false)
     {
-        Assert.Null(AuditRotationTests.Rotate(Audit, key, clock.GetUtcNow()));
+        Assert.Null(AuditRotationTests.Rotate(Audit, key));
         var grant = new GrantDocument(1, Guid.NewGuid(), "123",
             new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
             twoCallers ? [Subject(), Subject()] : [Subject()], ["launch"], Scope, caps,

@@ -16,7 +16,7 @@ public sealed class GrantCountersTests : IDisposable
     bool rotated;
     GrantStore Store(Action<string, byte[]>? write = null)
     {
-        if (!rotated) { Assert.Null(AuditRotationTests.Rotate(Audit, key, clock.GetUtcNow())); rotated = true; }
+        if (!rotated) { Assert.Null(AuditRotationTests.Rotate(Audit, key)); rotated = true; }
         return new(Folder, key, Audit, Scope, clock, write);
     }
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);

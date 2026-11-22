@@ -176,9 +176,11 @@ public sealed partial class AgentAuditLog
         }
     }
 
-    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false)
+    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false, P256KeyPair? key = null)
     {
-        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: !readOnly, key: DeviceKey); }
+        // A read-only check takes neither lock: its caller may hold the folder lock, which Append takes after the gate.
+        if (readOnly) { return VerifyProfile(profile, launch, log, synchronize: false, key: key ?? DeviceKey); }
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true, key: key ?? DeviceKey); }
     }
 
     internal bool Bootstrap()
@@ -299,18 +301,6 @@ public sealed partial class AgentAuditLog
     }
     internal static long RetainedThrough(string folder) => ReadHead(folder, false)?.RetainedThrough ?? 0;
     internal static bool Adopted(string folder) => ReadHead(folder, false)?.Adopted == true || ReadHead(folder, true)?.Adopted == true;
-    internal static bool LegacyOnlyAdoption(string folder)
-    {
-        foreach (var launch in new[] { false, true })
-        {
-            var head = ReadHead(folder, launch);
-            if (head?.Adopted != true) { continue; }
-            if (head.AdoptedGatedRows is null || head.AdoptedPrefix is not { } prefix
-                || !TryCountAdoptedRows(folder, launch, prefix, out var count)
-                || count != head.AdoptedGatedRows || count != 0) { return false; }
-        }
-        return true;
-    }
     static bool TryCountAdoptedRows(string folder, bool launch, AdoptionPrefix prefix, out long count)
     {
         count = 0;
