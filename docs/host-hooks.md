@@ -58,7 +58,15 @@ spaces; setup refuses otherwise rather than installing a command it cannot execu
 
 Setup writes `intake.json` with `standalone: true`, a private `<profile>\runtime` and a
 stable native hook and pointer in `<profile>\hooks`. It refuses an existing legacy install,
-legacy registrations, migrated profiles and another profile's ownership marker. G5 still
+legacy registrations, other profiles' migrations and another profile's ownership marker. A
+profile migrate has finished (`migration.json` `migrated`) may add **Codex** only (Set up,
+Repair or `hooks install codex`; #3648): the retained legacy root is the rollback copy and does
+not block it, the registration runs migrate's own hook (swapped in recoverably under the
+migration lock), `intake.json` and the migrated runtime stay as migrate wrote them, and no second
+runtime or pointer is made. Copilot and Claude still refuse there (migrate re-pointed them), as do a
+retained `agent-ha-bridge` or `copilot-ha-bridge` marketplace, another profile's marker, an
+unreadable Codex home or marketplace list and a hook path with a space. Remove connection
+reverses only this registration. An unmigrated profile with a legacy root still refuses. G5 still
 checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
 home, changes a legacy task or starts a host automatically.
 Every agent's preflight checks Claude bridge commands, excluding this profile's owned

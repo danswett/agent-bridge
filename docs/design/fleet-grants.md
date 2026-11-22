@@ -10,27 +10,31 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
-Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
-- Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
-  machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.
-  The MAC proves a device, not a person (docs/design/agent-principals.md §2), so only a `user` principal whose
-  device is pinned here as a person's, never this machine's own key, may rotate; an agent, script or relay kind cannot.
-- Rotate: the signed values must equal the active files now (else "press again"); grant history not proved absent
-  (a store, a `grant.*` row as the audit reader parses it, an incomplete read, any retained boundary, or gated rows
-  without heads) refuses, so budgets, revocations, tombstones and the boundary are never reset. Each stream moves to
-  `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first record is a genesis: `previousSha256` = the
-  signed tail plus `rotation` {retired name, length, SHA-256, signed command}. New heads are not adopted.
-- Verify: a genesis is only ever a stream's first record and its MAC verifies, as of its issue time, with this
-  device key; a retired file still present must match its length and SHA-256. A missing one is accepted:
-  grants never read retired history. Grants need both streams bound to one genesis, plus the existing adopted,
-  retained, chain and sequence checks; otherwise a profile with no grant history is `RotationRequired`
-  ("rotation-required") and any other is AuditIncomplete.
-- Crash safety: `audit/rotation.pending` journals the command first; every later audit write, archive or bootstrap
-  finishes that rotation, reusing a matching retired file, or refuses. A same-request retry is a no-op.
+Grants require ONE audit rotation per VM, done automatically by its first grant issue (owner Nov 21 21:41 PT,
+superseding the person-signed command first proposed for #3566); no cutoff is inferred and heads are never trusted.
+- Trigger: only `GrantStore.Issue`, inside the G4 person-confirmed issuance (same caller guard and confirmation),
+  and only when the store would accept that grant; launch, stop, revoke, list and reads never rotate. Agent or
+  script ancestry and a wrong confirmation are refused before the store opens, so nothing rotates.
+- Rotate: grant history not proved absent (a store, a `grant.*` row as the audit reader parses it, an incomplete
+  read, any retained boundary, or gated rows without heads) refuses, so budgets, revocations, tombstones and the
+  boundary are never reset. A stream that does not fully verify with the host key (a broken chain with or without
+  heads, a genesis MACed by another key) also refuses. Each stream moves to `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first
+  record is a genesis: `previousSha256` = the retired tail plus `rotation` {retired name, length, SHA-256, record}.
+  The record holds a UUID request, reason `automatic-first-grant`, the grant id, time, each stream's length,
+  SHA-256 and `TailHash` tail, and an HMAC under this host's device key. The issue result prints one notice line.
+- Verify: a genesis is only ever a stream's first, newline-terminated record and its MAC and reason verify; a
+  retired file still present must match its length and SHA-256. A missing one is accepted: grants never read
+  retired history. Grants need both streams bound to one genesis, plus the existing adopted, retained, chain and
+  sequence checks; otherwise a profile with no grant history is `RotationRequired` ("rotation-required") and any
+  other is AuditIncomplete. A second rotation is refused.
+- Crash safety: `audit/rotation.pending` journals the MACed record first; the next issue, or any audit write,
+  archive or bootstrap with the device key, finishes that rotation, reusing a matching retired file, or refuses.
+  A torn genesis, mismatched retired file or unverifiable journal stays `RotationRequired`.
 - Native launch/stop gates and the launch preflight work before and after; gate sequences restart at 1.
 Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
-external anchor (#3569); the designated-verifier MAC means this device key could compute a genesis; retention
+external anchor (#3569); anything holding this host's device key could compute a genesis (#3569); retention
 pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
+G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
 
 ## Authority and existing boundaries
 
@@ -198,6 +202,26 @@ person confirmation, not direct file editing. Guard 67 plus complete caller
 classification refuse agent/script credentials or untraceable ancestry; refusal
 occurs before signing or mutation. A grant cannot invoke either command.
 Phone issuance/revocation is a later separately reviewed person-device slice.
+
+G4 CLI: `grants issue <document.json>`, `grants revoke <id> <generation>` and
+`grants list`, each with optional trailing `--profile <name>`. Issue consumes the
+strict G1 document with explicit subject tuples, scope, all three caps, times and
+expiry; it supplies no cap/lifetime defaults. The existing signed-in Windows
+identity is required; no key is provisioned. Issuer account/device and proof/digest
+are replaced by the verified local person path. The document's issued time must
+not be in the future or leave an expired grant. Its complete normalized summary
+is displayed; the person types the exact SHA-256 digest in an unredirected console.
+HostCli requires a direct desktop (`explorer.exe`) parent; shell-parent mutations,
+including revoke, deliberately refuse with exit 4. No script or bypass flag qualifies.
+The digest excludes only issuer proof/digest and includes `allowAllLaunch`, an
+explicit boolean defaulting false. The receipt repeats that digest and boolean.
+This field conveys no Allow-all authority until G5 validator/policy wiring lands.
+Current local policy admits only `ask`, isolated approved workspace labels and
+offered tuning choices common to all selected agents; no stop-target exceptions.
+Policy/ancestry are rechecked after confirmation. Revoke acknowledges only after
+the audited tombstone is installed. Listing uses existing read locks and verifies
+MAC/audit without creating files, repairing state or changing ACLs; unavailable
+state refuses. No counters are claimed by the list.
 
 The list/details screen shows issuer, subjects, actions/scope, expiry, spent
 hour/day counts, pending/live sessions, last caller/outcome, and remaining budget.
