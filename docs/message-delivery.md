@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: design (slice 0), corrected 2026-11-14 PT per ruling 6870556195 (not yet accepted); ID-first addressing updated 2026-11-21 PT. Inputs: #2568
+Status: slice 2a lane scheduler core (host-only, fake-tested, unwired); slice 2b key/capability/ack/replay pending, 2026-11-21 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -101,11 +101,25 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
   If `n` does not match, the body runs to the next `\n\n` and the entry is flagged.
 - **Trust:** a header is verified only if it matches this session's journal `handoff` (id, from, seq, at, n and body HMAC); the host checks, the app shows the verdict. Anything else, a pasted header
   included, stays `console`, unverified, and never confirms, dedupes or attributes a delivery.
+  Body HMAC encoding uses strict UTF-8: invalid UTF-16 is refused, never replaced with U+FFFD during verification.
 ## Lanes and key path (slice 2)
+Slice 2 is split: **2a** is the inert host-only lane scheduler, overflow notices and journal-backed
+sequence reservation/high-water recovery; **2b1** supplies submit keys (`none`, `Enter`, `Queue`,
+ctrl+q VK `Q` left-ctrl) and the per-terminal capability table; **2b2** owns production
+offer/query by UUID, final fenced/flushed handoff, truthful states and restart classification/replay.
+The dispatcher must not hold ReplyService's shared claim/typing slot across its callback.
+No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
+Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
+Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
 - **Urgent lane:** owner and system; agent-urgent from slice 3. Text, then Enter (steer), one at a time
   via `DeliveryGate`, by class (owner, system, agent), then arrival. Bound 10 per session: an owner item
   always enters, moving the newest agent (then system) urgent to the queueable lane, journaled and the
   sender told; an 11th owner item, or any other urgent at the bound, is refused, naming the target ID.
+- Urgent (owner/system) bypasses `RequireIdle`: session state must be positively known (working or idle)
+  AND the input box positively known EMPTY. Unknown state, unknown box or half-typed words = wait, no keys.
+  Queueable never bypasses idle. A displaced urgent is a new queueable arrival: evict the oldest fyi;
+  if 50 normals leave no fyi, drop the displaced item (`dropped`, reason `overflow`), sender told by a
+  `from=system` drop notice naming the target ID (rule 3). Never hold it outside the 10/50 bounds.
 - **Every lane** types only into an empty box; half-typed words at the machine make the item wait.
 - **Queueable lane:** everything else, FIFO per session: envelope text, then ctrl+q, so the CLI queues it
   as its own turn. The host hands the CLI at most 2 and never sends ctrl+c, esc esc or Up. `KeySend.Enter`
@@ -122,6 +136,12 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
   TTL: fyi 30 min, normal 4 h, urgent none. Each delivery carries a summary line (`q=3 Quality 2, SRE 1`).
 ## Guarantees, each with its hosted-CI test (fakes for console, clock and transcript)
+Slice 1 is split at the owner-approved 14:49 PT Nov 21 cap: envelope/HA identity, then the
+`DeliveryJournal` writer. It is not yet wired to delivery or acknowledgement paths (slice 2).
+The writer leaves `seq` null until supplied by the later reservation; it never reserves one.
+Its in-memory handoffs provide the parser verifier; restart classification/replay is slice 2.
+The file is `delivery.jsonl`, with a CurrentUser DPAPI-protected `delivery.key` in the same folder.
+A key that cannot be read is never replaced; a post-handoff write failure retains uncertainty.
 1. **Identity and journal.** Every delivery has `from`, `id`, `at`, and a `seq` once reserved. The journal is JSON lines beside the host diagnostics journal: metadata (including sender/target IDs), length and an HMAC-SHA256 under a
    DPAPI-protected host key, never text. `enqueued` (flushed before any ack), `handoff` (pre-key
    reservation), `typed` (post-key: injector result, box check, time), `delivered` (verified header in a user
@@ -166,10 +186,15 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
    between envelopes stays one entry; half-typed box text waits; a missing reason is refused; the 4th
    urgent in an hour is demoted; supersede keeps the newest; an expired item notifies.
 ## Slices (one builder, sequential, each at most 250 changed lines, all sensitive)
+Slice 2b2a fixes [#3681](https://github.com/danswett/agent-bridge/issues/3681): `SubmitWritten`
+records Queue submission uncertainty without pretending Enter was written; text/submit splitting
+uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing it requires `Submit=None`.
 | Slice | Content | Estimate | Due (PT) |
 |---|---|---|---|
 | 1 | `DeliveryEnvelope`, `n`, `at`, escape, authenticated `from` end to end, journal writer (**moved earlier**: every later drop needs it) | ~180 | after acceptance, #2574 |
-| 2 | Lanes, reserved `seq`, `RequireIdle` default, fail closed, submit key and capability table, `queued`/`pending` exit 6, restart replay; plain child of slice 1; accepted `queued` only once the shared store exists; over 250: 2b takes the table and submit key | ~240 | after 1, hotfix, 2469 |
+| 2a | Host-only lane scheduler, bounds, reserved `seq` and high-water recovery, idle/empty-box gate, shared `DeliveryGate`; fake-only, unwired plain child of slice 1 | <=400 | after 1 |
+| 2b1 | Submit key (`none`/`Enter`/`Queue`, ctrl+q VK `Q` left-ctrl), default-Unknown per-terminal capability table; no production scheduler wiring or live qualification | <=400 | after 2a |
+| 2b2 | Production offer/query by UUID, canonical pre-key flushed handoff, callback without ReplyService gate reentry, truthful states and UUID replay; accepted `queued` only once the shared store exists | <=400 | plain child of pushed 2b1 |
 | 3 | Priority authority, `reply-session.ps1 -Priority -Reason`, per-principal quota, journaled grants | ~130 | after 2 |
 | 4 | Topic, TTL, summary line, confirmation by id, gap detector, bounded retry; over 250: 4b takes confirmation and retry | ~200 | after 3 |
 ## Live test (SRE Lead, disposable sessions; builder's harness): 1, 3, 4, 5 after slice 2; 2 after 4

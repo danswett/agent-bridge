@@ -146,7 +146,7 @@ in unsigned transport cannot poison that floor.
 `issuedAt` must not be in the future. Install eligibility requires
 `issuedAt <= now < expiresAt`, plus a verified, durably saved snapshot. Hourly
 republish provides availability margin, not an extension of the six-hour bound.
-At exactly expiry, Update now refuses under option A below. A 200, 304, cache
+At exactly expiry, protection is unavailable (person exception only, below). A 200, 304, cache
 hit, retry or process restart never renews signed validity. Prefer cached verified
 bytes within their remaining validity; no transport timestamp supplies freshness.
 
@@ -160,8 +160,8 @@ so a policy-only change can halt the current release.
 
 A first-time client can be shown an older valid policy and miss a newly published
 halt for the remainder of its signed lifetime, **at most six hours**. The signer
-is trusted to publish correct current state; withholding cannot force an unchecked
-install or extend the old policy indefinitely with an honest clock. It can deny
+is trusted to publish correct current state; withholding cannot force an automatic
+unchecked install or extend the old policy indefinitely with an honest clock. It can deny
 service after expiry. It cannot cause package downgrade past installed/channel
 floors, fabricate signed halts, or clear a halt already protected by a newer
 persisted sequence.
@@ -195,18 +195,24 @@ current main under one publication lock and allocate a higher sequence; they may
 not overwrite a newer generation. Clearing halts requires a reviewed policy edit.
 Signing credentials are never installed on clients.
 
-**Owner decisions needed before PR 2, routed through Engineering/Chief:**
+**Owner decisions (owner-approved 15:24 PT Nov 21):**
 
-| Install policy | Trade-off |
-|---|---|
-| A: checked installs only, no person bypass (**recommended**) | Every install needs valid protection; strongest safety and satisfies never-unchecked acceptance, but a policy/signing outage blocks an urgent manual update. |
-| B: keep a person's explicitly confirmed unchecked single-machine install | Retains today's availability exception, with distinct warning, fresh signed confirmation and audit line; can install a newly halted release whose halt was withheld. It does not satisfy a blanket never-unchecked guarantee. Automatic/batch installs remain fail closed; known halts always refuse. |
+1. **Install policy B.** When the policy cannot be verified, keep a person's
+   confirmed, warned, signed and audited single-machine install (as Nov 19,
+   12:06 PT); it gives no blanket never-unchecked guarantee. Known halts always
+   refuse; automatic, batch and null protection fail closed. So the reader reports
+   distinct unavailable, known-halted and verified outcomes for the wiring.
+2. **Existing signer and fixed anchor, yes.** Sign with the existing app
+   release-signing identity (no new key) and publish the pair at the fixed
+   `halt-policy-v1` anchor on every release and halt change.
 
-Do not silently remove today's `unchecked` behavior. Owner selection of A or B
-is a prerequisite to enforcement changes; absent that decision, PR 2 is held,
-not implicitly A. Also obtain owner approval for using/enabling the existing
-signer for this policy and provisioning the fixed anchor/publication schedule.
 No key rotation/new key or relay deployment is authorized by this design.
+
+**Where sequences live.** The client's highest accepted sequence lives in its
+installation state beside `release-discovery.json`, under the same lock. Lost or
+replaced state is a new install: no anchor, at most six hours of exposure. The
+publisher's sequence is the anchor's own verified sequence plus one, never a
+counter reset, so clients that reject lower sequences cannot be locked out.
 
 ## Ordered slices and focused tests
 
@@ -229,8 +235,8 @@ No later slice starts until this design is CLEAN and the Chief sends the go.
    higher-sequence clearing. Exercise new install, older-than-six-hour legacy
    state, pressed discovery, both channels/rings, forged version floor and held API
    budget. Assert zero `api.github.com` requests through full Update now acceptance,
-   discovery, download and departure, including failure paths. Cover owner-selected
-   A or B explicitly, automatic/batch/null holds and late expiry/halt at commit.
+   discovery, download and departure, including failure paths. Cover install policy
+   B explicitly, automatic/batch/null holds and late expiry/halt at commit.
 4. **PR 3: refusal wording and retry metadata**, folding
    [the wording issue](https://github.com/danswett/agent-bridge/issues/3553).
    Synthetic host-to-app refusal proves code/retry preservation, not a guess about

@@ -138,10 +138,11 @@ public sealed class StopService : ISessionStopper
 
     public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch,
         CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null,
-        Action? onReplay = null)
+        Action? onReplay = null, bool personConfirmation = true)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
+        if (!personConfirmation && request.Confirm is not null) { return Task.FromResult(Refused("person-required")); }
+        return requests.Once(key, () => EndAsync(request, key, beforeDispatch, personConfirmation), result =>
             log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
             owner: (principal, request.Id), foreign: () =>
             {
@@ -150,7 +151,7 @@ public sealed class StopService : ISessionStopper
             }, repeated: onReplay is null ? null : result => { onReplay(); return result; });
     }
 
-    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
+    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch, bool personConfirmation)
     {
         Session session;
         int processId;
@@ -188,6 +189,7 @@ public sealed class StopService : ISessionStopper
 
             if (ConfirmationHint(session) is { } doing)
             {
+                if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                 if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
                 {
                     if (beforeDispatch?.Invoke(processId, startedAt) == false) { return AuditRefused(); }
@@ -195,7 +197,7 @@ public sealed class StopService : ISessionStopper
                 }
                 confirmed = true;
             }
-            Disarm(session.Id);
+            if (personConfirmation) { Disarm(session.Id); }
         }
         catch (Exception e)
         {
@@ -207,7 +209,7 @@ public sealed class StopService : ISessionStopper
         StopResult result;
         try
         {
-            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch); }
+            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch, personConfirmation); }
             catch (Exception e)
             {
                 log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
@@ -244,12 +246,28 @@ public sealed class StopService : ISessionStopper
     // that was idle when it arrived is checked again once the typing turn is taken, which can
     // be a while if another session is being typed into: a session that has started working
     // or asking meanwhile needs a second press like any other.
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch)
+    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch, bool personConfirmation)
     {
+        StopResult? CheckAgent()
+        {
+            if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+            if (probe.Active() is { } changed) { return Refused(changed); }
+            if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
+            { return new(StopOutcome.Confirm, "person-required"); }
+            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
+            if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
+                || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
+            { return Stale("the session's process has changed"); }
+            return null;
+        }
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
         // Gone between the press and now: what the press asked for has happened.
-        if (opened.Process is not { } held) { return Ended(false); }
+        if (opened.Process is not { } held)
+        {
+            if (!personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+            return Ended(false);
+        }
         Task? pendingWorker = null;
         // Whether the handle outlives this stop, until every failed worker is proven gone.
         var hold = false;
@@ -275,15 +293,21 @@ public sealed class StopService : ISessionStopper
                 var asking = MayBeAsking(now, out var notReady);
                 if (!confirmed && ConfirmationHint(now, asking) is { } doing)
                 {
+                    if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                     if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                     return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle");
                 }
-                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                if (personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
+                if (!personConfirmation && CheckAgent() is { } agentRefusal) { return agentRefusal; }
                 if (ownsTyping && !asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys, deadline.Token); }
+                    StopResult? fenceRefusal = null;
+                    string? Proceed() { fenceRefusal = CheckAgent(); return fenceRefusal is null ? null : "agent-stop-refused"; }
+                    // Screen reads share the injector's slot, so the earlier check can be stale.
+                    var plan = personConfirmation ? ExitKeys : ExitKeys with { Proceed = Proceed };
+                    try { typing = await injector.InjectAsync(pid, plan, deadline.Token); }
                     catch (InjectorWorkerException e) when (e.Exited.IsCompletedSuccessfully)
                     { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
                     catch (Exception e)
@@ -293,6 +317,7 @@ public sealed class StopService : ISessionStopper
                         log($"end of {Short(session.Id)} retains its injector fence and PID handle: {e.Message}");
                         typing = new InjectionResult(InjectionStatus.Interrupted, e.Message);
                     }
+                    if (typing.Status == InjectionStatus.NothingTyped && fenceRefusal is not null) { return fenceRefusal; }
                     typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
@@ -323,6 +348,7 @@ public sealed class StopService : ISessionStopper
                 log($"end of {Short(session.Id)} (pid {pid}) not terminated: an injector worker is not proven gone");
                 return Failed("a typing attempt may still be running, so the host kept the session's process held and did not end it; check at the machine");
             }
+            if (!personConfirmation) { return Failed("still-running"); }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))

@@ -168,12 +168,11 @@ public sealed partial class AgentAuditLog
         }
     }
 
-    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false) =>
-        Verify(launch, readOnly, DeviceKey);
-
-    internal (bool Intact, bool LegacyPrefix) Verify(bool launch, bool readOnly, P256KeyPair? key)
+    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false, P256KeyPair? key = null)
     {
-        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: !readOnly, key: key); }
+        // A read-only check takes neither lock: its caller may hold the folder lock, which Append takes after the gate.
+        if (readOnly) { return VerifyProfile(profile, launch, log, synchronize: false, key: key ?? DeviceKey); }
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true, key: key ?? DeviceKey); }
     }
 
     internal bool Bootstrap()
@@ -277,7 +276,9 @@ public sealed partial class AgentAuditLog
         [property: JsonRequired] string Root, [property: JsonRequired] string RootSha256,
         [property: JsonRequired] string Tail, [property: JsonRequired] string TailSha256,
         [property: JsonRequired] long Length, [property: JsonRequired] long Sequence = 0,
-        [property: JsonRequired] string Fault = "none", long RetainedThrough = 0, string? RetiringRoot = null, bool Adopted = false);
+        [property: JsonRequired] string Fault = "none", long RetainedThrough = 0, string? RetiringRoot = null, bool Adopted = false,
+        long? AdoptedGatedRows = null, AdoptionPrefix? AdoptedPrefix = null);
+    sealed record AdoptionPrefix(string Root, string RootSha256, string Tail, string TailSha256, long Length, long Sequence, bool Empty = false);
     static string HeadFile(string folder, bool launch) => Path.Combine(folder, launch ? "launches.head" : "agents.head");
     internal static bool HasHeads(string folder) => File.Exists(HeadFile(folder, false)) || File.Exists(HeadFile(folder, true));
     static Head? ReadHead(string folder, bool launch)
@@ -292,6 +293,57 @@ public sealed partial class AgentAuditLog
     }
     internal static long RetainedThrough(string folder) => ReadHead(folder, false)?.RetainedThrough ?? 0;
     internal static bool Adopted(string folder) => ReadHead(folder, false)?.Adopted == true || ReadHead(folder, true)?.Adopted == true;
+    static bool TryCountAdoptedRows(string folder, bool launch, AdoptionPrefix prefix, out long count)
+    {
+        count = 0;
+        try
+        {
+            if (prefix.Empty) { return prefix is { Root: "", RootSha256: "", Tail: "", TailSha256: "", Length: 0, Sequence: 0 }; }
+            var files = Files(folder, launch).Where(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Root) >= 0
+                && StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Tail) <= 0).ToArray();
+            if (files.Length == 0 || Path.GetFileName(files[0]) != prefix.Root || Path.GetFileName(files[^1]) != prefix.Tail
+                || prefix.Length <= 0 || prefix.Sequence < 0
+                || files.Any(f => new FileInfo(f).Length == 0) || new FileInfo(files[^1]).Length < prefix.Length
+                || Hash(Encoding.UTF8.GetBytes(File.ReadLines(files[0]).First())) != prefix.RootSha256
+                || !PrefixIntact(files[^1], new(1, prefix.Root, prefix.RootSha256, prefix.Tail, prefix.TailSha256, prefix.Length)))
+            { throw new IOException("adopted audit prefix does not match its snapshot"); }
+            long sequence = 0;
+            foreach (var file in files)
+            {
+                using var stream = File.OpenRead(file);
+                var end = file == files[^1] ? prefix.Length : stream.Length;
+                while (end > 0)
+                {
+                    var start = PreviousNewline(stream, end - 1) + 1;
+                    var bytes = new byte[checked((int)(end - start))];
+                    stream.Position = start; stream.ReadExactly(bytes); end = start;
+                    using var doc = JsonDocument.Parse(bytes);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object) { throw new IOException("invalid adopted audit row"); }
+                    if (doc.RootElement.TryGetProperty("gate", out var metadata) && metadata.ValueKind != JsonValueKind.Null)
+                    {
+                        if (metadata.ValueKind != JsonValueKind.Object || !metadata.TryGetProperty("sequence", out var field)
+                            || field.ValueKind != JsonValueKind.Number || !field.TryGetInt64(out var value) || value <= 0)
+                        { throw new IOException("invalid adopted gate sequence"); }
+                        count++; sequence = Math.Max(sequence, value);
+                    }
+                }
+            }
+            if (sequence != prefix.Sequence) { throw new IOException("adopted gate sequence does not match its snapshot"); }
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or OverflowException)
+        { return false; }
+    }
+    static AdoptionPrefix? RetireAdoptedPrefix(string folder, Head head, string retiring, string next, string nextHash)
+    {
+        var prefix = head.AdoptedPrefix;
+        if (!head.Adopted || prefix is null || prefix.Empty || prefix.Root != retiring) { return prefix; }
+        if (!TryCountAdoptedRows(folder, false, prefix, out var count) || count != head.AdoptedGatedRows) { return null; }
+        // A positive bootstrap count is never cleared, even after its evidence is retired.
+        if (count != 0) { return prefix; }
+        return prefix.Root == prefix.Tail ? new("", "", "", "", 0, 0, Empty: true)
+            : prefix with { Root = next, RootSha256 = nextHash };
+    }
     static Head CaptureHead(string folder, bool launch, string? retiringRoot = null)
     {
         var files = Files(folder, launch).Where(f => Path.GetFileName(f) != retiringRoot).ToArray();
@@ -351,7 +403,14 @@ public sealed partial class AgentAuditLog
         // Advancing the head must not bless a suffix after its original root was lost.
         head = head with { Root = previous?.Root ?? head.Root, RootSha256 = previous?.RootSha256 ?? head.RootSha256,
             Sequence = sequence, Fault = fault, RetainedThrough = previous?.RetainedThrough ?? 0,
-            RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted };
+            RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted,
+            AdoptedGatedRows = previous?.AdoptedGatedRows, AdoptedPrefix = previous?.AdoptedPrefix };
+        if (adopted && previous is null && fault == "none")
+        {
+            var prefix = new AdoptionPrefix(head.Root, head.RootSha256, head.Tail, head.TailSha256, head.Length, sequence);
+            if (TryCountAdoptedRows(folder, launch, prefix, out var count))
+            { head = head with { AdoptedPrefix = prefix, AdoptedGatedRows = count }; }
+        }
         SaveHead(folder, launch, head);
     }
     static void SaveHead(string folder, bool launch, Head head)
@@ -555,7 +614,9 @@ public sealed partial class AgentAuditLog
             {
                 var next = files.First(f => f.Day > day).Info;
                 var removed = LastGateSequence(folder, false, info.FullName);
-                expected = expected with { Root = next.Name, RootSha256 = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First())),
+                var nextHash = Hash(Encoding.UTF8.GetBytes(File.ReadLines(next.FullName).First()));
+                expected = expected with { Root = next.Name, RootSha256 = nextHash,
+                    AdoptedPrefix = RetireAdoptedPrefix(folder, expected, info.Name, next.Name, nextHash),
                     RetiringRoot = info.Name, RetainedThrough = Math.Max(expected.RetainedThrough, removed), Sequence = Math.Max(expected.Sequence, removed) };
                 // Commit the exact authorized retirement before removing evidence; a crash may leave this one file present.
                 SaveHead(folder, false, expected);

@@ -227,6 +227,7 @@
                                     Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachineUpdates), Mode=OneWay}"
                                     Click="{x:Bind ViewModel.CheckAll}" />
                             </Grid>
+                            <Button x:Name="FleetGrantsButton" Content="Grants" AutomationProperties.AutomationId="FleetGrants" AutomationProperties.Name="Show fleet grants" Click="OnGrants" />
                             <TextBlock
                                 Style="{StaticResource AbTypeMeta}"
                                 Foreground="{ThemeResource AbText2}"
@@ -443,6 +444,7 @@
                 <!-- Launch, Usage and Settings: a page each, its title at the top of the view. -->
                 <local:LaunchView x:Name="LaunchPane" Grid.Row="1" Visibility="Collapsed" />
                 <local:UsageView x:Name="UsagePane" Grid.Row="1" Visibility="Collapsed" />
+                <local:GrantListView x:Name="GrantsPane" Grid.Row="1" Visibility="Collapsed" />
                 <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />
             </Grid>
         </NavigationView>
