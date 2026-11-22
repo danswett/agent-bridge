@@ -7,8 +7,8 @@ internal enum DeliveryClass { Owner, System, Agent }
 internal enum LaneResult { Waiting, HandedOff, Unconfirmed }
 internal sealed record LaneNotice(string Target, DeliveryHeader Item, string Reason) { public string From => "system"; }
 
-// Inert host-only seam; no production caller or console adapter.
-internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGate gate,
+// Host-only scheduler; the dispatch adapter lets ReplyService own its claim and typing slot.
+internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGate gate,
     Func<string, (bool? Idle, bool? Empty)> screen,
     Func<string, DeliveryHeader, string, Task> send, Action<LaneNotice> notice,
     TimeProvider time)
@@ -27,6 +27,13 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
 
     public bool Enqueue(string session, DeliveryHeader header, string body, DeliveryClass sender)
     {
+        List<LaneNotice> notices = [];
+        try { return EnqueueCore(session, header, body, sender, notices); }
+        finally { foreach (var n in notices) { notice(n); } }
+    }
+
+    bool EnqueueCore(string session, DeliveryHeader header, string body, DeliveryClass sender, List<LaneNotice> notices)
+    {
         lock (sync)
         {
             if (uncertain) { throw new InvalidOperationException($"Target {session}: delivery journal uncertain."); }
@@ -43,14 +50,14 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
                 !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
                 Record(session, header, body, DeliveryState.Dropped, "overflow");
-                notice(new(session, header, $"Target {session}: dropped overflow."));
+                notices.Add(new(session, header, $"Target {session}: dropped overflow."));
                 return false;
             }
             if (urgent && lanes.Urgent.Count == 10 && displaced is null ||
                 !urgent && lanes.Queueable.Count == 50 &&
                     !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
-                notice(new(session, header, $"Target {session}: lane full; refused."));
+                notices.Add(new(session, header, $"Target {session}: lane full; refused."));
                 return false;
             }
             if ((!urgent || displaced is not null) && lanes.Queueable.Count == 50 &&
@@ -59,7 +66,7 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
                 var drop = lanes.Queueable.First(i => i.Header.Priority == "fyi");
                 Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
                 lanes.Queueable.Remove(drop);
-                notice(new(session, drop.Header, $"Target {session}: dropped overflow."));
+                notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
             }
             if (displaced is not null)
             {
@@ -69,13 +76,13 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
                 {
                     Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");
                     lanes.Urgent.Remove(displaced);
-                    notice(new(session, moved.Header, $"Target {session}: dropped overflow."));
+                    notices.Add(new(session, moved.Header, $"Target {session}: dropped overflow."));
                 }
                 else
                 {
                     lanes.Urgent.Remove(displaced);
                     lanes.Queueable.Add(moved);
-                    notice(new(session, moved.Header, $"Target {session}: demoted to queueable for owner."));
+                    notices.Add(new(session, moved.Header, $"Target {session}: demoted to queueable for owner."));
                 }
             }
             Record(session, header, body, DeliveryState.Enqueued);
@@ -86,6 +93,7 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
 
     public async Task<LaneResult> DeliverNextAsync(string session, CancellationToken cancellation = default)
     {
+        if (Dispatch is not null) { return await DispatchNextAsync(session, cancellation); }
         using var admission = gate.TryEnterDelivery();
         var claim = Guid.NewGuid();
         if (admission is null || !gate.TryClaim(session, claim)) { return LaneResult.Waiting; }

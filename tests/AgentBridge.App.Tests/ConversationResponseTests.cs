@@ -73,6 +73,8 @@ public sealed class ConversationResponseTests
                 readonly List<Row> historyShown = [];
                 readonly Rows HistoryRows = new();
                 (string Id, double Top)? reading;
+                void SetEndPin(bool value) => pinEnd = value;
+                void UpdateConversationLayout(FrameworkElement content) => content.UpdateLayout();
                 bool HistoryAtEnd() => atEnd;
                 (string Id, double Top)? ReadingHistory() => reading;
                 double Top(FrameworkElement row, Scroll scroll) => 0;

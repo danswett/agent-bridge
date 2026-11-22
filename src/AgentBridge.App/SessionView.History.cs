@@ -37,7 +37,7 @@ public sealed partial class SessionView
         history = Card?.Stored;
         var key = Card?.Row?.Key ?? Card?.Id;
         var opening = shownHistory != key;
-        if (opening) { shownHistory = key; pinEnd = true; RecoverReading(); navigationPending = null; seen = null; openPrompts.Clear(); historyVisible = 1; }
+        if (opening) { shownHistory = key; SetEndPin(true); RecoverReading(); navigationPending = null; seen = null; openPrompts.Clear(); historyVisible = 1; }
         if (history is not null) { history.Changed += OnHistoryChanged; }
         ShowHistory(opening);
         if (history is not null) { _ = history.LoadNewestAsync(); }
@@ -89,10 +89,13 @@ public sealed partial class SessionView
         var atEnd = HistoryAtEnd();
         var offset = scroll?.VerticalOffset ?? 0;
         var reading = atEnd ? null : ReadingHistory();
-        var changed = HistoryRowSync.Apply(historyShown, rows);
+        var (session, releases) = (shownHistory, pinReleases);
+        if (atEnd) { SetEndPin(true); }
+        var changed = DuringConversationLayout(() => HistoryRowSync.Apply(historyShown, rows));
         rowsOf = shownHistory;
         // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
-        if (changed || opening) { if (atEnd) { pinEnd = true; anchor = null; } KeepPlace(atEnd, offset, reading, opening: opening); }
+        if ((changed || opening) && session == shownHistory && releases == pinReleases)
+        { if (atEnd) { anchor = null; } KeepPlace(atEnd, offset, reading, opening: opening); }
         HistoryLine.Text = line ?? "";
         HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
         HistoryRetry.Visibility = history?.State == HistoryLoad.Failed ? Visibility.Visible : Visibility.Collapsed;
@@ -147,11 +150,19 @@ public sealed partial class SessionView
         var offset = scroll?.VerticalOffset ?? 0;
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
-        if (atEnd) { anchor = null; }
-        for (var i = rows.Count - 1; i >= 0; i--) { historyShown.Insert(0, rows[i]); }
+        var (session, releases) = (shownHistory, pinReleases);
+        if (atEnd) { SetEndPin(true); anchor = null; }
+        DuringConversationLayout(() =>
+        {
+            for (var i = rows.Count - 1; i >= 0; i--) { historyShown.Insert(0, rows[i]); }
+            return 0;
+        });
         historyVisible = turns.Count - from;
-        KeepPlace(atEnd, offset, reading, extent);
-        if (atEnd) { KeepPlace(true, 0); }
+        if (session == shownHistory && releases == pinReleases)
+        {
+            KeepPlace(atEnd, offset, reading, extent);
+            if (atEnd) { KeepPlace(true, 0); }
+        }
         if (from == 0) { historyDraw?.Stop(); }
     }
 
@@ -194,10 +205,14 @@ public sealed partial class SessionView
     {
         if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null) { return; }
         var (session, releases, anchors) = (shownHistory, pinReleases, responseAnchors);
+        bool Current() => session == shownHistory && releases == pinReleases && restoreReading is null
+            && scrollbarPointers.Count == 0 && !panning && (!scrolling || anchoring is not null)
+            && keyTarget is null && (opening || !follow.Held || !atEnd && !pinEnd);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || restoreReading is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
-            HistoryColumn.UpdateLayout();
+            if (!Current() || ConversationScroll is not { } scroll) { return; }
+            UpdateConversationLayout(HistoryColumn);
+            if (!Current()) { return; }
             if (!atEnd && !pinEnd && reading is null && anchors != responseAnchors) { return; }
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
@@ -205,7 +220,8 @@ public sealed partial class SessionView
                 var index = historyShown.ToList().FindIndex(r => r.Id == kept.Id);
                 if (index >= 0 && HistoryRows.GetOrCreateElement(index) is FrameworkElement row)
                 {
-                    HistoryColumn.UpdateLayout();
+                    UpdateConversationLayout(HistoryColumn);
+                    if (!Current()) { return; }
                     target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }

@@ -866,6 +866,10 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    [JsonIgnore]
+    public Func<string>? HandoffText { get; init; }
+    [JsonIgnore]
+    public bool QueueSubmit { get; init; }
     // Host-only provenance, rechecked when consumed. No producer means Unknown, not Steer;
     // Mode, RequireIdle, sender labels and message text cannot supply this authority.
     [JsonIgnore]

@@ -38,6 +38,7 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
+        ConversationList.LayoutOwner = DuringConversationLayout;
         ReplyBox.TextCompositionStarted += (_, _) => replyComposing = true;
         ReplyBox.TextCompositionEnded += (_, _) => replyComposing = false;
         HistoryRows.ItemsSource = historyShown;
@@ -73,13 +74,14 @@ public sealed partial class SessionView : UserControl
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }
             else { follow.Pressed(e.Pointer.PointerId); }
+            SyncConversationAnchoring();
         }), true);
         ConversationList.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
         ConversationList.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         ConversationList.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         // A mouse or pen over the conversation holds it as a finger does (#261's guard).
-        ConversationList.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
-        ConversationList.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { HoldConversationPointer(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { ReleaseConversationPointer(e.Pointer.PointerId); } }), true);
         // The question's answers moved where they are (#491): held again. And a pointer's press on
         // one reads where they are first, and is dropped if they moved (PointerLets).
         answers = new AnswerWatch(QuestionCard, () => questionView, OnAnswersMoved);
