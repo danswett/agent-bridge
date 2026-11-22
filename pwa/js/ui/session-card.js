@@ -30,7 +30,7 @@ import { ago, localTime } from './time.js';
 import { copyText, renderMarkdown } from '../markdown.js';
 import { copyFeedback } from './copy-feedback.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
-import { awayWords, detailRows } from '../details-rows.js';
+import { awayWords, compactionText, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
@@ -70,8 +70,8 @@ export function cardStatusFacts(s, words, stale = false) {
     const index = s.id.split('').reduce((n, c) => (n + c.charCodeAt(0)) % SPINNER_VERBS.length, 0);
     facts[0] = SPINNER_VERBS[index];
   }
-  const n = s.activity.compactions;
-  if (n > 0) { facts.push(n === 1 ? 'compacted once' : `compacted ${n} times`); }
+  const compactions = compactionText(s.activity.compactions);
+  if (compactions) { facts.push(compactions); }
   return facts;
 }
 

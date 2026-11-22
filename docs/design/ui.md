@@ -1143,7 +1143,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   | 15 | Updated | "2m ago" | Always |
   | 16 | Background | "2 background agents · 1 background command" | When any |
   | 17 | Turns | "12 turns", "1 turn" | When sent |
-  | 18 | Compactions | "3 compactions" | When more than 0 |
+  | 18 | Compactions | "compacted once" / "compacted 3 times", as in the session header | When more than 0 |
   | 19 | Process | "pid 4312", mono | When sent |
   | 20 | ID | The full session id, mono, then a Copy button | Always |
 
@@ -1742,9 +1742,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   on the next reply or history update, including after a screen-reader retreat.
   This end-entry tolerance is separate from the 1 px movement tolerance; it does not
   widen pin-release exemptions or override active navigation, scrolling or holds.
-  Retained latest-response blocks own their list anchor and invalidate earlier queued numeric
-  restores, but not stored-row or end corrections. Only a signed extent decrease explains a
-  shrink-sized drop; stationary remeasurement evidence survives until the next actual move
+  Leading retained latest-response trims own their list anchor and invalidate earlier queued
+  numeric restores, but not stored-row or end corrections; plain appends preserve prior restores.
+  Only a signed extent decrease explains a shrink-sized drop; for stationary remeasurement
+  starting at a known end, the latest signed change survives until the next actual move,
+  so later growth cannot explain a shrink-sized drop or excuse a retreat from an earlier gap.
+  Stationary remeasurement evidence survives until the next actual move
   or user release, and resets on reattachment, so a one-viewport layout landing is recognized
   in either event ordering.
   A question brought into view, a block requested by a screen reader or any other move back from

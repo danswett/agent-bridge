@@ -16,7 +16,10 @@ public sealed class ConversationResponseTests
     public void A_retained_prefix_trim_leaves_the_lists_anchoring_while_a_wholesale_replacement_keeps_its_place() => RunProbe("Trim");
 
     [Theory, InlineData("numeric"), InlineData("row"), InlineData("end")]
-    public void A_retained_trim_invalidates_queued_numeric_restores_but_keeps_row_and_end_anchors(string anchor) => RunProbe("QueuedTrim", anchor);
+    public void A_retained_trim_invalidates_queued_numeric_restores_but_keeps_row_and_end_anchors(string anchor) => RunProbe("QueuedUpdate", anchor);
+
+    [Fact]
+    public void A_plain_append_preserves_the_numeric_restore_queued_by_a_wholesale_replacement() => RunProbe("QueuedUpdate", "append");
 
     static void RunProbe(string run, string? anchor = null)
     {
@@ -25,7 +28,7 @@ public sealed class ConversationResponseTests
         Assert.NotNull(root);
         var method = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SessionView.Conversation.cs")))
             .GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "ShowResponse");
-        var preserve = run == "QueuedTrim"
+        var preserve = run == "QueuedUpdate"
             ? CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.App", "SessionView.History.cs")))
                 .GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.ValueText == "KeepPlace").ToString()
             : "void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null) { kept++; }";
@@ -100,7 +103,7 @@ public sealed class ConversationResponseTests
                     pane.ShowResponse(reset: false);
                     if (pane.kept != 1) throw new InvalidOperationException("A wholesale replacement no longer keeps its place.");
                 }
-                public static void QueuedTrim(string anchor) {
+                public static void QueuedUpdate(string anchor) {
                     var pane = new Probe();
                     pane.ShowResponse(reset: true);
                     pane.ConversationScroll = new Scroll { VerticalOffset = 60 };
@@ -110,10 +113,10 @@ public sealed class ConversationResponseTests
                     pane.ShowResponse(reset: false);
                     pane.atEnd = false; pane.reading = null;
                     pane.ConversationScroll.VerticalOffset = 50;
-                    pane.Card.Response = "Surviving paragraph.";
+                    pane.Card.Response = anchor == "append" ? "Leading paragraph.\n\nSurviving paragraph.\n\nAppended paragraph." : "Surviving paragraph.";
                     pane.ShowResponse(reset: false);
                     pane.DispatcherQueue.Drain();
-                    var expected = anchor == "numeric" ? Array.Empty<double>() : new[] { anchor == "row" ? 40.0 : 200 };
+                    var expected = anchor == "numeric" ? Array.Empty<double>() : new[] { anchor == "append" ? 60.0 : anchor == "row" ? 40.0 : 200 };
                     if (!pane.ConversationScroll.Targets.SequenceEqual(expected))
                         throw new InvalidOperationException($"Queued {anchor} restore targets: {string.Join(",", pane.ConversationScroll.Targets)}.");
                 }

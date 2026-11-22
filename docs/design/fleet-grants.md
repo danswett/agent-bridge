@@ -5,6 +5,32 @@ No code, grant issuance, policy change, rollout or tool retirement is authorized
 by this document. Implementation needs separately assigned briefs and review.
 Tracking: https://github.com/danswett/agent-bridge/issues/3237.
 G1 landed: pure grant validation and policy-intersection evaluation only; no authority enabled.
+G2 adds `GrantStore` Issue/Revoke/TryGetUsable APIs only, with a 1 MiB/256-intent bound
+and no eviction. Every generation requires its matching intact audit intent/terminal;
+an incomplete transaction or replay refuses all use rather than repairing/resetting state.
+Issuance uses full G1 validation against the receiver's required known-options snapshot.
+Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
+Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
+- Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
+  machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.
+  The MAC proves a device, not a person (docs/design/agent-principals.md §2), so only a `user` principal whose
+  device is pinned here as a person's, never this machine's own key, may rotate; an agent, script or relay kind cannot.
+- Rotate: the signed values must equal the active files now (else "press again"); grant history not proved absent
+  (a store, a `grant.*` row as the audit reader parses it, an incomplete read, any retained boundary, or gated rows
+  without heads) refuses, so budgets, revocations, tombstones and the boundary are never reset. Each stream moves to
+  `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first record is a genesis: `previousSha256` = the
+  signed tail plus `rotation` {retired name, length, SHA-256, signed command}. New heads are not adopted.
+- Verify: a genesis is only ever a stream's first record and its MAC verifies, as of its issue time, with this
+  device key; a retired file still present must match its length and SHA-256. A missing one is accepted:
+  grants never read retired history. Grants need both streams bound to one genesis, plus the existing adopted,
+  retained, chain and sequence checks; otherwise a profile with no grant history is `RotationRequired`
+  ("rotation-required") and any other is AuditIncomplete.
+- Crash safety: `audit/rotation.pending` journals the command first; every later audit write, archive or bootstrap
+  finishes that rotation, reusing a matching retired file, or refuses. A same-request retry is a no-op.
+- Native launch/stop gates and the launch preflight work before and after; gate sequences restart at 1.
+Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
+external anchor (#3569); the designated-verifier MAC means this device key could compute a genesis; retention
+pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
 
 ## Authority and existing boundaries
 
@@ -133,9 +159,13 @@ refusals consume no launch quota; distinct attempts retain existing attempt limi
 
 Clock windows are rolling durations, not Pacific calendar midnight resets.
 Persist the last observed time; backwards clock movement refuses new grant use
-until trustworthy time catches up. Expiry, caps and kill are checked again at the
-actual execution slot, not only when queued. A large forward jump expires rather
-than extends authority. UI dates/times follow the viewer's local-time convention.
+until trustworthy time catches up. Counter refusals for observed expiry durably
+advance that watermark before returning; restart and clock rollback cannot
+restore authority. Known reservation refusals retain their binding for watermark
+persistence. Unchanged same-time counter operations add no intents. Expiry, caps
+and kill are checked again at the actual execution slot, not only when queued.
+A large forward jump expires rather than extends authority. UI dates/times follow
+the viewer's local-time convention.
 
 There is no coordinator tied to a particular VM. A receiver leaving stops actions
 there; its quota allocations stay spent/reserved and are not silently moved.

@@ -65,6 +65,7 @@ public sealed partial class SessionView
         var atEnd = !reset && HistoryAtEnd();
         var offset = ConversationScroll?.VerticalOffset ?? 0;
         var reading = reset || atEnd ? null : ReadingHistory();
+        var leading = blocks.FirstOrDefault();
         if (atEnd) { pinEnd = true; }
         var retained = false;
         if (reset)
@@ -82,7 +83,7 @@ public sealed partial class SessionView
             ConversationList.ItemsSource = blocks;
         }
         // Indexes have moved: the anchor taken again once the list has laid them out.
-        if (!reset && retained && !atEnd && !pinEnd && reading is null) { responseAnchors++; }
+        if (!reset && retained && !ReferenceEquals(leading, blocks.FirstOrDefault()) && !atEnd && !pinEnd && reading is null) { responseAnchors++; }
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
         // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.

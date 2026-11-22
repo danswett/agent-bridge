@@ -105,6 +105,23 @@ public sealed class ConversationEndPinTests
         Assert.Empty(view.Scroller.Targets);
     }
 
+    [Theory, InlineData(false, false), InlineData(true, false), InlineData(false, true), InlineData(true, true)]
+    public void A_stationary_shrink_keeps_its_signed_evidence_but_later_growth_cannot_excuse_a_reader_retreat(bool layoutFirst, bool laterGrowth)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 200);
+        view.Moved(200);
+        view.Scroller.ScrollableHeight = 300; view.Follow();
+        view.Scroller.ScrollableHeight = 200;
+        if (laterGrowth) { view.Follow(); view.Scroller.ScrollableHeight = 355; }
+        if (layoutFirst) { view.Follow(); }
+        view.Moved(100);
+        Assert.Equal(!laterGrowth, view.Pinned);
+        view.Scroller.Targets.Clear(); view.Follow();
+        if (laterGrowth) { Assert.Empty(view.Scroller.Targets); }
+        else { Assert.Equal(200, Assert.Single(view.Scroller.Targets)); }
+    }
+
     [Theory, InlineData(0), InlineData(6)]
     public void A_page_back_of_one_viewport_during_a_pending_correction_or_small_remeasure_releases_the_pin(double remeasure)
     {
