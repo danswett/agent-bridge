@@ -315,6 +315,18 @@ Adopting again, or revoking, ends the earlier credential and its open connection
 Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
 an adopted one is covered by the same adoption and can claim it during the window.
 
+### `launch.status` (#3237)
+
+After `agent.hello`, `launch.status` `{ "request": UUID }` reads the outcome of the caller's own pipe
+`session.launch` by its `request` id: `{ request, state (queued|launching|launched|refused|failed),
+session, code, queuedAt, changedAt, keptUntil }`. `launched` is a started session; `queued` and
+`launching` are pending. A finished record is kept 15 minutes (`keptUntil`). It needs a live
+credential with `read+reply+launch` scope; otherwise, a request id that is not a UUID, a damaged or
+unavailable launch request record, or an id this caller has no kept record of (another caller's id,
+one that expired, one never sent) is refused. A pipe launch that was launching when the host stopped
+is `failed` with code `restarted`, and one still queued is `failed` with code `unconfirmed`
+(`AgentPipeLaunch.Restore`, at host start), so neither is ever launched again.
+
 ### `fleet.list` and `fleet.find`
 
 Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).

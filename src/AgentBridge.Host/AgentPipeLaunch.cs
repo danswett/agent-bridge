@@ -7,8 +7,11 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
+public sealed record AgentLaunchStatus(string Request, string State, string? Session, string? Code,
+    DateTimeOffset QueuedAt, DateTimeOffset ChangedAt, DateTimeOffset? KeptUntil);
+
 // #3237 S3: session.launch on the pipe from a live read+reply+launch agent credential, with the
-// caller's request id on the record HA's launch card uses (#2743).
+// caller's request id on the record HA's launch card uses (#2743), and launch.status to read it.
 // The record keeps no principal, so an id is kept under a hash of the principal and the id:
 // another caller's id never matches, and reading it finds nothing.
 public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials, SessionService sessions,
@@ -18,14 +21,24 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     readonly LocalApi.RefusalAudits refusals = new(time ?? TimeProvider.System);
     readonly Dictionary<Guid, (string Principal, string Request, string Key, FleetLaunchContext? Fleet)> unconfirmed = [];
 
+    public const string StatusOp = "launch.status";
     const string Prefix = "pipe-";
     internal LaunchRequestStore? Requests => store;
 
-    static string Key(string principal, string request) =>
+    internal static string Key(string principal, string request) =>
         Prefix + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(principal + "\n" + request)))[..59];
 
     internal static Guid LaunchId(string principal, string request) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes("launcher\n" + Key(principal, request))).AsSpan(0, 16));
+
+    // At host start, before any pipe launch: the store's open already settles a launching record as
+    // failed "restarted"; a pipe launch still queued is settled here as unconfirmed, never launched
+    // later. Only this host's own "pipe-" records; HA's are left to HA's restore.
+    public static void Restore(LaunchRequestStore? store)
+    {
+        foreach (var r in store?.All().Where(r => !r.Finished && r.Id.StartsWith(Prefix, StringComparison.Ordinal)).ToList() ?? [])
+        { Save(() => store!.Fail(r.Id, "unconfirmed")); }
+    }
 
     // Again at dispatch, after the launch service's own waits: the credential, grant and policy as they are now.
     string? Still(AgentCredential caller, LaunchRequest r)
@@ -159,6 +172,20 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // Unconfirmed stays launching and holds its live slot: the launcher's registration or failure settles
         // both, and one it stops following without either keeps them until the host restarts (closed, not open).
         return result;
+    }
+
+    // Reads only the caller's own record: the key hashes the principal, so another caller's id finds nothing.
+    public AgentLaunchStatus Status(AgentCredential caller, JsonElement data)
+    {
+        if (caller.Scope != AgentProtocol.ScopeReadReplyLaunch) { throw new InvalidOperationException("refused: reading a launch's outcome needs read+reply+launch scope"); }
+        if (store is null) { throw new InvalidOperationException($"refused: the launch request record can't be used ({storeProblem ?? "not open"})"); }
+        var asked = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("request", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+        if (!Guid.TryParseExact(asked, "D", out var id)) { throw new ArgumentException($"{StatusOp} needs the launch's request id, a UUID"); }
+        var request = id.ToString("D");
+        var record = store.Get(Key(credentials.PrincipalOf(caller), request))
+            ?? throw new InvalidOperationException($"refused: no launch request {request} of this caller is kept; outcomes are kept {LaunchRequestStore.Retention.TotalMinutes:0} minutes");
+        return new(request, record.State.ToString().ToLowerInvariant(), record.Session, record.Code, record.QueuedAt, record.ChangedAt,
+            record.Finished ? record.ChangedAt + LaunchRequestStore.Retention : null);
     }
 
     // The launcher's word on a launch (ISessionLauncher's events), also after it answered unconfirmed.
