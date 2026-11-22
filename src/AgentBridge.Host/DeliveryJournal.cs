@@ -5,12 +5,17 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed, Demoted }
+public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed, Demoted, Priority }
 public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header, string State,
-    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null);
+    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null)
+{
+    public PriorityCapability? Capability { get; init; }
+    public string? PriorityReason { get; init; }
+    public string? PriorityPrevious { get; init; }
+}
 
 // Node-bound evidence only: replay metadata, never payloads or key sends.
-public sealed class DeliveryJournal : IDisposable
+public sealed partial class DeliveryJournal : IDisposable
 {
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
     readonly object gate = new();
@@ -21,6 +26,7 @@ public sealed class DeliveryJournal : IDisposable
     readonly Dictionary<(string, string), DeliveryJournalRecord> handoffs = [];
     readonly Dictionary<(string, char), long> reserved = [];
     readonly HashSet<(string, string)> replayed = [];
+    readonly HashSet<(string, string)> unverified = [];
     internal bool Uncertain { get; private set; }
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
@@ -34,13 +40,26 @@ public sealed class DeliveryJournal : IDisposable
         CryptographicOperations.ZeroMemory(key);
         this.append = append;
         this.log = log;
-        foreach (var r in reservations ?? [])
+        var records = (reservations ?? []).ToArray();
+        var facts = records.Where(r => r.State == "priority" && Matches(r, "")).ToArray();
+        foreach (var r in records)
         {
-            _ = Enum.Parse<DeliveryState>(r.State, true);
+            var validState = Enum.TryParse<DeliveryState>(r.State, true, out var state) && Enum.IsDefined(state);
+            if (validState && state == DeliveryState.Priority) { ReplayPriority(r, facts); continue; }
+            var refused = RefusePriorityChain(r, facts);
+            if (!validState || r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null ||
+                r.Header.N == 0 && !Matches(r, ""))
+            {
+                if (refused) { UnconfirmedReplay(r); continue; }
+                throw new InvalidDataException("Delivery journal evidence cannot enter legacy replay.");
+            }
             var id = (r.Session, r.Header.Id);
+            if (r.Header.N != 0 && (refused || state is not (DeliveryState.Enqueued or DeliveryState.Demoted)))
+            { unverified.Add(id); log("delivery journal body unavailable; replay is unconfirmed and inert for authority"); }
+            else { unverified.Remove(id); }
             latest[id] = r;
             replayed.Add(id);
-            if (r.State != "handoff") { continue; }
+            if (state != DeliveryState.Handoff || refused && r.Header.Seq is null) { continue; }
             _ = DeliveryEnvelope.Format(r.Header, "");
             handoffs.TryAdd(id, r);
             var seq = r.Header.Seq!;
@@ -73,7 +92,7 @@ public sealed class DeliveryJournal : IDisposable
         lock (gate)
         {
             var key = (session, id);
-            return replayed.Contains(key) ? handoffs.ContainsKey(key) ? DeliveryState.Unconfirmed : DeliveryState.Dropped :
+            return replayed.Contains(key) ? unverified.Contains(key) || handoffs.ContainsKey(key) ? DeliveryState.Unconfirmed : DeliveryState.Dropped :
                 latest.TryGetValue(key, out var r) ? Enum.Parse<DeliveryState>(r.State, true) : null;
         }
     }
@@ -101,7 +120,7 @@ public sealed class DeliveryJournal : IDisposable
             _ = DeliveryEnvelope.Format(header with { Seq = header.Seq ?? "q1" }, body);
             var id = (session, header.Id);
             latest.TryGetValue(id, out var prior);
-            if (!Enum.IsDefined(state) || state == DeliveryState.Enqueued && prior is not null ||
+            if (!Enum.IsDefined(state) || state == DeliveryState.Priority || state == DeliveryState.Enqueued && prior is not null ||
                 state == DeliveryState.Handoff && (header.Seq is null || prior?.State is not ("enqueued" or "demoted") ||
                     prior.Header != header with { Seq = prior.Header.Seq } || !Matches(prior, body)) ||
                 state == DeliveryState.Demoted && (prior?.State != "enqueued" || reason is null ||
@@ -126,6 +145,7 @@ public sealed class DeliveryJournal : IDisposable
             }
             latest[id] = record;
             replayed.Remove(id);
+            unverified.Remove(id);
             if (state == DeliveryState.Handoff)
             {
                 handoffs[id] = record;
@@ -158,6 +178,8 @@ public sealed class DeliveryJournal : IDisposable
             log("delivery journal verification refused (invalid UTF-16); no success acknowledgement");
             return false;
         }
+        catch (FormatException)
+        { log("delivery journal verification refused (invalid MAC); no success acknowledgement"); return false; }
     }
 
     byte[] Mac(DeliveryJournalRecord record, string body) =>
