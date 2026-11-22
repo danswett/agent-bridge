@@ -96,6 +96,7 @@ public sealed partial class SessionView
                 || anchoring is not null && extent - offset <= scroll.ViewportHeight + 1.5;
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         }
+        if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { pinEnd = true; }
         seen = (offset, extent);
     }
     // A final event can belong to a correction queued before this navigation request.

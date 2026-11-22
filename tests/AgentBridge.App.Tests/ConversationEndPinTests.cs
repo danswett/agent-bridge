@@ -19,11 +19,15 @@ public sealed class ConversationEndPinTests
         foreach (var extent in new[] { 52145.0, 52287 })
         {
             view.ReplyForProbe();
-            view.MeasuredExtent = extent;
+            view.MeasuredExtent = extent + 4;
             view.DrainForProbe();
             if (gap <= 8)
             {
-                if (view.Scroller.Targets.Count > 0) { view.Moved(Assert.Single(view.Scroller.Targets)); }
+                if (view.Scroller.Targets.Count > 0)
+                {
+                    view.Scroller.ScrollableHeight = extent; view.Moved(Assert.Single(view.Scroller.Targets) - 8); view.Follow();
+                    Assert.Equal(2, view.Scroller.Targets.Count); view.Moved(view.Scroller.Targets[^1]);
+                }
                 Assert.True(Math.Abs(extent - view.Scroller.VerticalOffset) <= 1.5, view.PinState());
                 view.Scroller.Targets.Clear();
             }
