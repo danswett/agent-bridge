@@ -189,7 +189,7 @@ public sealed class AgentLiteDeliveryTests
         if (handedOff) { f.Outcome = AnswerOutcome.Unconfirmed; await first.Lane.DeliverNextAsync(Target); }
         using var restarted = new LaneRig(f, first.Records);
         var result = await restarted.Send();
-        Assert.Equal(LiteKind.Unconfirmed, result.Outcome);
+        Assert.Equal(handedOff ? LiteKind.Unconfirmed : LiteKind.Refused, result.Outcome);
         await restarted.Lane.DeliverNextAsync(Target);
         Assert.Equal(handedOff ? 1 : 0, f.Typed.Count);
     }
