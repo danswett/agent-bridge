@@ -12,7 +12,7 @@ public sealed class FleetGrantRevokeProofTests : IDisposable
     static readonly JsonSerializerOptions Wire = new(JsonSerializerDefaults.Web);
     readonly ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     readonly FleetGrantRevokeContext expected = new(new("account", "default",
-        "0123456789abcdef0123456789abcdef", "grant.revoke", Guid.NewGuid()),
+        "0123456789abcdef0123456789abcdef", "grant.confirmRevoke", Guid.NewGuid()),
         new(Guid.NewGuid(), Guid.NewGuid(), 1, new('a', 64)));
     byte[] Point { get { var q = key.ExportParameters(false).Q; return [4, .. q.X!, .. q.Y!]; } }
     public void Dispose() => key.Dispose();
@@ -163,7 +163,7 @@ public sealed class FleetGrantRevokeProofTests : IDisposable
         var request = FleetGrantRevokeProof.SealRequest(expected.Confirmation, expected, new EcdsaEnvelopeSigner(key));
         var receipt = Seal(); var c = expected.Context; var r = expected.Confirmation;
         foreach (var context in new[] { c with { Account = "other" }, c with { Profile = "other" },
-            c with { Receiver = new('f', 32) }, c with { Action = "grant.confirmRevoke" }, c with { Request = Guid.NewGuid() } })
+            c with { Receiver = new('f', 32) }, c with { Action = "grant.revoke" }, c with { Request = Guid.NewGuid() } })
         { Assert.Throws<InvalidDataException>(() => FleetGrantRevokeProof.VerifyRequest(request, Point, expected with { Context = context }));
             Assert.Throws<InvalidDataException>(() => FleetGrantRevokeProof.VerifyReceipt(receipt, Point, expected with { Context = context })); }
         foreach (var tuple in new[] { r with { Challenge = Guid.NewGuid() }, r with { Id = Guid.NewGuid() },
