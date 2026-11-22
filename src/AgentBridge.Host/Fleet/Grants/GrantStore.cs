@@ -70,13 +70,13 @@ public sealed class GrantStore
 
     internal static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
         Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action)] };
-    internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime)
+    internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime, DateTimeOffset? observedAt = null)
     {
         if (state.Tombstones.Contains(id)) { return new(GrantStoreProblem.Revoked); }
         var grant = state.Grants.SingleOrDefault(g => g.Id == id);
         if (grant is null) { return new(GrantStoreProblem.NotFound); }
         if (grant.Generation != generation) { return new(GrantStoreProblem.Generation); }
-        var now = time.GetUtcNow();
+        var now = observedAt ?? time.GetUtcNow();
         return checkTime && now < grant.NotBefore ? new(GrantStoreProblem.NotYetValid)
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }

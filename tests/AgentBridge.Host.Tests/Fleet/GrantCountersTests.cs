@@ -205,6 +205,31 @@ public sealed class GrantCountersTests : IDisposable
         Assert.Equal(new GrantUsage(1, 1, 1), Open().Read(first.Id, 1).Usage);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Expiry_before_any_reservation_is_durable_even_if_install_fails(bool failWrite)
+    {
+        var grant = Issue(new(3, 3, 3));
+        clock.Advance(TimeSpan.FromHours(25));
+        var counters = failWrite ? Open((_, _) => throw new IOException("fixture")) : Open();
+        Assert.Equal(failWrite ? GrantStoreProblem.WriteFailed : GrantStoreProblem.Expired,
+            Reserve(counters, grant).StoreProblem);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        var retried = Reserve(Open(), grant);
+        if (failWrite) { Assert.Equal(GrantStoreProblem.AuditIncomplete, retried.StoreProblem); }
+        else { Assert.Equal(GrantCounterProblem.Clock, retried.Problem); }
+    }
+
+    [Fact]
+    public void Expiry_and_watermark_use_the_same_transaction_clock_snapshot()
+    {
+        var grant = Issue(new(3, 3, 3));
+        clock.Advance(TimeSpan.FromHours(23));
+        clock.AutoAdvanceAmount = TimeSpan.FromHours(2);
+        Assert.True(Reserve(Open(), grant).Accepted);
+    }
+
     [Fact]
     public void R4rl_expiry_refusal_prevents_admission_after_restart_and_clock_rollback()
     {

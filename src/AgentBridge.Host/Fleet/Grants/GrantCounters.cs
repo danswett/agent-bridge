@@ -20,7 +20,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     public GrantCounterResult Reserve(Guid grant, long generation, Guid request, GrantSubject subject, string binding) =>
-        Run(grant, generation, true, (state, document, now) =>
+        grant == Guid.Empty ? new(GrantCounterProblem.Malformed) : Run(grant, generation, true, (state, document, now) =>
         {
             if (request == Guid.Empty || !GrantValidator.Subject(subject) || binding is not { Length: 64 }
                 || !binding.All(char.IsAsciiHexDigit)) { return (state, new(GrantCounterProblem.Malformed)); }
@@ -58,7 +58,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             var reservation = state.Reservations.SingleOrDefault(r => r.Request == request);
             if (reservation is null) { return (state, new(GrantCounterProblem.NotFound)); }
             var next = change(reservation);
-            return next is null ? (state, new(GrantCounterProblem.Binding))
+            return next is null ? (state, new(GrantCounterProblem.Binding, Reservation: reservation))
                 : (state with { Reservations = state.Reservations.Select(r => r.Request == request ? next : r).ToArray() },
                     new(GrantCounterProblem.None, Reservation: next));
         });
@@ -105,12 +105,14 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             var counters = state.Counters ?? new GrantCounterState(now, []);
             if (now < counters.ObservedAt) { result = new(GrantCounterProblem.Clock); return (null, new(GrantStoreProblem.None)); }
             var found = grant == Guid.Empty ? new GrantStoreResult(GrantStoreProblem.None)
-                : store.Find(state, grant, generation, checkTime: admission);
-            if (!found.Usable) { return (null, found); }
-            var (next, outcome) = change(counters, found.Grant, now);
+                : store.Find(state, grant, generation, checkTime: admission, observedAt: now);
+            if (!found.Usable && found.Problem != GrantStoreProblem.Expired) { return (null, found); }
+            var (next, outcome) = found.Usable ? change(counters, found.Grant, now)
+                : (counters, new GrantCounterResult(GrantCounterProblem.Store, found.Problem));
             result = outcome;
             next = next with { ObservedAt = now };
-            if (state.Counters == next) { return (null, new(GrantStoreProblem.None)); }
+            if (state.Counters is { } current && current.ObservedAt == next.ObservedAt
+                && current.Reservations.SequenceEqual(next.Reservations)) { return (null, new(GrantStoreProblem.None)); }
             var id = grant != Guid.Empty ? grant : outcome.Reservation?.Grant ?? auditGrant;
             if (id == Guid.Empty) { return (null, new(GrantStoreProblem.None)); }
             return (GrantStore.Next(state with { Counters = next }, id, admission && outcome.Accepted ? "grant.reserve" : "grant.update"),
