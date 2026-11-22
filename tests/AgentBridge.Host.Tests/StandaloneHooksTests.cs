@@ -1667,6 +1667,21 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.True(File.Exists(MigratedPointer));
     }
 
+    [Fact]
+    public async Task A_read_only_check_for_another_agent_mid_run_does_not_change_a_Codex_add()
+    {
+        Migrate();
+        var setup = Setup;
+        codex.OnList = () => Assert.Throws<InvalidOperationException>(() => setup.CheckInstall("claude"));
+
+        await setup.InstallAsync("codex", false, TextWriter.Null);
+
+        Assert.False(File.Exists(Hook));
+        Assert.False(Directory.Exists(Path.Combine(Profile, "runtime")));
+        Assert.False(IntakeState.Load(Profile).State!.Standalone);
+        Assert.Equal("native hook fixture", File.ReadAllText(MigratedHook));
+    }
+
     [Theory]
     [InlineData("copilot")]
     [InlineData("claude")]

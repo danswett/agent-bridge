@@ -78,9 +78,9 @@ public sealed class StandaloneHooks(
 
     static void Write(string path, JsonNode value) => DurableFile.Replace(path, Bytes(value), MigrationRecord.Hash(path));
 
-    internal void CheckInstall(string agent) => Preflight(agent, removing: false);
+    internal void CheckInstall(string agent) => Preflight(agent, removing: false, commit: false);
 
-    void Preflight(string agent, bool removing)
+    void Preflight(string agent, bool removing, bool commit = true)
     {
         _ = Home(agent);
         var copilotHome = PhysicalHome(homes.Copilot);
@@ -105,17 +105,19 @@ public sealed class StandaloneHooks(
         // A profile migrate completed may add Codex (#3648): its retained legacy root is the
         // rollback copy, not fresh state. Any other profile with a legacy root, even a stopped
         // one, must go through its reversible migration, not acquire a second set of hooks.
-        adopted = agent == "codex" && problem is null ? Migrated(state) : null;
-        if (adopted is null && Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
+        var found = agent == "codex" && problem is null ? Migrated(state) : null;
+        // A read-only check from another flow must not change what a running install or removal uses.
+        if (commit) { adopted = found; }
+        if (found is null && Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
         if (problem is not null) { throw new InvalidOperationException(problem); }
-        if (adopted is null && (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName))))
+        if (found is null && (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName))))
         {
             throw new InvalidOperationException("this profile belongs to a migration; use migration status or rollback");
         }
         // A migrated profile keeps the runtime and bridge home migrate wrote; only the homes must agree.
         if (state is not null && (state.Homes is not { } saved || !Same(saved.Copilot, homes.Copilot)
             || !Same(saved.Claude, homes.Claude) || !Same(saved.Codex, homes.Codex)
-            || (adopted is null && (!Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))))
+            || (found is null && (!Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))))
         {
             throw new InvalidOperationException("this profile already uses different agent homes or a different runtime");
         }
@@ -133,17 +135,17 @@ public sealed class StandaloneHooks(
         // Migrate re-pointed the other agents' registrations; they are not this Codex add's concern.
         foreach (var path in new[] { Path.Combine(homes.Copilot, "hooks", "decision-notifier.json"), Path.Combine(homes.Claude, "ha-bridge"),
             Path.Combine(homes.Codex, "agent-ha-bridge-owner.json"),
-            Path.Combine(homes.Copilot, "instructions", "agent-ha-bridge.instructions.md") }.Where(p => adopted is null || Same(Path.GetDirectoryName(p)!, homes.Codex)))
+            Path.Combine(homes.Copilot, "instructions", "agent-ha-bridge.instructions.md") }.Where(p => found is null || Same(Path.GetDirectoryName(p)!, homes.Codex)))
         {
             if (File.Exists(path) || Directory.Exists(path)) { throw new InvalidOperationException($"{path} is a legacy registration; use Migrate"); }
         }
-        foreach (var path in adopted is null ? new[] { Instructions("claude"), Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") }
+        foreach (var path in found is null ? new[] { Instructions("claude"), Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") }
             : new[] { Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") })
         {
             ManagedInstructions.CheckLegacy(path);
         }
         var claudeSettings = Path.Combine(homes.Claude, "settings.json");
-        if (adopted is null && File.Exists(claudeSettings))
+        if (found is null && File.Exists(claudeSettings))
         {
             var claudeOwner = Path.Combine(homes.Claude, OwnerFile);
             var record = File.Exists(claudeOwner) ? Read(claudeOwner) : null;
