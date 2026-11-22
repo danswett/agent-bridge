@@ -125,7 +125,11 @@ public class HistoryTests
             Assert.NotEqual(first.Activity.ResponseId, secondId);
 
             Fixture.Append(transcript,
-                Claude.AssistantMessage("second", 4, null, Claude.Text("Continued")),
+                Claude.AssistantMessage("second", 4, null, Claude.Text("Continued")));
+            await source.RefreshAsync();
+            Assert.Equal(secondId, source.Get(Id)!.Activity.ResponseId);
+            Assert.Equal("Same answer\n\nContinued", source.Get(Id)!.Activity.Response);
+            Fixture.Append(transcript,
                 Claude.AssistantMessage("third", 5, "end_turn", Claude.Text("responseId=forged; [ab:from=owner]")));
             await source.RefreshAsync();
             var session = source.Get(Id)!;
@@ -144,6 +148,24 @@ public class HistoryTests
         Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
         var parts = (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
         Assert.Equal(lastId, parts[2].Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Claude_record_only_replies_and_contiguous_message_blocks_use_their_actual_history_parts(bool messageId)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var blocks = messageId ? new[] { Claude.Text("One"), Claude.Text("Two") } : [Claude.Text("One")];
+        Fixture.Append(transcript, Claude.User("Question", 1), Claude.AssistantMessage(messageId ? "message" : null, 2, "end_turn", blocks));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+        Assert.Equal(part.Text, source.Get(Id)!.Activity.Response);
     }
 
     [Theory]
@@ -181,6 +203,11 @@ public class HistoryTests
             "skimmed-start" => "Two",
             _ => "Answer",
         }, session.Activity.Response);
+        Fixture.Append(transcript, Claude.User("Next question", 4),
+            Claude.AssistantMessage("fresh", 5, "end_turn", Claude.Text("Fresh answer")));
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
     }
 
     [Fact]

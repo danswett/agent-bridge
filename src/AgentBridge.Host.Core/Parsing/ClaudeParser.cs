@@ -74,6 +74,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
+    bool _responseContiguous;
+    bool _replyIdentityKnown = true;
+    readonly HashSet<string> _replyRecords = new(StringComparer.Ordinal);
+    const int MaxReplyRecords = 4096;
     // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
     // The queue carries no mark of who wrote to it, and a prompt the person types while the agent
     // works is queued the same way, so a queued notice is not an end until its delivery is (see
@@ -94,6 +98,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     {
         base.Reset();
         _responseMessage = null;
+        ResetReplyIdentity(known: true);
         _queued.Clear();
         _wokenAt.Clear();
         _unclaimed.Clear();
@@ -105,12 +110,28 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // window, a delegate by its notice; until then it is listed with no outcome.
     public override void Skipped()
     {
+        ResetReplyIdentity(known: false);
+        S.ResponseId = null;
         S.Background.ForgetShells();
         S.Background.ForgetRuns();
         // A queued notice may have been delivered, and an agent woken and stopped again, in the
         // bytes never read. An end not claimed yet keeps its outcome.
         _queued.Clear();
         _wokenAt.Clear();
+    }
+
+    void ResetReplyIdentity(bool known)
+    {
+        _replyIdentityKnown = known;
+        _responseContiguous = false;
+        _replyRecords.Clear();
+    }
+
+    protected override void Unreadable(ReadOnlySpan<byte> line)
+    {
+        base.Unreadable(line);
+        _replyIdentityKnown = false;
+        _responseContiguous = false;
     }
 
     protected override void Count(JsonElement e)
@@ -128,6 +149,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
                 TurnStarts();
+                ResetReplyIdentity(known: false);
                 S.Prompt(Json.Time(e, "timestamp"));
 
                 S.UncountedTurn = false;
@@ -152,6 +174,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var before = S.Background.Version;
         Delegation(e, at);
         var delegates = S.Background.Version != before;
+        if (delegates) { _responseContiguous = false; }
         if (type is "user" or "assistant")
         {
             S.Cwd = Json.Str(e, "cwd") ?? S.Cwd;
@@ -413,6 +436,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             S.Activity(at);
             return;
         }
+        ResetReplyIdentity(known: true);
         UserPrompt(text, at);
     }
 
@@ -423,28 +447,54 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // nothing about which model the session runs.
         if (Text.NonBlank(Json.Str(message, "model")) is { } model && !model.StartsWith('<')) { S.Model = model; }
         var askedForTools = false;
+        var record = RecordId;
+        if (record is null || _replyRecords.Count >= MaxReplyRecords || !_replyRecords.Add(record))
+        {
+            _replyIdentityKnown = false;
+            S.ResponseId = null;
+        }
+        var part = 0;
+        var toolBeforeText = false;
         // Without an id, the entry itself is the message.
-        var key = Json.Str(message, "id") ?? Guid.NewGuid().ToString("N");
+        var messageId = Json.Str(message, "id");
+        var key = messageId ?? Guid.NewGuid().ToString("N");
         foreach (var block in Blocks(message))
         {
             switch (Json.Str(block, "type"))
             {
                 case "thinking" when Text.NonBlank(Json.Str(block, "thinking")) is { } thinking:
                     S.Reasoning = thinking;
+                    part++;
+                    _responseContiguous = false;
                     break;
                 case "text" when Text.NonBlank(Json.Str(block, "text")) is { } text:
                     // One reply can hold several text blocks, in one entry or (as Claude
                     // streams them) in several entries sharing the message id: they are
                     // one response, not each other's replacements.
-                    S.Response = key == _responseMessage && S.Response is { } sofar ? sofar + "\n\n" + text : text;
+                    var append = key == _responseMessage && S.Response is not null;
+                    var extendsPart = append && messageId is not null && _responseContiguous && S.ResponseTurn == S.TurnId;
+                    if (!extendsPart)
+                    {
+                        // Legacy text can span several history parts. Never give that
+                        // composite a single part id, or guess through an unread window.
+                        S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
+                            ? Conversation.TurnIds.Part(record, part) : null;
+                        part++;
+                    }
+                    S.Response = append ? S.Response + "\n\n" + text : text;
                     S.ResponseTurn = S.TurnId;
                     _responseMessage = key;
+                    _responseContiguous = messageId is not null;
                     break;
                 case "tool_use":
                     {
                         var id = Json.Str(block, "id");
                         var name = Json.Str(block, "name");
                         if (id is null || name is null) { break; }
+                        // History dedupes tools across the turn; an unread earlier call
+                        // could change the index of text following this tool.
+                        toolBeforeText = true;
+                        _responseContiguous = false;
                         askedForTools = true;
                         var input = Json.Get(block, "input");
                         S.Tools.Start(id, name, ToolSummary.From(input), Now(at));
