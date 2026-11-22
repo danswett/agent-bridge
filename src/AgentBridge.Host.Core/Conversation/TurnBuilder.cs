@@ -117,7 +117,13 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         Add(Blank(kind, at) with { Text = text });
     }
 
-    readonly CodexReplyIds _replyIds = new(known: true);
+    public void ReplyScope(bool known, string? nativeTurn = null)
+    {
+        _replyIds.Reset(known, nativeTurn);
+        _replyParts.Clear();
+    }
+
+    readonly CodexReplyIds _replyIds = new();
     readonly Dictionary<string, int> _replyParts = new(StringComparer.Ordinal);
     readonly HashSet<(HistoryPartKind, string)> _said = [];
 
