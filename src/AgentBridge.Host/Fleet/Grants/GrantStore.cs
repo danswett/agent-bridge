@@ -140,10 +140,12 @@ public sealed class GrantStore
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
         long retained = 0;
         var adopted = false;
-        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        string? rotation = null;
+        // Rotation is read under the same audit lock as the rows, so a concurrent write never makes it look absent.
+        var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, unproven) => { retained = floor; adopted = unproven; rotation = AgentAuditLog.Rotation(folder, key); });
         // Heads never prove a cutoff: grants need both streams to start with one verified person-signed genesis. Only a
         // profile with no grant history can still rotate; for any other, a lost genesis is lost evidence.
-        if (AgentAuditLog.Rotation(folder, key) is null) { throw new StoreFault(body is null && retained == 0
+        if (rotation is null) { throw new StoreFault(body is null && retained == 0
             && !rows.Any(r => r.Action is "grant.issue" or "grant.revoke") ? GrantStoreProblem.RotationRequired : GrantStoreProblem.AuditIncomplete); }
         // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
         if (!complete || adopted || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact

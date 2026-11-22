@@ -48,10 +48,13 @@ public sealed partial class AgentAuditLog
                 Resume(folder);
                 var bound = Streams.Select(launch => GenesisOf(folder, launch, key)).ToArray();
                 if (bound.Any(b => b is not null)) { return bound.All(b => b == c.Request) ? null : "this profile's audit was already rotated"; }
-                // Retiring grant history would orphan the store's tombstones and budgets, so only pre-grant profiles rotate.
-                if (File.Exists(Path.Combine(profile, Fleet.Grants.GrantStore.FileName)) || Streams.SelectMany(l => Files(folder, l))
-                    .SelectMany(File.ReadLines).Any(l => l.Contains("\"action\":\"grant.", StringComparison.Ordinal)))
-                { return "grant history exists; rotating would hide it"; }
+                // Only provably grant-free history rotates (the reader's own parse, nothing retained away, no gated rows
+                // without heads): retiring grant history would orphan its tombstones and budgets and reset the boundary.
+                long retained = 0;
+                var (rows, complete) = GateAuditProjection.Load(profile, alreadyLocked: true, boundary: (floor, _) => retained = floor);
+                if (File.Exists(Path.Combine(profile, Fleet.Grants.GrantStore.FileName)) || !complete || retained > 0
+                    || rows.Any(r => r.Action.StartsWith("grant.", StringComparison.OrdinalIgnoreCase)) || !HasHeads(folder) && rows.Any(r => r.Gate is not null))
+                { return "grant history cannot be proved absent; rotating could hide it"; }
                 if (Seal(folder) != seal) { return "the audit changed after the rotation was signed; press again"; }
                 Durable(JournalFile(folder), s => s.Write(JsonSerializer.SerializeToUtf8Bytes(command, Strict)));
                 RotationStep?.Invoke(0);

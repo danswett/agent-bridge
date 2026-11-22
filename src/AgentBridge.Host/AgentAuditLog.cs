@@ -501,6 +501,8 @@ public sealed partial class AgentAuditLog
             var folder = Path.Combine(profile, FolderName);
             if (!HasHeads(folder)) { throw new IOException("missing durable audit head"); }
             using var held = Lock(folder);
+            // A pending rotation retires these bytes: finish it before any day moves.
+            Resume(folder);
             foreach (var launch in new[] { false, true })
             {
                 if (Files(folder, launch).Any() && ReadHead(folder, launch) is null

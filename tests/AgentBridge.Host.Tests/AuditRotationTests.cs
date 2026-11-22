@@ -136,4 +136,40 @@ public sealed class AuditRotationTests : IDisposable
         Assert.Equal(GrantStoreProblem.Missing, Grants());
         Assert.True(Log().Verify().Intact && Log().Verify(launch: true).Intact);
     }
+
+    // A revocation retention moved away still binds: with no store and no row left to see, rotating must not let grants
+    // start over (a fresh store could reissue the revoked id). Only provably absent history rotates.
+    [Fact]
+    public void Rotation_refuses_retained_grant_history_even_when_the_store_and_old_rows_are_missing()
+    {
+        Legacy();
+        var (revoked, op) = (Guid.NewGuid(), Guid.NewGuid());
+        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "local", "person-client", revoked, "none", GrantBinding: new string('a', 64));
+        var intent = new AgentAuditEntry("local", op.ToString(), "person:local", [], "grant.revoke", revoked.ToString(), "reserved", Gate: gate) { Grant = revoked.ToString() };
+        Assert.True(Log().Append(intent) && Log().Append(intent with { Outcome = "revoked", Gate = gate with { Phase = "terminal" } }));
+        clock.Advance(TimeSpan.FromDays(AgentAuditLog.KeepDays + 1));
+        Legacy();
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.Equal(1, Log().Archive(clock.GetUtcNow()));
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Grants());
+        var before = Snapshot();
+        Assert.NotNull(Log().Rotate(Signed(), Pinned));
+        Assert.Equal(before, Snapshot());
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, new GrantStore(Folder, device, Log(), new([], [], [], [], [], [], [], []), clock).TryGetUsable(revoked, 1).Problem);
+    }
+
+    [Fact]
+    public void Archive_finishes_a_pending_rotation_before_it_moves_bytes_the_rotation_retires()
+    {
+        Legacy();
+        Pair();
+        clock.Advance(TimeSpan.FromDays(AgentAuditLog.KeepDays + 1));
+        Assert.True(Log().Append(Ordinary));
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.NotNull(Log(s => { if (s == 0) { throw new IOException("crash"); } }).Rotate(Signed(), Pinned));
+        Log().Archive(clock.GetUtcNow());
+        Assert.True(Log().Append(Ordinary));
+        Assert.NotNull(AgentAuditLog.Rotation(Folder, device));
+        Assert.Equal(GrantStoreProblem.Missing, Grants());
+    }
 }
