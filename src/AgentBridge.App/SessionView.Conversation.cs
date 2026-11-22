@@ -65,12 +65,13 @@ public sealed partial class SessionView
         var offset = ConversationScroll?.VerticalOffset ?? 0;
         var reading = reset || atEnd ? null : ReadingHistory();
         if (atEnd) { pinEnd = true; }
+        var retained = false;
         if (reset)
         {
             blocks = new ConversationItems(next.Select(b => new ConversationBlock(b)));
             ConversationList.ItemsSource = blocks;
         }
-        else if (!ConversationBlocks.Update(blocks, next))
+        else if (!(retained = ConversationBlocks.Update(blocks, next)))
         {
             // Replacing ItemsSource also resets the history header's viewport and realised rows.
             var common = Math.Min(blocks.Count, next.Count);
@@ -83,7 +84,9 @@ public sealed partial class SessionView
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
         // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.
-        if (!reset) { KeepPlace(atEnd, offset, reading); }
+        // Retained blocks keep the list's own item anchoring when no stored turn is in view: restoring the
+        // pre-trim offset would move the reader on in the response (#3576).
+        if (!reset && (atEnd || pinEnd || reading is not null || !retained)) { KeepPlace(atEnd, offset, reading); }
         else if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
         // The response's empty view held 8 under its label, as its first block does.
         FooterLead.Height = card is { HasVoice: true } && blocks.Count == 0 ? 8 : 0;

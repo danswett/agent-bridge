@@ -19,6 +19,72 @@ public sealed class ConversationEndPinTests
         }
     }
 
+    [Fact]
+    public void Review_a_stale_pending_target_does_not_undo_a_small_reader_retreat_after_a_hold()
+    {
+        var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
+        view.Scroller.ScrollableHeight = 52459;
+        view.Moved(52304);
+        view.Follow();
+        view.FollowState.PointerOver(7);
+        view.Scroller.ScrollableHeight = 52304;
+        view.Follow();
+        view.Moved(52204);
+        view.Scroller.Targets.Clear();
+        view.FollowState.PointerLeft(7);
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Review_a_small_reader_retreat_during_remeasurement_releases_the_pin(bool layoutFirst)
+    {
+        var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
+        view.Scroller.ScrollableHeight = 52304;
+        view.Moved(52304);
+        view.Scroller.ScrollableHeight = 52149;
+        if (layoutFirst) { view.Follow(); }
+        view.Moved(52049);
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory, InlineData(0), InlineData(6)]
+    public void A_page_back_of_one_viewport_during_a_pending_correction_or_small_remeasure_releases_the_pin(double remeasure)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 52449);
+        view.Moved(52449);
+        view.Scrolling(52449);
+        view.Scroller.ScrollableHeight = 52449 - remeasure;
+        view.Moved(52150);
+        view.StopScrolling();
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Review_the_original_pending_correction_reader_retreat_releases_the_pin()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        view.Moved(150);
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
     [Theory]
     [InlineData("pan", false)]
     [InlineData("scroll", false)]

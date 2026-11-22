@@ -88,12 +88,12 @@ public sealed partial class SessionView
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
         if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
         {
-            var remeasure = Math.Abs(extent - was.Extent);
-            // A remeasure can shift the virtualised anchor by the extent delta plus one viewport.
-            // A queued end correction keeps that residual exempt; a drop under a text line is layout rounding, not a person.
-            var layoutOnly = Math.Abs(extent - offset) <= 1.5 || was.Offset - offset <= 8
-                || remeasure >= 0.5 && Math.Abs(offset - was.Offset) <= remeasure + scroll.ViewportHeight + 1.5
-                || anchoring is not null && extent - offset <= scroll.ViewportHeight + 1.5;
+            var (remeasure, drop, gap) = (Math.Abs(extent - was.Extent), was.Offset - offset, extent - offset);
+            // A shrink above moves the view by at most the extent delta, and a real remeasure (seen before or
+            // with this move) can shift the virtualised anchor to one viewport short of the end. A drop under a
+            // text line is layout rounding. Anything else, such as a reader stepping or paging back, is the person's move.
+            var layoutOnly = gap <= 1.5 || drop <= 8 || remeasure >= 0.5 && drop <= remeasure + 1.5
+                || Math.Max(remeasure, was.Offset - was.Extent) > 8 && Math.Abs(gap - scroll.ViewportHeight) <= 8;
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         }
         seen = (offset, extent);

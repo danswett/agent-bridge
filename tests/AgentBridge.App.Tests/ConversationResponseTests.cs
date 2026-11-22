@@ -10,7 +10,12 @@ namespace AgentBridge.App.Tests;
 public sealed class ConversationResponseTests
 {
     [Fact]
-    public void The_first_response_loaded_after_a_detached_card_is_bound_and_replacements_keep_that_source()
+    public void The_first_response_loaded_after_a_detached_card_is_bound_and_replacements_keep_that_source() => RunProbe("Run");
+
+    [Fact]
+    public void A_retained_prefix_trim_leaves_the_lists_anchoring_while_a_wholesale_replacement_keeps_its_place() => RunProbe("Trim");
+
+    static void RunProbe(string run)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent; }
@@ -45,7 +50,8 @@ public sealed class ConversationResponseTests
                 bool HistoryAtEnd() => false;
                 (string Id, double Top)? ReadingHistory() => null;
                 void TakeAnchor() { }
-                void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null) { }
+                void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null) { kept++; }
+                int kept;
                 {{method}}
                 public static void Run() {
                     var pane = new Probe();
@@ -58,6 +64,17 @@ public sealed class ConversationResponseTests
                     if (!ReferenceEquals(bound, pane.ConversationList.ItemsSource) || !ReferenceEquals(bound, pane.blocks))
                         throw new InvalidOperationException("Replacement changed the bound source.");
                 }
+                public static void Trim() {
+                    var pane = new Probe();
+                    pane.Card.Response = "Leading paragraph.\n\nSurviving paragraph.";
+                    pane.ShowResponse(reset: false);
+                    (pane.kept, pane.Card.Response) = (0, "Surviving paragraph.");
+                    pane.ShowResponse(reset: false);
+                    if (pane.kept != 0) throw new InvalidOperationException("A retained trim restored a stale offset.");
+                    pane.Card.Response = "Wholly different replacement.";
+                    pane.ShowResponse(reset: false);
+                    if (pane.kept != 1) throw new InvalidOperationException("A wholesale replacement no longer keeps its place.");
+                }
             }
             """;
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
@@ -66,6 +83,6 @@ public sealed class ConversationResponseTests
         var result = CSharpCompilation.Create("ConversationResponseProbe", [CSharpSyntaxTree.ParseText(source)], references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)).Emit(output);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        Assembly.Load(output.ToArray()).GetType("Probe")!.GetMethod("Run")!.Invoke(null, null);
+        Assembly.Load(output.ToArray()).GetType("Probe")!.GetMethod(run)!.Invoke(null, null);
     }
 }
