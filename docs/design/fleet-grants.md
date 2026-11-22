@@ -316,6 +316,32 @@ is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
 
+### Sealed grant.prepareIssue prepared value
+
+`FleetGrantPrepareIssueResult(Prepared, Proof)` carries `FleetGrantPrepared`
+(challenge and preview) with a `FleetGrantSignedPayload`.
+`FleetGrantPrepareIssueProof.Seal(prepared, context, signer)` snapshots it;
+`Verify(result, trustedHostSign, expected)` returns that typed snapshot only
+after checking the host signature and exact body, otherwise `InvalidDataException`.
+`Parse(reply)` accepts only camelCase JSON with every constructor field present;
+unknown, duplicate, null, wrong-case and wrong-type fields refuse at every level.
+The preview is exactly the App's nine fields: id, generation, receiver, profile,
+document, digest, allocation (hourly/daily/live), effectivePolicy, unavailableActions.
+Document is opaque exact text, not a grant-policy validator or an issuance decision.
+
+Body order under `Framing.F(Framing.Label("agent-bridge fleet prepare issue v1"), ...)`:
+challenge request/nonce, id, generation, account, profile, receiver, action, digest,
+expiry; then preview id, generation, receiver, profile, document, digest,
+hourly/daily/live, effectivePolicy, and a framed ordered unavailableActions list.
+GUIDs use `D`, numbers signed 64-bit big-endian, digests decoded lowercase hex,
+expiry the exact round-trip `O` representation, and other strings UTF-8.
+Challenge action must be `grant.confirmIssue`; outer context action must be
+`grant.prepareIssue`. Account/profile/receiver match the caller-retained context;
+preview id/generation/receiver/profile/digest match the challenge.
+The outer request is the caller's fresh RPC GUID, distinct from the challenge nonce.
+Read and receipt domains cannot be substituted, even if re-signed for this context.
+This is contract-only: no producer, App/UI, dispatch, policy, or authority is enabled.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
