@@ -26,7 +26,11 @@ public sealed class GrantStore
     };
     internal sealed record Intent(Guid Operation, Guid Grant, long Generation, string Action, GrantOperation? Use = null);
     internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents,
-        GrantCounterState? Counters = null);
+        GrantCounterState? Counters = null)
+    {
+        // Derived only after Load verifies the state and audit; never supplied by persisted JSON.
+        [JsonIgnore] internal DateTimeOffset AuditAt { get; init; }
+    }
     readonly string folder, path;
     readonly P256KeyPair key;
     readonly AgentAuditLog audit;
@@ -123,7 +127,7 @@ public sealed class GrantStore
         if (grant is null) { return new(GrantStoreProblem.NotFound); }
         if (grant.Generation != generation) { return new(GrantStoreProblem.Generation); }
         var now = observedAt ?? time.GetUtcNow();
-        return checkTime && (now < grant.NotBefore || state.Counters is { } counters && now < counters.ObservedAt)
+        return checkTime && (now < grant.NotBefore || now < state.AuditAt || state.Counters is { } counters && now < counters.ObservedAt)
             ? new(GrantStoreProblem.NotYetValid)
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
@@ -149,7 +153,8 @@ public sealed class GrantStore
             var entry = new AgentAuditEntry("local", intent.Operation.ToString(), "person:local", [], intent.Action,
                 intent.Grant.ToString(), "reserved", Gate: metadata) { Grant = intent.Grant.ToString() };
             bool Append(AgentAuditEntry row) => next.Counters is { } counters
-                ? audit.AppendGrant(row, counters.ObservedAt) : audit.Append(row);
+                ? audit.AppendGrant(row, counters.ObservedAt > next.AuditAt ? counters.ObservedAt : next.AuditAt)
+                : audit.Append(row);
             if (!Append(entry)) { return new(failure = GrantStoreProblem.WriteFailed); }
             try { write(path, [.. Mac(body), .. body]); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException or System.Security.SecurityException)
@@ -228,7 +233,7 @@ public sealed class GrantStore
         if (body is not null && operations[^1].First().Gate!.GrantBinding != Convert.ToHexString(SHA256.HashData(body)))
         { throw new StoreFault(revisionProblem); }
         if (body is null && !allowNew) { throw new StoreFault(GrantStoreProblem.Missing); }
-        return state;
+        return state with { AuditAt = rows.Count == 0 ? default : rows.Max(r => r.At) };
     }
     byte[] Mac(byte[] body) => DeviceMacFile.Mac(body, key, "agent-bridge fleet grant store v1"u8);
     sealed class StoreFault(GrantStoreProblem problem) : Exception { internal GrantStoreProblem Problem => problem; }

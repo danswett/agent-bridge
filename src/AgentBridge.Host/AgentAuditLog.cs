@@ -84,7 +84,7 @@ public sealed partial class AgentAuditLog
     // text is only measured and hashed, never kept. Returns whether the line was written.
     public bool Append(AgentAuditEntry entry, string? text = null) => AppendAt(entry, text, time.GetUtcNow());
 
-    // Only the verified receiver store supplies this floor; a Clock refusal cannot append to an earlier audit day.
+    // Only the verified receiver store supplies the watermark/audit-tip floor for Clock refusal appends.
     internal bool AppendGrant(AgentAuditEntry entry, DateTimeOffset observedAt)
     {
         var now = time.GetUtcNow();

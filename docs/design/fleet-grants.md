@@ -234,7 +234,10 @@ hour/day counts, pending/live sessions, last caller/outcome, and remaining budge
 Counters come from the receiver, never an agent's report; read is not an acting
 grant. Audit details omit prompt text, tokens, secrets and raw command lines.
 Snapshot reads do not advance the watermark, reconcile reservations or write
-state. Documents, counters, pending/live bindings and safe last-operation metadata
+state. New use behind the verified audit tip or persisted watermark refuses.
+Clock-refusal metadata retains the actual observation time; only its audit append
+timestamp is floored to the verified tip and watermark, never a raw file name.
+Documents, counters, pending/live bindings and safe last-operation metadata
 come from verified receiver state. Receiver proofs use the existing roster-bound
 HostSign key and a distinct domain binding account, profile, receiver, action,
 fresh request UUID and exact payload bytes. The app authenticates HostSign metadata

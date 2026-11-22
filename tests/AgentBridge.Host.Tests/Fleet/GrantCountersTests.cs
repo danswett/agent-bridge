@@ -290,6 +290,40 @@ public sealed class GrantCountersTests : IDisposable
         Assert.Equal(before, GateAuditProjection.Load(Folder).Rows.Count);
     }
 
+    [Theory]
+    [InlineData(false, 20)]
+    [InlineData(false, 55)]
+    [InlineData(true, 20)]
+    [InlineData(true, 55)]
+    public void Later_day_issue_or_revoke_makes_a_rolled_back_request_a_nonlatching_clock_refusal(bool revoke, int minute)
+    {
+        clock.SetUtcNow(new(2026, 11, 21, 23, 30, 0, TimeSpan.Zero));
+        var other = Issue(new(3, 3, 3));
+        var grant = Issue(new(3, 3, 3));
+        var counters = Open();
+        clock.SetUtcNow(new(2026, 11, 21, 23, 40, 0, TimeSpan.Zero));
+        Assert.True(Reserve(counters, grant).Accepted);
+        var day1 = Path.Combine(Folder, "audit", "agents-2026-11-21.jsonl");
+        clock.SetUtcNow(new(2026, 11, 22, 0, 10, 0, TimeSpan.Zero));
+        if (revoke) { Assert.True(Store().Revoke(other.Id, 1).Usable); }
+        else { Issue(new(3, 3, 3)); }
+        var before = File.ReadAllBytes(day1);
+        clock.AdjustTime(new(2026, 11, 21, 23, minute, 0, TimeSpan.Zero));
+        var refused = Reserve(counters, grant);
+        Assert.Equal(GrantCounterProblem.Clock, refused.Problem);
+        Assert.Equal(GrantStoreProblem.None, refused.StoreProblem);
+        Assert.Equal(before, File.ReadAllBytes(day1));
+        Assert.Equal(new DateTimeOffset(2026, 11, 22, 0, 10, 0, TimeSpan.Zero), GateAuditProjection.Load(Folder).Rows.Last().At);
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
+        clock.AdjustTime(new(2026, 11, 22, 0, 20, 0, TimeSpan.Zero));
+        Assert.True(counters.Read(grant.Id, 1).Accepted);
+        Assert.True(Store().TryGetUsable(grant.Id, 1).Usable);
+        var last = Assert.Single(Store().Snapshot().Grants, g => g.Grant.Id == grant.Id).LastOperation!;
+        Assert.Equal(GrantCounterProblem.Clock, last.Outcome);
+        Assert.Equal(grant.Subjects[0].Session, last.Caller);
+        Assert.True(last.IsRequest);
+    }
+
     [Fact]
     public void R4rl_empty_grant_id_returns_a_typed_refusal()
     {

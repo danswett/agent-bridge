@@ -103,7 +103,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
         {
             var now = clock.GetUtcNow();
             var counters = state.Counters ?? new GrantCounterState(now, []);
-            var backwards = now < counters.ObservedAt;
+            var backwards = now < (state.AuditAt > counters.ObservedAt ? state.AuditAt : counters.ObservedAt);
             var found = grant == Guid.Empty ? new GrantStoreResult(GrantStoreProblem.None)
                 : store.Find(state, grant, generation, checkTime: admission, observedAt: now);
             var hasRequest = admission && request != Guid.Empty
