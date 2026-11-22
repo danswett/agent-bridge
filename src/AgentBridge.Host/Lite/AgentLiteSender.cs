@@ -98,6 +98,9 @@ public sealed class AgentLiteSender(
             return ack.Status switch
             {
                 "delivered" => Out(LiteKind.Delivered, null),
+                "pending" => Out(LiteKind.Pending, ack.Code),
+                "queued" => Out(LiteKind.Queued, ack.Code),
+                "unconfirmed" => Out(LiteKind.Unconfirmed, ack.Code),
                 "refused" => Out(LiteKind.Refused, ack.Code ?? "refused"),
                 _ => Out(LiteKind.Unconfirmed, BadAck),
             };

@@ -154,6 +154,20 @@ public class AgentLiteSenderTests
         Assert.Equal(0, r.Signed);
     }
 
+    [Theory]
+    [InlineData(LiteKind.Pending)]
+    [InlineData(LiteKind.Queued)]
+    [InlineData(LiteKind.Unconfirmed)]
+    public async Task Relay_lane_states_survive_receiver_and_sender_without_becoming_delivery(LiteKind kind)
+    {
+        using var r = new Rig();
+        Receiving(r, new LiteDelivery(false, "lane reason") { Outcome = kind });
+        var result = await r.Send();
+        Assert.Equal(kind, result.Kind);
+        Assert.Equal("lane reason", result.Code);
+        Assert.Equal(1, r.Link.Opened);
+    }
+
     [Fact]
     public async Task A_credential_that_no_longer_holds_is_refused_before_anything_is_signed()
     {

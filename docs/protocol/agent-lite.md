@@ -26,6 +26,27 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
 
 ## The plain limits
 
+### Queueable relay adapter (source-only, #3574)
+
+The host-only `LiteDeliver` lane seam uses the existing slice-2b2b
+`DeliveryLaneScheduler.Offer`/`Query` and dispatcher; it is **not enabled** in
+`Program` or `LiteComposition`. The legacy live-path limits below remain unchanged.
+Its contract follows [message-delivery](../message-delivery.md#lanes-and-key-path-slice-2):
+a verified ordinary agent offer to a working session waits in the queueable lane,
+without typing or holding ReplyService's claim/typing slot. The authenticated
+sender, resolved target and captured launch/grant/process fence stay bound to it.
+An ended ingress request does not revoke that authority; each dispatch rechecks it.
+
+Without recoverable protected shared payload storage the outcome is `pending`,
+not durable acceptance; this adapter never invents `queued` or `delivered`.
+The receiver and sender preserve `pending`, `queued` and `unconfirmed` separately.
+Same-ID signed reoffers query existing bound state, never enqueue again or bypass
+channel, signature, body or target checks. Restarted handoffs remain unconfirmed
+without new keys; memory-only pending payloads follow the kernel's restart drop.
+The canonical frame and sequence come from the flushed pre-key handoff API.
+Leading attachment tokens use `(at)` so journal normalization cannot restore `@`.
+This source cut adds no dispatcher, shared store, CLI/helper rollout or live probe.
+
 - ID-first host selection ([#3607](https://github.com/danswett/agent-bridge/issues/3607)): `machine` is an exact present host device ID (32 hex digits; publishers use canonical lowercase and comparisons are exact). Names are display only; names, fragments and a name-reusing successor never retarget. Unknown or offline IDs refuse loudly with the ID, before signing or opening a channel; the host never retries or falls back to HA.
 - Sender boundary: this cut acquires no session roster. The pipe still takes the receiver's exact session node, and the receiver retains its existing full-ID/node resolution and final-effect fences below. No role IDs or claims are introduced.
 - Own machines and own agents only. A message from any other account is never accepted, whatever it carries.
