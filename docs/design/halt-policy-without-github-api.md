@@ -173,6 +173,12 @@ same-user disk/clock rollback can restore an old unexpired snapshot after restar
 no rollback-resistant-storage guarantee is claimed. Local compromise is outside
 this transport boundary; new installs also have no previous sequence anchor.
 
+The first newer post-save time observation is saved under the installation lock.
+Later final observations are kept in memory and rechecked for backwards time and
+expiry; expiry first observed after that save is latched durably too. Restarts
+recover only saved observations: a failed save or unsaved final sample has no
+restart guarantee. Retained known halts still refuse in the current process.
+
 Transport failure, missing asset, hash/signature/pin failure, malformed content,
 timeout, cancellation or persistence/lock failure is explicit unavailable/stale
 state, never an empty checked policy or "up to date". Known halts still refuse.
