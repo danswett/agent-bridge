@@ -451,7 +451,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public string PrincipalOf(AgentCredential credential) =>
         credential.Kind == "script"
             ? credential.Principal ?? throw new ArgumentException("script credential has no principal", nameof(credential))
-            : AgentProtocol.Principal(machine, credential.Session);
+            : SessionPrincipal(credential.Session);
+
+    internal string SessionPrincipal(string session) => AgentProtocol.Principal(machine, session);
 
     // The credential behind this channel's agent connection, or null when it has none or it has
     // been revoked or has expired since.

@@ -222,11 +222,16 @@ from the script before #1414 is cut (Q4).**
 |---|---|---|---|
 | Pump wake | Wakes a waiting coordinator | `agent.send` (send text to a session) | Send only |
 | Board collector | Gathers fleet status for the board | `fleet.list` | Read only |
-| Messenger | Sends and reads session messages (#728 cut-over, fleet #104) | `agent.send`, and `fleet.find` to turn a name into a session | The first to cut over |
+| Messenger | Sends and reads session messages (#728 cut-over, fleet #104) | `agent.send` and `fleet.find` validate an explicit live session ID, never resolve a name | The first to cut over |
 | Review router | Picks a reviewer and passes work on (fleet #105) | `fleet.list`, `fleet.find`, `agent.send` | No launch |
 | Dispatcher | Starts worker sessions (fleet #106) | `session.launch` | **Not covered by this credential.** Needs the `launch:fleet` grant (agent-launch-scope.md §11, slice 2e) |
 
 Four of five need only `read+reply`. The dispatcher is the exception, deliberately.
+Session lookup follows [the canonical ID-only contract](../protocol/agent-operations.md#fleetfind):
+names are display only, machine pins are exact device IDs, and unknown, stale or
+offline IDs refuse without name, fragment or HA fallback. Trust/completeness
+precedence and the messaging-only own-account exception remain unchanged;
+these script credentials grant no roster verification or additional actions.
 
 **Code slice #1414 (needs-design, both receipts), under 400 changed lines:**
 

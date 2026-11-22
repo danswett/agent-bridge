@@ -133,8 +133,23 @@ public static class ProtocolVectors
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
+        DeliveryRecords(catalog.File("delivery.json", "../message-delivery.md", "Local delivery envelope helpers, not channel requests or sender authority."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
+    }
+
+    static void DeliveryRecords(VectorFileBuilder f)
+    {
+        var sender = new DeliverySender("ha-person", "Person", true);
+        var (header, body) = DeliveryEnvelope.Prepare(new(sender.From, Request, "q1", T0, "normal", 0), "hello");
+        f.Record<DeliverySender>("local")
+            .Valid("authenticated-principal", sender)
+            .Valid("unknown-agent", new("unknown"));
+        f.Record<DeliveryHeader>("local").Valid("prepared-handoff", header);
+        f.Record<DeliveryEntry>("local")
+            .Valid("verified-delivery", new(body, header))
+            .Valid("unverified-console", new("console"))
+            .Valid("length-mismatch", new("console", LengthMismatch: true));
     }
 
     static void MachineLoadRecords(VectorFileBuilder f)

@@ -24,7 +24,7 @@ internal sealed record FleetLaunchContext(FleetLaunchInput Input, GrantSubject S
 internal sealed class FleetLaunchDenied(string reason) : InvalidOperationException(reason);
 
 public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string?> account, string device,
-    AgentCredentials credentials, SessionService sessions, ISessionLauncher launcher)
+    AgentCredentials credentials, ISessionLauncher launcher)
 {
     readonly GrantStore store = new(folder, key, new(folder), new([], [], [], [], [], [], [], []));
     readonly GrantCounters counters = new(new(folder, key, new(folder), new([], [], [], [], [], [], [], [])));
@@ -62,8 +62,12 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         var effective = Evaluate(context, caller);
         var reconciled = counters.Reconcile(input.Grant, row =>
         {
-            var known = launcher.LaunchStatuses().SingleOrDefault(s => Guid.TryParse(s.Request, out var request) && request == row.Request);
-            return new(known?.Permissions is "ask" or "allowAll" && known.Session is { } id ? sessions.GrantTarget(id) : null, Permissions: known?.Permissions);
+            var principal = credentials.SessionPrincipal(row.Subject.Session);
+            var sourceRequest = AgentPipeLaunch.LaunchId(principal, row.Request.ToString("D")).ToString("D");
+            var known = launcher.LaunchStatuses().SingleOrDefault(s => s.Principal == principal && s.SourceRequest == sourceRequest
+                && Guid.TryParse(s.Request, out var request) && request == row.Request);
+            return new(known?.Permissions is "ask" or "allowAll" && known.Session is { } id
+                ? GateLaunchAudit.Started(folder, sourceRequest, principal, row.Grant.ToString("D"), id) : null, Permissions: known?.Permissions);
         }, Observe, ended: session => credentials.LaunchGate.SessionEnded(session));
         if (!reconciled.Accepted) { throw new FleetLaunchDenied(CounterReason(reconciled)); }
         return context with { Caps = effective.Caps, Request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = input.Agent,
@@ -128,7 +132,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         if (context.Admitted)
         {
             GrantCounterResult moved;
-            if (result.Outcome == LaunchOutcome.Started && result.Session is { } id && sessions.GrantTarget(id) is { } target
+            var principal = credentials.SessionPrincipal(context.Subject.Session);
+            var sourceRequest = AgentPipeLaunch.LaunchId(principal, context.Input.Request.ToString("D")).ToString("D");
+            if (result.Outcome == LaunchOutcome.Started && result.Session is { } id
+                && GateLaunchAudit.Started(folder, sourceRequest, principal, context.Input.Grant.ToString("D"), id) is { } target
                 && (result.Launched?.Permissions ?? launcher.LaunchStatuses().FirstOrDefault(s => s.Session == id)?.Permissions) is { } used && used == context.Request!.Permissions)
             { moved = counters.Commit(context.Input.Request, target, used); }
             else if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Failed or LaunchOutcome.Busy)
