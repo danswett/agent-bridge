@@ -1,6 +1,8 @@
 # Old-name inventory and compatibility plan
 
 Issue [#1838](https://github.com/danswett/agent-bridge/issues/1838), Product slice 1.
+Renames are batched under the rename epic [#1179](https://github.com/danswett/agent-bridge/issues/1179)
+(owner, Nov 21, 12:41 PT, fleet `docs/owner-decisions.md`); this inventory feeds that epic.
 Snapshot: `6f4ab661736d6f9af651c89b188724f4b8a76af6` (2026-11-10, Pacific). This document changes no names.
 Targets below are proposals for Product and Engineering sign-off, not new supported
 settings or permission to migrate installed machines. Every old name keeps working.

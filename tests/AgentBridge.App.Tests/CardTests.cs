@@ -1548,10 +1548,11 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(null, "Waiting on you")]
     [InlineData(0, "Waiting on you")]
     [InlineData(1, "Waiting on you · compacted once")]
     [InlineData(3, "Waiting on you · compacted 3 times")]
-    public void Compactions_say_compacted_once_or_N_times_beside_status_and_are_absent_at_zero(int count, string expected)
+    public void Compactions_use_the_same_words_in_the_header_and_Details_and_are_absent_at_zero_or_unknown(int? count, string expected)
     {
         var session = Make.Session(question: Make.Choice());
         var card = new SessionCardViewModel(session, Context());
@@ -1561,6 +1562,10 @@ public sealed class CardTests : IAsyncLifetime
             Assert.Equal(expected, card.HeaderStatusText);
             Assert.Equal("Waiting on you", card.StatusText);
             Assert.Equal(count > 0, card.Details.Any(d => d.Label == "Compactions"));
+            if (count > 0)
+            {
+                Assert.Equal(expected.Split(" · ")[1], card.Details.Single(d => d.Label == "Compactions").Value);
+            }
             Assert.DoesNotContain("compaction", card.Facts, StringComparison.Ordinal);
         }
         finally { card.Detach(); }

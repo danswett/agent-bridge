@@ -1,0 +1,125 @@
+{
+  "about": "Local delivery envelope helpers, not channel requests or sender authority.",
+  "spec": "../message-delivery.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "DeliverySender": {
+      "direction": "local",
+      "valid": [
+        {
+          "name": "authenticated-principal",
+          "json": {
+            "id": "ha-person",
+            "display": "Person",
+            "owner": true,
+            "from": "owner:ha-person (Person)"
+          }
+        },
+        {
+          "name": "unknown-agent",
+          "json": {
+            "id": "unknown",
+            "owner": false,
+            "from": "agent:unknown"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "display": "Person",
+            "owner": true,
+            "from": "owner:ha-person (Person)"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DeliveryHeader": {
+      "direction": "local",
+      "valid": [
+        {
+          "name": "prepared-handoff",
+          "json": {
+            "from": "owner:ha-person (Person)",
+            "id": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "seq": "q1",
+            "at": "2026-10-28T04:22:43.000Z",
+            "priority": "normal",
+            "n": 5
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-from",
+          "json": {
+            "from": 42,
+            "id": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "seq": "q1",
+            "at": "2026-10-28T04:22:43.000Z",
+            "priority": "normal",
+            "n": 5
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DeliveryEntry": {
+      "direction": "local",
+      "valid": [
+        {
+          "name": "verified-delivery",
+          "json": {
+            "text": "hello",
+            "header": {
+              "from": "owner:ha-person (Person)",
+              "id": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "seq": "q1",
+              "at": "2026-10-28T04:22:43.000Z",
+              "priority": "normal",
+              "n": 5
+            },
+            "lengthMismatch": false
+          }
+        },
+        {
+          "name": "unverified-console",
+          "json": {
+            "text": "console",
+            "lengthMismatch": false
+          }
+        },
+        {
+          "name": "length-mismatch",
+          "json": {
+            "text": "console",
+            "lengthMismatch": true
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-text",
+          "json": {
+            "text": 42,
+            "header": {
+              "from": "owner:ha-person (Person)",
+              "id": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "seq": "q1",
+              "at": "2026-10-28T04:22:43.000Z",
+              "priority": "normal",
+              "n": 5
+            },
+            "lengthMismatch": false
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    }
+  },
+  "knownDifferences": []
+}
