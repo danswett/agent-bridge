@@ -86,7 +86,7 @@ public sealed partial class SessionView
     void PinViewChanged(ScrollViewer scroll)
     {
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
-        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
+        if ((pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
         {
             var (remeasure, drop, gap) = (Math.Abs(extent - was.Extent), was.Offset - offset, extent - offset);
             // A shrink above moves the view by at most the extent delta, and a real remeasure (seen before or
@@ -96,6 +96,7 @@ public sealed partial class SessionView
                 || Math.Max(remeasure, was.Offset - was.Extent) > 8 && Math.Abs(gap - scroll.ViewportHeight) <= 8;
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         }
+        if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { pinEnd = true; }
         seen = (offset, extent);
     }
     // A final event can belong to a correction queued before this navigation request.
