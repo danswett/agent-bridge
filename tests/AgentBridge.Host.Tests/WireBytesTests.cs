@@ -25,8 +25,10 @@ public sealed class WireBytesTests : IAsyncLifetime
 
     // Handles (#2323) cut the unchanged #2171 workload from 10,155 to 9,606 bytes.
     // The 10,600-byte budget adds 994 bytes (10.3%); the 5 KB goal remains unmet.
+    // #3581 (owner-approved Nov 21 14:34 PT) added a per-reply responseId to each patch: 9,606 -> 10,983..11,012 bytes;
+    // the budget is now 11,400 (3.5% over the highest measured 11,012).
     const int Goal = 5 * 1024;
-    const int Budget = 10_600;
+    const int Budget = 11_400;
 
     // What each event costs beyond its (deflated) JSON: the AEAD tag, the channel header and the
     // relay's data frame (type byte and the peer id).
