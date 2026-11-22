@@ -44,8 +44,15 @@ public interface ICallerGuard
 // descends from nothing. What it stops is an agent following an instruction, or making a
 // mistake, through the obvious door: the agent-ha-bridge incident, not an attacker.
 public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string? appImage, IReadOnlyList<string>? agentNames = null, TimeProvider? time = null,
-    Func<IProtocolChannel, ProcessAncestry>? ancestryOf = null, string? hostImage = null) : ICallerGuard
+    Func<IProtocolChannel, ProcessAncestry>? ancestryOf = null, string? hostImage = null, Func<PeerProcess?>? desktopShell = null) : ICallerGuard
 {
+    // The desktop shell (GetShellWindow's process), for callers that require it (desktopShell).
+    public static PeerProcess? DesktopShell()
+    {
+        if (!OperatingSystem.IsWindows() || GetWindowThreadProcessId(GetShellWindow(), out var id) == 0 || id == 0) { return null; }
+        return ProcessChain.Read((int)id).Processes.FirstOrDefault(p => p.Id == id);
+    }
+
     // The Windows app's executable as it ships: AgentBridge.App.csproj's AssemblyName, which
     // build/pack-app.ps1 packs beside the host. Not the project's name.
     public const string AppExecutable = "AgentBridge.exe";
@@ -88,8 +95,10 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
         }
         if (hostImage is not null && self.Image is { } program && string.Equals(Path.GetFullPath(program), Path.GetFullPath(hostImage), StringComparison.OrdinalIgnoreCase))
         {
-            // Shell image/console inheritance cannot distinguish a person from a script.
-            if (chain.Count < 2 || !string.Equals(AgentAncestry.FileName(chain[1].Image), "explorer.exe", StringComparison.OrdinalIgnoreCase))
+            // Shell image/console inheritance cannot distinguish a person from a script, so where it
+            // matters the parent must be this desktop's own shell instance (id and start time).
+            if (desktopShell is not null && (chain.Count < 2 || desktopShell() is not { StartedAt: not null } shell
+                || chain[1].Id != shell.Id || chain[1].StartedAt != shell.StartedAt))
             { return new Caller(CallerKind.Other, "host command line was not started directly from the desktop"); }
             return new Caller(CallerKind.HostCli, $"agent-bridge-host's command line (pid {self.Id})");
         }
@@ -98,6 +107,12 @@ public sealed class CallerGuard(Func<IReadOnlyList<KnownProcess>> known, string?
 
     static Caller Inside(IReadOnlyList<PeerProcess> chain, PeerProcess at, string which) =>
         new(CallerKind.Agent, at == chain[0] ? $"{which} (pid {at.Id})" : $"pid {chain[0].Id}, inside {which} (pid {at.Id})");
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern IntPtr GetShellWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 }
 
 public static class KnownAgents

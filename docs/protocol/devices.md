@@ -422,7 +422,8 @@ issuedAt, expiresAt, heads }`, with exactly the members its action has:
 order. `sig` is over `F("agent-bridge person command v1", bodyBytes)`, the assertion for role
 `command`. The library checks, in order: `action` (not the op's), `machine` (not this host),
 `signer` (by is the machine or `to`, or is not an active person's device), `probation` (on
-probation, or held), `signature`, `presence`, `lifetime` (expiring at or before issue, or over 10
+probation, or held), `signature`, `presence`, `host-key` (signer key separation),
+`lifetime` (expiring at or before issue, or over 10
 minutes after), `future` (issued over 2 minutes after `now`), `expired` (expiring before `now`),
 `floor` (issued at or before the floor), `nonce` (an action with one, not this channel's), `heads`
 (a head the host does not hold: it syncs, then asks again), and for `attest` given the last

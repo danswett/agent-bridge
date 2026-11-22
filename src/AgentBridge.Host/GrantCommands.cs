@@ -26,7 +26,7 @@ public static class GrantCommands
             var known = new Func<IReadOnlyList<KnownProcess>>(() => KnownAgents.Running(new SystemProcessInspector()));
             return Console.IsInputRedirected || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN"))
                 || AgentAncestry.Inside(Environment.GetEnvironmentVariable(AgentAncestry.SessionVariable), ancestry, known) is not null
-                || new CallerGuard(known, null, hostImage: Environment.ProcessPath).Classify(ancestry).Kind != CallerKind.HostCli;
+                || new CallerGuard(known, null, hostImage: Environment.ProcessPath, desktopShell: CallerGuard.DesktopShell).Classify(ancestry).Kind != CallerKind.HostCli;
         }
         if (args is not ["grants", "list"] && Refused()) { return Deny(args, audit, error); }
         try
@@ -169,6 +169,7 @@ public static class GrantCommands
         { Digest = digest, PersonProof = AgentBridge.Roster.Codec.Base64Url(CommandMac.Of(key, key.Public, body)) } };
         var issued = open().Issue(grant);
         if (!issued.Usable) { return Fail(issued.Problem.ToString()); }
+        if (issued.Rotated) { output.WriteLine($"notice: this machine's pre-grant audit log was retired and a new one started ({AgentAuditLog.FirstGrantReason})"); }
         output.WriteLine(JsonSerializer.Serialize(new
         { grant.Id, grant.Generation, digest, grant.AllowAllLaunch, state = "issued" }, ProtocolJson.Options));
         return 0;

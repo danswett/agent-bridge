@@ -10,7 +10,8 @@ Outside contributors (pull requests only, no fleet access) may use
 [outside-contributors.md](outside-contributors.md) for background. Where it
 conflicts, that guide is historical/superseded, not a source of permission:
 current AGENTS and the Fleet register control; published heads never rebase or
-force-push, and Quality controls PR/body custody, receipt posting and arming.
+force-push, and Quality controls PR/body custody and arming; reviewer readers post their own
+receipts and statuses, which Quality spot-checks.
 
 ## Operational sources of truth
 
