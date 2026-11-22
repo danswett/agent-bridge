@@ -115,7 +115,8 @@ static partial class SelfTest
                     else { stable = 0; view.ChangeConversationView(scroll, scroll.ScrollableHeight - gap); }
                 }
                 CompositionTarget.Rendering += Seek;
-                try { return await Until(() => stable >= 2, TimeSpan.FromSeconds(5)); }
+                try { return await Until(() => stable >= 2 && Math.Abs(scroll.VerticalOffset - (scroll.ScrollableHeight - gap)) <= 1.5
+                    && (gap > 8 || scroll.VerticalOffset >= scroll.ScrollableHeight - 8), TimeSpan.FromSeconds(5)); }
                 finally { CompositionTarget.Rendering -= Seek; }
             }
             scroll.ViewChanged += Changed;
