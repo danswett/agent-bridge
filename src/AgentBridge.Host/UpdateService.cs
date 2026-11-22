@@ -723,9 +723,12 @@ public sealed class UpdateService
         finally { policyTurn.Release(); }
     }
 
+    // A signed policy also needs its own Expires still ahead: the snapshot checked it when read, but a policy can expire
+    // while departure is prepared, and an expired one must not authorize the commit (refused as unreadable, like stale).
     bool Fresh(HaltPolicySnapshot snapshot) =>
         snapshot.Fresh && snapshot.Policy is { Body.Length: > 0 } && snapshot.At is { } at
-        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery;
+        && at <= time.GetUtcNow() && time.GetUtcNow() - at < ReleaseDiscovery.GithubRevalidateEvery
+        && (snapshot.Policy.Sequence == 0 || snapshot.Policy.Expires > time.GetUtcNow());
 
     // host.log's audit of a press that went ahead unchecked (#3307): a verified policy not renewed
     // in time is stale; none, or none with a known time, is unreadable. Null while fresh.

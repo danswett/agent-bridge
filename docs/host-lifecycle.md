@@ -279,8 +279,9 @@ errors and hash mismatch yield `HaltListUnavailable`, with no cached-empty or
 custom-feed fallback. Reads have a ten-second timeout. There is no new service
 endpoint, polling loop, signing key or installer.
 
-This is **verified GitHub release metadata**, not an independent publisher
-signature. Its trust is GitHub HTTPS/repository write authority, like release
+This **legacy path** (#3307) is verified GitHub release metadata, not an independent publisher
+signature. A signed policy accepted by `SignedHaltPolicy.OfferAsync` supersedes it (see
+[design §4.1](design/updates-fast-fleet-update.md)); a later slice removes it. Its trust is GitHub HTTPS/repository write authority, like release
 discovery; it does not prove a separate signed policy. No raw URL/exception,
 identity or IP is logged. Consumers call the read-only adapter from their
 existing cadence and again before apply; no stale downloaded-package policy
