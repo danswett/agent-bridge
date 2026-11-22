@@ -159,9 +159,13 @@ refusals consume no launch quota; distinct attempts retain existing attempt limi
 
 Clock windows are rolling durations, not Pacific calendar midnight resets.
 Persist the last observed time; backwards clock movement refuses new grant use
-until trustworthy time catches up. Expiry, caps and kill are checked again at the
-actual execution slot, not only when queued. A large forward jump expires rather
-than extends authority. UI dates/times follow the viewer's local-time convention.
+until trustworthy time catches up. Counter refusals for observed expiry durably
+advance that watermark before returning; restart and clock rollback cannot
+restore authority. Known reservation refusals retain their binding for watermark
+persistence. Unchanged same-time counter operations add no intents. Expiry, caps
+and kill are checked again at the actual execution slot, not only when queued.
+A large forward jump expires rather than extends authority. UI dates/times follow
+the viewer's local-time convention.
 
 There is no coordinator tied to a particular VM. A receiver leaving stops actions
 there; its quota allocations stay spent/reserved and are not silently moved.
