@@ -198,6 +198,69 @@ The UI shows **Active** only on that verified receipt, never on submission alone
 Remote app issuance retains the established approved person-device/roster gates;
 same-account relay presence or a grant held by another agent is insufficient.
 
+### Local binding trust and sealed byte layout
+
+The approved existing trusted local App pipe is the trust root for `grant.binding`,
+not the Seal alone. The Host returns its existing HostSign public-key metadata only
+after verifying it against the active roster with `AcceptHostSign` and collision
+checks; otherwise the operation refuses. The App gets no new roster or identity-sign
+API. The Seal protects byte integrity; it does not authenticate a co-delivered key
+independently of that trusted pipe. No host-key opening, new key, HostSign substitution
+or relay fallback is introduced by this contract.
+
+`FleetGrantBindingRequest(Receiver, Profile, Request)` names a fresh nonempty GUID.
+The reply is `FleetGrantBindingResult(Binding, Proof)`, with `ReceiverKey` added to
+`Binding`: the existing receiver static DH public key (relay `PeerKey`), not HostSign.
+Both key texts are canonical unpadded base64url of 65-byte uncompressed P-256 points.
+The receiver's `Machine.Id` is `Binding.Receiver = Ids.Device(ReceiverKey)`.
+`Context` binds account, profile, receiver, action **`grant.binding`**, and that GUID.
+
+`FleetGrantBindingProof.Bytes` uses the existing roster `Framing.F`: each field is
+preceded by its unsigned 4-byte big-endian byte length. Its fixed-order fields are:
+ASCII domain `agent-bridge fleet receiver binding v1`, UTF-8 account, UTF-8 profile,
+UTF-8 `Machine.Id`, UTF-8 roster generation (32 lowercase hex), raw `ReceiverKey`
+(65 bytes), HostSign key id (raw 32-byte SHA-256 of its 65-byte public point),
+and UTF-8 freshness GUID in lowercase `D` form. These exact bytes are the body of
+`FleetGrantProof.Seal`, whose receiver-proof domain and full `Context` also frame
+the signature input. `FleetGrantBindingProof.Verify` verifies that Seal against the
+HostSign metadata authenticated by the pipe and checks the exact layout before
+returning `ReceiverKey` for the existing `SignedCommand` MAC.
+
+Missing, malformed, unsealed or unverifiable keys refuse, without fallback. Adapters
+retain the full binding metadata for that `Machine.Id` from binding through confirm;
+any account, profile, roster generation or key change requires a new binding/attempt,
+never substitution into an in-flight confirmation. The receiver remains the sole
+dispatcher/writer and retains all person-device, roster and signer gates.
+
+### Authenticated issuance rotation receipt
+
+Canonical `App.Core.Grants.GrantReceipt` requires an explicit `bool Rotated` with
+`JsonRequired` and no optional/default constructor argument. Missing or wrong-type
+flags refuse. Its value comes **only** from the successful B325 PR2 `Issue`
+`result.Rotated` (https://github.com/danswett/agent-bridge/pull/3638), never inferred
+from audit state, a log or `RotationRequired`. The contract has no compile dependency
+on PR2 and implements no producer or rotation policy. Until PR2 and G4 are available,
+the receiver producer reports unavailable, not synthesized `false`.
+
+`FleetGrantIssueReceiptResult(Receipt, Proof)` carries exactly the camel-case JSON
+fields `id`, `generation`, `receiver`, `digest`, `rotated`. Missing, duplicate,
+unknown or wrong-type fields refuse before sealing. `FleetGrantReceiptProof.Bytes`
+uses fixed-order `Framing.F` (u32 big-endian byte length preceding each field):
+ASCII `agent-bridge fleet issue receipt v1`, UTF-8 grant UUID in lowercase `D` form,
+positive generation as 8-byte big-endian Int64, UTF-8 receiver `Machine.Id`,
+raw SHA-256 document digest (32 bytes), and **one rotation byte: 0=false, 1=true**.
+These are the exact `FleetGrantProof.Seal` body bytes; its outer domain and full
+`grant.confirmIssue` Context bind account, profile, receiver and fresh request GUID.
+
+`FleetGrantReceiptProof.Verify` authenticates the Seal with the already trusted
+HostSign point and checks the exact body before returning receipt JSON for canonical
+parsing. An absent proof or any unsealed change to `rotated` refuses; tampering with
+the sealed rotation byte fails signature verification. The App may show the approved
+rotation notice only on its matching authenticated **Active** receipt with
+`Rotated=true`, never from preparation, submission or a missing producer. Builder 343
+alone supplies the actual result and Seal; 344 owns the adapter/notice. All other
+`RotationRequired` states retain their existing fail-closed behavior.
+
 Host CLI person path: proposed `agent-bridge-host grants issue` and
 `agent-bridge-host grants revoke <id>`. It uses the same receiver writer and
 person confirmation, not direct file editing. Guard 67 plus complete caller
@@ -239,6 +302,28 @@ Revoke-all on several machines reports each acknowledgment separately.
 An offline receiver is **Revocation pending**, not revoked; no future-use
 guarantee exists there until its receipt or the maximum 24-hour expiry.
 The app never reissues the same id to repair missing state.
+
+### Sealed grant.read problem
+
+A `grant.read` reply carries a REQUIRED closed `Problem` inside the seal:
+`FleetGrantReadProblem` = None 0, RotationRequired 1, Unavailable 2, Other 3.
+The reply JSON is exactly `{"problem":"<name>"}` with the exact, case-sensitive
+names `none`, `rotationRequired`, `unavailable`, `other`; a missing, null, number,
+unknown, extra, duplicate or differently cased name or value refuses. There is no default,
+and the diagnostic `GrantReadResult.Problem` string, an audit line or an unsigned
+flag never supplies it.
+
+`FleetGrantReadProof.Seal(reply, context, signer)` returns
+`FleetGrantReadResult(Reply, Proof)`. The binary body is
+`Framing.F("agent-bridge fleet read problem v1", problem byte)`. The outer
+`FleetGrantProof` context (account, profile, receiver, action `grant.read`, fresh
+request) is the caller-retained one, never one echoed by the reply.
+`FleetGrantReadProof.Verify(result, trustedHostSign, expected)` returns the typed
+problem only after the signature and the exact body match; anything else throws
+`InvalidDataException`. First issuance may be enabled only when the verified value
+is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
+refusal never qualify. This contract has no producer: until the receiver seals it
+the value is unavailable, not None.
 
 ## Agent use and receiver order
 
