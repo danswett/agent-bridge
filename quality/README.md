@@ -549,7 +549,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    **Reader enforcement is STALE:** the current evaluator/config can accept one
    independent receipt plus completed Copilot instead of the required second family.
    Before arming or permitting merge, Quality MUST manually verify authorized
-   posters and Quality-only posting; actual approved model/effort (or approved
+   posters and that each reader posted its own receipt and status (owner decision
+   2026-11-21, option A; Quality spot-checks); actual approved model/effort (or approved
    retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
    naming the PR's current full head SHA; reviewer independence/non-authorship;
    and completed required whole/security reads. Ordinary PRs need one required
@@ -868,7 +869,11 @@ Receipts count only from `independent_review.posters` in `quality/merge-rule.yml
 and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
 `[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
 nothing else; its key stays on the authorized receipt host. It has its own rate pool, so danswett's quota running out
-doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
+doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down,
+and since 2026-11-21 (owner decision, option A) it is also the identity reviewer readers post as:
+each reader posts its own receipt comment (naming its model family) and sets its own
+`independent-review` or `independent-review-2` status on the exact head, through the approved
+per-command route. Quality spot-checks them and alone gates, arms and merges.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
 ## 5. Coverage, timing, flakes and reports
