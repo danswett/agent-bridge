@@ -21,10 +21,13 @@ public sealed class GrantReadProducer(Func<GrantSnapshotResult> snapshot, Func<b
         if (!ready()) { return FleetGrantReadProblem.Unavailable; }
         try
         {
-            return snapshot().Problem switch
+            var read = snapshot();
+            // Readiness can end while the store is read; an answer sealed after that must not be actionable.
+            if (!ready()) { return FleetGrantReadProblem.Unavailable; }
+            return read switch
             {
-                GrantStoreProblem.None => FleetGrantReadProblem.None,
-                GrantStoreProblem.RotationRequired => FleetGrantReadProblem.RotationRequired,
+                { Problem: GrantStoreProblem.None, Grants.IsDefault: false } => FleetGrantReadProblem.None,
+                { Problem: GrantStoreProblem.RotationRequired } => FleetGrantReadProblem.RotationRequired,
                 _ => FleetGrantReadProblem.Other
             };
         }

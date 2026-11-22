@@ -41,6 +41,18 @@ public sealed class GrantReadProducerTests : IDisposable
         Assert.Equal(FleetGrantReadProblem.Other, Sealed(Producer(GrantStoreProblem.None, throws: true)));
 
     [Fact]
+    public void Readiness_that_ends_during_the_store_read_seals_unavailable()
+    {
+        var calls = 0;
+        var producer = new GrantReadProducer(() => new GrantSnapshotResult(GrantStoreProblem.RotationRequired, 0, null, [], []), () => ++calls < 2, () => Signer);
+        Assert.Equal(FleetGrantReadProblem.Unavailable, Sealed(producer));
+    }
+
+    [Fact]
+    public void A_none_without_a_real_grants_array_is_other() => Assert.Equal(FleetGrantReadProblem.Other,
+        Sealed(new GrantReadProducer(() => new GrantSnapshotResult(GrantStoreProblem.None, 0, null, default, []), () => true, () => Signer)));
+
+    [Fact]
     public void Without_a_signer_nothing_is_answered_at_all()
     {
         Assert.Throws<InvalidOperationException>(() => Producer(GrantStoreProblem.None, signer: false).Produce(context));
