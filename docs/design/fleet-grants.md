@@ -334,6 +334,13 @@ not a completed rotation: only the verified receipt's `Rotated` confirms that. W
 the adapter the reader returns Unavailable/G7Ready=false; production stays unavailable
 until G4 + PR2 land and AcceptHostSign is ON.
 
+Production App composition uses only this machine's trusted local pipe and the existing
+App-key signer. Binding, read-problem and issue-receipt calls retain their typed envelopes,
+use a 30-second deadline and refuse a changed connection. Notifications never read grants:
+disconnect marks the retained model unavailable; reconnect waits for person refresh.
+Quit detaches the observer. Prepare, page DATA and revoke remain explicitly unavailable
+pending their canonical integration and producer; no generic proof fallback is enabled.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
