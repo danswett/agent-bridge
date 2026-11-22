@@ -86,7 +86,7 @@ public sealed partial class SessionView
     void PinViewChanged(ScrollViewer scroll)
     {
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
-        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
+        if ((pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
         {
             var remeasure = Math.Abs(extent - was.Extent);
             // A remeasure can shift the virtualised anchor by the extent delta plus one viewport.

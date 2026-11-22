@@ -29,6 +29,9 @@ public sealed class ConversationEndPinTests
                     Assert.Equal(2, view.Scroller.Targets.Count); view.Moved(view.Scroller.Targets[^1]);
                 }
                 Assert.True(Math.Abs(extent - view.Scroller.VerticalOffset) <= 1.5, view.PinState());
+                view.ReleasePin(); view.AnchorForProbe(extent); view.Scroller.Targets.Clear();
+                view.Moved(extent - 1000, final: false); view.Moved(extent - 4); view.Follow();
+                Assert.False(view.Pinned);
                 view.Scroller.Targets.Clear();
             }
             else { Assert.Empty(view.Scroller.Targets); Assert.Equal(52147 - gap, view.Scroller.VerticalOffset); }
