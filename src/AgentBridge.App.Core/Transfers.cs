@@ -51,15 +51,6 @@ public static class Transfers
         return SignBody(key, machinePublic, UpdateProtocol.NowAction, null, machine, now, request, ManageProtocol.MaxLifetime, args: args);
     }
 
-    public static SignedCommand SignGrantConfirmation(P256KeyPair key, byte[] machinePublic, string action,
-        JsonElement args, DateTimeOffset now, Guid request)
-    {
-        if (action is not ("grant.issue" or "grant.revoke") || args.ValueKind != JsonValueKind.Object || request == Guid.Empty)
-        { throw new ArgumentException("An explicit grant confirmation and fresh request are required."); }
-        return SignBody(key, machinePublic, action, null, Wire.DeviceId(machinePublic), now,
-            request.ToString("D"), CommandLifetime, args: args);
-    }
-
     static SignedCommand SignBody(P256KeyPair key, byte[] machinePublic, string action, string? session, string to, DateTimeOffset now, string request,
         TimeSpan lifetime, string? question = null, string? shown = null, JsonElement? args = null)
     {
