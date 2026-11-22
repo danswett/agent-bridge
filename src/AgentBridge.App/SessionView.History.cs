@@ -193,11 +193,12 @@ public sealed partial class SessionView
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
         if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null) { return; }
-        var (session, releases) = (shownHistory, pinReleases);
+        var (session, releases, anchors) = (shownHistory, pinReleases, responseAnchors);
         void Restore()
         {
             if (session != shownHistory || releases != pinReleases || restoreReading is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
+            if (!atEnd && !pinEnd && reading is null && anchors != responseAnchors) { return; }
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)
             {

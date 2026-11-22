@@ -162,6 +162,7 @@ namespace AgentBridge.App
         double? anchoring;
         double? keyTarget = null;
         double anchorAt;
+        int responseAnchors = 0;
         Core.ScrollAnchor? anchor;
         readonly Microsoft.UI.Dispatching.DispatcherQueue DispatcherQueue = new();
         readonly Microsoft.UI.Xaml.FrameworkElement HistoryLine = new(), HistoryRetry = new(), HistoryEarlier = new();

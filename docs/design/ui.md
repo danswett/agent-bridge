@@ -1742,6 +1742,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   on the next reply or history update, including after a screen-reader retreat.
   This end-entry tolerance is separate from the 1 px movement tolerance; it does not
   widen pin-release exemptions or override active navigation, scrolling or holds.
+  Retained latest-response blocks own their list anchor and invalidate earlier queued numeric
+  restores, but not stored-row or end corrections. Only a signed extent decrease explains a
+  shrink-sized drop; stationary remeasurement evidence survives until the next actual move
+  or user release, and resets on reattachment, so a one-viewport layout landing is recognized
+  in either event ordering.
   A question brought into view, a block requested by a screen reader or any other move back from
   the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
   even before navigation first moves.
