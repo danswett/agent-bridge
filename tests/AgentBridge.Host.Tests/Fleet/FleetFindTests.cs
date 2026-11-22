@@ -157,14 +157,14 @@ public sealed class FleetFindTests : IDisposable
     [InlineData("Old name")]
     [InlineData("Old")]
     [InlineData("12345678-90ab-cdef-2222-222222222222")]
-    [InlineData("\n\u202exxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")]
+    [InlineData("\n\u202e1234567890123456789012345678901234567890123456789012345678901\uD83D\uDE80xxxxxxxxxxxxxxxxxxxx")]
     public async Task Lookup_never_resolves_a_name_fragment_or_unpublished_uuid(string id)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var machine = M("a", true, null, verified: true) with { Sessions = [new(Node, "Old name", "idle", Started, SessionId: Uuid)] };
         var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = id }));
         Assert.Contains("refused:", refusal.Message);
-        Assert.Contains(JsonSerializer.Serialize(id.Length > 64 ? id[..64] + "..." : id), refusal.Message);
+        Assert.Contains(JsonSerializer.Serialize(id.Length > 64 ? id[..63] + "..." : id), refusal.Message);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = Node, name = "Old name" }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = Node, machineName = "a" }));
     }

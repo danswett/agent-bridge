@@ -278,7 +278,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     {
         var caller = Authorize(channel, FindOp);
         var sessionId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("sessionId", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-        var target = JsonSerializer.Serialize(sessionId is { Length: > 64 } ? sessionId[..64] + "..." : sessionId ?? "<missing>");
+        var target = JsonSerializer.Serialize(sessionId is { Length: > 64 } ? sessionId[..(char.IsHighSurrogate(sessionId[63]) ? 63 : 64)] + "..." : sessionId ?? "<missing>");
         if (sessionId is null || !FleetSessionMatch.IsId(sessionId) || data.TryGetProperty("name", out _) || data.TryGetProperty("machineName", out _))
         { throw new InvalidOperationException($"refused: fleet.find sessionId {target} needs an exclusive session ID; names never route"); }
         string? machine = null;
