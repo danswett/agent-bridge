@@ -325,6 +325,15 @@ is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
 
+The App adapter implements `IVerifiedGrantReader` and internally constructs the sealed,
+read-only `VerifiedGrantRead` from its verified problem, computed G7 readiness and list
+data. The VM handles no contexts, keys or proof verification. Its separate `CanIssueFirst`
+requires typed RotationRequired plus G7Ready; list/revoke remain unavailable, and New grant
+uses the normal person prepare/confirm path. The notice describes first-issue rotation,
+not a completed rotation: only the verified receipt's `Rotated` confirms that. Without
+the adapter the reader returns Unavailable/G7Ready=false; production stays unavailable
+until G4 + PR2 land and AcceptHostSign is ON.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
