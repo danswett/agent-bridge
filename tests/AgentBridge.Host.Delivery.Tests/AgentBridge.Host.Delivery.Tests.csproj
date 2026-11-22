@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.Host\AgentBridge.Host.csproj" />
     <!-- Built alongside so the Windows integration tests drive the real worker and a real
          console program; their executables land in this output folder. -->
     <ProjectReference Include="..\..\src\AgentBridge.Injector\AgentBridge.Injector.csproj" />

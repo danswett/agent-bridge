@@ -1,6 +1,7 @@
 # Stable role IDs and fenced session delivery
 
 Status: proposed design, not implementation, enrollment or rollout authority.
+Role-ID code is paused (owner, Nov 19, 17:58 PT, two-track plan); no role-ID code is on main.
 Canonical home: [existing lookup issue](https://github.com/danswett/agent-bridge/issues/1399),
 under [fleet parity](https://github.com/danswett/agent-bridge/issues/1396).
 Owner decisions, Nov 19, 2026 PT: GUID addressing, names display-only (12:10);
