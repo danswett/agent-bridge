@@ -24,7 +24,8 @@ public sealed class GrantStore
         RespectRequiredConstructorParameters = true, MaxDepth = 16
     };
     internal sealed record Intent(Guid Operation, Guid Grant, long Generation, string Action);
-    internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents);
+    internal sealed record State(int Version, long Generation, GrantDocument[] Grants, Guid[] Tombstones, Intent[] Intents,
+        GrantCounterState? Counters = null);
     readonly string folder, path;
     readonly P256KeyPair key;
     readonly AgentAuditLog audit;
@@ -76,20 +77,21 @@ public sealed class GrantStore
         return new(result.Problem, grants);
     }
 
-    static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
+    internal static State Next(State state, Guid id, string action) => state with { Generation = state.Generation + 1,
         Intents = [.. state.Intents, new(Guid.NewGuid(), id, state.Generation + 1, action)] };
-    GrantStoreResult Find(State state, Guid id, long generation, bool checkTime)
+    internal GrantStoreResult Find(State state, Guid id, long generation, bool checkTime, DateTimeOffset? observedAt = null)
     {
         if (state.Tombstones.Contains(id)) { return new(GrantStoreProblem.Revoked); }
         var grant = state.Grants.SingleOrDefault(g => g.Id == id);
         if (grant is null) { return new(GrantStoreProblem.NotFound); }
         if (grant.Generation != generation) { return new(GrantStoreProblem.Generation); }
-        var now = time.GetUtcNow();
-        return checkTime && now < grant.NotBefore ? new(GrantStoreProblem.NotYetValid)
+        var now = observedAt ?? time.GetUtcNow();
+        return checkTime && (now < grant.NotBefore || state.Counters is { } counters && now < counters.ObservedAt)
+            ? new(GrantStoreProblem.NotYetValid)
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
 
-    GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true, bool readOnly = false)
+    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true, bool readOnly = false)
     {
         if (failure != GrantStoreProblem.None) { return new(failure); }
         try
@@ -143,23 +145,21 @@ public sealed class GrantStore
                 || state.Grants.Any(g => !GrantValidator.ValidateShape(g).Valid)
                 || state.Grants.Select(g => g.Id).Distinct().Count() != state.Grants.Length
                 || state.Tombstones.Any(id => id == Guid.Empty || state.Grants.Any(g => g.Id == id))
-                || state.Tombstones.Distinct().Count() != state.Tombstones.Length)
+                || state.Tombstones.Distinct().Count() != state.Tombstones.Length || !GrantCounters.Valid(state.Counters))
             { throw new StoreFault(GrantStoreProblem.Malformed); }
         }
         catch (FileNotFoundException) { state = new(1, 0, [], [], []); }
         long retained = 0;
         var adopted = false;
-        var adoptionIncomplete = false;
         var (rows, complete) = GateAuditProjection.Load(folder, alreadyLocked: readOnly, boundary: (floor, unproven) =>
         {
             retained = floor; adopted = unproven;
-            adoptionIncomplete = unproven && !AgentAuditLog.LegacyOnlyAdoption(Path.Combine(folder, AgentAuditLog.FolderName));
         });
-        // Legacy-only adoption cannot hide grant history; per-stream rollback still requires a global gated sequence.
-        if (!complete || adoptionIncomplete || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
+        // Adopted history is unproven; per-stream rollback requires one global gated sequence.
+        if (!complete || adopted || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
-        var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke").ToArray();
+        var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update").ToArray();
         if (body is not null && history.Length == 0) { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var operations = history.GroupBy(r => r.Gate?.Operation).OrderBy(g => g.First().Gate?.Sequence).ToArray();
         if (operations.Any(g => g.Count() != 2 || g.First().Gate is not { Phase: "intent" }
