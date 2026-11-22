@@ -16,6 +16,7 @@ only rows at least 15 minutes old expire. Records are principal/request keyed; a
 UUID query returns unknown. Invalid status records are logged, never abort launch completion.
 Corruption reads empty with a log warning. Deduplication, provenance and authorization
 are unchanged; unknown never authorizes a relaunch.
+The launch ledger retains used request IDs for 30 days (4096 entries); at capacity it refuses new IDs rather than evicting unexpired ones.
 
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
 agent session from another device, the way agent-ha-bridge's launch card does. A session from
