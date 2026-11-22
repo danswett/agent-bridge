@@ -294,11 +294,45 @@ An offline receiver is **Revocation pending**, not revoked; no future-use
 guarantee exists there until its receipt or the maximum 24-hour expiry.
 The app never reissues the same id to repair missing state.
 
-### Sealed grant.revoke request and receipt
+### Sealed grant.prepareRevoke prepared value and person-confirm RPC
+
+`grant.prepareRevoke` consumes `FleetGrantCall` with the caller's complete Context
+and Args exactly `{id,generation}` (`FleetGrantPrepareRevokeRequest`); omit Command.
+`FleetGrantPrepareRevokeResult(Prepared,Proof)` replies as `{prepared:{challenge,preview},proof}`.
+Prepared reuses `FleetGrantPrepared`/`FleetGrantChallenge`; preview is exactly
+id/generation/receiver/account/profile/action/document/digest. All fields are required.
+Prepare Context action is grant.prepareRevoke; challenge/preview action is grant.confirmRevoke.
+Caller retains Context and requested id/generation, never substitutes reply fields as expectations.
+Challenge nonce is nonempty and distinct from the prepare RPC GUID; all selector/binding fields match.
+`FleetGrantPrepareRevokeProof.Seal/Verify` take an injected receiver/caller TimeProvider.
+Expiry must be after that clock's current instant, with no new skew grace; malformed/default expiry refuses.
+`Parse(raw)` checks 128 KiB before JSON, rejects missing/extra/duplicate/wrong-case/type/null recursively.
+Verify returns a snapshotted typed prepared value only after the trusted HostSign/body/context checks.
+Document is exact complete normalized G1 text, opaque to this contract rather than a new policy parser.
+Digest is lowercase SHA-256 of `Framing.F(Framing.Label("agent-bridge fleet revoke digest v1"),
+account, profile, receiver, action grant.confirmRevoke, challenge nonce, id, generation, expiry, document)`.
+Order is fixed; strings/document are exact UTF-8, GUIDs lowercase D, generation signed Int64 big-endian,
+expiry invariant round-trip O. No reserialization while hashing; invalid Unicode refuses.
+The digest excludes its own field and is not issuer.digest. `DigestBytes` exposes this exact preimage.
+Seal body is `Framing.F(Framing.Label("agent-bridge fleet prepare revoke v1"), digest preimage, raw digest)`.
+Matching preview/challenge fields bind transitively through that preimage; document counts once.
+The COMPLETE body is <=30 KiB; oversize refuses without truncation, including multibyte document text.
+Caller retains the verified, person-reviewed tuple plus document/expiry through confirmation.
+Cached verified DATA may supply reviewed content but never manufacture a challenge or its expiry.
+Immediately before confirm, BOTH caller and receiver use `ConfirmContext` with their injected clock,
+using the caller's retained verified preparation or receiver's stored preparation, never unverified reply data.
+It rechecks digest/binding/expiry/nonce and returns `FleetGrantRevokeContext` with the exact supplied Context;
+it does not verify person intent, sign, rewrite Context, or authorize mutation.
+`grant.confirmRevoke` consumes `FleetGrantCall{context,args:Confirmation,command:SignedCommand}`.
+RPC, person SignedCommand, outer proof and receipt.action are all grant.confirmRevoke, with exact signed args.
+It returns `{receipt,proof}` below; producer/dispatch/person/host gates are still separate and unavailable here.
+The standalone `{request,proof}` helper is NOT the RPC request or a person command.
+
+### Sealed grant.confirmRevoke request and receipt
 
 `FleetGrantRevokeProof.SealRequest/VerifyRequest` bind `FleetGrantConfirmation` (challenge, id, generation, digest) to caller-retained `FleetGrantRevokeContext`.
 GUIDs: nonempty lowercase D; generation: positive Int64; digest: 64 lowercase hex; approved tuple must match; challenge differs from fresh RPC GUID.
-Outer context is the caller's account/profile/receiver/action `grant.revoke`/request, never reply-supplied.
+Outer context is the caller's account/profile/receiver/action `grant.confirmRevoke`/request, never reply-supplied.
 Seals enable no producer, UI, dispatch, policy or authority; existing person/host/confirm gates remain. `SealReceipt/VerifyReceipt` return a sealed snapshot/typed `FleetGrantRevokeOutcome`.
 Success requires exactly id/generation/receiver/account/profile/action/digest/problem/finalState/tombstone/counters/inFlightRequests, with none/revoked/true; only success may use none.
 Counters use the complete DATA schema, nonnegative counts and required nullable lastCaller/lastOutcome.

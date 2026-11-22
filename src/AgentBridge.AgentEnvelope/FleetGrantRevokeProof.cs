@@ -117,12 +117,12 @@ public static class FleetGrantRevokeProof
             "refused" when code > 0 => FleetGrantRevokeState.Refused,
             "unconfirmed" when code > 0 => FleetGrantRevokeState.RevocationPending, _ => throw Invalid() };
         GuidText(receipt.GetProperty("id"), value.Id);
-        if (value.Generation <= 0 || !Digest(value.Digest) || value.Action != "grant.revoke") { throw Invalid(); }
+        if (value.Generation <= 0 || !Digest(value.Digest) || value.Action != "grant.confirmRevoke") { throw Invalid(); }
         return new(value, (FleetGrantRevokeProblem)code, state, snapshot, tail);
     }
     static void Context(FleetGrantRevokeContext expected)
     {
-        if (expected is null || !FleetGrantProof.Valid(expected.Context) || expected.Context.Action != "grant.revoke")
+        if (expected is null || !FleetGrantProof.Valid(expected.Context) || expected.Context.Action != "grant.confirmRevoke")
         { throw Invalid(); }
         Confirmation(expected.Confirmation);
         if (expected.Confirmation.Challenge == expected.Context.Request) { throw Invalid(); }
@@ -130,19 +130,19 @@ public static class FleetGrantRevokeProof
     static void Confirmation(FleetGrantConfirmation value)
     { if (value is null || value.Challenge == Guid.Empty || value.Id == Guid.Empty || value.Generation <= 0 || !Digest(value.Digest)) { throw Invalid(); } }
     static bool Digest(string? value) => value is { Length: 64 } && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
-    static void GuidText(JsonElement value, Guid id)
+    internal static void GuidText(JsonElement value, Guid id)
     { if (id == Guid.Empty || value.ValueKind != JsonValueKind.String || value.GetString() != id.ToString("D")) { throw Invalid(); } }
     static void Proof(FleetGrantSignedPayload proof)
     { if (proof is not { Body.Length: > 0, Signature.Length: > 0 }) { throw Invalid(); } }
     static void Match(FleetGrantSignedPayload proof, byte[] bytes, ReadOnlySpan<byte> key, FleetGrantProofContext context)
     { if (!FleetGrantProof.Verify(proof, key, context).AsSpan().SequenceEqual(bytes)) { throw Invalid(); } }
-    static JsonElement Root(ReadOnlySpan<byte> raw)
+    internal static JsonElement Root(ReadOnlySpan<byte> raw)
     {
         if (raw.Length > 128 * 1024) { throw Invalid(); }
         try { using var doc = JsonDocument.Parse(raw.ToArray(), new() { MaxDepth = 12 }); return doc.RootElement.Clone(); }
         catch (JsonException e) { throw new InvalidDataException("revoke", e); }
     }
-    static T Read<T>(JsonElement value) where T : class
+    internal static T Read<T>(JsonElement value) where T : class
     {
         try { if (!Strict(value)) { throw Invalid(); } return value.Deserialize<T>(Wire) ?? throw Invalid(); }
         catch (Exception e) when (e is JsonException or InvalidOperationException) { throw new InvalidDataException("revoke", e); }
@@ -156,7 +156,7 @@ public static class FleetGrantRevokeProof
         var names = new HashSet<string>(StringComparer.Ordinal);
         return value.EnumerateObject().All(p => names.Add(p.Name) && Strict(p.Value, p.Name));
     }
-    static byte[] Number(long value)
+    internal static byte[] Number(long value)
     { var bytes = new byte[8]; BinaryPrimitives.WriteInt64BigEndian(bytes, value); return bytes; }
     static InvalidDataException Invalid() => new("revoke");
 }
