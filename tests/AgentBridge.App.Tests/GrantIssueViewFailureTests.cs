@@ -14,14 +14,16 @@ public sealed class GrantIssueViewFailureTests
     static readonly Lazy<Type> View = new(CompileView);
 
     [Theory]
-    [InlineData(false, "Not issued")]
-    [InlineData(true, "Unconfirmed")]
-    public void Invalid_receiver_data_is_reported_without_escaping_the_UI_handler(bool confirming, string outcome)
+    [InlineData(false, "Not issued", false)]
+    [InlineData(true, "Unconfirmed", false)]
+    [InlineData(true, "Unconfirmed", true)]
+    public void Invalid_receiver_data_is_reported_without_escaping_the_UI_handler(bool confirming, string outcome, bool format)
     {
-        var model = new GrantIssueViewModel(new ThrowingReceiver(confirming));
+        var model = new GrantIssueViewModel(new ThrowingReceiver(confirming, format));
         var view = Activator.CreateInstance(View.Value)!;
         View.Value.GetProperty("ViewModel")!.SetValue(view, model);
         View.Value.GetMethod("Prepare")!.Invoke(view, ["{}"]);
+        Assert.False((bool)View.Value.GetProperty("IsSubmitting")!.GetValue(view)!);
         if (confirming)
         {
             Assert.True(model.CanConfirm);
@@ -31,6 +33,20 @@ public sealed class GrantIssueViewFailureTests
         Assert.Equal(outcome, (string)View.Value.GetProperty("Outcome")!.GetValue(view)!);
         Assert.False((bool)View.Value.GetProperty("IsSubmitting")!.GetValue(view)!);
         Assert.False(model.Active);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Rotation_notice_requires_a_matching_active_receipt(bool rotated, bool mismatch)
+    {
+        var model = new GrantIssueViewModel(new ThrowingReceiver(true, false, rotated, mismatch));
+        var view = Activator.CreateInstance(View.Value)!;
+        View.Value.GetProperty("ViewModel")!.SetValue(view, model);
+        View.Value.GetMethod("Prepare")!.Invoke(view, ["{}"]);
+        View.Value.GetMethod("Confirm")!.Invoke(view, [model.Digest]);
+        Assert.Equal(rotated && !mismatch, !string.IsNullOrEmpty((string)View.Value.GetProperty("Notice")!.GetValue(view)!));
     }
 
     static Type CompileView()
@@ -52,22 +68,25 @@ public sealed class GrantIssueViewFailureTests
         return Assembly.Load(output.ToArray()).GetType("AgentBridge.App.GrantIssueView")!;
     }
 
-    sealed class ThrowingReceiver(bool confirming) : IGrantIssueReceiver
+    sealed class ThrowingReceiver(bool confirming, bool format, bool? rotated = null, bool mismatch = false) : IGrantIssueReceiver
     {
+        Exception Error => format ? new FormatException("receiver-format") : new InvalidDataException("receiver-proof");
+        GrantReceipt? receipt;
         public string Receiver => new('1', 32);
         public bool Online => true;
         public string? Problem => null;
         public Task<GrantPrepareResult> PrepareIssueAsync(JsonElement input, CancellationToken ct = default)
         {
-            if (!confirming) { return Task.FromException<GrantPrepareResult>(new InvalidDataException("receiver-proof")); }
+            if (!confirming) { return Task.FromException<GrantPrepareResult>(Error); }
             var id = Guid.NewGuid();
             var document = JsonSerializer.Serialize(new { id, generation = 1, audience = new { device = Receiver, profile = "default" },
                 caps = new { hourly = 1, daily = 2, live = 1 } });
             var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document)));
+            receipt = new(id, 1, Receiver, mismatch ? new('0', 64) : digest, rotated ?? false);
             return Task.FromResult(new GrantPrepareResult(new(id, 1, Receiver, "default", document, digest, new(1, 2, 1), "ask", []), null));
         }
         public Task<GrantIssueResult> ConfirmIssueAsync(Guid id, long generation, string digest, CancellationToken ct = default) =>
-            Task.FromException<GrantIssueResult>(new InvalidDataException("receiver-proof"));
+            rotated is null ? Task.FromException<GrantIssueResult>(Error) : Task.FromResult(new GrantIssueResult(receipt, null));
         public Task<GrantReadResult> ReadAsync(CancellationToken ct = default) => Task.FromResult(new GrantReadResult([], null));
         public Task<GrantRevokePreview> PrepareRevokeAsync(Guid id, long generation, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<GrantRevokeReceipt> ConfirmRevokeAsync(Guid id, long generation, string digest, CancellationToken ct = default) => throw new NotSupportedException();
@@ -110,13 +129,14 @@ public sealed class GrantIssueViewFailureTests
             public sealed partial class GrantIssueView
             {
                 readonly Microsoft.UI.Xaml.Controls.TextBox SourceDocument = new(), PersonDigest = new();
-                readonly Microsoft.UI.Xaml.Controls.TextBlock InputProblem = new(), StatusLine = new();
+                readonly Microsoft.UI.Xaml.Controls.TextBlock InputProblem = new(), StatusLine = new(), RotationNotice = new();
                 void InitializeComponent() { }
                 static class Bindings { public static void Update() { } }
                 public void Prepare(string source) { SourceDocument.Text = source; OnPrepare(this, new()); }
                 public void Confirm(string digest) { PersonDigest.Text = digest; OnConfirm(this, new()); }
                 public string Message => InputProblem.Text;
                 public string Outcome => StatusLine.Text;
+                public string Notice => RotationNotice.Text;
             }
         }
         """;

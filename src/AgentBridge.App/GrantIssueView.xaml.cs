@@ -11,7 +11,7 @@ public sealed partial class GrantIssueView : UserControl
 {
     GrantIssueViewModel? viewModel;
     bool busy;
-    public bool IsSubmitting => busy;
+    public bool IsSubmitting { get; private set; }
     string? reviewedDocument;
     string? shownDigest, shownState;
 
@@ -29,6 +29,7 @@ public sealed partial class GrantIssueView : UserControl
             shownDigest = viewModel.Digest;
             shownState = viewModel.State;
             PersonDigest.Text = "";
+            RotationNotice.Text = "";
             Bindings.Update();
         }
     }
@@ -36,6 +37,8 @@ public sealed partial class GrantIssueView : UserControl
     void OnChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (viewModel is null) { return; }
+        RotationNotice.Text = viewModel.Active && viewModel.Receipt is { Rotated: true }
+            ? "notice: this machine's pre-grant audit log was retired and a new one started (automatic-first-grant)" : "";
         if (shownDigest != viewModel.Digest)
         { shownDigest = viewModel.Digest; PersonDigest.Text = ""; }
         if (shownState != viewModel.State)
@@ -81,6 +84,7 @@ public sealed partial class GrantIssueView : UserControl
         if (reviewedDocument != SourceDocument.Text)
         { InputProblem.Text = "The document changed. Review it again before confirming."; return; }
         busy = true;
+        IsSubmitting = true;
         try { await model.ConfirmAsync(PersonDigest.Text); }
         catch (Exception error) when (ExpectedFailure(error))
         {
@@ -88,10 +92,10 @@ public sealed partial class GrantIssueView : UserControl
             StatusLine.Text = "Unconfirmed";
             AppLog.Write($"grants: issue unconfirmed ({error.GetType().Name})");
         }
-        finally { busy = false; PersonDigest.Text = ""; }
+        finally { IsSubmitting = false; busy = false; PersonDigest.Text = ""; }
     }
 
     static bool ExpectedFailure(Exception error) => error is IOException or InvalidDataException or JsonException
-        or CryptographicException or ArgumentException or InvalidOperationException or KeyNotFoundException
+        or CryptographicException or ArgumentException or FormatException or InvalidOperationException or KeyNotFoundException
         or TimeoutException or OperationCanceledException or HttpRequestException or UnauthorizedAccessException;
 }

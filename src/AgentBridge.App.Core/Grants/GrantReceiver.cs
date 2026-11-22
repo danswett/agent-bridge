@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AgentBridge.App.Core.Grants;
 
@@ -7,7 +8,8 @@ public sealed record GrantAllocation(int Hourly, int Daily, int Live);
 public sealed record GrantIssuePreview(Guid Id, long Generation, string Receiver, string Profile,
     string Document, string Digest, GrantAllocation Allocation, string EffectivePolicy,
     ImmutableArray<string> UnavailableActions);
-public sealed record GrantReceipt(Guid Id, long Generation, string Receiver, string Digest);
+public sealed record GrantReceipt(Guid Id, long Generation, string Receiver, string Digest,
+    [property: JsonRequired] bool Rotated);
 public sealed record GrantReceiverCounters(int Hour, int Day, int Pending, int Live,
     ImmutableArray<string> Requests, string? LastCaller, string? LastOutcome, DateTimeOffset ObservedAt,
     ImmutableArray<string> PendingRequests, ImmutableArray<string> LiveSessions);

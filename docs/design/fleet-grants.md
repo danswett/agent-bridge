@@ -232,6 +232,35 @@ any account, profile, roster generation or key change requires a new binding/att
 never substitution into an in-flight confirmation. The receiver remains the sole
 dispatcher/writer and retains all person-device, roster and signer gates.
 
+### Authenticated issuance rotation receipt
+
+Canonical `App.Core.Grants.GrantReceipt` requires an explicit `bool Rotated` with
+`JsonRequired` and no optional/default constructor argument. Missing or wrong-type
+flags refuse. Its value comes **only** from the successful B325 PR2 `Issue`
+`result.Rotated` (https://github.com/danswett/agent-bridge/pull/3638), never inferred
+from audit state, a log or `RotationRequired`. The contract has no compile dependency
+on PR2 and implements no producer or rotation policy. Until PR2 and G4 are available,
+the receiver producer reports unavailable, not synthesized `false`.
+
+`FleetGrantIssueReceiptResult(Receipt, Proof)` carries exactly the camel-case JSON
+fields `id`, `generation`, `receiver`, `digest`, `rotated`. Missing, duplicate,
+unknown or wrong-type fields refuse before sealing. `FleetGrantReceiptProof.Bytes`
+uses fixed-order `Framing.F` (u32 big-endian byte length preceding each field):
+ASCII `agent-bridge fleet issue receipt v1`, UTF-8 grant UUID in lowercase `D` form,
+positive generation as 8-byte big-endian Int64, UTF-8 receiver `Machine.Id`,
+raw SHA-256 document digest (32 bytes), and **one rotation byte: 0=false, 1=true**.
+These are the exact `FleetGrantProof.Seal` body bytes; its outer domain and full
+`grant.confirmIssue` Context bind account, profile, receiver and fresh request GUID.
+
+`FleetGrantReceiptProof.Verify` authenticates the Seal with the already trusted
+HostSign point and checks the exact body before returning receipt JSON for canonical
+parsing. An absent proof or any unsealed change to `rotated` refuses; tampering with
+the sealed rotation byte fails signature verification. The App may show the approved
+rotation notice only on its matching authenticated **Active** receipt with
+`Rotated=true`, never from preparation, submission or a missing producer. Builder 343
+alone supplies the actual result and Seal; 344 owns the adapter/notice. All other
+`RotationRequired` states retain their existing fail-closed behavior.
+
 Host CLI person path: proposed `agent-bridge-host grants issue` and
 `agent-bridge-host grants revoke <id>`. It uses the same receiver writer and
 person confirmation, not direct file editing. Guard 67 plus complete caller

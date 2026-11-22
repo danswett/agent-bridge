@@ -38,6 +38,7 @@
                     AutomationProperties.AutomationId="GrantConfirm" />
             <TextBlock x:Name="StatusLine" Text="{x:Bind ViewModel.State, Mode=OneWay}"
                        TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock x:Name="RotationNotice" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
             <TextBlock Text="{x:Bind ViewModel.Problem, Mode=OneWay}"
                        TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
             <TextBlock Text="An unconfirmed submission is not retried automatically. Rotation required remains a refusal until the person path completes it."
