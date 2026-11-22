@@ -20,7 +20,11 @@ public sealed class DeliveryLaneSchedulerTests
         public Func<Task> Sending = () => Task.CompletedTask;
         public Action? Noticing;
         public bool FailWrite;
-        public Fake(IEnumerable<DeliveryJournalRecord>? reservations = null)
+        public bool Active = true;
+        public DeliverySender? LastSender;
+        public bool LastRequireIdle;
+        public ReplyResult DispatchResult = new(AnswerOutcome.Delivered);
+        public Fake(IEnumerable<DeliveryJournalRecord>? reservations = null, bool dispatch = false)
         {
             Gate = new(Clock);
             Journal = new(new byte[32], b =>
@@ -34,7 +38,25 @@ public sealed class DeliveryLaneSchedulerTests
                     Journal.State("other", header.Id));
                 await Sending();
                 Sent.Add(header);
-            }, n => { Assert.Equal("system", n.From); Notices.Add((n.Item.Id, n.Reason)); Noticing?.Invoke(); }, Clock);
+            }, n => { Assert.Equal("system", n.From); Notices.Add((n.Item.Id, n.Reason)); Noticing?.Invoke(); }, Clock)
+            {
+                Dispatch = dispatch ? async (request, cancellation) =>
+                {
+                    var attempt = Guid.Parse(request.Request);
+                    Assert.True(Gate.TryClaim(request.Id, attempt));
+                    await Gate.WaitToTypeAsync(cancellation);
+                    try
+                    {
+                        if (request.StillCurrent?.Invoke() != true) { return new(AnswerOutcome.Refused); }
+                        LastSender = request.Sender; LastRequireIdle = request.RequireIdle;
+                        var frame = request.HandoffText!();
+                        Sent.Add(Assert.Single(DeliveryEnvelope.Parse(request.Id, frame, Journal.VerifyHandoff)).Header!);
+                        await Sending();
+                        return DispatchResult;
+                    }
+                    finally { Gate.DoneTyping(); Gate.Release(request.Id, attempt); }
+                } : null,
+            };
         }
         public bool Add(string id, DeliveryClass sender = DeliveryClass.Agent, string priority = "normal",
             string session = "target") => Scheduler.Enqueue(session,
@@ -44,6 +66,98 @@ public sealed class DeliveryLaneSchedulerTests
         public DeliveryJournalRecord[] Records => Disk.Select(b =>
             JsonSerializer.Deserialize<DeliveryJournalRecord>(b, ProtocolJson.Options)!).ToArray();
         public void Dispose() => Journal.Dispose();
+    }
+
+    [Fact]
+    public void Overflow_notice_cannot_fill_space_before_the_offered_item_is_inserted()
+    {
+        using var f = new Fake();
+        for (var i = 0; i < 50; i++) { f.Add("f" + i, priority: "fyi"); }
+        f.Noticing = () => { f.Noticing = null; Assert.True(f.Add("reentrant")); };
+        Assert.True(f.Add("normal"));
+        Assert.Equal(2, f.Records.Count(r => r.State == "dropped"));
+    }
+
+    [Fact]
+    public async Task Pending_offer_owns_no_reply_slot_and_dedupes_bound_sender_target_body()
+    {
+        using var f = new Fake(dispatch: true) { Screen = (false, true) };
+        var id = Guid.NewGuid(); var sender = new DeliverySender("user", "Friendly");
+        Assert.Equal(DeliveryOfferState.Pending, f.Scheduler.Offer(id, "target", sender, "e\u00AD\u0301", () => f.Active).State);
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Empty(f.Sent);
+        Assert.Equal(DeliveryOfferState.Refused, f.Scheduler.Offer(id, "target", sender, "changed", () => true).State);
+        Assert.Equal(DeliveryOfferState.Refused, f.Scheduler.Query(id, "other", sender).State);
+        Assert.Equal(DeliveryOfferState.Refused, f.Scheduler.Query(id, "target", new("other")).State);
+        f.Screen = (true, true);
+        await f.Next().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(sender, f.LastSender); Assert.True(f.LastRequireIdle);
+        Assert.Equal(1, Assert.Single(f.Sent).N);
+        Assert.Equal("q1", f.Sent[0].Seq);
+        Assert.Equal(DeliveryOfferState.Delivered, f.Scheduler.Query(id, "target", sender).State);
+        f.Active = false;
+        Assert.Equal(DeliveryOfferState.Delivered, f.Scheduler.Offer(id, "target", sender, "e\u00AD\u0301", () => f.Active).State);
+        await f.Next(); Assert.Single(f.Sent);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Post_handoff_journal_failure_never_reports_delivery_or_admits_more_work(bool confirmed)
+    {
+        using var f = new Fake(dispatch: true) { DispatchResult = new(confirmed ? AnswerOutcome.Delivered : AnswerOutcome.Unconfirmed) };
+        var id = Guid.NewGuid(); var sender = new DeliverySender("user");
+        f.Scheduler.Offer(id, "target", sender, "body", () => true);
+        f.Sending = () => { f.FailWrite = true; return Task.CompletedTask; };
+        Assert.Equal(LaneResult.Unconfirmed, await f.Next());
+        Assert.Equal(DeliveryOfferState.Unconfirmed, f.Scheduler.Offer(id, "target", sender, "body", () => true).State);
+        Assert.Throws<InvalidOperationException>(() => f.Scheduler.Offer(Guid.NewGuid(), "target", sender, "more", () => true));
+    }
+
+    [Fact]
+    public async Task Owner_overtakes_a_pending_offer_before_ReplyService_gets_the_shared_slot()
+    {
+        using var f = new Fake(dispatch: true);
+        var agent = Guid.NewGuid(); var owner = Guid.NewGuid();
+        f.Scheduler.Offer(agent, "target", new("agent"), "body", () => true);
+        await f.Gate.WaitToTypeAsync();
+        var waiting = f.Next();
+        f.Scheduler.Offer(owner, "target", new("user", Owner: true), "owner", () => true);
+        f.Gate.DoneTyping();
+        Assert.Equal(LaneResult.Waiting, await waiting);
+        f.Screen = (false, true); await f.Next(); Assert.False(f.LastRequireIdle);
+        f.Screen = (true, true); await f.Next();
+        Assert.Equal(new[] { owner.ToString(), agent.ToString() }, f.Sent.Select(h => h.Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Restart_and_same_id_never_resubmit_handoff_or_promote_Typed_to_delivered(bool handoff)
+    {
+        using var f = new Fake(dispatch: true) { DispatchResult = new(AnswerOutcome.Unconfirmed) { Stage = ReplyStage.Typed } };
+        var id = Guid.NewGuid(); var sender = new DeliverySender("user");
+        f.Scheduler.Offer(id, "target", sender, "body", () => true);
+        if (handoff) { await f.Next(); Assert.Equal(DeliveryOfferState.Unconfirmed, f.Scheduler.Query(id, "target", sender).State); }
+        using var restarted = new Fake(f.Records, dispatch: true);
+        var state = handoff ? DeliveryOfferState.Unconfirmed : DeliveryOfferState.Dropped;
+        Assert.Equal(state, restarted.Scheduler.Offer(id, "target", sender, "body", () => true).State);
+        await restarted.Next(); Assert.Empty(restarted.Sent);
+    }
+
+    [Fact]
+    public async Task Revoked_authority_and_failed_handoff_flush_send_zero_keys()
+    {
+        using var f = new Fake(dispatch: true);
+        var id = Guid.NewGuid(); var sender = new DeliverySender("user");
+        f.Scheduler.Offer(id, "target", sender, "body", () => f.Active);
+        f.Active = false;
+        Assert.Equal(DeliveryOfferState.Pending, f.Scheduler.Offer(id, "target", sender, "body", () => true).State);
+        await f.Next(); Assert.Empty(f.Sent);
+        f.Active = true; f.FailWrite = true;
+        await Assert.ThrowsAsync<IOException>(() => f.Next());
+        Assert.Empty(f.Sent);
+        Assert.DoesNotContain(f.Records, r => r.State == "handoff");
     }
 
     [Fact]

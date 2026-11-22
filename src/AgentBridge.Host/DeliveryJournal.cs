@@ -9,7 +9,7 @@ public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped,
 public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header, string State,
     DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null);
 
-// Node-bound evidence only: no payload retention, replay or key sends.
+// Node-bound evidence only: replay metadata, never payloads or key sends.
 public sealed class DeliveryJournal : IDisposable
 {
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -20,6 +20,8 @@ public sealed class DeliveryJournal : IDisposable
     readonly Dictionary<(string, string), DeliveryJournalRecord> latest = [];
     readonly Dictionary<(string, string), DeliveryJournalRecord> handoffs = [];
     readonly Dictionary<(string, char), long> reserved = [];
+    readonly HashSet<(string, string)> replayed = [];
+    internal bool Uncertain { get; private set; }
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
         : this(HostKey(diagnosticsFile), b => Append(JournalFile(diagnosticsFile), b), log,
@@ -34,8 +36,13 @@ public sealed class DeliveryJournal : IDisposable
         this.log = log;
         foreach (var r in reservations ?? [])
         {
+            _ = Enum.Parse<DeliveryState>(r.State, true);
+            var id = (r.Session, r.Header.Id);
+            latest[id] = r;
+            replayed.Add(id);
             if (r.State != "handoff") { continue; }
             _ = DeliveryEnvelope.Format(r.Header, "");
+            handoffs.TryAdd(id, r);
             var seq = r.Header.Seq!;
             var lane = (r.Session, seq[0]);
             reserved[lane] = Math.Max(reserved.GetValueOrDefault(lane), long.Parse(seq[1..], System.Globalization.CultureInfo.InvariantCulture));
@@ -53,16 +60,36 @@ public sealed class DeliveryJournal : IDisposable
         lock (gate)
         {
             if (lane is not ('u' or 'q')) { throw new ArgumentException("Invalid delivery lane.", nameof(lane)); }
+            if (replayed.Contains((session, header.Id))) { throw new InvalidOperationException("Replayed delivery UUID cannot be handed off again."); }
             var next = checked(reserved.GetValueOrDefault((session, lane)) + 1);
             header = header with { Seq = lane + next.ToString(System.Globalization.CultureInfo.InvariantCulture) };
             Write(session, header, body, DeliveryState.Handoff);
-            return header;
+            return handoffs[(session, header.Id)].Header;
         }
     }
 
     public DeliveryState? State(string session, string id)
     {
-        lock (gate) { return latest.TryGetValue((session, id), out var r) ? Enum.Parse<DeliveryState>(r.State, true) : null; }
+        lock (gate)
+        {
+            var key = (session, id);
+            return replayed.Contains(key) ? handoffs.ContainsKey(key) ? DeliveryState.Unconfirmed : DeliveryState.Dropped :
+                latest.TryGetValue(key, out var r) ? Enum.Parse<DeliveryState>(r.State, true) : null;
+        }
+    }
+
+    internal DeliveryJournalRecord? Find(Guid request)
+    {
+        lock (gate) { return latest.Values.SingleOrDefault(r => r.Header.Id == request.ToString("D")); }
+    }
+
+    internal bool MatchesOffer(DeliveryJournalRecord record, string body)
+    {
+        lock (gate)
+        {
+            return Matches(handoffs.GetValueOrDefault((record.Session, record.Header.Id), record),
+                DeliveryEnvelope.Prepare(record.Header, body).Body);
+        }
     }
 
     public DeliveryState Write(string session, DeliveryHeader header, string body, DeliveryState state,
@@ -91,12 +118,14 @@ public sealed class DeliveryJournal : IDisposable
             try { append(JsonSerializer.SerializeToUtf8Bytes(record, ProtocolJson.Options)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
             {
+                Uncertain = true;
                 log($"delivery journal write failed ({e.GetType().Name}); no success acknowledgement");
                 if (!handoffs.ContainsKey(id)) { throw; }
                 latest[id] = record with { State = "unconfirmed" };
                 return DeliveryState.Unconfirmed;
             }
             latest[id] = record;
+            replayed.Remove(id);
             if (state == DeliveryState.Handoff)
             {
                 handoffs[id] = record;
