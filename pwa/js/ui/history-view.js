@@ -149,10 +149,13 @@ export function currentReply(snapshot, session) {
 export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.kind === 'notification' ? 'notification' : t.kind === 'scheduled' ? 'schedule' : t.prompt?.from ?? 'person';
+  // A relay message is stored as the person's, so the origin is read before the layout is chosen.
+  const origin = t.prompt ? historyPromptOrigin(t.prompt, t.kind) : null;
   const prompt = !t.prompt ? null
-    : from === 'person'
-      ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
-      : (() => { const o = historyPromptOrigin(t.prompt, t.kind); return o ? originView(o, t.at) : null; })();
+    : origin ? originView(origin, t.at)
+      : from === 'person'
+        ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
+        : null;
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 
