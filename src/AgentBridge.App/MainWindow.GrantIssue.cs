@@ -10,13 +10,23 @@ namespace AgentBridge.App;
 public sealed partial class MainWindow
 {
     bool grantIssueOpen;
+    Action? openGrant;
+
+    internal Task RefreshGrantListAsync() => GrantsPage.ViewModel?.RefreshAsync() ?? Task.CompletedTask;
 
     internal void BindGrantReceiver(IGrantIssueReceiver receiver)
     {
-        Action open = () => _ = ShowGrantIssueAsync(receiver);
-        GrantsPage.NewGrantRequested += open;
+        if (openGrant is { } previous) { GrantsPage.NewGrantRequested -= previous; }
+        else { Closed += OnGrantsClosed; }
+        openGrant = () => _ = ShowGrantIssueAsync(receiver);
+        GrantsPage.NewGrantRequested += openGrant;
         GrantsPage.ViewModel = new GrantListViewModel(receiver);
-        Closed += (_, _) => GrantsPage.NewGrantRequested -= open;
+    }
+
+    void OnGrantsClosed(object sender, WindowEventArgs args)
+    {
+        if (openGrant is { } open) { GrantsPage.NewGrantRequested -= open; }
+        openGrant = null;
     }
 
     async Task ShowGrantIssueAsync(IGrantIssueReceiver receiver)
@@ -26,18 +36,22 @@ public sealed partial class MainWindow
         grantIssueOpen = true;
         try
         {
+            var model = new GrantIssueViewModel(receiver);
+            var view = new GrantIssueView { ViewModel = model };
             var dialog = new ContentDialog
             {
                 XamlRoot = root,
                 Title = "New grant",
-                Content = new GrantIssueView { ViewModel = new GrantIssueViewModel(receiver) },
+                Content = view,
                 CloseButtonText = "Close",
                 DefaultButton = ContentDialogButton.Close
             };
+            dialog.Closing += (_, args) => args.Cancel = view.IsSubmitting;
             await dialog.ShowAsync();
+            if (model.Active && GrantsPage.ViewModel is { } list) { await list.RefreshAsync(); }
         }
         catch (Exception error) when (error is COMException or InvalidOperationException)
-        { AppLog.Write($"grants: cannot open issue dialog: {error.Message}"); }
+        { AppLog.Write($"grants: cannot open issue dialog ({error.GetType().Name})"); }
         finally
         {
             grantIssueOpen = false;

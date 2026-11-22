@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.App.Core.Grants;
 using Microsoft.UI.Xaml;
@@ -10,6 +11,7 @@ public sealed partial class GrantIssueView : UserControl
 {
     GrantIssueViewModel? viewModel;
     bool busy;
+    public bool IsSubmitting => busy;
     string? reviewedDocument;
     string? shownDigest, shownState;
 
@@ -49,18 +51,25 @@ public sealed partial class GrantIssueView : UserControl
     {
         if (busy || viewModel is null) { return; }
         InputProblem.Text = "";
+        reviewedDocument = null;
+        PersonDigest.Text = "";
         JsonDocument document;
         try { document = JsonDocument.Parse(SourceDocument.Text, new() { MaxDepth = 12 }); }
         catch (JsonException) { InputProblem.Text = "Enter a valid explicit grant document before reviewing."; return; }
         using (document)
         {
             busy = true;
-            reviewedDocument = null;
             var source = SourceDocument.Text;
             try
             {
                 await viewModel.PrepareAsync(document.RootElement);
                 if (viewModel.CanConfirm) { reviewedDocument = source; }
+            }
+            catch (Exception error) when (ExpectedFailure(error))
+            {
+                InputProblem.Text = "Not issued. The receiving host could not be verified.";
+                StatusLine.Text = "Not issued";
+                AppLog.Write($"grants: prepare unavailable ({error.GetType().Name})");
             }
             finally { busy = false; }
         }
@@ -73,6 +82,16 @@ public sealed partial class GrantIssueView : UserControl
         { InputProblem.Text = "The document changed. Review it again before confirming."; return; }
         busy = true;
         try { await model.ConfirmAsync(PersonDigest.Text); }
+        catch (Exception error) when (ExpectedFailure(error))
+        {
+            InputProblem.Text = "Unconfirmed. Do not retry automatically; verify the receiver's outcome.";
+            StatusLine.Text = "Unconfirmed";
+            AppLog.Write($"grants: issue unconfirmed ({error.GetType().Name})");
+        }
         finally { busy = false; PersonDigest.Text = ""; }
     }
+
+    static bool ExpectedFailure(Exception error) => error is IOException or InvalidDataException or JsonException
+        or CryptographicException or ArgumentException or InvalidOperationException or KeyNotFoundException
+        or TimeoutException or OperationCanceledException or HttpRequestException or UnauthorizedAccessException;
 }
