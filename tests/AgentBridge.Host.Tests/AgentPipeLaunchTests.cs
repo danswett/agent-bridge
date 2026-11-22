@@ -191,9 +191,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
         launcher.LateRegistration = late;
         if (!terminalSucceeds)
         {
-            launcher.TerminalFailure = () => new FileStream(
-                Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single(),
-                FileMode.Open, FileAccess.Read, FileShare.Read);
+            launcher.TerminalFailure = () => new BlockedAuditFile(
+                Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single());
         }
         var (pipe, grant, _) = Granted(key, grantOnly: true, source: discovery);
         var body = GrantBody(grant);
@@ -519,6 +518,25 @@ public sealed class AgentPipeLaunchTests : IDisposable
     sealed class FrozenAuditClock : TimeProvider
     {
         public override long GetTimestamp() => 0;
+    }
+
+    // A directory blocks writes on Unix too, without relying on Windows file-sharing enforcement.
+    sealed class BlockedAuditFile : IDisposable
+    {
+        readonly string path;
+
+        public BlockedAuditFile(string path)
+        {
+            this.path = path;
+            File.Move(path, path + ".held");
+            Directory.CreateDirectory(path);
+        }
+
+        public void Dispose()
+        {
+            Directory.Delete(path);
+            File.Move(path + ".held", path);
+        }
     }
 
     sealed class FakeLauncher : ISessionLauncher
