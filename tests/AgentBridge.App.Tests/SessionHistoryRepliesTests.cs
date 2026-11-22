@@ -140,9 +140,11 @@ public sealed class SessionHistoryRepliesTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Codex_delayed_pages_preserve_each_revised_item_even_when_the_last_item_is_unchanged(bool reviseSecond)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Codex_delayed_pages_preserve_each_revised_item_even_when_the_last_item_is_unchanged(bool reviseSecond, bool budget)
     {
         await using var host = Serving(() => 0);
         host.Start();
@@ -162,7 +164,9 @@ public sealed class SessionHistoryRepliesTests
             card.Update(Say("second", "Second old", 1));
             host.On(HistoryProtocol.Op, _ => page);
             await card.Stored!.LoadNewestAsync();
-            host.OnAsync(HistoryProtocol.Op, async _ => { captured.SetResult(); await release.Task; return page; });
+            var historyTurn = page.Turns!.Single();
+            var delayed = budget ? page with { Turns = [historyTurn with { Parts = [historyTurn.Parts[1]], Truncated = true, PartsMore = 1 }] } : page;
+            host.OnAsync(HistoryProtocol.Op, async _ => { captured.SetResult(); await release.Task; return delayed; });
             var loading = card.Stored.LoadNewestAsync();
             await captured.Task.WaitAsync(FakeHost.Patience);
             card.Update(Say("first", "First new", 2));

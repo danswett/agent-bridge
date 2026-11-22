@@ -103,14 +103,16 @@ test('Codex live revisions after history replace the same part without accepting
   assert.equal(currentReply(store.get('h', ID), session('Complete revised answer', 4)), 'Complete revised answer');
 });
 
-for (const reviseSecond of [false, true]) {
-  test(`Codex delayed pages preserve each revised item: second revised ${reviseSecond}`, async () => {
+for (const [reviseSecond, budget] of [[false, false], [true, false], [false, true], [true, true]]) {
+  test(`Codex delayed pages preserve each revised item: second revised ${reviseSecond}, budget ${budget}`, async () => {
     let pending = null;
     const page = { id: 'owner', at: '2026-11-22T11:00:00Z', parts: ['first', 'second'].map((id) => ({
       id, kind: 'response', at: '2026-11-22T11:00:00Z', text: id === 'first' ? 'First old' : 'Second old',
     })) };
     const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
-      history: async () => { await pending; return readHistoryResult({ turns: [page] }); },
+      history: async () => { await pending; return readHistoryResult({ turns: [
+        budget && pending ? { ...page, parts: [page.parts[1]], truncated: true, partsMore: 1 } : page,
+      ] }); },
     } }) });
     await store.open('h', ID);
     const say = (responseId, response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',

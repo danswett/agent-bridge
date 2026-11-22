@@ -324,7 +324,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                         Prompt = turn.Prompt ?? prior.Prompt,
                         Parts = identified.Contains(turn.Id) && turn.Truncated != true && prior.Truncated != true
                             && turn.PartsMore is not > 0 && prior.PartsMore is not > 0 ? MergeReplies(prior.Parts, turn.Parts, keep, newer)
-                            : newer is { Count: > 0 } ? MergeReplies(prior.Parts.Where(p => newer.Contains(p.Id)).ToArray(), turn.Parts, true)
+                            : identified.Contains(turn.Id) && newer is { Count: > 0 } ? MergeReplies(prior.Parts.Where(p => newer.Contains(p.Id)).ToArray(), turn.Parts, true)
                             : keep ? [.. turn.Parts.Where(p => p.Kind != HistoryPartKind.Response), .. prior.Parts.Where(p => p.Kind == HistoryPartKind.Response)] : turn.Parts,
                     };
                     PruneRevisions(held[at]);

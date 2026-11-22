@@ -439,9 +439,12 @@ export class HistoryStore {
       const items = e.revisions.get(turn.id);
       const replies = [...(items ?? [])].filter(([, reply]) => reply.version > started)
         .map(([id, reply]) => ({ id, kind: 'response', text: reply.text, truncated: reply.truncated }));
-      const order = e.turns.find((t) => t.id === turn.id)?.parts.map((p) => p.id) ?? [];
-      replies.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-      const parts = replies.length ? keepReplies(mergeParts(turn.parts, replies, true)) : turn.parts;
+      const updated = new Map(replies.map((reply) => [reply.id, reply]));
+      const overlay = (e.turns.find((t) => t.id === turn.id)?.parts ?? []).filter((p) => p.kind === 'response').map((held) => {
+        const page = turn.parts.find((p) => p.id === held.id);
+        return updated.has(held.id) ? { ...(page ?? held), ...updated.get(held.id) } : page;
+      }).filter(Boolean);
+      const parts = replies.length ? keepReplies(mergeParts(turn.parts, overlay, true)) : turn.parts;
       const kept = new Set(parts.filter((p) => p.kind === 'response').map((p) => p.id));
       for (const id of items?.keys() ?? []) { if (!kept.has(id)) { items.delete(id); } }
       return replies.length ? { ...turn, parts } : turn;
