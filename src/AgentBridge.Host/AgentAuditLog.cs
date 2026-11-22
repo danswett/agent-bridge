@@ -193,9 +193,10 @@ public sealed class AgentAuditLog
         {
             foreach (var launch in new[] { false, true })
             {
-                if (ReadHead(folder, launch) is not { Adopted: true, AdoptedPrefix.Empty: true } head) { continue; }
-                if (!AdoptionProofMatches(folder, launch, head, out var count) || count != 0)
-                { throw new IOException("empty adoption proof contradicts audit evidence"); }
+                if (ReadHead(folder, launch) is not { Adopted: true } head) { continue; }
+                if (!AdoptionProofMatches(folder, launch, head, out var count))
+                { throw new IOException("adoption proof contradicts audit evidence"); }
+                if (head.AdoptedPrefix?.Empty != true) { continue; }
                 var actual = CaptureHead(folder, launch);
                 SaveHead(folder, launch, head with { AdoptedPrefix =
                     new(actual.Root, actual.RootSha256, actual.Tail, actual.TailSha256, actual.Length, 0) });
@@ -335,7 +336,8 @@ public sealed class AgentAuditLog
                 }
                 return true;
             }
-            var files = Files(folder, launch).Where(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Root) >= 0
+            var surviving = Files(folder, launch).ToArray();
+            var files = surviving.Where(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Root) >= 0
                 && StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Tail) <= 0).ToArray();
             if (files.Length == 0 || Path.GetFileName(files[0]) != prefix.Root || Path.GetFileName(files[^1]) != prefix.Tail
                 || prefix.Length <= 0 || prefix.Sequence < 0
@@ -343,31 +345,50 @@ public sealed class AgentAuditLog
                 || Hash(Encoding.UTF8.GetBytes(File.ReadLines(files[0]).First())) != prefix.RootSha256
                 || !PrefixIntact(files[^1], new(1, prefix.Root, prefix.RootSha256, prefix.Tail, prefix.TailSha256, prefix.Length)))
             { throw new IOException("adopted audit prefix does not match its snapshot"); }
+            var archive = Path.Combine(folder, "archive", launch ? "launches-legacy-adoption.jsonl" : "agents-legacy-adoption.jsonl");
             long sequence = 0;
-            foreach (var file in files)
+            string? link = null;
+            var legacy = false; var shortPrefix = false;
+            foreach (var file in (File.Exists(archive) ? new[] { archive }.Concat(surviving) : surviving).Reverse())
             {
                 using var stream = File.OpenRead(file);
-                var end = file == files[^1] ? prefix.Length : stream.Length;
+                if (stream.Length == 0 || EndsWithoutNewline(file)) { throw new IOException("incomplete adoption evidence"); }
+                var end = stream.Length;
                 while (end > 0)
                 {
                     var start = PreviousNewline(stream, end - 1) + 1;
+                    if (file == files[^1] && start < prefix.Length && end > prefix.Length) { throw new IOException("adoption cutoff splits a row"); }
+                    var before = file == archive || StringComparer.Ordinal.Compare(Path.GetFileName(file), prefix.Tail) < 0
+                        || file == files[^1] && end <= prefix.Length;
                     var bytes = new byte[checked((int)(end - start))];
                     stream.Position = start; stream.ReadExactly(bytes); end = start;
                     using var doc = JsonDocument.Parse(bytes);
-                    if (doc.RootElement.ValueKind != JsonValueKind.Object) { throw new IOException("invalid adopted audit row"); }
-                    if (doc.RootElement.TryGetProperty("action", out var action) && action.GetString() is "grant.issue" or "grant.revoke"
-                        && (!doc.RootElement.TryGetProperty("gate", out var grantGate) || grantGate.ValueKind == JsonValueKind.Null))
-                    { throw new IOException("unproven adopted grant history"); }
-                    if (doc.RootElement.TryGetProperty("gate", out var metadata) && metadata.ValueKind != JsonValueKind.Null)
+                    var row = doc.RootElement;
+                    if (row.ValueKind != JsonValueKind.Object || !row.TryGetProperty("v", out var version)
+                        || version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var v) || v != 1
+                        || !row.TryGetProperty("previousSha256", out var previous) || previous.ValueKind != JsonValueKind.String
+                        || previous.GetString() is not { Length: 64 } hash || hash.Any(c => !char.IsAsciiHexDigitLower(c))
+                        || link is not null && Hash(bytes[..^1]) != link) { throw new IOException("invalid adoption chain"); }
+                    link = hash;
+                    if (row.EnumerateObject().Any(p => p.Name.Equals("gate", StringComparison.OrdinalIgnoreCase) && p.Name != "gate"))
+                    { throw new IOException("noncanonical gate field"); }
+                    if (row.TryGetProperty("gate", out var metadata))
                     {
                         if (metadata.ValueKind != JsonValueKind.Object || !metadata.TryGetProperty("sequence", out var field)
                             || field.ValueKind != JsonValueKind.Number || !field.TryGetInt64(out var value) || value <= 0)
                         { throw new IOException("invalid adopted gate sequence"); }
-                        count++; sequence = Math.Max(sequence, value);
+                        if (before) { count++; sequence = Math.Max(sequence, value); }
+                        legacy = false; shortPrefix = false;
+                    }
+                    else if (row.TryGetProperty("action", out var action))
+                    {
+                        if (action.GetString() is "grant.issue" or "grant.revoke") { throw new IOException("unproven adopted grant history"); }
+                        legacy = true; shortPrefix |= !before;
                     }
                 }
             }
-            if (sequence != prefix.Sequence) { throw new IOException("adopted gate sequence does not match its snapshot"); }
+            if (sequence != prefix.Sequence || count == 0 && (!legacy || shortPrefix))
+            { throw new IOException("adoption cutoff is not the maximal legacy run"); }
             return true;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or OverflowException)
@@ -643,10 +664,12 @@ public sealed class AgentAuditLog
             if (day > anchor.AddDays(-KeepDays) && (archive || total <= maxBytes)) { break; }
             var size = info.Length;
             string? destination = null;
-            if (archive)
+            var legacyProof = expected is { Adopted: true, AdoptedGatedRows: 0, AdoptedPrefix: { } prefix }
+                && prefix.Root == info.Name && prefix.Tail == info.Name && LastGateSequence(folder, false, info.FullName) == 0;
+            if (archive || legacyProof)
             {
                 var archiveFolder = PrivateFolder.Ensure(Path.Combine(folder, "archive"), "the audit archive", "nothing is archived");
-                destination = Path.Combine(archiveFolder, info.Name);
+                destination = Path.Combine(archiveFolder, legacyProof ? "agents-legacy-adoption.jsonl" : info.Name);
                 if (Path.Exists(destination)) { throw new IOException("audit archive destination already exists"); }
             }
             if (expected is not null)

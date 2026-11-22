@@ -133,9 +133,11 @@ public sealed class GrantStoreTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Retiring_only_legacy_adopted_files_keeps_a_recent_grant_usable(bool interrupted)
+    [InlineData(false, "none")]
+    [InlineData(true, "none")]
+    [InlineData(false, "missing")]
+    [InlineData(false, "broken")]
+    public void Retiring_only_legacy_adopted_files_keeps_a_recent_grant_usable(bool interrupted, string archiveProof)
     {
         var now = clock.GetUtcNow().Date.AddHours(23).AddMinutes(30);
         var legacyClock = new FakeTimeProvider(new DateTimeOffset(now, TimeSpan.Zero).AddDays(-31));
@@ -161,6 +163,16 @@ public sealed class GrantStoreTests : IDisposable
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         Assert.All(old, file => Assert.False(File.Exists(file)));
         Assert.Equal(0, AgentAuditLog.RetainedThrough(Path.Combine(Folder, "audit")));
+        var proofFile = Path.Combine(Folder, "audit", "archive", "agents-legacy-adoption.jsonl");
+        Assert.True(File.Exists(proofFile));
+        if (archiveProof != "none")
+        {
+            if (archiveProof == "missing") { File.Delete(proofFile); }
+            else { var bytes = File.ReadAllBytes(proofFile); bytes[^2] ^= 1; File.WriteAllBytes(proofFile, bytes); }
+            Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+            Assert.False(Audit.Bootstrap());
+            return;
+        }
         var next = Grant();
         Assert.True(Open().Issue(next).Usable);
         Assert.True(Open().TryGetUsable(next.Id, 1).Usable);

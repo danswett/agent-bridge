@@ -13,8 +13,13 @@ Retired audit coverage refuses, including when the store is missing; it cannot r
 Legacy-only adoption requires file-backed proof of zero adopted gated rows.
 An empty adoption sentinel is accepted only when the surviving audit files and
 head have no gated or grant history; the head's zero count alone is not proof.
-Legacy retention preserves a hashed file boundary before newer gated rows,
-never an empty sentinel that could hide adopted issuance or revocation.
+The cutoff must end the maximal leading run of v1 non-gated actions; headers
+alone are not legacy provenance. Every later row remains subject to the global
+sequence and issue/revoke checks; a matching caller-selected prefix proves nothing.
+Legacy retention preserves only the last zero-gated legacy file needed for proof
+in `audit/archive/agents-legacy-adoption.jsonl`. Its intact chain must link to the
+next surviving file's header; a missing/broken archive refuses with AuditIncomplete.
+Already-retained stores without that evidence fail closed; no migration is provided.
 
 ## Authority and existing boundaries
 
