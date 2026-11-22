@@ -168,6 +168,22 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Empty(console.Plans);
     }
 
+    [Fact]
+    public async Task A_Claude_replys_injector_fence_stops_the_keys_once_the_send_or_the_session_changes()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var current = true;
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(request, Peer)).Outcome);
+
+        var fence = Assert.Single(console.Plans).Plan.Proceed!;
+        Assert.Null(fence());
+        current = false;
+        Assert.NotNull(fence());
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
