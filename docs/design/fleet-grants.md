@@ -198,6 +198,40 @@ The UI shows **Active** only on that verified receipt, never on submission alone
 Remote app issuance retains the established approved person-device/roster gates;
 same-account relay presence or a grant held by another agent is insufficient.
 
+### Local binding trust and sealed byte layout
+
+The approved existing trusted local App pipe is the trust root for `grant.binding`,
+not the Seal alone. The Host returns its existing HostSign public-key metadata only
+after verifying it against the active roster with `AcceptHostSign` and collision
+checks; otherwise the operation refuses. The App gets no new roster or identity-sign
+API. The Seal protects byte integrity; it does not authenticate a co-delivered key
+independently of that trusted pipe. No host-key opening, new key, HostSign substitution
+or relay fallback is introduced by this contract.
+
+`FleetGrantBindingRequest(Receiver, Profile, Request)` names a fresh nonempty GUID.
+The reply is `FleetGrantBindingResult(Binding, Proof)`, with `ReceiverKey` added to
+`Binding`: the existing receiver static DH public key (relay `PeerKey`), not HostSign.
+Both key texts are canonical unpadded base64url of 65-byte uncompressed P-256 points.
+The receiver's `Machine.Id` is `Binding.Receiver = Ids.Device(ReceiverKey)`.
+`Context` binds account, profile, receiver, action **`grant.binding`**, and that GUID.
+
+`FleetGrantBindingProof.Bytes` uses the existing roster `Framing.F`: each field is
+preceded by its unsigned 4-byte big-endian byte length. Its fixed-order fields are:
+ASCII domain `agent-bridge fleet receiver binding v1`, UTF-8 account, UTF-8 profile,
+UTF-8 `Machine.Id`, UTF-8 roster generation (32 lowercase hex), raw `ReceiverKey`
+(65 bytes), HostSign key id (raw 32-byte SHA-256 of its 65-byte public point),
+and UTF-8 freshness GUID in lowercase `D` form. These exact bytes are the body of
+`FleetGrantProof.Seal`, whose receiver-proof domain and full `Context` also frame
+the signature input. `FleetGrantBindingProof.Verify` verifies that Seal against the
+HostSign metadata authenticated by the pipe and checks the exact layout before
+returning `ReceiverKey` for the existing `SignedCommand` MAC.
+
+Missing, malformed, unsealed or unverifiable keys refuse, without fallback. Adapters
+retain the full binding metadata for that `Machine.Id` from binding through confirm;
+any account, profile, roster generation or key change requires a new binding/attempt,
+never substitution into an in-flight confirmation. The receiver remains the sole
+dispatcher/writer and retains all person-device, roster and signer gates.
+
 Host CLI person path: proposed `agent-bridge-host grants issue` and
 `agent-bridge-host grants revoke <id>`. It uses the same receiver writer and
 person confirmation, not direct file editing. Guard 67 plus complete caller

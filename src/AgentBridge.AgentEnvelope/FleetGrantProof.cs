@@ -42,12 +42,12 @@ public static class FleetGrantProof
         Framing.Utf8(context.Account), Framing.Utf8(context.Profile), Framing.Utf8(context.Receiver),
         Framing.Utf8(context.Action), Framing.Utf8(context.Request.ToString("D")), body);
 
-    static bool Valid(FleetGrantProofContext? context) => context is not null
+    internal static bool Valid(FleetGrantProofContext? context) => context is not null
         && Text(context.Account, 256) && Text(context.Profile, 64)
         && context.Receiver is { Length: 32 }
         && context.Receiver.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')
         && context.Request != Guid.Empty
-        && context.Action is "grant.read" or "grant.prepareIssue" or "grant.confirmIssue"
+        && context.Action is "grant.binding" or "grant.read" or "grant.prepareIssue" or "grant.confirmIssue"
             or "grant.prepareRevoke" or "grant.confirmRevoke" or "grant.revoke";
 
     static bool Text(string? value, int max) => value is { Length: > 0 } && value.Length <= max
