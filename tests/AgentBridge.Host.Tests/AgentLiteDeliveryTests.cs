@@ -212,6 +212,21 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal("(at)secret.txt", entry.Text);
     }
 
+    [Fact]
+    public async Task Bound_reoffers_report_prior_state_even_when_live_admission_is_no_longer_allowed()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        f.Status = SessionStatus.Waiting;
+        Assert.Equal(LiteKind.Pending, (await ((ILiteReplayQuery)r.Deliver).QueryAsync(Envelope("hi"), "hi", default)).Outcome);
+        Assert.Equal(LiteKind.Refused, (await ((ILiteReplayQuery)r.Deliver).QueryAsync(Envelope("changed"), "changed", default)).Outcome);
+        f.Status = SessionStatus.Idle; await r.Lane.DeliverNextAsync(Target);
+        f.Exists = false;
+        Assert.Equal(LiteKind.Delivered, (await r.Send()).Outcome);
+        Assert.Single(f.Typed);
+    }
+
                 // What the roster and fleet.find publish for Target (HaContract.NodeId).
                 const string Node = "agent_bridge_aaaaaaaaaaaaaaaa", Sibling = "aaaaaaaa-aaaa-aaaa-bbbb-bbbbbbbbbbbb";
                 static Task<LiteDelivery> SendTo(Fixture f, string target) => f.Build().DeliverAsync(Envelope("hi", target: target), "hi", default);

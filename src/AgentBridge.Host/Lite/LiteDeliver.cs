@@ -57,6 +57,18 @@ public sealed class LiteDeliver(
         var session = source.Get(target);
         var byNode = false;
         if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+        var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
+            $"{body.Principal.Machine}/{body.Principal.SenderId}");
+        var request = Guid.Parse(body.Request);
+        // Journal NFKC must not restore an escaped attachment token.
+        var laneBody = safe.Replace("\uFF20", "(at)", StringComparison.Ordinal);
+        if (Lane is { } history)
+        {
+            var prior = history.Query(request, id, sender);
+            // A false fence forbids new admission while Offer verifies the existing body's HMAC.
+            if (prior.State != DeliveryOfferState.Refused) { return FromLane(history.Offer(request, id, sender, laneBody, () => false)); }
+            if (query) { return FromLane(prior); }
+        }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
@@ -69,14 +81,8 @@ public sealed class LiteDeliver(
             bool Current() => stillAllowed() && (!byNode || FromNodeId(target) == id) &&
                 source.Get(id) is { Agent: AgentKind.Copilot, Question: null } live && live.ProcessId == pid &&
                 live.Status is SessionStatus.Idle or SessionStatus.Working;
-            var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
-                $"{body.Principal.Machine}/{body.Principal.SenderId}");
-            var request = Guid.Parse(body.Request);
-            var prior = lane.Query(request, id, sender);
-            if (query && prior.State == DeliveryOfferState.Refused) { return FromLane(prior); }
-            if (!query && prior.State == DeliveryOfferState.Refused && !WithinRate(id)) { return Refused(LiteCodes.Busy); }
-            // Journal NFKC must not restore an escaped attachment token.
-            return FromLane(lane.Offer(request, id, sender, safe.Replace("\uFF20", "(at)", StringComparison.Ordinal), Current));
+            if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+            return FromLane(lane.Offer(request, id, sender, laneBody, Current));
         }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
