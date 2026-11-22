@@ -29,14 +29,14 @@ test('the working status shows a stable verb immediately, even without a current
   await expect(status).toHaveText(verb);
 });
 
-test('compacted once and compacted N times sit beside status, zero is absent, and Details stays unchanged', async ({ page }) => {
+test('compaction words match beside status and in Details, and zero or unknown is absent', async ({ page }) => {
   const card = await workingCard(page);
-  for (const [count, label] of [[1, 'compacted once'], [4, 'compacted 4 times'], [0, null]]) {
+  for (const [count, label] of [[1, 'compacted once'], [3, 'compacted 3 times'], [0, null], [null, null]]) {
     await change(page, { compactions: count });
     if (label) { await expect(card.locator('.status-line')).toContainText(label); }
     else { await expect(card.locator('.status-line')).not.toContainText('compacted'); }
     if (count) {
-      await expect(card.locator('.fact-compactions dd')).toHaveText(`${count} compaction${count === 1 ? '' : 's'}`);
+      await expect(card.locator('.fact-compactions dd')).toHaveText(label);
     } else { await expect(card.locator('.fact-compactions')).toHaveCount(0); }
   }
   await expect(card.locator('.fact-status dd')).toHaveText('Working');

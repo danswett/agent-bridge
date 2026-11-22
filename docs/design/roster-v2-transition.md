@@ -314,5 +314,9 @@ behavior, so it has no runtime failing-first claim; those tests belong to the
 subsequently authorized code PRs. Run `quality/run.ps1` and the selected docs checks
 here, retaining complete output and disclosing any unavailable checks.
 Do not enroll live hosts, change `security.roster`, deploy, or start #1776 as a
-consequence of merging this note. `fleet.find` stays the canonical name lookup;
-no machine/session node ids are embedded in configuration or this design.
+consequence of merging this note. `fleet.find` stays the
+[canonical live session-ID lookup](../protocol/agent-operations.md#fleetfind):
+names are display only, exact device IDs pin machines, and stale, unknown or offline
+IDs refuse without name, fragment or HA fallback. Its trust/completeness precedence
+and messaging-only own-account exception do not authorize roster transition.
+No machine/session node roster is embedded in configuration or this design.

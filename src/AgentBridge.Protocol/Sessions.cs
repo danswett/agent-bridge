@@ -869,6 +869,8 @@ public sealed record ReplyRequest
     [JsonIgnore]
     public Func<ReplyIntent>? IntentSource { get; init; }
     [JsonIgnore]
+    public DeliverySender? Sender { get; init; }
+    [JsonIgnore]
     public ReplyIntent Intent => IntentSource?.Invoke() ?? ReplyIntent.Unknown;
     // Host-only verified person confirmation, bound to the whole escaped composer digest.
     // No production producer until the signed relay ingress and policy land (#804).

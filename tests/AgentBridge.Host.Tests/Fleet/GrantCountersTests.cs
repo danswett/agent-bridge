@@ -12,7 +12,13 @@ public sealed class GrantCountersTests : IDisposable
     const string Device = "0123456789abcdef0123456789abcdef";
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
-    GrantStore Store(Action<string, byte[]>? write = null) => new(Folder, key, new(Folder, clock), Scope, clock, write);
+    bool rotated;
+    GrantStore Store(Action<string, byte[]>? write = null)
+    {
+        var audit = new AgentAuditLog(Folder, clock) { DeviceKey = key };
+        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(audit, key, clock.GetUtcNow())); }
+        return new(Folder, key, audit, Scope, clock, write);
+    }
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);
     GrantDocument Issue(GrantCaps caps)
     {

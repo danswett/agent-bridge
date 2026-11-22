@@ -390,7 +390,7 @@ truth. The host-owned fleet name is the canonical lookup key; routing still uses
 resolved machine/node, never a node ID typed by a person.
 
 ```
-{ "op": "fleet.find", "data": { "name": "SG Quality Lead", "machine": "<optional device id>" } }
+{ "op": "fleet.find", "data": { "sessionId": "<live node, bare 16-hex or published full UUID>", "machine": "<optional device id>" } }
 -> { "result": "found",      "fleetScope": "<account id>", "session": { "id", "node", "machine", "state", "since", "model"? } }
 -> { "result": "ambiguous",  "fleetScope": "<account id>", "candidates": [ { "id", "node", "machine", "state", "since",
                                                "online" } … ] }
@@ -399,6 +399,8 @@ resolved machine/node, never a node ID typed by a person.
 -> { "result": "incomplete", "fleetScope": "<account id>", "machines": [ "<device id>" … ] }
 -> { "result": "notFound",   "fleetScope": "<account id>" }
 ```
+
+**ID-first supersedes the legacy name/replacement rules below** ([#3607](https://github.com/danswett/agent-bridge/issues/3607), owner Nov 19, 2026, 12:10/12:12 PT). The exclusive `sessionId` resolves only from live roster rows; full UUIDs require the published node binding. `name`/`machineName` selectors refuse, and `machine` pins only an exact device ID. Unknown, stale or offline IDs now produce a loud `refused:` reason naming the ID, not the legacy `notFound`/`offline` responses above. Trust, completeness, account, kill and final-effect fences stay unchanged. See [the current protocol](../protocol/agent-operations.md#fleetfind). Names are display only; role-ID code/claims remain paused.
 
 Every `session` and candidate holds typed fields only; **the session name is never echoed back**.
 Where a reply includes a machine object, session or candidate, it may also carry `machineName`

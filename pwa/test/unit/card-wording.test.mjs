@@ -2,11 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { compactionText } from '../../js/details-rows.js';
 
 const source = readFileSync(new URL('../../js/ui/session-card.js', import.meta.url), 'utf8')
   .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
 const { cardStatusFacts, pauseCardSpinners } = vm.runInNewContext(
   `${source}\n({ cardStatusFacts, pauseCardSpinners })`,
+  { compactionText },
 );
 const words = { rule: 3, facts: ['Working', 'task: Delegate Read logs'] };
 const session = (id = 'a', compactions = 0) => ({ id, activity: { compactions } });
@@ -28,7 +30,7 @@ test('waiting, idle and stale status lines never claim the session is working', 
 });
 
 test('compaction status says compacted once or compacted N times and is absent at zero', () => {
-  for (const [count, expected] of [[0, null], [1, 'compacted once'], [3, 'compacted 3 times']]) {
+  for (const [count, expected] of [[null, null], [undefined, null], [0, null], [1, 'compacted once'], [3, 'compacted 3 times']]) {
     const facts = cardStatusFacts(session('a', count), words);
     assert.deepEqual(Array.from(facts.slice(2)), expected ? [expected] : []);
   }

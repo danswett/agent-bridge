@@ -3,6 +3,9 @@
 Scope: https://github.com/danswett/agent-bridge/issues/3450 . Engineering owns this
 correction. This spike is **not a trust root, separate-device proof, or a
 confused-deputy mitigation**. Nothing is wired into the app, host, relay or roster.
+The `agent.lite` trust gate is instead authenticated same-account relay host presence,
+with no separate peers pin (owner, Nov 19, 22:05 PT; merged in
+[#3384](https://github.com/danswett/agent-bridge/pull/3384)).
 `fmt=none` and self-attestation authenticate no device provenance: software ES256
 keys on the PC pass the same UP/UV/signature checks. A malware-shown QR and matching
 PC fingerprint can approve the attacker's request. The PC reference is not trusted.
