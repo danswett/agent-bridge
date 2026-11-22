@@ -1791,6 +1791,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   on the next reply or history update, including after a screen-reader retreat.
   This end-entry tolerance is separate from the 1 px movement tolerance; it does not
   widen pin-release exemptions or override active navigation, scrolling or holds.
+  Windows tracks synchronous pane/list measure, arrange and forced measurement ownership
+  separately from reader movement, so their offset coercion does not consume the end pin.
+  Native last-item anchoring follows only an unheld pin and yields to reader custody;
+  an SDK intermediate layout event alone does not establish that custody.
+  Restores recheck session, release and hold state after measurement before moving the view.
   Leading retained latest-response trims own their list anchor and invalidate earlier queued
   numeric restores, but not stored-row or end corrections; plain appends preserve prior restores.
   Only a signed extent decrease explains a shrink-sized drop; for stationary remeasurement

@@ -66,7 +66,7 @@ public sealed partial class SessionView
         var offset = ConversationScroll?.VerticalOffset ?? 0;
         var reading = reset || atEnd ? null : ReadingHistory();
         var leading = blocks.FirstOrDefault();
-        if (atEnd) { pinEnd = true; }
+        if (atEnd) { SetEndPin(true); }
         var retained = false;
         if (reset)
         {
@@ -115,6 +115,7 @@ public sealed partial class SessionView
             }
             HistoryScrolled(e.IsIntermediate);
             if (!e.IsIntermediate) { SaveReading(); }
+            SyncConversationAnchoring();
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
