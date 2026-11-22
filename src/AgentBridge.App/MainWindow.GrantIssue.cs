@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using AgentBridge.App.Core;
 using AgentBridge.App.Core.Grants;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
