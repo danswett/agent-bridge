@@ -8,11 +8,12 @@ internal sealed record DeliveryOfferStatus(DeliveryOfferState State, string? Rea
 
 internal sealed partial class DeliveryLaneScheduler
 {
-    readonly Dictionary<(string, string), (DeliverySender Sender, Func<bool> Current)> fences = [];
+    readonly Dictionary<(string, string), (DeliverySender Sender, Func<bool> Current, Func<bool> Revoked)> fences = [];
     readonly HashSet<string> dispatching = [];
     public Func<ReplyRequest, CancellationToken, Task<ReplyResult>>? Dispatch { private get; init; }
 
-    public DeliveryOfferStatus Offer(Guid request, string target, DeliverySender sender, string body, Func<bool> current)
+    public DeliveryOfferStatus Offer(Guid request, string target, DeliverySender sender, string body, Func<bool> current,
+        Func<bool>? revoked = null)
     {
         if (request == Guid.Empty || string.IsNullOrWhiteSpace(target) ||
             string.IsNullOrWhiteSpace(sender.Id) || string.IsNullOrWhiteSpace(body))
@@ -28,13 +29,23 @@ internal sealed partial class DeliveryLaneScheduler
                 { Record(target, prior.Header, body, DeliveryState.Dropped, "restart: pending payload unavailable"); }
                 return Query(request, target, sender);
             }
-            if (Dispatch is null || !current())
+            var revokedProof = false;
+            bool Revoked() => revokedProof |= revoked?.Invoke() == true;
+            if (Dispatch is null || Revoked() || !current())
             { return new(DeliveryOfferState.Refused, $"Target {target}: no dispatcher or revoked authority."); }
             var header = new DeliveryHeader(sender.From, id, null, time.GetUtcNow(), "normal", 0);
-            fences[(target, id)] = (sender, current);
+            fences[(target, id)] = (sender, current, Revoked);
             if (!Enqueue(target, header, body, sender.Owner ? DeliveryClass.Owner : DeliveryClass.Agent))
             { fences.Remove((target, id)); return new(DeliveryOfferState.Refused, $"Target {target}: lane full."); }
             return Query(request, target, sender);
+        }
+    }
+
+    public string? BoundTarget(Guid request, DeliverySender sender)
+    {
+        lock (sync)
+        {
+            return journal.Find(request) is { } record && SameSender(record, record.Session, sender) ? record.Session : null;
         }
     }
 
@@ -67,28 +78,47 @@ internal sealed partial class DeliveryLaneScheduler
         return lane.OrderBy(i => lane == lanes.Urgent ? (int)i.Sender : 0).FirstOrDefault();
     }
 
+    void RemoveItem(string session, string id)
+    {
+        var lanes = sessions[session];
+        lanes.Urgent.RemoveAll(i => i.Header.Id == id);
+        lanes.Queueable.RemoveAll(i => i.Header.Id == id);
+    }
+
     async Task<LaneResult> DispatchNextAsync(string session, CancellationToken cancellation)
     {
         using var admission = gate.TryEnterDelivery();
         var attempt = Guid.NewGuid();
-        Item item; SubmitKey submit; (DeliverySender Sender, Func<bool> Current) authority;
-        lock (sync)
+        Item item; SubmitKey submit; (DeliverySender Sender, Func<bool> Current, Func<bool> Revoked) authority;
+        List<LaneNotice> notices = [];
+        try
         {
-            if (admission is null || uncertain || dispatching.Contains(session) || Head(session) is not { } head ||
-                !fences.TryGetValue((session, head.Header.Id), out authority))
-            { return LaneResult.Waiting; }
-            var box = screen(session);
-            if (QueueSubmitPolicy.Select(DeliveryTerminalKind.Unknown, box.Idle, box.Empty, head.Header.Priority == "urgent") is not { } key)
-            { return LaneResult.Waiting; }
-            item = head; submit = key; dispatching.Add(session);
+            lock (sync)
+            {
+                if (admission is null || uncertain || dispatching.Contains(session) || Head(session) is not { } head ||
+                    !fences.TryGetValue((session, head.Header.Id), out authority))
+                { return LaneResult.Waiting; }
+                if (authority.Revoked())
+                {
+                    Record(session, head.Header, head.Body, DeliveryState.Dropped, "revoked authority");
+                    RemoveItem(session, head.Header.Id); fences.Remove((session, head.Header.Id));
+                    notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority."));
+                    return LaneResult.Waiting;
+                }
+                var box = screen(session);
+                if (QueueSubmitPolicy.Select(DeliveryTerminalKind.Unknown, box.Idle, box.Empty, head.Header.Priority == "urgent") is not { } key)
+                { return LaneResult.Waiting; }
+                item = head; submit = key; dispatching.Add(session);
+            }
         }
+        finally { foreach (var n in notices) { notice(n); } }
         DeliveryHeader? handedOff = null;
         bool Current()
         {
             lock (sync)
             {
                 var box = screen(session);
-                return !uncertain && !cancellation.IsCancellationRequested && authority.Current() &&
+                return !uncertain && !cancellation.IsCancellationRequested && !authority.Revoked() && authority.Current() &&
                     (handedOff is not null || ReferenceEquals(Head(session), item)) &&
                     QueueSubmitPolicy.Select(DeliveryTerminalKind.Unknown, box.Idle, box.Empty, item.Header.Priority == "urgent") == submit;
             }
@@ -100,9 +130,7 @@ internal sealed partial class DeliveryLaneScheduler
                 if (handedOff is not null || !Current()) { throw new InvalidOperationException($"Target {session}: handoff is no longer current."); }
                 try { handedOff = journal.ReserveHandoff(session, item.Header, item.Body, item.Header.Priority == "urgent" ? 'u' : 'q'); }
                 catch { uncertain = true; gate.MarkJournalUncertain(); throw; }
-                var lanes = sessions[session];
-                lanes.Urgent.RemoveAll(i => i.Header.Id == item.Header.Id);
-                lanes.Queueable.RemoveAll(i => i.Header.Id == item.Header.Id);
+                RemoveItem(session, item.Header.Id);
                 return DeliveryEnvelope.Format(handedOff, item.Body);
             }
         }

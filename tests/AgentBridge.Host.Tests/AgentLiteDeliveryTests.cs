@@ -20,6 +20,9 @@ public sealed class AgentLiteDeliveryTests
     {
         public SessionStatus Status = SessionStatus.Idle;
         public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public bool FenceCurrent = true, ProcessKnown = true;
+        public bool ForbidDiscovery;
+        public int ProcessId = 42;
         public string Remote = AgentMessagingSettings.OwnAccount;
         public string Account = "acct";
         public string[] AllowAllTargetSessions = [];
@@ -39,7 +42,7 @@ public sealed class AgentLiteDeliveryTests
         public readonly List<ReplyRequest> Typed = []; public readonly List<string> Log = [];
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
-        public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(42, ProcessAt) : null);
+        public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
         public LiteDeliver Build(DeliveryLaneScheduler? lane = null) => new([
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
@@ -48,20 +51,28 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock, id => () => Launches.PermissionsOf(id) is not null,
+        ], this, this, this, Log.Add, Clock, id =>
+        {
+            var launch = Launches.Capture(id);
+            return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
+        },
             account: lane is null ? null : () => Account) { Lane = lane };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
         public Session? Get(string id)
         {
+            if (ForbidDiscovery) { throw new InvalidOperationException("history must not resolve live discovery"); }
             if (FlipAfterFirstGet && ++Gets >= 2) { Status = SessionStatus.Working; }
-            if (id == Target && Exists) { return Live(id, PidOnRecheck is { } pid && ++TargetGets >= 2 ? pid : 42); }
+            if (id == Target && Exists) { return Live(id, PidOnRecheck is { } pid && ++TargetGets >= 2 ? pid : ProcessId); }
             return Others.Contains(id) ? Live(id, 43) : null;
         }
+        public SessionProcess? ProcessOf(string id) =>
+            id == Target && Exists && ProcessKnown ? new(ProcessId, ProcessAt) : null;
         public IReadOnlyList<Session> Snapshot()
         {
-            Session[] listed = [.. (Exists ? new[] { Target } : []).Concat(HideOthersFromSnapshot ? [] : Others).Select(id => Live(id, 42))];
+            if (ForbidDiscovery) { throw new InvalidOperationException("history must not resolve live discovery"); }
+            Session[] listed = [.. (Exists ? new[] { Target } : []).Concat(HideOthersFromSnapshot ? [] : Others).Select(id => Live(id, ProcessId))];
             OnSnapshot?.Invoke();
             return listed;
         }
@@ -89,10 +100,10 @@ public sealed class AgentLiteDeliveryTests
             return Task.FromResult(new ConsoleScreen(Rows, null));
         }
     }
-    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target)
+    static VerifiedEnvelope Envelope(string text, string request = Req, string target = Target, string sender = "SENDER")
     {
         var sha = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(text))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal("SENDER", "add", "sess-9", "inst", "cred", "copilot", "launcher"),
+        var body = new EnvelopeBody(request, "acct", "g", [], new AgentPrincipal(sender, "add", "sess-9", "inst", "cred", "copilot", "launcher"),
             new AgentChain("root", 0, null, 0, 1, []), new AgentProvenance(null, default, null), "message",             new AgentTarget("acct", "HOST", target, null), sha, 0, 0);
         return new VerifiedEnvelope(body, []);
     }
@@ -212,6 +223,88 @@ public sealed class AgentLiteDeliveryTests
         await r.Lane.DeliverNextAsync(Target);
         var entry = Assert.Single(DeliveryEnvelope.Parse(Target, Assert.Single(f.Typed).Text!, r.Journal.VerifyHandoff));
         Assert.Equal("(at)secret.txt", entry.Text);
+    }
+
+    [Fact]
+    public async Task Supplementary_format_characters_cannot_expose_an_attachment_after_lane_normalization()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Send("\U000E0001@secret.txt")).Outcome);
+        await r.Lane.DeliverNextAsync(Target);
+        var entry = Assert.Single(DeliveryEnvelope.Parse(Target, Assert.Single(f.Typed).Text!, r.Journal.VerifyHandoff));
+        Assert.Equal("(at)secret.txt", entry.Text);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task A_node_reoffer_keeps_its_authenticated_history_after_discovery_loses_the_target(bool delivered, bool sibling)
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        var envelope = Envelope("hi", target: Node);
+        Assert.Equal(LiteKind.Pending, (await r.Deliver.DeliverAsync(envelope, "hi", default)).Outcome);
+        if (delivered) { f.Status = SessionStatus.Idle; await r.Lane.DeliverNextAsync(Target); }
+        f.Exists = false;
+        if (sibling) { f.Others.Add(Sibling); }
+        f.ForbidDiscovery = true;
+        var query = (ILiteReplayQuery)r.Deliver;
+        Assert.Equal(delivered ? LiteKind.Delivered : LiteKind.Pending, (await query.QueryAsync(envelope, "hi", default)).Outcome);
+        Assert.Equal(delivered ? LiteKind.Delivered : LiteKind.Pending, (await r.Deliver.DeliverAsync(envelope, "hi", default)).Outcome);
+        Assert.Equal(LiteKind.Refused, (await query.QueryAsync(Envelope("changed", target: Node), "changed", default)).Outcome);
+        Assert.Equal(LiteKind.Refused, (await query.QueryAsync(Envelope("hi", target: Node, sender: "OTHER"), "hi", default)).Outcome);
+        Assert.Equal(LiteKind.Refused, (await query.QueryAsync(Envelope("hi", target: Sibling), "hi", default)).Outcome);
+        Assert.Equal(1, r.Records.Count(record => record.State == "enqueued"));
+        Assert.Equal(delivered ? 1 : 0, f.Typed.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_proven_new_incarnation_drops_the_stale_offer_and_allows_the_next_valid_offer(bool reusedPid)
+    {
+        const string next = "33333333-3333-3333-3333-333333333333";
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        f.ProcessAt = f.ProcessAt.AddTicks(1);
+        if (!reusedPid) { f.ProcessId = 43; }
+        f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(LiteKind.Pending, (await r.Send("new", next)).Outcome);
+        f.Status = SessionStatus.Idle; f.ProcessKnown = false;
+        Assert.Equal(LaneResult.Waiting, await r.Lane.DeliverNextAsync(Target));
+        Assert.DoesNotContain(r.Records, record => record.State == "dropped");
+        f.ProcessKnown = true;
+        Assert.Equal(LaneResult.Waiting, await r.Lane.DeliverNextAsync(Target));
+        var dropped = Assert.Single(r.Records, record => record.State == "dropped");
+        Assert.Equal(Req, dropped.Header.Id); Assert.Equal("revoked authority", dropped.Reason);
+        Assert.Contains(f.Log, line => line.Contains(Req) && line.Contains("revoked authority"));
+        Assert.Equal(LaneResult.HandedOff, await r.Lane.DeliverNextAsync(Target));
+        var entry = Assert.Single(DeliveryEnvelope.Parse(Target, Assert.Single(f.Typed).Text!, r.Journal.VerifyHandoff));
+        Assert.Equal(next, entry.Header!.Id); Assert.Equal("new", entry.Text);
+        Assert.Equal("revoked authority", (await r.Send()).Code);
+        Assert.DoesNotContain(r.Records, record => record.Header.Id == Req && record.State == "handoff");
+    }
+
+    [Fact]
+    public async Task A_false_current_fence_and_discovery_hold_never_drop_or_renew_a_pending_offer()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Deliver.DeliverAsync(Envelope("hi", target: Node), "hi", default)).Outcome);
+        f.Status = SessionStatus.Idle; f.FenceCurrent = false; f.Held = Hold;
+        Assert.Equal(LaneResult.Waiting, await r.Lane.DeliverNextAsync(Target));
+        f.Held = null;
+        Assert.Equal(LaneResult.Waiting, await r.Lane.DeliverNextAsync(Target));
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        Assert.DoesNotContain(r.Records, record => record.State == "dropped");
+        Assert.Empty(f.Typed);
+        f.FenceCurrent = true;
+        Assert.Equal(LaneResult.HandedOff, await r.Lane.DeliverNextAsync(Target));
+        Assert.Single(f.Typed);
     }
 
     [Fact]
