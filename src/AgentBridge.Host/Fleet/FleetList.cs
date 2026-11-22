@@ -313,7 +313,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => FleetSessionMatch.Matches(s, sessionId)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
         if (live.Any(h => !h.Machine.Verified && h.Machine.MessagingTrust != LiteFleetRoster.Trust)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, Trust: h.Machine.MessagingTrust))).ToList();
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, SessionId: FleetSessionId.ForNode(s.SessionId, s.Node), Trust: h.Machine.MessagingTrust))).ToList();
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
@@ -321,7 +321,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
             return new FindRefusal($"refused: fleet.find sessionId {JsonSerializer.Serialize(sessionId)} is unknown, stale or offline");
         }
         // One live routing match; messaging trust never authorizes another operation.
-        return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
+        return new { result = "found", fleetScope, session = cands[0] };
     }
 
     sealed record FindRefusal(string Reason);
