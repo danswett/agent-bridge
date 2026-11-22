@@ -28,6 +28,9 @@ public interface ISessionSource : IAsyncDisposable
     // The question as discovered, before a presentation-only attempt overlay.
     Session? GetForDelivery(string id) => Get(id);
 
+    // Stop safety reads the discovered state, not its presentation-only Ending override.
+    Session? GetForStop(string id) => GetForDelivery(id);
+
     // The same session before SessionBudget.Fit, within the field limits only, or null once it
     // has gone. For a consumer that sends it on under limits of its own (the HA connector): Fit
     // trims the fields older clients ignore first, activity.own among them, so the budgeted form

@@ -72,6 +72,8 @@ public sealed class GrantStore
 
     public GrantStoreResult TryGetUsable(Guid id, long generation) =>
         Transaction(state => (null, Find(state, id, generation, checkTime: true)), allowNew: false);
+    public GrantStoreResult TryGetUsable(Guid id) => Transaction(state =>
+        (null, Find(state, id, state.Grants.SingleOrDefault(g => g.Id == id)?.Generation ?? 1, checkTime: true)), allowNew: false);
 
     public GrantListResult List()
     {

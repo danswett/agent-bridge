@@ -189,6 +189,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GuardForm : null; }
     }
 
+    public Session? GetForStop(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.Full : null; }
+    }
+
     public void AnswerAttemptsChanged() => Wake(activity: true);
 
     void Wake(bool activity)

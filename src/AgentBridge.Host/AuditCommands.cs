@@ -15,7 +15,8 @@ public static class AuditCommands
         string? Request = null, string[]? Chain = null, string? Target = null, string? Reason = null,
         string? DataSha256 = null, int? TextLength = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GateAuditMetadata? Gate = null,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool PreviousTailIncomplete = false,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Grant = null);
 
     public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
         args.ElementAtOrDefault(1) == "archive" ? AuditArchiveCommand.Run(args, profileRoot, output, error)
