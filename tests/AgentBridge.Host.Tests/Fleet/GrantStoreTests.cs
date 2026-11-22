@@ -233,8 +233,8 @@ public sealed class GrantStoreTests : IDisposable
         var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
         var honest = JsonNode.Parse(File.ReadAllText(head))!;
         var old = new[] { PathName, file }.ToDictionary(f => f, File.ReadAllBytes);
-        // Fail-closed adoption refuses this revoke; the rollback must refuse whether or not it landed.
-        Open().Revoke(grant.Id, 1);
+        // Fail-closed adoption refuses this revoke; were legacy grants trusted again, the rollback below would resurrect it.
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().Revoke(grant.Id, 1).Problem);
         foreach (var (saved, bytes) in old) { File.WriteAllBytes(saved, bytes); }
         File.Delete(head);
         Assert.True(Audit.Bootstrap());
