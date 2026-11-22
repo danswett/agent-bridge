@@ -27,7 +27,8 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 - **PR 2546 (#2538, merged)** records the HA sender principal (`PrincipalOf`); reused. Rendering stays there.
 - **Host-typing hotfix** (agent text via ctrl+q, default off: `KeyPlan.cs`, `CopilotReply.cs`, `Injector/`),
   then **PR 2469** (#2468, strict `queue|steer` mode, `Protocol/ReplyMode.cs`), then slice 2.
-- **#2574:** a session resolves only by its exact active name (no substring or HA fallback), else holds.
+- **[#3607](https://github.com/danswett/agent-bridge/issues/3607):** sends and lookups target a live session ID; names are display only. A stale or unknown ID refuses loudly, naming the ID, and holds without name, substring or HA fallback.
+  This supersedes #2574's name lookup, per the owner decisions of Nov 19, 2026, 12:10/12:12 PT and the [ID-first design](https://github.com/danswett/agent-bridge/pull/3606). Role-ID code and claims remain paused (#3334).
 - **Protected shared store** (own dependency, in no slice estimate): partition identity, lease, fencing, CAS,
   migration. It holds protected queued payloads and cross-node state; if missing, hold (no local fallback).
   **Locality:** the host journal is node-bound injector evidence, not the cross-node payload, outbox or lease
