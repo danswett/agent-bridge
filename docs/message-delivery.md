@@ -176,6 +176,11 @@ The decision's required admission predicate runs before consumption: known refus
 `lane-full`, spends nothing and permits a bound same-UUID retry. Consumed UUIDs never renew.
 Clock refusal before a write does not mark the journal uncertain; actual append failure does.
 Slice 3b alone integrates Offer/Query, scheduler-locked preflight and final fenced capability rechecks.
+Offer takes an optional `DeliveryPriorityRequest` and receiver binding; only a non-owner explicit non-normal request reaches
+`DecidePriority`, whose admission predicate checks the effective lane before any grant is consumed (a full lane refuses
+`lane-full`, spends nothing and permits a same-UUID retry). Agent urgent exists only for a journaled grant; Query reports a
+demotion and its reason. The scheduler rechecks `PriorityCurrent` at preflight and in the final fence: a lapsed grant is
+journaled `demoted` and waits as normal, never typed urgent. Nothing calls this yet: no wiring or activation.
 No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.
 Canonical Fleet flags remain [#651](https://github.com/danswett/slipgates-fleet/issues/651), owned by Fleet Quality.
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
