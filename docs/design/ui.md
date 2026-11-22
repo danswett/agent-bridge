@@ -1143,7 +1143,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   | 15 | Updated | "2m ago" | Always |
   | 16 | Background | "2 background agents · 1 background command" | When any |
   | 17 | Turns | "12 turns", "1 turn" | When sent |
-  | 18 | Compactions | "3 compactions" | When more than 0 |
+  | 18 | Compactions | "compacted once" / "compacted 3 times", as in the session header | When more than 0 |
   | 19 | Process | "pid 4312", mono | When sent |
   | 20 | ID | The full session id, mono, then a Copy button | Always |
 

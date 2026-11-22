@@ -144,9 +144,9 @@ public sealed partial class SessionCardViewModel : Observable
                 foreach (var c in session.Id) { index = (index + c) % SpinnerVerbs.Length; }
                 facts[0] = SpinnerVerbs[index];
             }
-            if (session.Activity.Compactions is > 0 and var n)
+            if (Words.Compactions(session.Activity.Compactions) is { } compactions)
             {
-                facts.Add(n == 1 ? "compacted once" : $"compacted {n} times");
+                facts.Add(compactions);
             }
             return string.Join(StatusLine.Separator, facts);
         }
