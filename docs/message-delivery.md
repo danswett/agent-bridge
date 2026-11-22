@@ -68,6 +68,7 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
   If `n` does not match, the body runs to the next `\n\n` and the entry is flagged.
 - **Trust:** a header is verified only if it matches this session's journal `handoff` (id, from, seq, at, n and body HMAC); the host checks, the app shows the verdict. Anything else, a pasted header
   included, stays `console`, unverified, and never confirms, dedupes or attributes a delivery.
+  Body HMAC encoding uses strict UTF-8: invalid UTF-16 is refused, never replaced with U+FFFD during verification.
 ## Lanes and key path (slice 2)
 - **Urgent lane:** owner and system; agent-urgent from slice 3. Text, then Enter (steer), one at a time
   via `DeliveryGate`, by class (owner, system, agent), then arrival. Bound 10 per session: an owner item

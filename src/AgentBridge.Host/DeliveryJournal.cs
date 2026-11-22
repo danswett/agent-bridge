@@ -12,6 +12,7 @@ public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header
 // Node-bound evidence only: no payload retention, sequence reservation, replay or key sends.
 public sealed class DeliveryJournal : IDisposable
 {
+    static readonly UTF8Encoding StrictUtf8 = new(false, true);
     readonly object gate = new();
     readonly HMACSHA256 hmac;
     readonly Action<byte[]> append;
@@ -79,11 +80,21 @@ public sealed class DeliveryJournal : IDisposable
         }
     }
 
-    bool Matches(DeliveryJournalRecord record, string body) =>
-        CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(record.Hmac), Mac(record with { Hmac = "" }, body));
+    bool Matches(DeliveryJournalRecord record, string body)
+    {
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(record.Hmac), Mac(record with { Hmac = "" }, body));
+        }
+        catch (EncoderFallbackException)
+        {
+            log("delivery journal verification refused (invalid UTF-16); no success acknowledgement");
+            return false;
+        }
+    }
 
     byte[] Mac(DeliveryJournalRecord record, string body) =>
-        hmac.ComputeHash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(record, ProtocolJson.Options) + "\n" + body));
+        hmac.ComputeHash(StrictUtf8.GetBytes(JsonSerializer.Serialize(record, ProtocolJson.Options) + "\n" + body));
 
     static void Append(string file, byte[] bytes)
     {

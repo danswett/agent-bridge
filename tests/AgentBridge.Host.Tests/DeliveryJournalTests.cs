@@ -34,6 +34,56 @@ public sealed class DeliveryJournalTests : IDisposable
     }
 
     [Fact]
+    public void A_transcript_emoji_cannot_alias_a_handed_off_replacement_character()
+    {
+        var prepared = DeliveryEnvelope.Prepare(Header, "\uFFFD");
+        using var journal = new DeliveryJournal(RandomNumberGenerator.GetBytes(32), _ => { }, _ => { });
+        journal.Write("session", prepared.Header with { Seq = null }, prepared.Body, DeliveryState.Enqueued);
+        journal.Write("session", prepared.Header, prepared.Body, DeliveryState.Handoff);
+        var frame = DeliveryEnvelope.Format(prepared.Header, prepared.Body);
+        Assert.Equal(prepared.Header,
+            Assert.Single(DeliveryEnvelope.Parse("session", frame, journal.VerifyHandoff)).Header);
+        var forged = frame[..^prepared.Body.Length] + "\U0001F600";
+        var entry = Assert.Single(DeliveryEnvelope.Parse("session", forged, journal.VerifyHandoff));
+        Assert.Null(entry.Header);
+        Assert.Equal(forged, entry.Text);
+        Assert.True(journal.VerifyHandoff("session", prepared.Header, prepared.Body));
+    }
+
+    [Theory]
+    [InlineData("\uFFFD")]
+    [InlineData("\U0001F600")]
+    [InlineData("h\u00E9llo \U0001F44D")]
+    public void Valid_Unicode_bodies_verify_through_the_real_parser(string body)
+    {
+        var prepared = DeliveryEnvelope.Prepare(Header, body);
+        using var journal = new DeliveryJournal(RandomNumberGenerator.GetBytes(32), _ => { }, _ => { });
+        journal.Write("session", prepared.Header, prepared.Body, DeliveryState.Enqueued);
+        journal.Write("session", prepared.Header, prepared.Body, DeliveryState.Handoff);
+        var entry = Assert.Single(DeliveryEnvelope.Parse("session",
+            DeliveryEnvelope.Format(prepared.Header, prepared.Body), journal.VerifyHandoff));
+        Assert.Equal(prepared.Header, entry.Header);
+        Assert.Equal(prepared.Body, entry.Text);
+    }
+
+    [Theory]
+    [InlineData(0xD83D)]
+    [InlineData(0xDE00)]
+    public void Isolated_surrogates_are_refused_without_losing_the_handoff(int codeUnit)
+    {
+        var body = ((char)codeUnit).ToString();
+        var prepared = DeliveryEnvelope.Prepare(Header, "\uFFFD");
+        var logs = new List<string>();
+        using var journal = new DeliveryJournal(RandomNumberGenerator.GetBytes(32), _ => { }, logs.Add);
+        journal.Write("session", prepared.Header, prepared.Body, DeliveryState.Enqueued);
+        journal.Write("session", prepared.Header, prepared.Body, DeliveryState.Handoff);
+        Assert.False(journal.VerifyHandoff("session", prepared.Header, body));
+        Assert.Single(logs);
+        Assert.Equal(DeliveryState.Handoff, journal.State("session", prepared.Header.Id));
+        Assert.True(journal.VerifyHandoff("session", prepared.Header, prepared.Body));
+    }
+
+    [Fact]
     public void Full_disk_refuses_enqueue_and_permits_no_ack()
     {
         using var journal = new DeliveryJournal(RandomNumberGenerator.GetBytes(32), _ => throw new IOException("full"), _ => { });
