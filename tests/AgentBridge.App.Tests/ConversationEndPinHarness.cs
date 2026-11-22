@@ -92,6 +92,12 @@ namespace Microsoft.UI.Xaml.Input
 
 namespace Microsoft.UI.Xaml.Controls
 {
+    public enum ItemsUpdatingScrollMode { KeepItemsInView, KeepLastItemInView }
+    public sealed class ItemsStackPanel
+    {
+        public ItemsUpdatingScrollMode ItemsUpdatingScrollMode { get; set; }
+    }
+
     public sealed class ScrollViewer : UIElement
     {
         readonly List<(object Event, Input.PointerEventHandler Handler, bool HandledToo)> handlers = [];
@@ -174,12 +180,19 @@ namespace AgentBridge.App
         public SessionView()
         {
             pinEnd = true;
-            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = MeasuredExtent ?? 100 + historyShown.Count * 100 };
+            HistoryColumn = new() { Layout = () =>
+            {
+                Scroller.ScrollableHeight = MeasuredExtent ?? 100 + historyShown.Count * 100;
+                LayoutDuringMeasure?.Invoke();
+            } };
             HookConversationInput(Scroller);
         }
         public Microsoft.UI.Xaml.Controls.ScrollViewer Scroller => ConversationScroll!;
         public double? MeasuredExtent { get; set; }
+        public Action? LayoutDuringMeasure { get; set; }
         public bool Pinned => pinEnd;
+        public Microsoft.UI.Xaml.Controls.ItemsUpdatingScrollMode NativeMode =>
+            ((Microsoft.UI.Xaml.Controls.ItemsStackPanel)ConversationList.ItemsPanelRoot).ItemsUpdatingScrollMode;
         public bool IsScrolling => scrolling;
         public int Releases => pinReleases;
         public double AnchorAt => anchorAt;
@@ -188,6 +201,7 @@ namespace AgentBridge.App
         public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
         public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); if (final) { anchoring = null; } }
+        public void LayoutForProbe(Action layout) => DuringConversationLayout(() => { layout(); return 0; });
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() { scrolling = false; CompleteNavigation(); }
         public bool HasAnchor => anchor is not null;
@@ -228,6 +242,8 @@ namespace AgentBridge.App
             DrainForProbe();
             Scroller.Targets.Clear();
         }
+        public void ObserveHistoryForProbe(Action changed) => historyShown.CollectionChanged += (_, _) => changed();
+        public void AppendHistoryForProbe() => Card!.Stored!.AddLive(new() { Id = "latest", At = default, Prompt = new() { Text = "Latest prompt" } });
         static double Top(Microsoft.UI.Xaml.UIElement element, Microsoft.UI.Xaml.UIElement viewport) => element.Top;
         sealed record ProbeCard(string Id, Core.SessionHistory? Stored, string? UserMessage = null)
         {
@@ -239,6 +255,7 @@ namespace AgentBridge.App
         sealed record ProbeRow(string Key);
         sealed class ProbeList : Microsoft.UI.Xaml.FrameworkElement
         {
+            public object ItemsPanelRoot { get; } = new Microsoft.UI.Xaml.Controls.ItemsStackPanel();
             public bool Available = true;
             public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = 40 } : null;
             public void ScrollIntoView(object item) => Scrolled?.Invoke();

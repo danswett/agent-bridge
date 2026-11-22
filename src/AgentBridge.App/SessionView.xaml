@@ -273,7 +273,7 @@
                  alone (#765): each block an item a screen reader counts and reaches off screen (#707),
                  with no item chrome, selection or focus visual of its own. What comes before the
                  response is the list's header, what comes after it its footer, each the same column. -->
-            <ListView
+            <local:ConversationListView
                 x:Name="ConversationList"
                 AutomationProperties.AutomationId="Conversation"
                 AutomationProperties.Name="Conversation"
@@ -857,7 +857,7 @@
                 </local:ReadingColumn>
                 </local:ReadingColumn>
                 </ListView.Footer>
-            </ListView>
+            </local:ConversationListView>
 
             <!-- The Delegates tab (§6.3, §5.2): every delegate, nested under its parent, and one opened
                  from it pushed in its place; a host that can't list them (rule 8), its counts. -->
