@@ -1,0 +1,47 @@
+<UserControl
+    x:Class="AgentBridge.App.GrantIssueView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12" Padding="24" MaxWidth="760" HorizontalAlignment="Left">
+            <TextBlock Text="Fleet &gt; Grants &gt; New grant" FontSize="24" />
+            <TextBlock Text="Choose explicit subjects, actions, scope, all three caps and expiry. No authority is granted until the receiver verifies issuance."
+                       TextWrapping="Wrap" />
+            <TextBox x:Name="SourceDocument" Header="Grant document"
+                     AutomationProperties.AutomationId="GrantDocument"
+                     PlaceholderText="Explicit receiving machine, live subject/process bindings, scope, caps and expiry"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="180" MaxLength="65536" />
+            <Button Content="Review grant" Click="OnPrepare"
+                    AutomationProperties.AutomationId="GrantPrepare" />
+            <TextBlock x:Name="InputProblem" TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="Receiver-verified summary" FontSize="18" />
+            <TextBlock Text="{x:Bind ViewModel.Summary, Mode=OneWay}"
+                       TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+            <TextBlock Text="{x:Bind ViewModel.EffectivePolicy, Mode=OneWay}"
+                       TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+            <ItemsControl ItemsSource="{x:Bind ViewModel.UnavailableActions, Mode=OneWay}" />
+            <TextBlock Text="Exact normalized document" />
+            <TextBlock Text="{x:Bind ViewModel.Document, Mode=OneWay}"
+                       TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+            <TextBlock Text="SHA-256 digest" />
+            <TextBlock Text="{x:Bind ViewModel.Digest, Mode=OneWay}"
+                       TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                       AutomationProperties.AutomationId="GrantDigest" />
+            <TextBlock Text="Confirm only if every subject, scope, cap and expiry above is intended. First issuance may include person-signed audit rotation."
+                       TextWrapping="Wrap" />
+            <TextBox x:Name="PersonDigest" Header="Type the exact digest to confirm"
+                     MaxLength="64" IsEnabled="{x:Bind ViewModel.CanConfirm, Mode=OneWay}"
+                     AutomationProperties.AutomationId="GrantPersonDigest" />
+            <Button Content="Issue grant" Click="OnConfirm"
+                    IsEnabled="{x:Bind ViewModel.CanConfirm, Mode=OneWay}"
+                    AutomationProperties.AutomationId="GrantConfirm" />
+            <TextBlock x:Name="StatusLine" Text="{x:Bind ViewModel.State, Mode=OneWay}"
+                       TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="{x:Bind ViewModel.Problem, Mode=OneWay}"
+                       TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="An unconfirmed submission is not retried automatically. Rotation required remains a refusal until the person path completes it."
+                       TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
