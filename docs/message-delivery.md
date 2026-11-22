@@ -162,7 +162,8 @@ Request, issue, grant, consumption, refusal, demotion and revocation are flushed
 Priority facts require Priority state, MAC and previous-MAC verification. Relabeled or stripped policy
 facts refuse their verified principal/receiver chain: no current authority, replacement capability or quota refund.
 Unauthenticated linked/ambiguous facts quarantine all priority bindings and replay Unconfirmed; only MAC-covered fields prove attribution.
-Zero-body legacy requires its MAC; unverifiable nonempty history is Unconfirmed/inert only when no priority record exists anywhere;
+Zero-body legacy requires its MAC (a missing MAC is unverifiable evidence, never an exception); a MAC-valid zero-body record linked to refused priority evidence replays Unconfirmed, not Dropped;
+unverifiable nonempty history is Unconfirmed/inert only when no priority record exists anywhere;
 otherwise all bindings are quarantined regardless of record position. Unrelated handoffs stay Unconfirmed and need body-MAC evidence.
 Known pre-activation limitation: genuine nonempty history in a journal with any priority record permanently quarantines on restart; whole-design review must resolve this with a body-free authenticated-history design ([#3720](https://github.com/danswett/agent-bridge/issues/3720)).
 no missing-body guess, new replay-body resolver, UI, live adapter or migration is introduced.
@@ -173,7 +174,11 @@ Max three grants per principal/receiver rolling hour spans all its capabilities;
 expiry, revocation and observed clock high-water survive replay. No capability/quota decides normal,
 waiting idle; owner urgent retains its existing path without a capability or quota.
 The decision's required admission predicate runs before consumption: known refusal journals
-`lane-full`, spends nothing and permits a bound same-UUID retry. Consumed UUIDs never renew.
+`lane-full`, spends nothing and permits a same-UUID retry only when it is unchanged: the `requested` fact stores a
+keyed MAC-covered `priorityBinding` over target, sender, exact receiver and canonical body, so a changed body or receiver is refused.
+The `requested` header stores the requested priority (`normal` for an invalid value) and `granted`/`consumed` store the effective `urgent`.
+Every successful current-authority check appends a `checked` fact that advances the durable time high-water, so a rolled-back
+clock is refused after replay too; slice 3b must bound this record growth. Consumed UUIDs never renew.
 Clock refusal before a write does not mark the journal uncertain; actual append failure does.
 Slice 3b alone integrates Offer/Query, scheduler-locked preflight and final fenced capability rechecks.
 No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.
