@@ -286,6 +286,16 @@ public class HistoryTests
     [InlineData("ignored", true)]
     [InlineData("duplicate", false)]
     [InlineData("duplicate", true)]
+    [InlineData("late-native", false)]
+    [InlineData("late-native", true)]
+    [InlineData("late-context", false)]
+    [InlineData("late-context", true)]
+    [InlineData("late-reply", false)]
+    [InlineData("late-reply", true)]
+    [InlineData("late-control", false)]
+    [InlineData("late-control", true)]
+    [InlineData("known-optional", false)]
+    [InlineData("known-optional", true)]
     public async Task Codex_non_reply_records_invalidate_conflicting_scope_without_registering_items(string shape, bool history)
     {
         using var f = new Fixture();
@@ -294,21 +304,34 @@ public class HistoryTests
         f.Processes.Run(AgentKind.Codex, 950);
         var boundary = shape switch
         {
-            "flat" => Codex.Event(new { type = "agent_message", message = "Flat", turn_id = "other-turn" }, 3),
+            "flat" or "late-native" => Codex.Event(new { type = "agent_message", message = "Flat", turn_id = "other-turn" }, 3),
+            "late-reply" or "known-optional" => Codex.Event(new { type = "token_count" }, 3),
             "empty" => CodexReply("same", "", 3, true, "other-turn"),
             _ => new JsonObject { ["type"] = shape == "ignored" ? "bookkeeping" : "turn_context",
                 ["payload"] = new JsonObject { ["turn_id"] = "other-turn" } }.ToJsonString(),
         };
         if (shape == "duplicate") { boundary = boundary.Replace("\"turn_id\":\"other-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
-        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
-            CodexReply("same", "Original", 2), boundary, CodexReply("same", "Later", 4));
+        var late = shape.StartsWith("late-", StringComparison.Ordinal);
+        var control = shape is "late-control" or "known-optional";
+        var first = CodexReply("same", shape == "late-control" ? "" : "Original", 2);
+        var later = CodexReply("same", "Later", 4, turn: shape is "late-reply" or "late-control" ? "other-turn" : "native-turn");
+        if (late)
+        {
+            first = first.Replace("\"turn_id\":\"native-turn\",", "");
+            if (shape is "late-native" or "late-context") { later = later.Replace("\"turn_id\":\"native-turn\",", ""); }
+        }
+        if (shape == "known-optional") { later = later.Replace("\"turn_id\":\"native-turn\",", ""); }
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = late ? null : "native-turn" }, 1),
+            first, boundary, later);
         await using var source = f.Source();
         await source.RefreshAsync();
         if (history)
         {
             var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
-            Assert.Equal(shape == "flat" ? ["Original", "Flat", "Later"] : ["Original", "Later"], parts.Select(p => p.Text));
+            Assert.Equal(control ? ["Later"] : shape is "flat" or "late-native" ? ["Original", "Flat", "Later"] : ["Original", "Later"], parts.Select(p => p.Text));
+            if (control) { Assert.Equal(parts.Single().Id, source.Get(Id)!.Activity.ResponseId); }
         }
+        else if (control) { Assert.NotNull(source.Get(Id)!.Activity.ResponseId); }
         else { Assert.Null(source.Get(Id)!.Activity.ResponseId); }
         Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next", turn_id = "native-turn" }, 5),
             CodexReply("same", "Fresh", 6), CodexReply("same", "Fresh revised", 7, true));
