@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -10,10 +11,11 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     private protected override bool UsesRelay => false;
     readonly FakeTimeProvider auditClock = new(new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero));
     readonly Guid run = Guid.NewGuid();
+    readonly P256KeyPair device = P256KeyPair.Generate();
     string Profile => Path.Combine(f.Root, "audit-lifecycle", "default");
     string Audit => Path.Combine(Profile, "audit");
     string Head(bool launch) => Path.Combine(Audit, launch ? "launches.head" : "agents.head");
-    AgentAuditLog Writer(AuditLockTiming? lockTiming = null) => new(Profile, auditClock, logged.Enqueue) { LockTiming = lockTiming };
+    AgentAuditLog Writer(AuditLockTiming? lockTiming = null) => new(Profile, auditClock, logged.Enqueue) { LockTiming = lockTiming, DeviceKey = device };
     AgentAuditEntry Ordinary() => new("local", "fixture", "person:local", [], "lookup", "fixture", "ok");
     AgentAuditEntry Intent(bool launch)
     {
@@ -31,6 +33,17 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
         new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Prompt = "fixture" },
         "local", Writer(), new GateLaunchIngress("local", "person-client", "person:local", null));
     Dictionary<string, byte[]> Evidence() => Directory.GetFiles(Audit, "*.jsonl").ToDictionary(p => p, File.ReadAllBytes);
+
+    [Fact]
+    public async Task The_native_launch_preflight_works_before_and_after_a_person_signed_audit_rotation()
+    {
+        Assert.True(Writer().Append(Ordinary()));
+        Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+        Assert.Null(AuditRotationTests.Rotate(Writer(), device, auditClock.GetUtcNow()));
+        Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
+        Pair();
+        Assert.True(Writer().Verify().Intact && Writer().Verify(launch: true).Intact);
+    }
 
     [Fact]
     public async Task Clean_retention_advances_the_root_without_disabling_subsequent_production_launches()

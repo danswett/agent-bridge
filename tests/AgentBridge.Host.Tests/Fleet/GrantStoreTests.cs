@@ -15,29 +15,36 @@ public sealed class GrantStoreTests : IDisposable
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
     string PathName => Path.Combine(Folder, GrantStore.FileName);
-    AgentAuditLog Audit => new(Folder, clock);
-    GrantStore Open(P256KeyPair? signingKey = null, Action<string, byte[]>? write = null) =>
-        new(Folder, signingKey ?? key, Audit, Scope, clock, write);
+    AgentAuditLog Audit => new(Folder, clock) { DeviceKey = key };
+    bool rotated;
+    GrantStore Open(P256KeyPair? signingKey = null, Action<string, byte[]>? write = null)
+    {
+        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(Audit, key, clock.GetUtcNow())); }
+        return new(Folder, signingKey ?? key, Audit, Scope, clock, write);
+    }
     GrantDocument Grant() => new(1, Guid.NewGuid(), "123",
         new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
         [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
         ["launch", "stop"], Scope,
         new(3, 10, 6), clock.GetUtcNow(), 1, Roles: [], StopTargets: []);
     GrantDocument Issued() { var grant = Grant(); Assert.True(Open().Issue(grant).Usable); return grant; }
+    // Rotation anchors both streams, so re-adoption needs both heads gone.
+    void DropHeads() { foreach (var name in new[] { "agents.head", "launches.head" }) { File.Delete(Path.Combine(Folder, "audit", name)); } }
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Legacy_adoption_refuses_grants_without_migration(bool bothStreams)
+    public void Legacy_adoption_refuses_grants_until_a_person_rotates_the_audit(bool bothStreams)
     {
+        rotated = true;
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         if (bothStreams) { Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "session.launch", "fixture", "started"))); }
         var grant = Grant();
-        Open().Issue(grant);
-        Assert.True(AgentAuditLog.Adopted(Path.Combine(Folder, "audit")));
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().Issue(Grant()).Problem);
+        Assert.True(Audit.Bootstrap() && AgentAuditLog.Adopted(Path.Combine(Folder, "audit")));
+        Assert.Equal(GrantStoreProblem.RotationRequired, Open().Issue(grant).Problem);
+        Assert.Equal(GrantStoreProblem.RotationRequired, Open().TryGetUsable(grant.Id, 1).Problem);
+        Assert.False(File.Exists(PathName));
     }
 
     [Fact]
@@ -52,7 +59,7 @@ public sealed class GrantStoreTests : IDisposable
         row["gate"]!["sequence"] = 0;
         lines[^1] = row.ToJsonString();
         File.WriteAllLines(file, lines);
-        File.Delete(Path.Combine(auditFolder, "agents.head"));
+        DropHeads();
         Assert.True(Audit.Bootstrap());
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
@@ -65,7 +72,7 @@ public sealed class GrantStoreTests : IDisposable
         var grant = Grant();
         Assert.True(Open().Issue(grant).Usable);
         var head = Path.Combine(Folder, "audit", "agents.head");
-        if (!legacy) { File.Delete(head); Assert.True(Audit.Bootstrap()); }
+        if (!legacy) { DropHeads(); Assert.True(Audit.Bootstrap()); }
         clock.Advance(TimeSpan.FromDays(35));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         clock.Advance(TimeSpan.FromDays(1));
@@ -82,7 +89,7 @@ public sealed class GrantStoreTests : IDisposable
         var grant = Grant();
         Assert.True(Open().Issue(grant).Usable);
         var auditFolder = Path.Combine(Folder, "audit");
-        File.Delete(Path.Combine(auditFolder, "agents.head"));
+        DropHeads();
         Assert.True(Audit.Bootstrap());
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
         File.Delete(PathName);
@@ -167,7 +174,7 @@ public sealed class GrantStoreTests : IDisposable
         var launch = new AgentAuditEntry("local", op.ToString(), "person:local", [], "session.launch", op.ToString(), "reserved", Gate: gate);
         Assert.True(adopted || Audit.Append(launch) && Audit.Append(launch with { Outcome = "started", Gate = gate with { Phase = "terminal" } }));
         foreach (var (file, bytes) in old) { File.WriteAllBytes(file, bytes); }
-        if (adopted) { File.Delete(head); Assert.True(Audit.Bootstrap() && AgentAuditLog.Adopted(auditFolder)); }
+        if (adopted) { DropHeads(); Assert.True(Audit.Bootstrap() && AgentAuditLog.Adopted(auditFolder)); }
         Assert.True(Audit.Verify().Intact && Audit.Verify(launch: true).Intact);
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
@@ -186,8 +193,8 @@ public sealed class GrantStoreTests : IDisposable
         var head = Path.Combine(auditFolder, "agents.head");
         var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
         var old = new[] { PathName, head, file }.ToDictionary(f => f, File.ReadAllBytes);
-        // A legacy-adopted store refuses even the revoke; the rollback below must refuse either way.
-        Assert.Equal(proof != "short-legacy", Open().Revoke(grant.Id, 1).Usable);
+        // Legacy history was rotated away before the first grant; the rollback below must refuse either way.
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
         foreach (var (savedFile, bytes) in old) { File.WriteAllBytes(savedFile, bytes); }
         if (proof == "gate-case")
         {
@@ -203,7 +210,7 @@ public sealed class GrantStoreTests : IDisposable
             }
             File.WriteAllText(file, string.Join('\n', lines) + "\n");
         }
-        File.Delete(head);
+        DropHeads();
         Assert.True(Audit.Bootstrap());
         var json = JsonNode.Parse(File.ReadAllText(head))!;
         json["adoptedGatedRows"] = 0;
@@ -233,10 +240,10 @@ public sealed class GrantStoreTests : IDisposable
         var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
         var honest = JsonNode.Parse(File.ReadAllText(head))!;
         var old = new[] { PathName, file }.ToDictionary(f => f, File.ReadAllBytes);
-        // Fail-closed adoption refuses this revoke; were legacy grants trusted again, the rollback below would resurrect it.
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().Revoke(grant.Id, 1).Problem);
+        // The rotated profile revokes; were a re-adopted cutoff trusted, the rollback below would resurrect the grant.
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
         foreach (var (saved, bytes) in old) { File.WriteAllBytes(saved, bytes); }
-        File.Delete(head);
+        DropHeads();
         Assert.True(Audit.Bootstrap());
         // Copy the honest cutoff (header and agent.send, zero gates) onto the re-adopted head; only those fields change.
         var json = JsonNode.Parse(File.ReadAllText(head))!;
