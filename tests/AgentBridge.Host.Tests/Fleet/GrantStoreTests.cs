@@ -19,7 +19,7 @@ public sealed class GrantStoreTests : IDisposable
     bool rotated;
     GrantStore Open(P256KeyPair? signingKey = null, Action<string, byte[]>? write = null)
     {
-        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(Audit, key, clock.GetUtcNow())); }
+        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(Audit, key)); }
         return new(Folder, signingKey ?? key, Audit, Scope, clock, write);
     }
     GrantDocument Grant() => new(1, Guid.NewGuid(), "123",
@@ -35,16 +35,19 @@ public sealed class GrantStoreTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Legacy_adoption_refuses_grants_until_a_person_rotates_the_audit(bool bothStreams)
+    public void Only_the_first_issue_rotates_a_legacy_profile_and_other_store_paths_refuse(bool bothStreams)
     {
         rotated = true;
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         if (bothStreams) { Assert.True(Audit.Append(new("local", "fixture", "person:local", [], "session.launch", "fixture", "started"))); }
         var grant = Grant();
         Assert.True(Audit.Bootstrap() && AgentAuditLog.Adopted(Path.Combine(Folder, "audit")));
-        Assert.Equal(GrantStoreProblem.RotationRequired, Open().Issue(grant).Problem);
         Assert.Equal(GrantStoreProblem.RotationRequired, Open().TryGetUsable(grant.Id, 1).Problem);
-        Assert.False(File.Exists(PathName));
+        Assert.Equal(GrantStoreProblem.RotationRequired, Open().Revoke(grant.Id, 1).Problem);
+        Assert.Equal(GrantStoreProblem.RotationRequired, Open().List().Problem);
+        Assert.False(File.Exists(PathName) || Directory.Exists(Path.Combine(Folder, "audit", "retired")));
+        Assert.True(Open().Issue(grant).Rotated);
+        Assert.True(Open().TryGetUsable(grant.Id, 1).Usable);
     }
 
     [Fact]

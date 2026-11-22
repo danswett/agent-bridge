@@ -76,48 +76,101 @@ public sealed partial class SessionView
     {
         foreach (var pointer in scrollbarPointers) { follow.Released(pointer); }
         scrollbarPointers.Clear();
+        (stationaryRemeasure, stationaryChange) = (0, 0);
+        stationaryFromEnd = false;
     }
 
     (double Offset, double Extent)? seen;
+    double stationaryRemeasure;
+    double stationaryChange;
+    bool stationaryFromEnd;
+
+    // Layout and stationary view events must not consume the evidence for the next anchored move.
+    void RememberStillExtent(ScrollViewer scroll)
+    {
+        if (seen is { } was && Math.Abs(scroll.VerticalOffset - was.Offset) < 0.5)
+        {
+            var change = was.Extent - scroll.ScrollableHeight;
+            if (Math.Abs(change) >= 0.5)
+            {
+                stationaryFromEnd |= Math.Abs(was.Offset - was.Extent) <= 1.5;
+                stationaryChange = stationaryFromEnd ? change : 0;
+            }
+            stationaryRemeasure = Math.Max(stationaryRemeasure, Math.Abs(change));
+            seen = (was.Offset, scroll.ScrollableHeight);
+        }
+    }
 
     // UIA or a screen reader can move the view back from the end with no wheel or press: that is the
     // person's move too, or the final view change pulls it back. Growth or an anchored shrink above
-    // leaves the distance from the end as it was, and our own requests never release.
+    // can change both the offset and gap while the extent is remeasured or our end correction is pending.
     void PinViewChanged(ScrollViewer scroll)
     {
+        RememberStillExtent(scroll);
         var (offset, extent) = (scroll.VerticalOffset, scroll.ScrollableHeight);
-        if (pinEnd && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5
-            && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
+        if ((pinEnd || anchoring is { } pending && Math.Abs(pending - extent) <= ConversationFollow.EndFollowSlack) && seen is { } was && offset < was.Offset - 0.5 && extent - offset > was.Extent - was.Offset + 0.5)
+        {
+            var (change, drop, gap) = (was.Extent - extent, was.Offset - offset, extent - offset);
+            var remeasure = Math.Max(Math.Abs(change), stationaryRemeasure);
+            var shrink = Math.Abs(change) >= 0.5 ? change : stationaryChange;
+            // A shrink above moves the view by at most the extent delta, and a real remeasure (seen before or
+            // with this move) can shift the virtualised anchor to one viewport short of the end. A drop under a
+            // text line is layout rounding. Anything else, such as a reader stepping or paging back, is the person's move.
+            var layoutOnly = gap <= 1.5 || drop <= 8 || shrink >= 0.5 && drop <= shrink + 1.5
+                || Math.Max(remeasure, was.Offset - was.Extent) > 8 && Math.Abs(gap - scroll.ViewportHeight) <= 8;
+            if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
+        }
+        if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { pinEnd = true; }
+        if (seen is { } moved && Math.Abs(offset - moved.Offset) >= 0.5)
+        {
+            (stationaryRemeasure, stationaryChange) = (0, 0); stationaryFromEnd = false;
+        }
         seen = (offset, extent);
     }
     // A final event can belong to a correction queued before this navigation request.
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin()
+    internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
-        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++;
+        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
+        RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen}");
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
     }
 
     bool HistoryAtEnd() => navigationPending is null && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
-        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
+        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.EndFollowSlack);
 
     // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
     // measured end on layout and final view changes, including while an older target is pending.
     void FollowPinnedEnd()
     {
-        // Growth under a still view, measured so a later anchored shrink above is not read as a move.
-        if (ConversationScroll is { } still && seen is { } was && Math.Abs(still.VerticalOffset - was.Offset) < 0.5) { seen = (was.Offset, still.ScrollableHeight); }
+        if (ConversationScroll is { } still) { RememberStillExtent(still); }
         if (follow.Held || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
+    }
+
+    // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
+    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released=[{string.Join(" | ", pinReleased)}] requests=[{string.Join(" | ", pinRequests)}]";
+
+    static void RecordPin(Queue<string> records, string record)
+    {
+        if (records.Count == 3) { records.Dequeue(); }
+        records.Enqueue(record);
+    }
+
+    internal bool ChangeConversationView(ScrollViewer scroll, double to, bool disableAnimation = true,
+        [System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
+    {
+        RecordPin(pinRequests, $"{by}:{line} at ({scroll.VerticalOffset}, {scroll.ScrollableHeight}) to={to}");
+        return scroll.ChangeView(null, to, null, disableAnimation: disableAnimation);
     }
 
     void Anchoring(ScrollViewer scroll, double to)
     {
         anchoring = to;
         anchorAt = to;
-        if (!scroll.ChangeView(null, to, null, disableAnimation: true)) { anchoring = null; }
+        if (!ChangeConversationView(scroll, to)) { anchoring = null; }
     }
 }
 

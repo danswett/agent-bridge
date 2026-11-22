@@ -20,26 +20,29 @@ before signing through G4's writer. G7b supplies that production adapter and Win
 wiring separately; this core has no issuing transport, signing key or enabled UI.
 G8 read/revoke contracts require verified snapshots and a confirmation bound to
 account/profile/receiver/id/generation/action; G4's unsigned CLI tombstone is not proof.
-Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
-- Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
-  machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.
-  The MAC proves a device, not a person (docs/design/agent-principals.md §2), so only a `user` principal whose
-  device is pinned here as a person's, never this machine's own key, may rotate; an agent, script or relay kind cannot.
-- Rotate: the signed values must equal the active files now (else "press again"); grant history not proved absent
-  (a store, a `grant.*` row as the audit reader parses it, an incomplete read, any retained boundary, or gated rows
-  without heads) refuses, so budgets, revocations, tombstones and the boundary are never reset. Each stream moves to
-  `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first record is a genesis: `previousSha256` = the
-  signed tail plus `rotation` {retired name, length, SHA-256, signed command}. New heads are not adopted.
-- Verify: a genesis is only ever a stream's first record and its MAC verifies, as of its issue time, with this
-  device key; a retired file still present must match its length and SHA-256. A missing one is accepted:
-  grants never read retired history. Grants need both streams bound to one genesis, plus the existing adopted,
-  retained, chain and sequence checks; otherwise a profile with no grant history is `RotationRequired`
-  ("rotation-required") and any other is AuditIncomplete.
-- Crash safety: `audit/rotation.pending` journals the command first; every later audit write, archive or bootstrap
-  finishes that rotation, reusing a matching retired file, or refuses. A same-request retry is a no-op.
+Grants require ONE audit rotation per VM, done automatically by its first grant issue (owner Nov 21 21:41 PT,
+superseding the person-signed command first proposed for #3566); no cutoff is inferred and heads are never trusted.
+- Trigger: only `GrantStore.Issue`, inside the G4 person-confirmed issuance (same caller guard and confirmation),
+  and only when the store would accept that grant; launch, stop, revoke, list and reads never rotate. Agent or
+  script ancestry and a wrong confirmation are refused before the store opens, so nothing rotates.
+- Rotate: grant history not proved absent (a store, a `grant.*` row as the audit reader parses it, an incomplete
+  read, any retained boundary, or gated rows without heads) refuses, so budgets, revocations, tombstones and the
+  boundary are never reset. A stream that does not fully verify with the host key (a broken chain with or without
+  heads, a genesis MACed by another key) also refuses. Each stream moves to `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first
+  record is a genesis: `previousSha256` = the retired tail plus `rotation` {retired name, length, SHA-256, record}.
+  The record holds a UUID request, reason `automatic-first-grant`, the grant id, time, each stream's length,
+  SHA-256 and `TailHash` tail, and an HMAC under this host's device key. The issue result prints one notice line.
+- Verify: a genesis is only ever a stream's first, newline-terminated record and its MAC and reason verify; a
+  retired file still present must match its length and SHA-256. A missing one is accepted: grants never read
+  retired history. Grants need both streams bound to one genesis, plus the existing adopted, retained, chain and
+  sequence checks; otherwise a profile with no grant history is `RotationRequired` ("rotation-required") and any
+  other is AuditIncomplete. A second rotation is refused.
+- Crash safety: `audit/rotation.pending` journals the MACed record first; the next issue, or any audit write,
+  archive or bootstrap with the device key, finishes that rotation, reusing a matching retired file, or refuses.
+  A torn genesis, mismatched retired file or unverifiable journal stays `RotationRequired`.
 - Native launch/stop gates and the launch preflight work before and after; gate sequences restart at 1.
 Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
-external anchor (#3569); the designated-verifier MAC means this device key could compute a genesis; retention
+external anchor (#3569); anything holding this host's device key could compute a genesis (#3569); retention
 pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
 
 ## Authority and existing boundaries
@@ -169,9 +172,13 @@ refusals consume no launch quota; distinct attempts retain existing attempt limi
 
 Clock windows are rolling durations, not Pacific calendar midnight resets.
 Persist the last observed time; backwards clock movement refuses new grant use
-until trustworthy time catches up. Expiry, caps and kill are checked again at the
-actual execution slot, not only when queued. A large forward jump expires rather
-than extends authority. UI dates/times follow the viewer's local-time convention.
+until trustworthy time catches up. Counter refusals for observed expiry durably
+advance that watermark before returning; restart and clock rollback cannot
+restore authority. Known reservation refusals retain their binding for watermark
+persistence. Unchanged same-time counter operations add no intents. Expiry, caps
+and kill are checked again at the actual execution slot, not only when queued.
+A large forward jump expires rather than extends authority. UI dates/times follow
+the viewer's local-time convention.
 
 There is no coordinator tied to a particular VM. A receiver leaving stops actions
 there; its quota allocations stay spent/reserved and are not silently moved.
