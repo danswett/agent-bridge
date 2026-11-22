@@ -251,6 +251,16 @@ Order the operation explicitly:
    with new command request/nonce and higher assignment version (same launch request ID).
    Never auto-renew consent. Only then CAS/commit and publish the link/new occupant.
 
+For an independently started/manual-resumed activation, use the explicitly signed
+`continuity.kind: existingActivation` variant with null `launchRequestId` and
+`launchIntentDigest`; the launched variant is `kind: launched` and requires both.
+The enrolled host instead supplies fresh nonce-bound proof of that exact already-running
+activation/process and scoped successor tuple. The person chooses Approve continuation;
+verify live possession, then follow steps 3-5 above (no launch step, no invented receipt).
+Unsupported hosts or ambiguous process binding refuse; neither a provider ID nor a retained
+alias substitutes for proof. Both variants require the same per-successor person approval,
+predecessor-stop confirmation and CAS; neither adopts launch grants or pending-launch rights.
+
 Fleet's current `launch-lead -PredNode` puts a node in prompt text only; role-settings names
 are configuration/display labels. A future adapter must pass the structured request/link and
 await its committed receipt. It cannot sign person approval or borrow launch/stop grants.

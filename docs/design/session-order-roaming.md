@@ -236,15 +236,16 @@ replicated role ledger; preferences live locally now and in sealed account recor
 Ordinary same-provider-ID resume keeps today's legacy behavior until adopted. A fresh
 activation, cross-host transfer/fork, rename or copied conversation alone proves no succession.
 Unlinked sessions remain independent, unpinned/ungrouped new rows under the existing default.
+Cross-host approved succession preserves manual rank, not a false machine label/filter:
+Machine sort and machine tabs use the successor's actual verified host.
+
+## 13. Adoption, migration and retention (CHANGE C3)
+
 After adoption, even a same-provider-ID manual resume needs explicit Approve continuation
 through the existing person role-assignment UI to occupy that slot. Disclose this at adoption:
 "Manual resumes stay separate until approved as a continuation." A retained legacy alias
 never auto-matches a new activation. The slot keeps its choices while approval is pending;
 this intentional post-adoption change is C3, not a regression hidden behind migration.
-Cross-host approved succession preserves manual rank, not a false machine label/filter:
-Machine sort and machine tabs use the successor's actual verified host.
-
-## 13. Adoption, migration and retention (CHANGE C3)
 
 The person explicitly adopts an existing session into a continuity slot. The approved link
 names its full verified execution tuple and legacy locator; never infer an alias from titles.
@@ -332,9 +333,9 @@ Role-ID numbers below reference that canonical doc's existing ordered slices.
 |---|---|---|---|---|
 | PC1 identity/assignment schema vectors | 220 | Owner approves CHANGE C1-C6; role-ID 1 | yes | Typed IDs, continuity signed-body fields and opaque/salted request commitment; old schema cannot overwrite |
 | PC2a negotiated launch preparation/proof | 240 | PC1; role-ID 3-4,6; existing host launch | yes | Capability/refusal before dispatch; independently authorized prepared activation; exact request/proof; unsupported receiver launches nothing |
-| PC2b person link approval/commit/publication | 240 | PC2a; role-ID 2,5-9,14 | yes | Extend assignment/CAS and approval rendering; competing successors, replay, expired approval, unknown stop, no automatic reapproval |
+| PC2b person link approval/commit/publication | 240 | PC2a; role-ID 2,5-9,14 | yes | Launched/existing-activation variants; assignment/CAS/approval; competing successors, replay, expiry, unknown stop, no automatic reapproval |
 | PC3 pure preference migration/merge | 240 | PC1; existing JS/C# merge ports | no | Pin/rank/all orders/arbitrary groups; late edits/delete; duplicate/out-of-order link; crash; byte limits; resume alias cannot auto-adopt |
-| PC4 PWA local projection/management | 240 | PC2b,PC3; role-ID 9,12; PWA groups | yes | Pinned/unpinned, hidden membership, conflict/retired/reload, detach/rejoin/move/forget, no changed answer target |
+| PC4 PWA local projection/management | 240 | PC2b,PC3; role-ID 9,12; PWA groups | yes | Pinned/unpinned/manual resume, hidden membership, conflict/retired/reload, detach/rejoin/move/forget, no changed answer target |
 | PC5a Windows verified continuity reader | 220 | PC1; role-ID 4,6,9 | yes | Full proof/epoch/account validation; incomplete, stale, split-brain and legacy publication refuse |
 | PC5b Windows projection/management | 240 | PC2b,PC3,PC5a; existing Windows group model/UI | yes | Shared vectors and interaction cases; failed save fallback; actual-host filter; safe manual-resume approval |
 | PC6 sealed-record sync integration | 240 | PC4,PC5b; signed roster and existing roaming S2-S4 | yes | Missed recycle/concurrent edits/detach converge; offline/mixed clients; forget cutover acknowledgement; no host-readable preferences |
