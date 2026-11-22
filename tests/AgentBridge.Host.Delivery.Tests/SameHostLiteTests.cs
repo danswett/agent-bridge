@@ -110,11 +110,13 @@ public sealed class SameHostLiteTests
     }
 
     [Fact]
-    public async Task An_unknown_host_is_still_offline_and_never_delivers_locally()
+    public async Task An_unknown_host_is_refused_by_id_and_never_delivers_locally()
     {
         using var r = new Rig();
         var result = await r.Send(new string('3', 32));
-        Assert.Equal((LiteKind.Undeliverable, AgentLiteSender.OfflineText), (result.Kind, result.Code));
+        Assert.Equal(LiteKind.Refused, result.Kind);
+        Assert.Contains("noSuchMachine", result.Code);
+        Assert.Contains(new string('3', 32), result.Code);
         Assert.Empty(r.TargetSession.Replies);
     }
 

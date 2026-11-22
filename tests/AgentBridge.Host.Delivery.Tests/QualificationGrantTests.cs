@@ -311,6 +311,29 @@ public sealed class QualificationGrantTests
         Assert.Single(run.Journal.Entries);
     }
 
+    [Fact]
+    public void Repeated_revocation_is_idempotent_only_for_the_same_disposable_binding()
+    {
+        var run = new Run(); run.Issue();
+        Assert.Null(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Null(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Equal(2, run.Journal.Entries.Count);
+        run.Trust.Binding = run.Trust.Binding with { Target = run.Trust.Binding.Target with { ProcessId = 43 } };
+        Assert.NotNull(run.Grants().Revoke(run.Id).Refusal);
+        Assert.Equal(2, run.Journal.Entries.Count);
+    }
+
+    [Fact]
+    public void An_already_revoked_grant_cannot_bypass_the_restarted_journal_clock_fence()
+    {
+        var run = new Run(); run.Issue();
+        Assert.Null(run.Grants().Revoke(run.Id).Refusal);
+        run.Journal.ObserveTime(run.Clock.GetUtcNow().AddMinutes(1));
+        var restored = run.Journal.Restart();
+        Assert.NotNull(new QualificationGrants(run.Trust, restored, run.Clock).Revoke(run.Id).Refusal);
+        Assert.Equal(2, restored.Entries.Count);
+    }
+
     public static IEnumerable<object[]> StateClockRestartCases()
     {
         foreach (var state in Enum.GetValues<QualificationGrantState>())

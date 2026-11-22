@@ -7,6 +7,9 @@ import { clockTime } from './auth-state.js';
 import { ago, duration } from './ui/time.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+export function compactionText(n) {
+  return n > 0 ? (n === 1 ? 'compacted once' : `compacted ${n} times`) : null;
+}
 // What is code, drawn in the mono face (§4.1, #215).
 const MONO = new Set(['branch', 'folder', 'pid', 'id']);
 
@@ -77,7 +80,7 @@ export function detailRows(s, { status = null, machine = null, away = false, now
   add('Updated', ago(s.updatedAt, now), 'updated');
   add('Background', [b?.agents ? plural(b.agents, 'background agent', 'background agents') : null, b?.shells ? plural(b.shells, 'background command', 'background commands') : null].filter(Boolean).join(' \u00b7 '), 'background');
   add('Turns', turns === null || turns === undefined ? null : plural(turns, 'turn', 'turns'), 'turns');
-  add('Compactions', s.activity.compactions ? plural(s.activity.compactions, 'compaction', 'compactions') : null, 'compactions');
+  add('Compactions', compactionText(s.activity.compactions), 'compactions');
   add('Process', s.processId === null || s.processId === undefined ? null : `pid ${s.processId}`, 'pid');
   add('ID', s.id, 'id');
   return rows;

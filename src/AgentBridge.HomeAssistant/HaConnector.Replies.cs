@@ -10,7 +10,10 @@ namespace AgentBridge.HomeAssistant;
 // A reply from a card, for the host's own reply delivery (session.reply): the words, and the
 // files that go with them, already fetched from Home Assistant's image store or decoded from the
 // card's publish. Request is one id per press or publish, so a resend is answered from the first.
-public sealed record HaReply(string SessionId, string Request, string? Text, IReadOnlyList<HaReplyFile> Files);
+public sealed record HaReply(string SessionId, string Request, string? Text, IReadOnlyList<HaReplyFile> Files)
+{
+    public DeliverySender? Sender { get; init; }
+}
 
 public sealed record HaReplyFile(string Name, string? Type, byte[] Bytes);
 
@@ -584,7 +587,8 @@ public sealed partial class HaConnector
                 }
                 staged.Add(new HaReplyFile(string.IsNullOrWhiteSpace(name) ? "file" : name, type, bytes));
             }
-            return (await reply!(new HaReply(sessionId, request, string.IsNullOrWhiteSpace(text) ? null : text, staged), token), false);
+            return (await reply!(new HaReply(sessionId, request, string.IsNullOrWhiteSpace(text) ? null : text, staged)
+                { Sender = EnvelopeSender(state.UserId) }, token), false);
         }, rid, sender);
         log($"Home Assistant connector took a reply-card reply for {sessionId[..Math.Min(8, sessionId.Length)]}" +
             (images.Count + files.Count > 0 ? $" with {images.Count + files.Count} attachment(s)" : ""));
@@ -656,8 +660,11 @@ public sealed partial class HaConnector
         p.Reply.PendingPress = null;
         var request = RequestId(sessionId, "reply", "box:" + press.Value);
         Deliver(p, sessionId, Preview(text, 0), box: true, text, [], async token =>
-            (await reply!(new HaReply(sessionId, request, text, []), token), false));
+            (await reply!(new HaReply(sessionId, request, text, []) { Sender = EnvelopeSender(press.Snapshot?.UserId) }, token), false));
     }
+
+    DeliverySender EnvelopeSender(string? userId) => new(string.IsNullOrWhiteSpace(userId) ? "unknown" : userId,
+        Owner: !string.IsNullOrWhiteSpace(userId) && DriverOf(userId) != "agent");
 
     // Runs a delivery beside the passes; what came of it waits for the next one.
     void Deliver(Published p, string sessionId, string shown, bool box, string? text, IReadOnlyList<string> images,

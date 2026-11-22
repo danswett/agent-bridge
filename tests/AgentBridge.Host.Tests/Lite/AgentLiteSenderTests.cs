@@ -52,7 +52,7 @@ public class AgentLiteSenderTests
         public Deliver Deliver = new(new LiteDelivery(true, null));
         public (IEnvelopeSigner, byte[]) Signer { get { var q = Key.ExportParameters(false).Q; return (new EcdsaEnvelopeSigner(Key), [0x04, .. q.X!, .. q.Y!]); } }
         public AgentLiteSender Sender() => new(Mode, Link, _ => Live, () => { Signed++; return Signer; }, OwnStatic, null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(20));
-        public Task<LiteOutcome> Send(string text = "hello", string machine = "node-b") => Sender().SendAsync(Caller, new LiteSendInput(machine, "agent-b2", text), default);
+        public Task<LiteOutcome> Send(string text = "hello", string machine = Other) => Sender().SendAsync(Caller, new LiteSendInput(machine, "agent-b2", text), default);
         public void Dispose() => Key.Dispose();
     }
 
@@ -70,7 +70,7 @@ public class AgentLiteSenderTests
         Receiving(r);
         const string canary = "abat1_CANARY_NOT_A_PRINCIPAL";
         var script = AgentCredential.Script(canary, Self, "pump-wake", DateTimeOffset.UtcNow);
-        var result = await r.Sender().SendAsync(script, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        var result = await r.Sender().SendAsync(script, new LiteSendInput(Other, "agent-b2", "hello"), default);
         Assert.Equal(LiteKind.Delivered, result.Kind);
         var wire = Encoding.UTF8.GetString(r.Deliver.Envelope!.Body.Encode());
         Assert.Contains("\"kind\":\"script\"", wire);
@@ -88,7 +88,7 @@ public class AgentLiteSenderTests
     {
         using var r = new Rig();
         var caller = Caller with { Kind = kind, Principal = principal };
-        var result = await r.Sender().SendAsync(caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        var result = await r.Sender().SendAsync(caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
         Assert.Equal((LiteKind.Refused, AgentLiteSender.NoCredential), (result.Kind, result.Code));
         Assert.Equal(0, r.Signed);
         Assert.Equal(0, r.Link.Opened);
@@ -101,6 +101,46 @@ public class AgentLiteSenderTests
         var receiver = new LiteReceiver(new Mode(), r.Deliver);
         var channel = new LiteChannel(Self, "host", OwnStatic, target ?? Other, Account, true);
         r.Link.Reply = (req, ct) => receiver.ReceiveAsync(channel, System.Text.Json.JsonSerializer.SerializeToElement(req), ct);
+    }
+
+    [Fact]
+    public async Task A_renamed_host_is_reached_by_device_id_not_its_successors_reused_name()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        r.Link.Hosts = [new(Other, "Renamed", "host", DateTimeOffset.UnixEpoch),
+            new(new string('4', 32), "node-b", "host", DateTimeOffset.UnixEpoch)];
+        Assert.Equal(LiteKind.Delivered, (await r.Send(machine: Other)).Kind);
+        Assert.Equal(Other, r.Deliver.Envelope!.Body.Target.Machine);
+        var refused = await r.Send(machine: "node-b");
+        Assert.Equal(LiteKind.Refused, refused.Kind);
+        Assert.Contains("node-b", refused.Code);
+        Assert.Equal((1, 1), (r.Link.Opened, r.Signed));
+    }
+
+    [Theory, InlineData("node-b"), InlineData("node"), InlineData("NODE-B"), InlineData("33333333")]
+    public async Task Names_and_fragments_are_refused_even_when_a_present_host_has_that_name(string machine)
+    {
+        using var r = new Rig();
+        Receiving(r);
+        r.Link.Hosts = [new(Other, machine, "host", DateTimeOffset.UnixEpoch)];
+        var refused = await r.Send(machine: machine);
+        Assert.Equal(LiteKind.Refused, refused.Kind);
+        Assert.Contains("refused:", refused.Code);
+        Assert.Contains(machine, refused.Code);
+        Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
+    }
+
+    [Fact]
+    public async Task A_stale_device_id_is_a_loud_refusal_and_never_targets_a_name_reusing_successor()
+    {
+        using var r = new Rig();
+        r.Link.Hosts = [new(new string('4', 32), Other, "host", DateTimeOffset.UnixEpoch)];
+        var refused = await r.Send(machine: Other);
+        Assert.Equal(LiteKind.Refused, refused.Kind);
+        Assert.Contains("refused:", refused.Code);
+        Assert.Contains(Other, refused.Code);
+        Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
     }
 
     [Fact]
@@ -129,7 +169,7 @@ public class AgentLiteSenderTests
     {
         using var r = new Rig();
         var sender = new AgentLiteSender(r.Mode, r.Link, _ => r.Live, () => { r.Live = false; return r.Signer; }, OwnStatic);
-        var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        var o = await sender.SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
         Assert.Equal((LiteKind.Refused, AgentLiteSender.NoCredential), (o.Kind, o.Code));
         Assert.Equal(0, r.Link.Opened);
     }
@@ -140,14 +180,14 @@ public class AgentLiteSenderTests
         using var r = new Rig();
         Receiving(r);
         var sender = new AgentLiteSender(r.Mode, r.Link, _ => true, () => { r.Mode.On = false; return r.Signer; }, OwnStatic);
-        var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+        var o = await sender.SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
         Assert.Equal((LiteKind.Off, "off"), (o.Kind, o.Code));
         Assert.Equal(0, r.Link.Opened);
         Assert.Null(r.Deliver.Text);
         // A key that could not be made because the mode went off reports off, not a missing key.
         r.Mode.On = true;
         o = await new AgentLiteSender(r.Mode, r.Link, _ => true, () => { r.Mode.On = false; return null; }, OwnStatic)
-            .SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default);
+            .SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
         Assert.Equal((LiteKind.Off, "off"), (o.Kind, o.Code));
         Assert.Equal(0, r.Link.Opened);
     }
@@ -164,7 +204,8 @@ public class AgentLiteSenderTests
         var channel = new LiteChannel(Self, "host", OwnStatic, wrongHost, Account, true);
         r.Link.Reply = (req, ct) => receiver.ReceiveAsync(channel, System.Text.Json.JsonSerializer.SerializeToElement(req), ct);
         var o = await r.Send(machine: Other);
-        Assert.Equal((LiteKind.Undeliverable, AgentLiteSender.OfflineText), (o.Kind, o.Code));
+        Assert.Equal(LiteKind.Refused, o.Kind);
+        Assert.Contains(Other, o.Code);
         Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
         Assert.Null(r.Deliver.Text);
     }
@@ -175,17 +216,19 @@ public class AgentLiteSenderTests
         using var r = new Rig();
         Receiving(r);
         var sender = new AgentLiteSender(r.Mode, r.Link, _ => true, () => { r.Link.Account = "acct-other"; return r.Signer; }, OwnStatic);
-        Assert.Equal(LiteKind.Delivered, (await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hello"), default)).Kind);
+        Assert.Equal(LiteKind.Delivered, (await sender.SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default)).Kind);
         Assert.Equal(Account, r.Link.Bound);
     }
 
     [Fact]
-    public async Task A_machine_absent_from_presence_is_undeliverable_and_says_nothing_was_queued()
+    public async Task A_machine_absent_from_presence_is_refused_by_id_and_says_nothing_was_queued()
     {
         using var r = new Rig();
         r.Link.Present = false;
         var o = await r.Send();
-        Assert.Equal((LiteKind.Undeliverable, "that machine is offline; nothing was queued"), (o.Kind, o.Code));
+        Assert.Equal(LiteKind.Refused, o.Kind);
+        Assert.Contains(Other, o.Code);
+        Assert.Contains("nothing was queued", o.Code);
         Assert.Equal(0, r.Link.Opened);
     }
 
@@ -199,30 +242,37 @@ public class AgentLiteSenderTests
     }
 
     [Fact]
-    public async Task Only_one_present_host_of_the_signed_in_account_is_a_target()
+    public async Task Only_the_exact_present_host_is_a_target_despite_duplicate_names()
     {
         using var r = new Rig();
-        r.Link.Hosts = [new PresenceEntry(Other, "node-b", "phone", DateTimeOffset.UnixEpoch)];
-        Assert.Equal(LiteKind.Undeliverable, (await r.Send()).Kind);
+        r.Link.Hosts = [new PresenceEntry(Other, "node-b", "phone", DateTimeOffset.UnixEpoch), new PresenceEntry(Self, "node-b", "host", DateTimeOffset.UnixEpoch)];
+        Assert.Equal(LiteKind.Refused, (await r.Send()).Kind);
+        Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
         r.Link.Hosts = [new PresenceEntry(Other, "node-b", "host", DateTimeOffset.UnixEpoch), new PresenceEntry(new string('4', 32), "NODE-B", "host", DateTimeOffset.UnixEpoch)];
+        Receiving(r);
         var o = await r.Send();
-        Assert.Equal((LiteKind.Refused, AgentLiteSender.Ambiguous), (o.Kind, o.Code));
+        Assert.Equal(LiteKind.Delivered, o.Kind);
+        Assert.Equal(Other, r.Deliver.Envelope!.Body.Target.Machine);
         r.Link.Account = "";
         Assert.Equal(LiteKind.Undeliverable, (await r.Send(machine: Other)).Kind);
-        Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
+        Assert.Equal((1, 1), (r.Link.Opened, r.Signed));
     }
 
     [Fact]
-    public async Task An_own_host_name_resolves_locally_but_a_shared_name_is_ambiguous()
+    public async Task The_own_host_device_id_resolves_locally_without_presence_and_names_never_route()
     {
         using var r = new Rig();
         Receiving(r, target: Self);
+        r.Link.Present = false;
+        Assert.Equal(LiteKind.Delivered, (await r.Send(machine: Self)).Kind);
+        Assert.Equal(Self, r.Deliver.Envelope!.Body.Target.Machine);
+        r.Link.Present = true;
         r.Link.Hosts = [new PresenceEntry(Self, "node-b", "host", DateTimeOffset.UnixEpoch)];
-        Assert.Equal(LiteKind.Delivered, (await r.Send()).Kind);
         r.Link.Hosts.Add(new PresenceEntry(Other, "node-b", "host", DateTimeOffset.UnixEpoch));
-        var refused = await r.Send();
-        Assert.Equal((LiteKind.Refused, AgentLiteSender.Ambiguous), (refused.Kind, refused.Code));
-        Assert.Equal(1, r.Link.Opened);
+        var refused = await r.Send(machine: "node-b");
+        Assert.Equal(LiteKind.Refused, refused.Kind);
+        Assert.Contains("names never route", refused.Code);
+        Assert.Equal((1, 1), (r.Link.Opened, r.Signed));
     }
 
     [Fact]
@@ -255,7 +305,7 @@ public class AgentLiteSenderTests
             await r.Mode.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
             return new LiteAck("delivered", "", "not-the-request", 0);
         };
-        var send = sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hi"), default);
+        var send = sender.SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hi"), default);
         await Task.Delay(300);
         Assert.False(send.IsCompleted);
         r.Mode.Gate.Set();
@@ -279,7 +329,7 @@ public class AgentLiteSenderTests
         // The ack limit is far longer than the watcher's tick, so a loaded runner cannot let the timeout beat the
         // mode watcher (#1521: with a 200 ms limit it sometimes reported "timeout"). Only the watcher can end this send.
         var sender = new AgentLiteSender(r.Mode, r.Link, _ => true, () => r.Signer, OwnStatic, null, TimeSpan.FromSeconds(60), TimeSpan.FromMilliseconds(1));
-        var o = await sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", "hi"), default).WaitAsync(TimeSpan.FromSeconds(30));
+        var o = await sender.SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hi"), default).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal((LiteKind.Unconfirmed, "mode switched off"), (o.Kind, o.Code));
     }
 

@@ -1,8 +1,9 @@
 # Own-agents messaging (AP5-lite): runbook
 
 A temporary mode (#728, owner decision of 14:06 PT on 2026-11-08) that lets the owner's agents on the owner's
-own machines message each other host to host over the relay, with Home Assistant as the automatic fallback,
-until the signed roster (#55) exists. Since the owner's decision of Nov 19, 2026, 22:07 PT it is **on by default**
+own machines message each other host to host over the relay until the signed roster (#55) exists.
+Legacy fleet messenger fallback is described below; the host does not perform it.
+Since the owner's decision of Nov 19, 2026, 22:07 PT it is **on by default**
 for a host signed in to the account: with no `agentMessaging.remote` key it is `own-account`, and it does anything
 only with a present same-account peer, by the trust rule below. A host with no signed-in account sends and receives
 nothing. An explicit `"off"`, an unreadable setting or a kill keeps it off; the kill switch stays. It is removed or
@@ -25,8 +26,10 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
 
 ## The plain limits
 
+- ID-first host selection ([#3607](https://github.com/danswett/agent-bridge/issues/3607)): `machine` is an exact present host device ID (32 hex digits; publishers use canonical lowercase and comparisons are exact). Names are display only; names, fragments and a name-reusing successor never retarget. Unknown or offline IDs refuse loudly with the ID, before signing or opening a channel; the host never retries or falls back to HA.
+- Sender boundary: this cut acquires no session roster. The pipe still takes the receiver's exact session node, and the receiver retains its existing full-ID/node resolution and final-effect fences below. No role IDs or claims are introduced.
 - Own machines and own agents only. A message from any other account is never accepted, whatever it carries.
-- Same machine means local delivery through the same signed receiver checks (owner-approved 14:34 PT Nov 21, 2026). A target device id equal to the sending host's own id routes locally, even without relay presence for itself. The host passes the signed envelope through the same receiver, replay/rate limits and reply-target gates, bound to its own device key and current signed-in account; it never opens a remote channel to itself. Unknown other hosts remain offline. A busy local target is refused as `busy`, not `offline`; queueing is a separate change.
+- Same machine means local delivery through the same signed receiver checks (owner-approved 14:34 PT Nov 21, 2026). A target device id equal to the sending host's own id routes locally, even without relay presence for itself. The host passes the signed envelope through the same receiver, replay/rate limits and reply-target gates, bound to its own device key and current signed-in account; it never opens a remote channel to itself. Unknown other host IDs refuse loudly as `noSuchMachine`. A busy local target is refused as `busy`, not `offline`; queueing is a separate change.
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
@@ -39,7 +42,7 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
 - The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
   The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
-- A message to an offline machine fails at once and falls back to Home Assistant. Nothing is queued.
+- A remote-host device ID absent from presence fails at once as `refused: noSuchMachine`, naming the ID. Nothing is signed or queued, and identity refusals hold without HA fallback.
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
@@ -94,15 +97,18 @@ Receiver refusals, in the order they are checked:
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held. A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |
 
-What the sender gets, and what the messenger does:
+What the sender gets, and what the legacy fleet messenger does (report-only, outside this host cut).
+These historical fallback rows describe external scripts, not a host fallback or permission to
+resolve names. The ID-first refusal contract above takes precedence for identity failures.
 
 | Outcome | The messenger |
 | --- | --- |
 | `delivered` | success; the only success |
+| `refused` with `badMachine` or `noSuchMachine` | final identity failure naming the device ID; no name, fragment or HA fallback |
 | `off` (including the mode turned off while the signing key was made; nothing sent), `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
 | `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
-| any other `refused` (other account, `ambiguousMachine` (a name shared by two present hosts), replay, size, and so on) | final failure shown to the sender |
+| any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
 
 ## Acceptance tests (tick before cut-over)
 
