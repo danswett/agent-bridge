@@ -199,6 +199,49 @@ empty roster. Valid older signed epochs are historical, never competing live hol
 
 ## 7. Migration and ordered implementation slices
 
+### Presentation continuity (CHANGE C1-C2)
+
+**Proposed Nov 21, 2026, 22:26 PT; owner approval required; code remains paused.**
+[Seamless recycling](https://github.com/danswett/agent-bridge/issues/1504) consumes this
+identity authority; [session-order-roaming.md](session-order-roaming.md#11-stable-presentation-identity-change-c1)
+owns pins, positions, ALL user groups, migration, privacy and preference-only undo.
+Extend optional person enrollment to any personal continuity slot, not just fleet roles.
+Reuse ROLE GUIDs and this ledger; no extra lineage ID, name-to-role map or authority is added.
+
+Extend the exact person-signed successor assignment with `continuity`: the predecessor's
+`sessionId, hostAdd, holderEpoch, assignmentDigest`, the exact `launchRequest`, and
+`presentation: inherit | separate`. Its successor is the existing assignment target tuple.
+The person sees both executions/hosts and the presentation effect before presence-gated
+approval. Sign these fields under section 2's assignment gates; an old approval lacking
+them, an agent request, prompt `PredNode`, grant, or host-only proof authorizes no inheritance.
+First adoption explicitly binds the current execution and legacy locator instead of claiming
+a predecessor. The authority's committed link/receipt binds the approved body digest.
+
+An enrolled target host binds that request to the actual launched activation and proves
+possession; launch failure, uncertain result or a different activation cannot fulfill it.
+Publish the link through the existing signed registry/role projection only after section 3's
+CAS, drain and confirmed stop, not at spawn, rename or "ready" text. Clients verify both
+historical predecessor assignment and current successor proof; lower epochs cannot roll back.
+Negotiate validated continuity support before launch dispatch; unsupported receivers refuse
+an inheritance request rather than ignoring an optional field and returning ordinary success.
+These are proposed additive protocol semantics, not fields supported by current v1 launch.
+Approval/linkage cannot itself launch, end, rename, grant or silently retarget any session.
+Do not redefine [v1 Session.id](../protocol/v1-sessions.md#session): it remains the provider
+conversation identifier. A separately typed activation identity and proof/link reference
+need reader-before-writer negotiation in both session snapshots and the strict
+[relay registry](../protocol/roster.md#session-registry-each-machines-sessions).
+The registry's current allow-list/byte limits still apply; unsupported relay connections
+omit the proposed projection and cannot prove continuity. Capabilities never grant consent.
+[v1 launch](../protocol/v1-launch.md) and transfer keep their present provider-ID/fork
+semantics until those separately approved protocol slices land.
+
+Fleet's current `launch-lead -PredNode` puts a node in prompt text only; role-settings names
+are configuration/display labels. A future adapter must pass the structured request/link and
+await its committed receipt. It cannot sign person approval or borrow launch/stop grants.
+Preferences are client-owned; neither host nor role authority receives group names or order.
+
+### Identity migration and implementation
+
 Use additive, default-off negotiation, then explicit person enrollment of each
 role and existing session; do not infer assignments from matching labels.
 Rename/display-name changes update display only, preserving both GUIDs and the epoch.

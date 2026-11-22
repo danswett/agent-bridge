@@ -4,6 +4,12 @@ Status: design, build-ready for slice S1. Sync slices S2 to S5 wait for the sign
 enforced (`device-approval.md`). Storage decided by Engineering on #759 (comment 6755248456);
 this document says what the person sees and exactly what roams. UI rules extend `ui.md` §6.1.
 
+**CHANGE C1-C6, proposed Nov 21, 2026, 22:26 PT; owner approval required.**
+The continuation sections below extend [seamless recycling](https://github.com/danswett/agent-bridge/issues/1504),
+the [group decision](https://github.com/danswett/agent-bridge/issues/767) and
+[roaming](https://github.com/danswett/agent-bridge/issues/759), not a new design or epic.
+They are not built and do not lift the role-ID implementation pause or sync prerequisites.
+
 ## 1. What the person gets
 
 One order of sessions on all of their devices, one read state, and a way to keep a different
@@ -34,7 +40,9 @@ Rules:
 7. Groups (#767): names and membership roam with Your order, one set for the account.
    **Collapsed or expanded stays on each device.** This device's order keeps its own copy of
    group membership from the moment it is copied.
-8. Moves stay within a row's group, as today (`ui.md` §6.1).
+8. **CHANGE C6 (canonical reconciliation):** sorting stays within each section/group.
+   Person moves cross expanded group edges as
+   `ui.md` §6.1 already specifies; they never implicitly cross Pinned.
 
 ## 3. What roams
 
@@ -169,3 +177,129 @@ signed roster is enforced; its date is unset.
 Owner defaults, unless told otherwise: shared-member trust is accepted for preferences; no
 recovery in the first release; sync is off until switched on. The account-purge procedure is not
 decided (same unknown as #744).
+
+## 11. Stable presentation identity (CHANGE C1)
+
+Use the existing [ROLE ID design](role-ids.md), not a name, truncated node ID, provider
+conversation ID or a second lineage registry. A role here is a person-adopted logical slot;
+the same mechanism covers any recycled session, not only coordinators or a named group.
+This extends that design's fleet-only enrollment scope to optional personal continuity slots.
+Do not require every unrelated session to acquire a role or grant role-message privileges.
+
+In a versioned order object, a stable row key is `r:<roleId>`; the sealed object's authenticated
+account and roster generation supply its scope. An unadopted row retains a typed legacy
+machine/session key. A new execution has its own SESSION GUID and host binding; these locate
+the current occupant, never the person's pin, manual position or group membership.
+Read markers, drafts, pending sends, approvals and execution history remain session-bound.
+
+Each applicable order retains its existing pin/position and membership registers for that
+one row. This includes Your order, This device's order and later named orders, even inactive
+ones. Preserve every stored membership; existing cardinality remains one user group per row
+per order. Different orders can choose different groups. Pinned rows retain hidden membership.
+Group IDs/names/order, collapse, sort choice and active-order choice do not change on recycle.
+No automatic group creation, role-name grouping or special treatment of any group is added.
+
+## 12. Verified continuation, not a launch self-claim (CHANGE C2)
+
+Consume the committed, person-approved succession link specified in
+[role-ids.md: presentation continuity](role-ids.md#presentation-continuity-change-c1-c2).
+The link binds exact predecessor and successor activations, scoped ROLE ID, assignment
+version/epoch and launch request; its person-visible effect is inheritance or separation.
+Names, prompt text, a host-only signature and a launch/stop grant cannot supply consent.
+The signed registry/role ledger publishes identity evidence, never private preferences.
+Hosts publish execution bindings and proof references; independently enrolled clients verify
+them against that ledger. A session summary is a hint, not an authority or a preference write.
+
+Only a committed higher assignment with confirmed predecessor stop can change the occupant.
+A prepared successor, expired claim, incomplete snapshot, duplicate current claim, replay,
+wrong account/generation or unknown stop outcome cannot take the saved slot.
+Historical lower epochs are not competitors and cannot switch the row back.
+Two candidates at one current epoch freeze the slot with an explicit identity-conflict state;
+no latest-arrival/name tie-break. Show candidates in details without giving them the pin/groups.
+Retain preferences during a vacancy, offline interval or conflict; do not fabricate liveness.
+
+For verified inheritance, replace the execution binding behind the stable row in one model
+transaction, without generating new pin/move/group writes. Repeated observations are idempotent.
+The clients that missed the launch resolve the same committed lineage on reconnect. Local
+orders work without preference sync; another device has only its own saved choices until sync.
+When the role authority is unavailable, keep a stale read-only slot, not an offline takeover.
+No holder or client machine is the continuity coordinator: durable identity lives in the
+replicated role ledger; preferences live locally now and in sealed account records with sync.
+
+Ordinary same-provider-ID resume keeps today's legacy behavior until adopted. A fresh
+activation, cross-host transfer/fork, rename or copied conversation alone proves no succession.
+Unlinked sessions remain independent, unpinned/ungrouped new rows under the existing default.
+Cross-host approved succession preserves manual rank, not a false machine label/filter:
+Machine sort and machine tabs use the successor's actual verified host.
+
+## 13. Adoption, migration and retention (CHANGE C3)
+
+The person explicitly adopts an existing session into a continuity slot. The approved link
+names its full verified execution tuple and legacy locator; never infer an alias from titles.
+For each order, atomically rekey its saved pin/position/membership registers to the stable key,
+preserving counters and values, and persist a migration marker plus the source alias.
+Merge aliases before row registers using the existing counter/deviceTag rules. An existing
+stable register or newer user edit wins over an older imported value; no launch-time snapshot
+may overwrite a subsequent unpin, move or group deletion. Resolve deleted groups as §5 says.
+Crash before commit leaves the legacy record intact; crash after commit replays no import.
+Keep the original readable backup; failed persistence keeps the existing safe sort fallback.
+
+Old clients keep their versioned local records and cannot write the new roaming object.
+Enable the new sealed-record schema only after negotiated client/trust support; do not let an
+old client's whole-object write erase stable rows, detach choices or migration markers.
+Alias/cutover records remain while their stable row is retained. Forgotten/retired aliases
+cannot be rediscovered from old host snapshots; importing old schema requires explicit person
+adoption again, not background migration. Cross-generation/account adoption is never automatic.
+
+Stable preferences do not expire after 30 days without a listed execution. Keep vacant,
+paused and retired slots until the person forgets them; a retired ROLE ID is never reusable.
+The existing 30-day rule remains for legacy session memberships. Role-authority retirement
+tombstones are permanent security records, separate from disposable preference tombstones.
+Use the existing 500-row/32-group/64-KiB/1-MiB limits. Stable rows and migration/detach metadata
+count toward them; do not silently evict saved continuity choices. If the object does not fit,
+keep the local change and show Not fully synced. New-schema vectors must measure sealed bytes;
+the old 100-bytes-per-row estimate is not proof that the added metadata fits.
+
+## 14. Person visibility and undo (CHANGE C4)
+
+Before approving a launch-time link, the person sees predecessor, successor, role and actual
+hosts, and "Keep pins, positions and user groups in each order". A launch result alone changes
+nothing. After commit, row details show "Continues <predecessor>", the verified assignment and
+launch receipt; labels render as plain text. No public log contains group names or preferences.
+
+"Treat this session separately" is a person-only preference action, for the selected order or
+all existing orders. Store a mergeable `follow=false` register on the stable row and give the
+successor an ordinary session row with new-session defaults. Keep the stable row's saved
+choices dormant; never re-pin the predecessor or change holder authority as an undo side effect.
+The opt-out persists through later successors and sync/reload. "Follow this identity again"
+sets `follow=true` and resumes the stable choices; disclose that independent row choices are
+not copied over, then remove its independent presentation alias atomically.
+Neither action revokes/reassigns the role, ends a session, grants permissions, or retargets a
+draft. Undoing the operational handover is a separate person-approved role-management action.
+
+Account switching clears projections immediately. Sealed sync contains IDs, registers and
+person-entered group names only, never titles, paths, prompts, history or host credentials.
+Agents/hosts cannot write these records or promote themselves into someone's saved pins.
+
+## 15. Projection and bounded follow-on slices (CHANGE C5-C6)
+
+UI behavior belongs to [ui.md: verified successors](ui.md#verified-successors-change-c4-c5).
+Apply binding changes under its input/focus holds; old replies/answers never silently attach
+to the new occupant. Most recent/Machine remain derived views, not exact-rank promises.
+
+CHANGE C6 also reconciles the stale group-move sentence in §2 and "sort roams" wording in
+ui.md with the already-decided roaming rules; it does not newly enable roaming sort choice.
+These slices extend the existing issues above and the ordered role-ID and roaming slices. No code,
+rollout, automatic end or new session is authorized. Each budget is additions plus deletions,
+including tests/docs; split before exceeding it, never consume a parent/carry allowance.
+
+| Slice | Maximum WHOLE | Prerequisites | Failing-first acceptance |
+|---|---|---|---|
+| C1 identity/schema vectors | 220 | Owner approves C1-C6; role-ID types | Full scoped role versus activation IDs; plain labels never alias; old schema cannot overwrite |
+| C2 signed launch-link seam | 240 | C1; role-ID assignment/CAS/stop/host-proof slices | Two simultaneous successors; replay, unsigned request, expired approval, unknown stop; unsupported receiver refuses before launch |
+| C3 pure preference migration/merge | 240 | C1; existing JS/C# merge ports | Pin/manual rank/all orders and arbitrary groups; late user edit/delete wins; duplicate/out-of-order link; crash before/after commit; byte limits |
+| C4 PWA local projection and undo | 240 | C2-C3; verified registry reader | Pinned/unpinned recycle; hidden membership; vacant/conflicting/retired slot; reload; persistent opt-out; no new focus/action target |
+| C5 Windows local projection and undo | 240 | C2-C3; existing Windows group model/UI | Same vectors and interaction cases; failed save keeps original record/safe fallback; actual cross-host filter |
+| C6 sealed-record sync integration | 240 | C4-C5; signed-roster enforcement and existing roaming S2-S4 | Two devices miss recycle, concurrent move/unpin/delete/detach converge; offline reconnect; mixed-client schema refusal; no host-readable group state |
+| C7 Fleet launch-lead adapter | 220 | C2; role-ID enrollment and person approval UI | Structured exact predecessor/request, not PredNode prompt; lost result does not inherit or relaunch; grants not inherited |
+| C8 Apple/other client parity, one client per PR | 220 | C2-C3; that client's groups/verified reader | Same general-group, pin/rank, undo, conflict and answer-target cases; no simulated live agent sessions |
