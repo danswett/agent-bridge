@@ -275,24 +275,53 @@ public sealed class GrantStoreTests : IDisposable
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
 
-    [Fact]
-    public void An_empty_adoption_proof_cannot_resurrect_a_rolled_back_revoked_grant()
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("header")]
+    [InlineData("short-legacy")]
+    [InlineData("sequence")]
+    [InlineData("gate-case")]
+    public void An_adoption_cutoff_cannot_resurrect_a_rolled_back_revoked_grant(string proof)
     {
+        if (proof == "short-legacy") { Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent"))); }
         var grant = Issued();
         var auditFolder = Path.Combine(Folder, "audit");
         var head = Path.Combine(auditFolder, "agents.head");
-        var old = new[] { PathName, head, Directory.GetFiles(auditFolder, "agents-*.jsonl").Single() }.ToDictionary(f => f, File.ReadAllBytes);
+        var file = Directory.GetFiles(auditFolder, "agents-*.jsonl").Single();
+        var old = new[] { PathName, head, file }.ToDictionary(f => f, File.ReadAllBytes);
         Assert.True(Open().Revoke(grant.Id, 1).Usable);
-        foreach (var (file, bytes) in old) { File.WriteAllBytes(file, bytes); }
+        foreach (var (savedFile, bytes) in old) { File.WriteAllBytes(savedFile, bytes); }
+        if (proof == "gate-case")
+        {
+            var lines = File.ReadAllLines(file);
+            var previous = new string('0', 64);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var row = JsonNode.Parse(lines[i])!;
+                if (row["gate"] is { } gate) { row.AsObject().Remove("gate"); row["Gate"] = gate; }
+                row["previousSha256"] = previous;
+                lines[i] = row.ToJsonString();
+                previous = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(lines[i]))).ToLowerInvariant();
+            }
+            File.WriteAllText(file, string.Join('\n', lines) + "\n");
+        }
         File.Delete(head);
         Assert.True(Audit.Bootstrap());
         var json = JsonNode.Parse(File.ReadAllText(head))!;
-        Assert.True(json["adoptedGatedRows"]!.GetValue<long>() > 0);
         json["adoptedGatedRows"] = 0;
-        json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}""");
+        if (proof == "empty") { json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}"""); }
+        else if (proof != "gate-case")
+        {
+            var header = File.ReadLines(file).First();
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(header))).ToLowerInvariant();
+            json["adoptedPrefix"] = new JsonObject { ["root"] = Path.GetFileName(file), ["rootSha256"] = hash,
+                ["tail"] = Path.GetFileName(file), ["tailSha256"] = hash, ["length"] = System.Text.Encoding.UTF8.GetByteCount(header) + 1L,
+                ["sequence"] = proof == "sequence" ? 1 : 0, ["empty"] = false };
+        }
         File.WriteAllText(head, json.ToJsonString());
         Assert.True(Audit.Verify().Intact);
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+        Assert.False(Audit.Bootstrap());
     }
 
     [Fact]
