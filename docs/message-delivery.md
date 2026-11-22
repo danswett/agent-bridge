@@ -51,6 +51,39 @@ current capability; teardown/failure revokes. No host starts or live keys ran.
 Consumers must ask the controller for current capability; a stored receipt alone
 never authorizes delivery, and restart defaults to Unknown.
 
+### Qualification procedure: live qualification pending
+The owner's 2026-11-21 16:21 PT decision selects code-level proof only.
+The procedure below is deferred: no VM start or live keys are authorized now.
+A later slice must build trusted grant issue/consume tooling and obtain fresh
+live-run clearance. No controller receipt, adapter registration or capability is claimed.
+1. Confirm `ab-lab-x64-1107` in `RG-AGENT-BRIDGE-LAB`, westus2, is disposable,
+   x64 and deallocated. On VM4 set `AZURE_CONFIG_DIR` to the existing
+   `.azure-agentbridge` profile in process environment only; never read, print,
+   copy or move its files or tokens. Stop on auth refusal; never repair credentials.
+2. After the tooling and fresh clearance exist and the head is pushed/reported,
+   start only that lab VM through the trusted owner/SRE grant path.
+   Use the exact carried injector/CLI, capture `QueueTarget` at target launch,
+   and bind a cursor-bound reader to that main target's raw transcript.
+   Missing runtime, sign-in, trusted folder or identity evidence stops the proof;
+   no trust/permission prompt is answered and no live fleet session is used.
+3. While the target is working, issue one host-generated, one-shot nonce.
+   Hold the typing gate and identity/owned-composer checks through text and one
+   Ctrl+Q; verify the composer reads empty. Never substitute idle Enter.
+4. Expect `QueueQualification` Verified only for the exact nonce in a raw
+   main-target `user.message` with `data.delivery="queued"`, before monotonic
+   expiry and with unchanged identity before and after reading. Replay, wrong
+   target, stripped delivery and ambiguity must remain Unknown.
+5. Record observed transport, runtime and results without substituting manual
+   evidence for a controller receipt. In all outcomes deallocate the lab VM and confirm
+   `PowerState/deallocated`; controller registration/capability remains Unknown.
+Code-level proof on [carry 3e4e63ff](https://github.com/danswett/agent-bridge/commit/3e4e63ffd453f055cd10b29aefe4b1d617b42356):
+447 delivery/qualification/codec tests and 39 person-clear tests passed, serial,
+one CPU, BelowNormal. Refreshed original tests-first RED: 13 failed/2 passed;
+legacy Enter-evidence regression RED: 3 failed/1 passed, then all four passed.
+These are source/unit fakes, not live qualification. The stopped lab operation
+was followed by deallocation, confirmed `PowerState/deallocated`. No live keys
+or manual proof ran; the controller stays unregistered/Unknown and the wrapped-input candidate is not admitted.
+
 ## Queue-submit execution (B)
 The host-only `ReplyService.QueueController` seam is unregistered by default.
 Queueable intent (or a requested queue mode) never falls back to Enter: current
