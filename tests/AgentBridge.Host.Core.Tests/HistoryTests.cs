@@ -136,12 +136,16 @@ public class HistoryTests
             Assert.Equal([firstId, secondId, source.Get(Id)!.Activity.ResponseId], parts.Select(p => p.Id));
             var legacy = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(source.Get(Id)!.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
             Assert.Equal("responseId=forged", legacy.Response);
+            Fixture.Append(transcript, CodexReply("first", "Same answer revised", 8, !responseFirst));
+            await source.RefreshAsync();
+            Assert.Equal(firstId, source.Get(Id)!.Activity.ResponseId);
+            Assert.Equal("Same answer revised", (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.First().Text);
             lastId = source.Get(Id)!.Activity.ResponseId;
         }
         await using var restarted = f.Source();
         await restarted.RefreshAsync();
         Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
-        Assert.Equal(lastId, (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Last().Id);
+        Assert.Equal(lastId, (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.First().Id);
     }
 
     [Fact]
@@ -152,7 +156,7 @@ public class HistoryTests
         f.CodexRegistration(Id, 950, transcript);
         f.Processes.Run(AgentKind.Codex, 950);
         Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question" }, 1),
-            CodexReply("first", "Same", 2), CodexReply("second", "Same", 3),
+            CodexReply("first", "Same", 2), CodexReply("first ", "Same", 3),
             Codex.Event(new { type = "task_complete", last_agent_message = "Same" }, 4));
         await using var source = f.Source();
         await source.RefreshAsync();
@@ -163,11 +167,19 @@ public class HistoryTests
     [Theory]
     [InlineData("missing")]
     [InlineData("empty")]
+    [InlineData("missing-item-id")]
     [InlineData("complete")]
     [InlineData("conflicting-turn")]
     [InlineData("conflicting-new-item")]
+    [InlineData("conflicting-prompt")]
+    [InlineData("padded-turn")]
     [InlineData("multiple-ids")]
+    [InlineData("multiple-turns")]
+    [InlineData("multiple-items")]
+    [InlineData("malformed-id")]
+    [InlineData("malformed-turn")]
     [InlineData("no-turn")]
+    [InlineData("started")]
     [InlineData("unreadable")]
     [InlineData("skimmed")]
     public async Task Codex_unknown_item_identity_never_aliases_by_text_time_or_last_agent_message(string shape)
@@ -180,18 +192,26 @@ public class HistoryTests
         {
             "missing" => Codex.Event(new { type = "agent_message", message = "Answer" }, 3),
             "empty" => CodexReply("", "Answer", 3),
+            "missing-item-id" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\",", ""),
             "complete" => Codex.Event(new { type = "task_complete", last_agent_message = "Answer" }, 3),
             "conflicting-turn" => CodexReply("first", "Answer", 3, true, "other-turn"),
             "conflicting-new-item" => CodexReply("second", "Answer", 3, true, "other-turn"),
+            "conflicting-prompt" => CodexReply("second", "Answer", 3),
+            "padded-turn" => CodexReply("first", "Answer", 3, true, "native-turn "),
             "multiple-ids" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\"", "\"id\":\"first\",\"id\":\"first\""),
+            "multiple-turns" => CodexReply("first", "Answer", 3).Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""),
+            "multiple-items" => CodexReply("first", "Answer", 3).Replace("\"item\":", "\"item\":{},\"item\":"),
+            "malformed-id" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\"", "\"id\":\"\\ud800\""),
+            "malformed-turn" => CodexReply("first", "Answer", 3).Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":42"),
             "no-turn" => CodexReply("first", "Answer", 3),
+            "started" => Codex.Event(new { type = "task_started" }, 3),
             "unreadable" => "{\"type\":\"response_item\",\"payload\":",
             "skimmed" => new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
             _ => throw new ArgumentOutOfRangeException(nameof(shape)),
         };
-        var initial = shape == "no-turn" ? Array.Empty<string>() : [Codex.Event(new { type = "user_message", message = "Question" }, 1), CodexReply("first", "Answer", 2)];
+        var initial = shape == "no-turn" ? Array.Empty<string>() : [Codex.Event(new { type = "user_message", message = "Question", turn_id = shape == "conflicting-prompt" ? "other-turn" : "native-turn" }, 1), CodexReply("first", "Answer", 2)];
         Fixture.Append(transcript, [.. initial, next]);
-        if (shape is "unreadable" or "skimmed") { Fixture.Append(transcript, CodexReply("first", "Answer", 4, true)); }
+        if (shape is "unreadable" or "skimmed" or "started") { Fixture.Append(transcript, CodexReply("first", "Answer", 4, true)); }
         await using var source = f.Source(tailBytes: shape == "skimmed" ? 4096 : 4 * 1024 * 1024);
         await source.RefreshAsync();
         Assert.Equal("Answer", source.Get(Id)!.Activity.Response);
