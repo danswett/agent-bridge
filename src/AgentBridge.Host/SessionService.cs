@@ -121,13 +121,16 @@ public sealed class SessionService
         if (launcher is null) { return new(LaunchOutcome.Refused, "the launch service is unavailable"); }
         if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
         // Again at dispatch: the caller still authorized, and the running launcher's own settings, not
-        // config.json's: extra arguments could still bypass ask.
-        string? Dispatch() => authorized() ?? (launcher.FleetConfig is not { } running ? "the launch settings are unavailable"
+        // config.json's: extra arguments could still bypass ask. Its own refusals are told as they are;
+        // the launcher's go through the agent projection.
+        string? ours = null;
+        string? Dispatch() => ours = authorized() ?? (launcher.FleetConfig is not { } running ? "the launch settings are unavailable"
             : running.Agent(request.Agent ?? "").ExtraArgs.Count > 0 ? "extraArgs: this agent starts with extra arguments on this machine; agents may not launch it"
             : running.Workspaces.Any(w => w.Isolate && w.Label == request.Workspace) ? null : "the workspace is not an isolated launch workspace on this machine");
         if (Dispatch() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null), refusal: Dispatch);
-        return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
+        var safe = LaunchService.ForAgent(result);
+        return ours is not null && result.Reason == ours ? safe with { Reason = ours } : safe;
     }
 
     // hello's machine.restore (#780): what went with the machine or the host when it last stopped, or

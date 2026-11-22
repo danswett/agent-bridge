@@ -17,10 +17,16 @@ public sealed record LaunchRequestRecord(string Id, LaunchRequestState State, st
 {
     public string? Session { get; init; }
     public string? Code { get; init; }
+    public string? Group { get; init; }
     public bool Finished => State >= LaunchRequestState.Launched;
 }
 
 public readonly record struct EnqueueResult(EnqueueStatus Status, LaunchRequestRecord? Record);
+
+// An agent's requests (#3427): all requests with a quota together hold at most a quarter of the
+// records, used ids and pending slots, so a flood of agent ids never blocks a person's or Home
+// Assistant's launch; one Group (an agent) holds at most MaxRecords records.
+public sealed record LaunchQuota(string Group, int MaxRecords);
 
 // Launch requests keyed by the caller's request id (#2743). Home Assistant's one payload slot let
 // a second coordinator overwrite the first and lose its launch; here each id has its own record,
@@ -48,7 +54,7 @@ public sealed class LaunchRequestStore
     Dictionary<string, LaunchRequestRecord> _records;
     readonly Dictionary<string, UsedId> _used;
 
-    readonly record struct UsedId(string TextHash, DateTimeOffset FinishedAt);
+    readonly record struct UsedId(string TextHash, DateTimeOffset FinishedAt, string? Group = null);
 
     LaunchRequestStore(string path, TimeProvider time, int maxPending, Dictionary<string, LaunchRequestRecord> records, Dictionary<string, UsedId> used) =>
         (_path, _time, _maxPending, _records, _used) = (path, time, maxPending, records, used);
@@ -87,7 +93,7 @@ public sealed class LaunchRequestStore
 
     public static bool IsValidId(string? id) => IsToken(id, MaxIdLength);
 
-    public EnqueueResult Enqueue(string id, string launchText)
+    public EnqueueResult Enqueue(string id, string launchText, LaunchQuota? quota = null)
     {
         if (!IsValidId(id)) { return new(EnqueueStatus.InvalidId, null); }
         // The UTF-16 units as they are: UTF-8 would read two different lone surrogates as one U+FFFD.
@@ -106,7 +112,17 @@ public sealed class LaunchRequestStore
             {
                 return new(EnqueueStatus.Full, null);
             }
-            var record = new LaunchRequestRecord(id, LaunchRequestState.Queued, hash, now, now);
+            if (quota is not null)
+            {
+                Checked(quota.Group, nameof(quota));
+                var shared = _records.Values.Where(r => r.Group is not null).ToList();
+                if (shared.Count >= MaxRecords / 4 || shared.Count + _used.Values.Count(u => u.Group is not null) >= MaxUsedIds / 4
+                    || shared.Count(r => !r.Finished) >= Math.Max(1, _maxPending / 4) || shared.Count(r => r.Group == quota.Group) >= quota.MaxRecords)
+                {
+                    return new(EnqueueStatus.Full, null);
+                }
+            }
+            var record = new LaunchRequestRecord(id, LaunchRequestState.Queued, hash, now, now) { Group = quota?.Group };
             Commit(() => _records[id] = record);
             return new(EnqueueStatus.Added, record);
         }
@@ -161,7 +177,7 @@ public sealed class LaunchRequestStore
         foreach (var r in _records.Values.Where(r => r.Finished && now - r.ChangedAt >= Retention).ToList())
         {
             _records.Remove(r.Id);
-            _used[r.Id] = new(r.TextHash, r.ChangedAt);
+            _used[r.Id] = new(r.TextHash, r.ChangedAt, r.Group);
         }
         foreach (var id in _used.Where(u => now - u.Value.FinishedAt >= UsedKept).Select(u => u.Key).ToList()) { _used.Remove(id); }
     }
@@ -194,6 +210,7 @@ public sealed class LaunchRequestStore
                 w.WriteString("textHash", r.TextHash);
                 if (r.Session is { } s) { w.WriteString("session", s); }
                 if (r.Code is { } c) { w.WriteString("code", c); }
+                if (r.Group is { } g) { w.WriteString("group", g); }
                 w.WriteString("queuedAt", r.QueuedAt.ToString("o", CultureInfo.InvariantCulture));
                 w.WriteString("changedAt", r.ChangedAt.ToString("o", CultureInfo.InvariantCulture));
                 w.WriteEndObject();
@@ -205,6 +222,7 @@ public sealed class LaunchRequestStore
                 w.WriteStartObject();
                 w.WriteString("id", id);
                 w.WriteString("textHash", u.TextHash);
+                if (u.Group is { } g) { w.WriteString("group", g); }
                 w.WriteString("finishedAt", u.FinishedAt.ToString("o", CultureInfo.InvariantCulture));
                 w.WriteEndObject();
             }
@@ -233,14 +251,15 @@ public sealed class LaunchRequestStore
             var hash = Json.Str(item, "textHash");
             var session = Json.Str(item, "session");
             var code = Json.Str(item, "code");
+            var group = Json.Str(item, "group");
             var stateText = Json.Str(item, "state");
             LaunchRequestState? state = Enum.GetValues<LaunchRequestState>().Where(s => Name(s) == stateText).Select(s => (LaunchRequestState?)s).FirstOrDefault();
             if (!IsValidId(id) || state is not { } known || !IsHash(hash)
                 || Json.Time(item, "queuedAt") is not { } queued || Json.Time(item, "changedAt") is not { } changed || changed < queued
-                || (session is not null && !IsToken(session, 128)) || (code is not null && !IsToken(code, 128))
+                || (session is not null && !IsToken(session, 128)) || (code is not null && !IsToken(code, 128)) || (group is not null && !IsToken(group, 128))
                 || (known == LaunchRequestState.Launched) != (session is not null)
                 || (known is LaunchRequestState.Refused or LaunchRequestState.Failed) != (code is not null)
-                || !records.TryAdd(id!, new(id!, known, hash, queued, changed) { Session = session, Code = code }))
+                || !records.TryAdd(id!, new(id!, known, hash, queued, changed) { Session = session, Code = code, Group = group }))
             {
                 return null;
             }
@@ -255,7 +274,9 @@ public sealed class LaunchRequestStore
             {
                 var id = Json.Str(item, "id");
                 var hash = Json.Str(item, "textHash");
-                if (!IsValidId(id) || !IsHash(hash) || Json.Time(item, "finishedAt") is not { } at || records.ContainsKey(id!) || !used.TryAdd(id!, new(hash!, at)))
+                var group = Json.Str(item, "group");
+                if (!IsValidId(id) || !IsHash(hash) || Json.Time(item, "finishedAt") is not { } at || records.ContainsKey(id!)
+                    || (group is not null && !IsToken(group, 128)) || !used.TryAdd(id!, new(hash!, at, group)))
                 {
                     return null;
                 }
