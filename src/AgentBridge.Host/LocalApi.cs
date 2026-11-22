@@ -209,6 +209,13 @@ public static class LocalApi
             if (op == LaunchProtocol.Options)
             { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
         }
+        if (agentLaunch is not null && op == AgentPipeLaunch.StatusOp)
+        {
+            var asking = callers.Classify(channel, fresh: true);
+            if (asking.Kind != CallerKind.Agent || credentials?.Of(channel) is not { Kind: "session" } statusReader || !credentials.IsLive(statusReader))
+            { throw Refuse(op, asking, "a live session read+reply+launch credential is required", log); }
+            return agentLaunch.Status(statusReader, data);
+        }
         if (agentLaunch is not null && op == LaunchProtocol.Launch && credentials is { } launchIssuer
             && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } launching && launchIssuer.Of(channel) is { Kind: "session" } launcher)
         {

@@ -135,6 +135,118 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
+    [Fact]
+    public async Task Another_principal_cannot_read_or_take_over_a_request_id()
+    {
+        var credentials = new AgentCredentials(folder, "machine");
+        var store = LaunchRequestStore.Open(folder, TimeProvider.System);
+        await Launch(Open(credentials: credentials, store: store), Body());
+        var other = Open("other", credentials: credentials, store: store);
+
+        Assert.Contains("no launch request", await Refusal(other, AgentPipeLaunch.StatusOp, StatusBody()));
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    JsonElement StatusBody(string? id = null) => JsonSerializer.SerializeToElement(new { request = id ?? request });
+
+    static async Task<AgentLaunchStatus> Status(Pipe pipe, JsonElement body) =>
+        Assert.IsType<AgentLaunchStatus>(await pipe.Handle(pipe.Channel, AgentPipeLaunch.StatusOp, body));
+
+    [Fact]
+    public async Task Launch_status_reads_a_started_launch_and_keeps_it_for_the_retention_window()
+    {
+        var pipe = Open();
+        var started = await Launch(pipe, Body());
+
+        var status = await Status(pipe, StatusBody(request.ToUpperInvariant()));
+
+        Assert.Equal(request, status.Request);
+        Assert.Equal("launched", status.State);
+        Assert.Equal(started.Session, status.Session);
+        Assert.Equal(status.ChangedAt + LaunchRequestStore.Retention, status.KeptUntil);
+    }
+
+    [Fact]
+    public async Task Launch_status_reads_a_pending_launch_then_its_late_start_or_failure()
+    {
+        launcher.RegisteredSession = Guid.NewGuid().ToString("D");
+        launcher.LateRegistration = true;
+        var pipe = Open();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(pipe, Body())).Outcome);
+
+        var pending = await Status(pipe, StatusBody());
+        Assert.Equal("launching", pending.State);
+        Assert.Null(pending.Session);
+        Assert.Null(pending.KeptUntil);
+
+        launcher.RegisterPending!();
+        var started = await Status(pipe, StatusBody());
+        Assert.Equal("launched", started.State);
+        Assert.Equal(launcher.RegisteredSession, started.Session);
+
+        var failedRequest = Guid.NewGuid().ToString("D");
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(pipe, Body(failedRequest))).Outcome);
+        pipe.Launch.Failed(AgentPipeLaunch.LaunchId(pipe.Credentials.PrincipalOf(pipe.Credentials.Of(pipe.Channel)!), failedRequest));
+        var failed = await Status(pipe, StatusBody(failedRequest));
+        Assert.Equal("failed", failed.State);
+        Assert.Equal("failed", failed.Code);
+        Assert.NotNull(failed.KeptUntil);
+    }
+
+    [Fact]
+    public async Task Launch_status_refuses_an_unknown_request_and_one_that_is_not_a_uuid()
+    {
+        var pipe = Open();
+
+        Assert.Contains("no launch request", await Refusal(pipe, AgentPipeLaunch.StatusOp, StatusBody()));
+        foreach (var bad in new[] { StatusBody("not-a-uuid"), JsonSerializer.SerializeToElement(new { }) })
+        {
+            Assert.Contains("request id", (await Assert.ThrowsAsync<ArgumentException>(() => pipe.Handle(pipe.Channel, AgentPipeLaunch.StatusOp, bad))).Message);
+        }
+        Assert.Contains("can't be used", await Refusal(Open(store: (null, "not open")), AgentPipeLaunch.StatusOp, StatusBody()));
+    }
+
+    [Theory]
+    [InlineData(AgentProtocol.ScopeRead)]
+    [InlineData(AgentProtocol.ScopeReadReply)]
+    public async Task Launch_status_needs_read_reply_launch_scope(string scope)
+    {
+        Assert.Contains("read+reply+launch", await Refusal(Open(scope: scope), AgentPipeLaunch.StatusOp, StatusBody()));
+    }
+
+    [Fact]
+    public async Task Launch_status_is_refused_once_the_credential_is_revoked()
+    {
+        var pipe = Open();
+        await Launch(pipe, Body());
+        pipe.Credentials.Revoke("parent", "test");
+
+        Assert.Contains("credential is required", await Refusal(pipe, AgentPipeLaunch.StatusOp, StatusBody()));
+    }
+
+    [Fact]
+    public async Task A_pipe_launch_still_queued_at_a_restart_is_unconfirmed_and_never_launched()
+    {
+        var credentials = new AgentCredentials(folder, "machine");
+        var (store, _) = LaunchRequestStore.Open(folder, TimeProvider.System);
+        var pipe = Open(credentials: credentials, store: (store, null));
+        var key = AgentPipeLaunch.Key(credentials.PrincipalOf(credentials.Of(pipe.Channel)!), request);
+        store!.Enqueue(key, LaunchService.RequestBinding(Body().Deserialize<LaunchRequest>(ProtocolJson.Options)!));
+        store.Enqueue("hosted-request-0001", "{}");
+        Assert.Equal("queued", (await Status(pipe, StatusBody())).State);
+
+        var (restarted, _) = LaunchRequestStore.Open(folder, TimeProvider.System);
+        AgentPipeLaunch.Restore(restarted);
+        var after = Open(credentials: credentials, store: (restarted, null));
+
+        var status = await Status(after, StatusBody());
+        Assert.Equal("failed", status.State);
+        Assert.Equal("unconfirmed", status.Code);
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await Launch(after, Body())).Outcome);
+        Assert.Equal(0, launcher.Launches);
+        Assert.Equal(LaunchRequestState.Queued, restarted!.Get("hosted-request-0001")!.State);
+    }
+
     (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null, bool grantOnly = false,
         bool allScope = false, bool allowAllLaunch = false, FleetPublisherTests.Source? source = null,
         (LaunchRequestStore?, string?)? launchStore = null)
