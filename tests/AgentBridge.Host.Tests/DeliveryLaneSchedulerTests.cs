@@ -161,6 +161,42 @@ public sealed class DeliveryLaneSchedulerTests
     }
 
     [Fact]
+    public async Task Explicit_revocation_seen_in_the_final_fence_cannot_renew_and_a_new_offer_proceeds()
+    {
+        using var f = new Fake(dispatch: true);
+        var old = Guid.NewGuid(); var next = Guid.NewGuid(); var sender = new DeliverySender("user");
+        var revoked = false;
+        f.Scheduler.Offer(old, "target", sender, "old", () => true, () => revoked);
+        await f.Gate.WaitToTypeAsync();
+        var waiting = f.Next();
+        revoked = true; f.Gate.DoneTyping();
+        Assert.Equal(LaneResult.Waiting, await waiting.WaitAsync(TimeSpan.FromSeconds(2)));
+        revoked = false;
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Equal(DeliveryOfferState.Dropped, f.Scheduler.Offer(old, "target", sender, "old", () => true).State);
+        Assert.Contains(f.Notices, notice => notice.Id == old.ToString() && notice.Reason.Contains("revoked authority"));
+        f.Scheduler.Offer(next, "target", sender, "new", () => true);
+        Assert.Equal(LaneResult.HandedOff, await f.Next());
+        Assert.Equal(next.ToString(), Assert.Single(f.Sent).Id);
+    }
+
+    [Fact]
+    public async Task A_failed_revocation_flush_preserves_pending_evidence_and_freezes_without_a_drop_notice()
+    {
+        using var f = new Fake(dispatch: true);
+        var id = Guid.NewGuid(); var sender = new DeliverySender("user"); var revoked = false;
+        f.Scheduler.Offer(id, "target", sender, "body", () => true, () => revoked);
+        revoked = true; f.FailWrite = true;
+        await Assert.ThrowsAsync<IOException>(() => f.Next());
+        Assert.Equal(DeliveryOfferState.Pending, f.Scheduler.Query(id, "target", sender).State);
+        Assert.Empty(f.Sent); Assert.Empty(f.Notices);
+        Assert.DoesNotContain(f.Records, record => record.State == "dropped");
+        f.FailWrite = false;
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Throws<InvalidOperationException>(() => f.Scheduler.Offer(Guid.NewGuid(), "target", sender, "new", () => true));
+    }
+
+    [Fact]
     public async Task Owner_is_first_in_same_second_burst_and_lanes_have_no_false_gap()
     {
         using var f = new Fake();

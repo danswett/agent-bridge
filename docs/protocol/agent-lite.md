@@ -45,6 +45,15 @@ channel, signature, body or target checks. Restarted handoffs remain unconfirmed
 without new keys; memory-only pending payloads follow the kernel's restart drop.
 The canonical frame and sequence come from the flushed pre-key handoff API.
 Leading attachment tokens use `(at)` so journal normalization cannot restore `@`.
+The lane normalizes the canonical body before escaping, including supplementary
+format characters that could otherwise disappear and expose an attachment token.
+Known node-addressed UUIDs use the authenticated sender/recorded full-target
+binding for history and body-HMAC checks even after discovery loses the target.
+This never resolves a new recipient, renews authority or admits another offer.
+An optional positive-revocation predicate distinguishes an identified PID/start
+stamp or account change from a temporarily false current fence. Proven revocation
+flushes `dropped: revoked authority` before removing the item and notifying through
+the existing notice seam. Busy, questions, holds and missing evidence stay pending.
 This source cut adds no dispatcher, shared store, CLI/helper rollout or live probe.
 
 - ID-first host selection ([#3607](https://github.com/danswett/agent-bridge/issues/3607)): `machine` is an exact present host device ID (32 hex digits; publishers use canonical lowercase and comparisons are exact). Names are display only; names, fragments and a name-reusing successor never retarget. Unknown or offline IDs refuse loudly with the ID, before signing or opening a channel; the host never retries or falls back to HA.

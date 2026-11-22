@@ -24,6 +24,14 @@ public static class DeliveryEnvelope
 
     public static (DeliveryHeader Header, string Body) Prepare(DeliveryHeader header, string text)
     {
+        var words = NormalizeBody(text);
+        var at = TimeZoneInfo.ConvertTime(header.At, Pacific);
+        at = new DateTimeOffset(at.Ticks - at.Ticks % TimeSpan.TicksPerSecond, at.Offset);
+        return (header with { At = at, N = words.Length }, words);
+    }
+
+    public static string NormalizeBody(string text)
+    {
         var body = new StringBuilder();
         foreach (var rune in text.Normalize(NormalizationForm.FormKC).EnumerateRunes())
         {
@@ -34,10 +42,7 @@ public static class DeliveryEnvelope
             }
             else if (Rune.GetUnicodeCategory(rune) != UnicodeCategory.Control) { body.Append(rune); }
         }
-        var words = Marker.Replace(body.ToString().TrimEnd().Normalize(NormalizationForm.FormKC), m => "(" + m.Value[1..]);
-        var at = TimeZoneInfo.ConvertTime(header.At, Pacific);
-        at = new DateTimeOffset(at.Ticks - at.Ticks % TimeSpan.TicksPerSecond, at.Offset);
-        return (header with { At = at, N = words.Length }, words);
+        return Marker.Replace(body.ToString().TrimEnd().Normalize(NormalizationForm.FormKC), m => "(" + m.Value[1..]);
     }
 
     public static string Format(DeliveryHeader header, string text)

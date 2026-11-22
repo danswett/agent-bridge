@@ -118,6 +118,12 @@ The host owns memory-only pending payloads; no shared-store adapter means never 
 Node loss drops never-handed-off pending metadata; prior handoff stays `Unconfirmed`, never resubmitted.
 Known UUIDs bind sender class/id, target and canonical body; re-offers neither renew authority nor
 promote `Typed`/uncertainty. Post-key journal failure atomically freezes further admission.
+The source-only [relay P2 follow-up](https://github.com/danswett/agent-bridge/issues/3717)
+adds an optional explicit `Revoked` predicate: `Current=false` alone never drops.
+Only positive incarnation (PID/start stamp), account change or explicit revocation
+evidence permits a flushed `dropped: revoked authority` and notice before progress
+past the stale item. Missing evidence stays pending. Authenticated node-history
+queries retain the UUID's recorded full target without new routing or admission.
 State stays node-bound injector evidence; protected cross-node recoverable payloads remain held.
 The dispatcher must not hold ReplyService's shared claim/typing slot across its callback.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
