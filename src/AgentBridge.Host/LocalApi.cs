@@ -198,8 +198,7 @@ public static class LocalApi
             && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } launching && launchIssuer.Of(channel) is { Kind: "session" } launcher)
         {
             if (!launchIssuer.IsLive(launcher)) { throw Refuse(op, launching, "the credential is no longer live", log); }
-            return data.ValueKind == JsonValueKind.Object && data.TryGetProperty("grant", out _) ? await agentLaunch.LaunchGrantedAsync(launcher, data)
-                : await agentLaunch.LaunchAsync(launcher, data);
+            return await agentLaunch.LaunchAsync(launcher, data);
         }
         if (Acts.Contains(op) && callers.Classify(channel, fresh: op == Ops.SessionReply) is { Kind: CallerKind.Agent } agent)
         {
