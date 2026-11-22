@@ -21,7 +21,8 @@ The implementation sequence belongs to
 [#1776](https://github.com/danswett/agent-bridge/issues/1776) registry signing
 and reader verification are separate.
 
-Today `CommandAction` has no `accept-host-sign` action.
+The C# and PWA person-command parsers register `accept-host-sign`; their shared
+vectors prove the command contract, not authorization to enable v2.
 `RosterVerifier.AcceptHostSign` is init-only and defaults to false in production;
 the PWA verifier also defaults to false. `HostRosterReader` reads an existing
 four-field pin and retains a verifier in memory, but has no disk write API.

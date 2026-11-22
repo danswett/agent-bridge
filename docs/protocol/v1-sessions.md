@@ -505,7 +505,7 @@ to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The work
 JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
 10.3%, of margin). Negotiated handles lower the unchanged workload further to **9,606 bytes**
 (549 saved, 4,486 above the goal), still 53 patches and no whole upserts. The budget is now
-**10,600 bytes**, 994 bytes (10.3%) of margin. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
+**10,600 bytes**, 994 bytes (10.3%) of margin. #3581's per-reply `responseId` then raised the measured total to 10,983..11,012 bytes, so the budget is now **11,400 bytes**. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
 
 #### Resuming without a snapshot
 
@@ -2302,6 +2302,7 @@ to be the owner's answer. The next known assistant cycle reestablishes attributi
 | `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is |
 | `turn` | string? | **New (#292).** The id of the latest turn, which `userMessage`, `reasoning`, `currentTool` and `question` belong to: the same id [`session.history`](v1-history.md#live-turns-and-history) gives it, so a client merging live activity with history pages draws it once. Absent before the first prompt, when the host could not read where the latest turn began, and after a record that may have started a turn but could not be read, until the next readable prompt. Never trimmed by the session budget |
 | `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply (`own.response`, else `response`) was written in: `turn` once the latest turn has replied, an earlier turn's until then, so a client never draws the last turn's reply under a new prompt ([v1-history.md](v1-history.md#live-turns-and-history)). Absent with no such reply or when its turn is not known. Never trimmed |
+| `responseId` | string? | Optional (#2667), Copilot only: the latest main reply's `session.history` response-part id (record hash plus part index). Different ids retain successive replies within one turn; the same id updates one streaming slot. Stored parts replace that slot by id, without duplicating it. Absent with no known reply; Claude, Codex and older hosts keep the legacy single-live-reply fallback. Older clients ignore this field and keep reading `response`/`own.response` unchanged |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
