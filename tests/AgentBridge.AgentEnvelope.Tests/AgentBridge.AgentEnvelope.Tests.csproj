@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.AgentEnvelope\AgentBridge.AgentEnvelope.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
     <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
   </ItemGroup>
 
