@@ -250,14 +250,15 @@ public sealed class StopService : ISessionStopper
     {
         StopResult? CheckAgent()
         {
+            if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
             if (probe.Active() is { } changed) { return Refused(changed); }
             if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
             { return new(StopOutcome.Confirm, "person-required"); }
+            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
             if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
                 || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
             { return Stale("the session's process has changed"); }
-            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
-            return beforeDispatch?.Invoke(pid, startedAt) == false ? AuditRefused() : null;
+            return null;
         }
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }

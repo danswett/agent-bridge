@@ -199,6 +199,29 @@ public sealed class FleetStopTests : IDisposable
     [InlineData("workspace")]
     public async Task Changes_while_waiting_for_the_injector_refuse_agent_stop_without_keys(string change)
         => await ChangedBeforeTyping(change, injectorSlot: true);
+    [Theory]
+    [InlineData("working")]
+    [InlineData("question")]
+    public async Task Changes_during_the_last_grant_transaction_refuse_agent_stop_without_keys(string change)
+    {
+        Own();
+        var changed = false;
+        injector.BeforeSlot = () =>
+        {
+            // The grant transaction resolves its target with Get, not the safety read's GetForStop.
+            source.BeforeGet = () =>
+            {
+                source.BeforeGet = null;
+                changed = true;
+                if (change == "working") { source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working }; }
+                else { Fixture.Append(Path.Combine(f.CopilotHome, "session-state", id, "events.jsonl"), Copilot.ToolStart("q9", "ask_user", new { message = "Which?" }, 5)); }
+            };
+            return Task.CompletedTask;
+        };
+        var result = await End();
+        Assert.True(changed);
+        Assert.Equal(("refused", "person-required", 0, 0), (result.Outcome, result.Reason, injector.Calls, control.Terminations));
+    }
     async Task ChangedBeforeTyping(string change, bool injectorSlot)
     {
         Own();
@@ -260,6 +283,7 @@ public sealed class FleetStopTests : IDisposable
         public List<Session> Sessions = [];
         public Func<string, SessionProcess?> Binding = _ => null;
         public Func<Task>? BeforeEnding;
+        public Action? BeforeGet;
         bool ending;
         public DiscoveryHeld? Held { get; set; }
         public SessionProcess? ProcessOf(string id) => Binding(id);
@@ -268,7 +292,11 @@ public sealed class FleetStopTests : IDisposable
         public IReadOnlyList<Session> Snapshot() => Sessions;
         public SessionList List(string? cursor = null) => new(Snapshot(), 0);
         public Session? GetForStop(string id) => Sessions.Find(s => s.Id == id);
-        public Session? Get(string id) => GetForStop(id) is { } s && ending ? s with { Status = SessionStatus.Ending } : GetForStop(id);
+        public Session? Get(string id)
+        {
+            BeforeGet?.Invoke();
+            return GetForStop(id) is { } s && ending ? s with { Status = SessionStatus.Ending } : GetForStop(id);
+        }
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public async Task SetEndingAsync(string id, bool value) { if (value && BeforeEnding is not null) { await BeforeEnding(); } ending = value; }
         public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
