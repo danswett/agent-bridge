@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.App.Core.Grants;
 
 namespace AgentBridge.App.Core;
@@ -54,36 +55,49 @@ public sealed class GrantListRow
     static string Outcome(string? value) => value is "delivered" or "started" or "stopped" or "refused" or "unconfirmed" or "reserved" or "pending" or "failed" or "exited" or "issued" or "revoked" or "committed" or "abandoned" or "notLaunched" ? value : "Unknown";
 }
 
-public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
+public sealed class GrantListViewModel(IGrantListReceiver receiver, IVerifiedGrantReader? verifiedReader = null) : Observable
 {
+    readonly IVerifiedGrantReader reader = verifiedReader ?? receiver as IVerifiedGrantReader ?? new UnavailableVerifiedGrantReader();
     IReadOnlyList<GrantListRow> rows = [];
     string error = "";
     string? readProblem = "unavailable";
+    FleetGrantReadProblem verifiedProblem = FleetGrantReadProblem.Unavailable;
+    bool g7Ready;
     bool busy;
     public GrantListViewModel() : this(new UnavailableReceiver()) { }
     public IReadOnlyList<GrantListRow> Rows => rows;
     public string Error => error;
     public bool Busy => busy;
     bool ReceiverAvailable => receiver.Online && receiver.Problem is null;
-    public bool Available => ReceiverAvailable && readProblem is null;
+    public bool Available => ReceiverAvailable && verifiedProblem == FleetGrantReadProblem.None && readProblem is null;
+    public bool CanIssueFirst => !busy && ReceiverAvailable && verifiedProblem == FleetGrantReadProblem.RotationRequired && g7Ready;
+    public string FirstIssueNotice => CanIssueFirst ? "First issue rotates this profile after person confirmation. Only a verified receiver receipt confirms rotation." : "";
     void Availability()
     {
         foreach (var row in rows) { row.Unavailable = !Available || row.Receiver != receiver.Receiver; }
-        error = (receiver.Problem ?? readProblem) is "RotationRequired" or "rotation-required" ? "RotationRequired: person key rotation is required. Grant operations remain blocked."
+        error = (receiver.Problem ?? readProblem) is "RotationRequired" or "rotation-required" ? "RotationRequired: receiver list unavailable." + (CanIssueFirst ? "" : " Grant operations remain blocked.")
             : !Available ? "Receiver adapter unavailable or offline. Last verified counters are stale; no new receipt is confirmed." : "";
     }
     public async Task RefreshAsync()
     {
         if (busy) { return; }
+        verifiedProblem = FleetGrantReadProblem.Unavailable; g7Ready = false;
         Availability();
         if (!ReceiverAvailable) { RaiseAll(); return; }
         busy = true; RaiseAll();
         try
         {
-            var result = await receiver.ReadAsync();
+            var verified = await reader.ReadAsync();
             if (!ReceiverAvailable) { Availability(); return; }
+            if (verified is null) { throw new InvalidDataException("missing verified receiver result"); }
+            verifiedProblem = verified.Problem; g7Ready = verified.G7Ready;
+            var result = verified.Data;
             if (result is null) { throw new InvalidDataException("missing receiver result"); }
-            if (result.Problem is not null) { readProblem = result.Problem is "RotationRequired" or "rotation-required" ? "RotationRequired" : "unavailable"; throw new InvalidDataException("receiver read unavailable"); }
+            if (verifiedProblem != FleetGrantReadProblem.None || result.Problem is not null)
+            {
+                readProblem = verifiedProblem == FleetGrantReadProblem.RotationRequired || result.Problem is "RotationRequired" or "rotation-required" ? "RotationRequired" : "unavailable";
+                Availability(); return;
+            }
             if (result.Grants.IsDefault) { throw new InvalidDataException("missing receiver snapshot"); }
             var previous = rows.ToDictionary(r => (r.Id, r.Generation, r.Receiver));
             var refreshed = result.Grants.Select(snapshot =>
@@ -98,12 +112,13 @@ public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
         }
         catch (Exception e) when (UnavailableError(e))
         {
+            verifiedProblem = FleetGrantReadProblem.Unavailable; g7Ready = false;
             readProblem ??= "unavailable";
             error = readProblem == "RotationRequired" ? "RotationRequired: person key rotation is required."
                 : "Receiver read unavailable. Last verified counters are stale.";
             foreach (var row in rows) { row.Unavailable = true; }
         }
-        finally { busy = false; RaiseAll(); }
+        finally { busy = false; Availability(); RaiseAll(); }
     }
     public async Task RevokeAsync(GrantListRow row, Func<string, Task<bool>> personConfirm)
     {
