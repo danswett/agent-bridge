@@ -20,6 +20,7 @@ sealed record AppOptions
     // Draw the demo's cards, write what was drawn to this file and exit (CI's smoke test).
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
+    public bool HistoryScrollPreserve { get; init; }
     public bool LiveListReplay { get; init; }
 
     public static AppOptions Parse(string[] args)
@@ -35,6 +36,7 @@ sealed record AppOptions
                 case "--demo": o = o with { Demo = true }; break;
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
+                case "--self-test-scroll-preserve" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollPreserve = true }; break;
                 case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
             }
         }
