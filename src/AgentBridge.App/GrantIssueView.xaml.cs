@@ -49,13 +49,14 @@ public sealed partial class GrantIssueView : UserControl
     {
         if (busy || viewModel is null) { return; }
         InputProblem.Text = "";
+        reviewedDocument = null;
+        PersonDigest.Text = "";
         JsonDocument document;
         try { document = JsonDocument.Parse(SourceDocument.Text, new() { MaxDepth = 12 }); }
         catch (JsonException) { InputProblem.Text = "Enter a valid explicit grant document before reviewing."; return; }
         using (document)
         {
             busy = true;
-            reviewedDocument = null;
             var source = SourceDocument.Text;
             try
             {
