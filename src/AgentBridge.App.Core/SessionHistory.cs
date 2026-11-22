@@ -18,7 +18,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
 {
     readonly object gate = new();
     readonly List<HistoryTurn> held = [];
-    readonly Dictionary<string, long> live = [];
+    readonly Dictionary<string, Dictionary<string, long>> live = [];
+    readonly Dictionary<string, Dictionary<string, (DateTimeOffset? At, string? Text)>> revisions = [];
     readonly HashSet<string> identified = [];
     long observed;
     // Pages read past turns already held after a stale cursor: the held turns are at most Kept, a page is
@@ -115,15 +116,23 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var at = held.FindIndex(t => t.Id == turn.Id);
                 if (at >= 0) { turn = turn with { Prompt = turn.Prompt ?? held[at].Prompt, Parts = turn.Parts.Count == 0 ? held[at].Parts : turn.Parts }; }
                 if (at >= 0 && held[at] == turn with { Parts = held[at].Parts } && held[at].Parts.SequenceEqual(turn.Parts)) { return; }
-                var replied = at < 0 || !held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text))
-                    .SequenceEqual(turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text)));
+                var replied = at < 0 || !held[at].Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text, p.Truncated))
+                    .SequenceEqual(turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => (p.Id, p.Text, p.Truncated)));
+                if (replied)
+                {
+                    if (!live.TryGetValue(turn.Id, out var versions)) { live[turn.Id] = versions = []; }
+                    foreach (var part in turn.Parts.Where(p => p.Kind == HistoryPartKind.Response))
+                    {
+                        if (at < 0 || !held[at].Parts.Any(p => p.Id == part.Id && p.Text == part.Text && p.Truncated == part.Truncated)) { versions[part.Id] = ++observed; }
+                    }
+                }
                 if (at >= 0) { held[at] = turn; }
                 else
                 {
                     var index = before ? held.FindIndex(t => t.Id == a.Turn || t.Id == a.Notice?.Id) : held.Count;
                     held.Insert(index < 0 ? held.Count : index, turn);
                 }
-                if (replied) { live[turn.Id] = ++observed; }
+                PruneRevisions(turn);
                 changed = true;
             }
             if (a.Notice is { } carried && held.All(t => t.Id != a.Turn)) { Keep(carried); }
@@ -144,7 +153,13 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var parts = turn.Parts.ToList();
                 var last = string.IsNullOrEmpty(a.ResponseId) ? parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response)
                     : parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId);
-                var finished = !string.IsNullOrEmpty(a.ResponseId) && last >= 0 && parts[last].At != default && parts[last].Truncated != true;
+                var mutable = session.Agent == AgentKind.Codex && !string.IsNullOrEmpty(a.ResponseId);
+                var items = revisions.GetValueOrDefault(a.ResponseTurn);
+                var prior = items?.GetValueOrDefault(a.ResponseId ?? "") ?? default;
+                var current = session.UpdatedAt == default || prior.At is not { } before || session.UpdatedAt >= before;
+                var revised = current && prior.Text != voice.Response;
+                var finished = mutable && (!current || voice.ResponseTruncated && last >= 0 && parts[last].Truncated != true)
+                    || !string.IsNullOrEmpty(a.ResponseId) && last >= 0 && parts[last].At != default && parts[last].Truncated != true && (!mutable || !revised);
                 if (!finished && (last < 0 || parts[last].Text != voice.Response || (parts[last].Truncated == true) != voice.ResponseTruncated))
                 {
                     var part = new HistoryPart
@@ -159,6 +174,12 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                         parts.RemoveAt(parts.FindIndex(p => p.Kind == HistoryPartKind.Response));
                     }
                     Keep(turn with { Parts = parts }, before: true);
+                }
+                if (mutable && current && (!voice.ResponseTruncated || !finished) && a.ResponseId is { } responseId)
+                {
+                    if (items is null) { revisions[a.ResponseTurn] = items = []; }
+                    items[responseId] = (session.UpdatedAt == default ? prior.At : session.UpdatedAt, voice.Response);
+                    PruneRevisions(Held(a.ResponseTurn));
                 }
             }
             if (a.Notice is { } notice) { Keep(notice); }
@@ -200,10 +221,23 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     {
         var over = held.Count - HistoryLimits.Kept;
         if (over <= 0) { return; }
-        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); identified.Remove(turn.Id); }
+        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); }
         held.RemoveRange(0, over);
         before = null;
         OldestDropped = true;
+    }
+
+    void PruneRevisions(HistoryTurn turn)
+    {
+        var kept = turn.Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Id).ToHashSet();
+        if (revisions.TryGetValue(turn.Id, out var items))
+        {
+            foreach (var id in items.Keys.Where(id => !kept.Contains(id)).ToArray()) { items.Remove(id); }
+        }
+        if (live.TryGetValue(turn.Id, out var versions))
+        {
+            foreach (var id in versions.Keys.Where(id => !kept.Contains(id)).ToArray()) { versions.Remove(id); }
+        }
     }
 
     async Task RunAsync(bool newest, CancellationToken ct, bool refresh = false)
@@ -283,14 +317,17 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                     var prior = held[at];
                     var reply = turn.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text));
                     var retained = prior.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text));
-                    var keep = retained is not null && (reply is null || live.GetValueOrDefault(turn.Id) > started && reply.Text != retained.Text);
+                    var newer = live.GetValueOrDefault(turn.Id)?.Where(item => item.Value > started).Select(item => item.Key).ToHashSet();
+                    var keep = retained is not null && (reply is null || newer is { Count: > 0 } && reply.Text != retained.Text);
                     held[at] = turn with
                     {
                         Prompt = turn.Prompt ?? prior.Prompt,
                         Parts = identified.Contains(turn.Id) && turn.Truncated != true && prior.Truncated != true
-                            && turn.PartsMore is not > 0 && prior.PartsMore is not > 0 ? MergeReplies(prior.Parts, turn.Parts, keep)
+                            && turn.PartsMore is not > 0 && prior.PartsMore is not > 0 ? MergeReplies(prior.Parts, turn.Parts, keep, newer)
+                            : identified.Contains(turn.Id) && newer is { Count: > 0 } ? MergeReplies(prior.Parts.Where(p => newer.Contains(p.Id)).ToArray(), turn.Parts, true)
                             : keep ? [.. turn.Parts.Where(p => p.Kind != HistoryPartKind.Response), .. prior.Parts.Where(p => p.Kind == HistoryPartKind.Response)] : turn.Parts,
                     };
+                    PruneRevisions(held[at]);
                 }
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
@@ -328,7 +365,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var over = held.Count - HistoryLimits.Kept;
                 if (over > 0)
                 {
-                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); identified.Remove(turn.Id); }
+                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); }
                     held.RemoveRange(held.Count - over, over);
                     NewestDropped = true;
                 }
@@ -337,7 +374,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         return added;
     }
 
-    static IReadOnlyList<HistoryPart> MergeReplies(IReadOnlyList<HistoryPart> held, IReadOnlyList<HistoryPart> page, bool keepLive)
+    static IReadOnlyList<HistoryPart> MergeReplies(IReadOnlyList<HistoryPart> held, IReadOnlyList<HistoryPart> page, bool keepLive, HashSet<string>? keepItems = null)
     {
         var parts = held.Where(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text)).ToList();
         var previous = -1;
@@ -347,7 +384,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             var at = parts.FindIndex(p => p.Id == part.Id);
             if (at >= 0)
             {
-                if (!keepLive || part.Text == parts[at].Text) { parts[at] = part; }
+                if (!(keepItems?.Contains(part.Id) ?? keepLive)
+                    || part.Text == parts[at].Text && !(part.Truncated == true && parts[at].Truncated != true)) { parts[at] = part; }
                 previous = at;
                 continue;
             }
@@ -356,6 +394,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             previous = previous >= 0 ? previous + 1 : later < 0 ? parts.Count : later;
             parts.Insert(previous, part);
         }
-        return parts;
+        var replies = parts.Where(p => p.Kind == HistoryPartKind.Response).TakeLast(HistoryLimits.TextsPerTurn).ToHashSet();
+        return parts.Where(p => p.Kind != HistoryPartKind.Response || replies.Contains(p)).ToArray();
     }
 }

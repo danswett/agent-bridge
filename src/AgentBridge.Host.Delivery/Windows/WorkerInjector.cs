@@ -325,7 +325,7 @@ public sealed class WorkerInjector : IConsoleInjector
 
     internal sealed class ReplyWriteEvidence(KeyPlan plan)
     {
-        readonly bool supported = plan.Sends is [{ Enter: false }, { Text.Length: 0, Enter: true }];
+        readonly bool supported = plan.Sends is [{ Submit: SubmitKey.None }, { Text.Length: 0, Submit: SubmitKey.Enter or SubmitKey.Queue }];
         int? text;
         bool? enter = false;
         bool writingText, writingEnter;
@@ -335,7 +335,7 @@ public sealed class WorkerInjector : IConsoleInjector
             if (!supported) return;
             if (line == "writing 0") { writingText = true; text = null; }
             else if (line == "wrote 0") { writingText = false; text = plan.Sends[0].Text.Length; }
-            else if (line == "writing 1 enter") { writingEnter = true; enter = null; }
+            else if (line == $"writing 1 {plan.Sends[1].Submit.ToString().ToLowerInvariant()}") { writingEnter = true; enter = null; }
             else if (line == "wrote 1" && writingEnter) { writingEnter = false; enter = true; }
             else if (line.StartsWith("fail partial ", StringComparison.Ordinal)
                 && int.TryParse(line.AsSpan(13), CultureInfo.InvariantCulture, out var records) && records >= 0)
@@ -349,7 +349,8 @@ public sealed class WorkerInjector : IConsoleInjector
         public InjectionResult Apply(InjectionResult result) => !supported ? result : result with
         {
             TextWritten = text,
-            EnterWritten = enter,
+            EnterWritten = plan.Sends[1].Submit == SubmitKey.Enter ? enter : null,
+            SubmitWritten = enter,
             TextFingerprint = text is { } count ? InjectionResult.Fingerprint(plan.Sends[0].Text[..count]) : null,
         };
     }

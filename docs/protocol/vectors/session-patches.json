@@ -5468,7 +5468,8 @@
               "updatedAt": "2026-10-28T04:00:12.723Z",
               "activity": {
                 "response": "Working on it.",
-                "responseTurn": "iGVW87LiK1hYfY3B"
+                "responseTurn": "iGVW87LiK1hYfY3B",
+                "responseId": "GKkJaJ8yEvjbz8Zv.0"
               }
             }
           },
@@ -5491,6 +5492,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "GKkJaJ8yEvjbz8Zv.0",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5543,6 +5545,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "GKkJaJ8yEvjbz8Zv.0",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5598,6 +5601,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "GKkJaJ8yEvjbz8Zv.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -5666,6 +5670,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "GKkJaJ8yEvjbz8Zv.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -5733,6 +5738,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "GKkJaJ8yEvjbz8Zv.0",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5764,7 +5770,8 @@
             "set": {
               "updatedAt": "2026-10-28T04:00:23.986Z",
               "activity": {
-                "response": "0a1b2c3 First commit"
+                "response": "0a1b2c3 First commit",
+                "responseId": "UNVtdQzHhKKYeiSI.0"
               }
             }
           },
@@ -5787,6 +5794,7 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turn": "iGVW87LiK1hYfY3B",
               "responseTurn": "iGVW87LiK1hYfY3B",
+              "responseId": "UNVtdQzHhKKYeiSI.0",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5820,7 +5828,8 @@
               "statusSince": "2026-10-28T04:00:24.484Z",
               "updatedAt": "2026-10-28T04:00:24.484Z",
               "activity": {
-                "turnCount": 1
+                "turnCount": 1,
+                "responseId": null
               },
               "class": "done",
               "classSince": "2026-10-28T04:00:24.484Z"
@@ -5988,7 +5997,8 @@
               "updatedAt": "2026-10-28T04:01:15.380Z",
               "activity": {
                 "response": "ok",
-                "responseTurn": "lQsY1wedVqMU8mF1"
+                "responseTurn": "lQsY1wedVqMU8mF1",
+                "responseId": "KHuNVjB_FRXOx_Xr.0"
               }
             }
           },
@@ -6010,6 +6020,7 @@
               "userMessage": "Say ok and nothing else.",
               "turn": "lQsY1wedVqMU8mF1",
               "responseTurn": "lQsY1wedVqMU8mF1",
+              "responseId": "KHuNVjB_FRXOx_Xr.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -6043,7 +6054,8 @@
               "statusSince": "2026-10-28T04:01:15.837Z",
               "updatedAt": "2026-10-28T04:01:15.837Z",
               "activity": {
-                "turnCount": 2
+                "turnCount": 2,
+                "responseId": null
               },
               "class": "done",
               "classSince": "2026-10-28T04:01:15.837Z"

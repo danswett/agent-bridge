@@ -32,12 +32,16 @@ public sealed class GrantStore
     readonly GrantScope knownOptions;
     readonly TimeProvider time;
     readonly Action<string, byte[]> write;
+    readonly int maxBytes;
     GrantStoreProblem failure;
 
     public GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, GrantScope knownOptions, TimeProvider? time = null)
         : this(profileFolder, key, audit, knownOptions, time, null) { }
-    internal GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, GrantScope knownOptions, TimeProvider? time, Action<string, byte[]>? write)
+    internal GrantStore(string profileFolder, P256KeyPair key, AgentAuditLog audit, GrantScope knownOptions, TimeProvider? time,
+        Action<string, byte[]>? write, int maxBytes = MaxBytes)
     {
+        if (maxBytes is < 32 or > MaxBytes) { throw new ArgumentOutOfRangeException(nameof(maxBytes)); }
+        this.maxBytes = maxBytes;
         folder = Path.GetFullPath(profileFolder); path = Path.Combine(folder, FileName);
         if (folder != Path.GetFullPath(audit.Profile)) { throw new ArgumentException("audit profile mismatch", nameof(audit)); }
         this.key = key; this.audit = audit; this.time = time ?? TimeProvider.System;
@@ -117,7 +121,7 @@ public sealed class GrantStore
             if (next is null) { return result; }
             var body = JsonSerializer.SerializeToUtf8Bytes(next, Json);
             // Revoke must never be refused by the lifetime cap; each needs a live grant, so Load's 512 bounds them.
-            if (body.Length > MaxBytes - 32 || next.Intents.Length > 256 && next.Intents[^1].Action != "grant.revoke") { return new(GrantStoreProblem.Oversize); }
+            if (body.Length > maxBytes - 32 || next.Intents.Length > 256 && next.Intents[^1].Action != "grant.revoke") { return new(GrantStoreProblem.Oversize); }
             var intent = next.Intents[^1];
             var metadata = new GateAuditMetadata(1, intent.Operation, Guid.Empty, 0, "intent", "local",
                 "person-client", intent.Grant, "none", GrantBinding: Convert.ToHexString(SHA256.HashData(body)));
@@ -147,7 +151,7 @@ public sealed class GrantStore
             if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) { throw new StoreFault(GrantStoreProblem.Unreadable); }
             using var stream = File.OpenRead(path);
             if (!DeviceMacFile.IsPrivate(path)) { throw new StoreFault(GrantStoreProblem.Unreadable); }
-            if (stream.Length > MaxBytes) { throw new StoreFault(GrantStoreProblem.Oversize); }
+            if (stream.Length > maxBytes) { throw new StoreFault(GrantStoreProblem.Oversize); }
             if (stream.Length < 32) { throw new StoreFault(GrantStoreProblem.BadMac); }
             var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes); body = bytes[32..];
             if (!CryptographicOperations.FixedTimeEquals(bytes.AsSpan(0, 32), Mac(body))) { throw new StoreFault(GrantStoreProblem.BadMac); }
