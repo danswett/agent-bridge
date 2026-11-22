@@ -248,6 +248,17 @@ public sealed class StopService : ISessionStopper
     // or asking meanwhile needs a second press like any other.
     async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch, bool personConfirmation)
     {
+        StopResult? CheckAgent()
+        {
+            if (probe.Active() is { } changed) { return Refused(changed); }
+            if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
+            { return new(StopOutcome.Confirm, "person-required"); }
+            if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
+                || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
+            { return Stale("the session's process has changed"); }
+            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
+            return beforeDispatch?.Invoke(pid, startedAt) == false ? AuditRefused() : null;
+        }
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
         // Gone between the press and now: what the press asked for has happened.
@@ -287,22 +298,15 @@ public sealed class StopService : ISessionStopper
                 }
                 if (personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
-                if (!personConfirmation)
-                {
-                    if (probe.Active() is { } changed) { return Refused(changed); }
-                    if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
-                    { return new(StopOutcome.Confirm, "person-required"); }
-                    if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
-                        || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
-                    { return Stale("the session's process has changed"); }
-                    asking = MayBeAsking(current, out notReady);
-                    if (ConfirmationHint(current, asking) is not null) { return new(StopOutcome.Confirm, "person-required"); }
-                    if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
-                }
+                if (!personConfirmation && CheckAgent() is { } agentRefusal) { return agentRefusal; }
                 if (ownsTyping && !asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys, deadline.Token); }
+                    StopResult? fenceRefusal = null;
+                    string? Proceed() { fenceRefusal = CheckAgent(); return fenceRefusal is null ? null : "agent-stop-refused"; }
+                    // Screen reads share the injector's slot, so the earlier check can be stale.
+                    var plan = personConfirmation ? ExitKeys : ExitKeys with { Proceed = Proceed };
+                    try { typing = await injector.InjectAsync(pid, plan, deadline.Token); }
                     catch (InjectorWorkerException e) when (e.Exited.IsCompletedSuccessfully)
                     { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
                     catch (Exception e)
@@ -312,6 +316,7 @@ public sealed class StopService : ISessionStopper
                         log($"end of {Short(session.Id)} retains its injector fence and PID handle: {e.Message}");
                         typing = new InjectionResult(InjectionStatus.Interrupted, e.Message);
                     }
+                    if (typing.Status == InjectionStatus.NothingTyped && fenceRefusal is not null) { return fenceRefusal; }
                     typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }

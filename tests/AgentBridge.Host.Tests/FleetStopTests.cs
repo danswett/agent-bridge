@@ -187,11 +187,26 @@ public sealed class FleetStopTests : IDisposable
     [InlineData("policy")]
     [InlineData("workspace")]
     public async Task Changes_while_showing_ending_refuse_agent_stop_without_keys(string change)
+        => await ChangedBeforeTyping(change, injectorSlot: false);
+    [Theory]
+    [InlineData("revoke")]
+    [InlineData("prompt")]
+    [InlineData("question")]
+    [InlineData("working")]
+    [InlineData("held")]
+    [InlineData("pid")]
+    [InlineData("policy")]
+    [InlineData("workspace")]
+    public async Task Changes_while_waiting_for_the_injector_refuse_agent_stop_without_keys(string change)
+        => await ChangedBeforeTyping(change, injectorSlot: true);
+    async Task ChangedBeforeTyping(string change, bool injectorSlot)
     {
         Own();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        source.BeforeEnding = async () => { entered.SetResult(); await release.Task; };
+        async Task Wait() { entered.SetResult(); await release.Task; }
+        if (injectorSlot) { injector.BeforeSlot = Wait; }
+        else { source.BeforeEnding = Wait; }
         var run = End();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
@@ -209,14 +224,20 @@ public sealed class FleetStopTests : IDisposable
             }
         }
         finally { release.SetResult(); }
-        Assert.Equal("refused", (await run).Outcome);
+        var result = await run;
+        Assert.Equal("refused", result.Outcome);
+        if (change == "revoke") { Assert.Equal("grant-revoked", result.Reason); }
         Assert.Equal(0, injector.Calls);
         Assert.Equal(0, control.Terminations);
     }
-    [Fact]
-    public async Task Person_stop_keeps_its_existing_path_while_showing_ending()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Person_stop_keeps_its_existing_path_while_waiting(bool injectorSlot)
     {
-        source.BeforeEnding = () => { stops.LaunchHeld = _ => "startup question"; return Task.CompletedTask; };
+        Task Question() { stops.LaunchHeld = _ => "startup question"; return Task.CompletedTask; }
+        if (injectorSlot) { injector.BeforeSlot = Question; }
+        else { source.BeforeEnding = Question; }
         Assert.Equal(StopOutcome.Ended, (await stops.StopAsync(new() { Id = id, Request = Guid.NewGuid().ToString() })).Outcome);
         Assert.Equal(1, injector.Calls);
     }
@@ -225,6 +246,7 @@ public sealed class FleetStopTests : IDisposable
     {
         Own();
         Assert.Equal("ended", (await End()).Outcome);
+        Assert.Single(GateAuditProjection.Load(Folder).Rows, r => r.Action == Ops.SessionStop && r.Gate?.Phase == "intent");
         Assert.Equal(new GrantUsage(1, 1, 0), counters.Read(grant.Id, 1).Usage);
         source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Working };
         var result = await stops.StopAuditedAsync(new() { Id = id, Request = Guid.NewGuid().ToString() }, null, personConfirmation: false);
@@ -275,7 +297,12 @@ public sealed class FleetStopTests : IDisposable
     sealed class Injector(Control control) : IConsoleInjector
     {
         public int Calls;
-        public Task<InjectionResult> InjectAsync(int pid, KeyPlan plan, CancellationToken cancellationToken = default)
-        { Calls++; control.Exited = control.ExitOnTyping; return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "fixture")); }
+        public Func<Task>? BeforeSlot;
+        public async Task<InjectionResult> InjectAsync(int pid, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            if (BeforeSlot is not null) { await BeforeSlot(); }
+            if (plan.Proceed?.Invoke() is { } stop) { return new(InjectionStatus.NothingTyped, stop); }
+            Calls++; control.Exited = control.ExitOnTyping; return new(InjectionStatus.Typed, "fixture");
+        }
     }
 }

@@ -107,8 +107,11 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 {
                     denial = Check(state);
                     if (denial is not null || target!.ProcessInstance != new ProcessInstance(pid, at)) { denial ??= "scope"; return (null, new(GrantStoreProblem.None)); }
-                    intent = Entry("intent", "attempted", "none");
-                    if (!audit.Append(intent)) { intent = null; denial = "audit-unavailable"; }
+                    if (intent is null)
+                    {
+                        intent = Entry("intent", "attempted", "none");
+                        if (!audit.Append(intent)) { intent = null; denial = "audit-unavailable"; }
+                    }
                     return (null, new(GrantStoreProblem.None));
                 }, allowNew: false);
                 if (!authorized.Usable) { denial = FleetGrantLaunch.StoreReason(authorized.Problem); }
@@ -130,6 +133,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
             if (!audit.Append(intent with { Outcome = outcome, Gate = intent.Gate! with
                 { Phase = "terminal", ReasonCode = reason == "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused" } }))
             { return Receipt("unconfirmed", "audit-unavailable"); }
+            if (outcome == "refused") { return Receipt(outcome, reason); }
             var counters = new GrantCounters(store);
             if (outcome == "ended" && !counters.Reconcile(input.Grant, _ => new(null),
                 inspect ?? FleetGrantLaunch.Observe, session => credentials.LaunchGate.SessionEnded(session)).Accepted)
