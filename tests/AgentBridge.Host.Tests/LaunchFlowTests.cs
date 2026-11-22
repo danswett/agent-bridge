@@ -724,17 +724,17 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait for its own transcript activity", StringComparison.Ordinal))));
         Assert.NotNull(launcher.HeldForReply(Id));
 
         Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
-            Copilot.User("trusted it, then this", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+            Copilot.User("trusted it, then this", 1).Replace(Copilot.At(1), DateTimeOffset.UtcNow.ToString("O")), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
         await source.RefreshAsync();
         Assert.Null(launcher.HeldForReply(Id));
     }
 
     // #855 L1: a new CLI's session.resume ends the killed turn, which counts a turn, with nobody having
-    // typed: replies stay held. Only a prompt of the person's after the launch lets them through.
+    // typed: replies stay held. Activity after this process started lets them through.
     [Fact]
     public async Task A_resume_that_ends_a_killed_turn_does_not_lift_the_hold_but_a_prompt_typed_at_the_machine_does()
     {
@@ -746,13 +746,13 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait for its own transcript activity", StringComparison.Ordinal))));
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 30));
         await source.RefreshAsync();
         Assert.NotNull(launcher.HeldForReply(Id));
 
         // A prompt and the turn it starts, not yet ended: the turn count is the same as before.
-        Fixture.Append(events, Copilot.User("trusted it, then this", 40), Copilot.TurnStart(41));
+        Fixture.Append(events, Copilot.User("trusted it, then this", 40).Replace(Copilot.At(40), DateTimeOffset.UtcNow.ToString("O")), Copilot.TurnStart(41));
         await source.RefreshAsync();
         Assert.Null(launcher.HeldForReply(Id));
     }
