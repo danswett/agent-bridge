@@ -34,7 +34,7 @@ public static class FleetGrantReadDataProof
     sealed record Document(int Version, Guid Id, string Account, Issuer Issuer, Audience Audience,
         Subject[] Subjects, string[] Actions, Scope Scope, Caps Caps, DateTimeOffset NotBefore, long Generation,
         DateTimeOffset ExpiresAt, Role[] Roles, Target[] StopTargets, bool AllowAllLaunch);
-    sealed record Counters(int Hour, int Day, int Pending, int Live, string[] Requests,
+    internal sealed record Counters(int Hour, int Day, int Pending, int Live, string[] Requests,
         string? LastCaller, string? LastOutcome, DateTimeOffset ObservedAt, string[] PendingRequests, string[] LiveSessions);
 
     public static FleetGrantReadDataResult Seal(FleetGrantReadDataPage page, FleetGrantReadDataContext context,
