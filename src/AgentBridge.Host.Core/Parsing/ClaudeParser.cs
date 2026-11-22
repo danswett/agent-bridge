@@ -154,6 +154,16 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
                 S.UncountedTurn = false;
                 break;
+            // The person's message sent while the agent worked: not a user entry (below), a prompt all the same.
+            case "attachment" when QueuedPrompt(e) is { } queuedText:
+                S.StartedAt ??= Json.Time(e, "timestamp");
+                S.FirstUserMessage ??= queuedText;
+                S.UserMessage = queuedText;
+                TurnStarts();
+                ResetReplyIdentity(known: false);
+                S.Prompt(Json.Time(e, "timestamp"));
+                S.UncountedTurn = false;
+                break;
             case "system" when Json.Str(e, "subtype") == "compact_boundary":
                 S.Compactions++;
                 break;
@@ -188,6 +198,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 return true;
             case "assistant":
                 Assistant(e, at);
+                return true;
+            case "attachment" when QueuedPrompt(e) is { } queuedText:
+                ResetReplyIdentity(known: true);
+                UserPrompt(queuedText, at);
                 return true;
             case "system":
                 switch (Json.Str(e, "subtype"))
@@ -519,9 +533,22 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // entries Count and User take as the person's prompt, so history's turn ids are activity.turn's.
     internal static string? TurnStart(JsonElement e)
     {
+        if (QueuedPrompt(e) is { } queued) { return queued; }
         if (Json.Str(e, "type") != "user" || Json.Bool(e, "isSidechain") == true || Json.Bool(e, "isMeta") == true || Json.Bool(e, "isCompactSummary") == true) { return null; }
         if (Prompt(e) is not { } text || IsInterrupt(text) || IsNotice(e, text)) { return null; }
         return text;
+    }
+
+    // The person's message sent while the agent was working (2.1.317, seen live): Claude writes it as an
+    // attachment (type "queued_command", origin.kind "human", commandMode "prompt") after the queue's
+    // enqueue and remove, and no user entry. A notice (origin task-notification) is not one; the
+    // attachment's own prompt is the text, as the person typed it.
+    internal static string? QueuedPrompt(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "attachment" || Json.Bool(e, "isSidechain") == true || Json.Obj(e, "attachment") is not { } a
+            || Json.Str(a, "type") != "queued_command" || Json.Str(a, "commandMode") != "prompt"
+            || Json.Obj(a, "origin") is not { } origin || Json.Str(origin, "kind") != "human") { return null; }
+        return Text.NonBlank(Json.Str(a, "prompt")) is { } text && !IsInterrupt(text) && !text.StartsWith("<command-", StringComparison.Ordinal) ? text : null;
     }
 
     // The text of a prompt, or null for an entry that is not one: tool results, and the

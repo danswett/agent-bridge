@@ -362,6 +362,34 @@ public class HistoryTests
         Assert.Equal(["Revised", "Original"], (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Select(p => p.Text));
     }
 
+    // The person's message sent while Claude works is an attachment, not a user entry (2.1.318, redacted:
+    // tests/fixtures/claude/mid-turn-human-message.jsonl). It must show as its own prompt, in order, once.
+    [Fact]
+    public async Task Claude_a_message_the_person_sent_mid_turn_is_a_history_prompt_in_order_and_a_notice_is_not()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var midTurn = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-human-message.jsonl")).Trim();
+        var notice = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-queued-command.jsonl"))
+            .Single(l => l.Contains("\"commandMode\":\"task-notification\"", StringComparison.Ordinal) && l.Contains("\"queued_command\"", StringComparison.Ordinal));
+        Fixture.Append(transcript, Claude.User("Start the work", 1),
+            Claude.AssistantMessage("a", 2, null, Claude.Text("Working.")), midTurn, notice,
+            Claude.AssistantMessage("b", 4, "end_turn", Claude.Text("Done both.")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var turns = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!;
+        Assert.Equal(["Start the work", "Also check the second host."], turns.Select(t => t.Prompt!.Text));
+        Assert.All(turns, t => Assert.Null(t.Prompt!.From));
+        Assert.Equal(["Working."], turns[0].Parts.Select(p => p.Text));
+        Assert.Equal(["Done both."], turns[1].Parts.Select(p => p.Text));
+        var activity = source.Get(Id)!.Activity;
+        Assert.Equal("Also check the second host.", activity.UserMessage);
+        Assert.Equal(turns[1].Id, activity.Turn);
+    }
+
     [Fact]
     public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
     {
