@@ -8,6 +8,21 @@ namespace AgentBridge.App;
 
 static partial class SelfTest
 {
+    public static async Task RunHistoryScrollPreserveAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit)
+    {
+        var passed = new List<string>();
+        var failed = new List<string>();
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+        }
+        try { await CheckHistoryScrollPreserve(window, main, demo, Check); }
+        catch (Exception e) { Check(false, $"scroll-preserve crashed: {e}"); }
+        await Write(outFile, new Dictionary<string, object?>(), passed, failed, null);
+        exit(failed.Count == 0 ? 0 : 1);
+    }
+
     static async Task CheckHistoryScrollPreserve(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check)
     {
         const string id = "demo-history-scroll-preserve";
@@ -90,13 +105,14 @@ static partial class SelfTest
                 var first = frames;
                 return await Until(() => frames >= first + 2, TimeSpan.FromSeconds(5));
             }
-            async Task<bool> ReachMeasuredBottom()
+            async Task<bool> ReachMeasuredBottom(double gap = 0)
             {
                 var stable = 0;
                 void Seek(object? sender, object args)
                 {
-                    if (Math.Abs(scroll.VerticalOffset - scroll.ScrollableHeight) <= 1.5) { stable++; }
-                    else { stable = 0; scroll.ChangeView(null, scroll.ScrollableHeight, null, disableAnimation: true); }
+                    if (Math.Abs(scroll.VerticalOffset - (scroll.ScrollableHeight - gap)) <= 1.5
+                        && (gap > 8 || scroll.VerticalOffset >= scroll.ScrollableHeight - 8)) { stable++; }
+                    else { stable = 0; view.ChangeConversationView(scroll, scroll.ScrollableHeight - gap); }
                 }
                 CompositionTarget.Rendering += Seek;
                 try { return await Until(() => stable >= 2, TimeSpan.FromSeconds(5)); }
@@ -114,7 +130,7 @@ static partial class SelfTest
                     atBottom = bottom;
                     view.ReleasePin();
                     var chosen = bottom ? scroll.ScrollableHeight : Math.Round(scroll.ScrollableHeight / 2);
-                    scroll.ChangeView(null, chosen, null, disableAnimation: true);
+                    view.ChangeConversationView(scroll, chosen);
                     var reached = bottom ? await ReachMeasuredBottom()
                         : await Until(() => Math.Abs(scroll.VerticalOffset - chosen) <= 1.5, TimeSpan.FromSeconds(5));
                     var settled = reached && (bottom || await Rendered());
@@ -130,6 +146,11 @@ static partial class SelfTest
                     monitoring = true;
                     for (var arrival = 1; arrival <= 3; arrival++)
                     {
+                        if (bottom && arrival >= 2)
+                        {
+                            check(await ReachMeasuredBottom(299), $"scroll-preserve driver: retreats 299 px before reply {update + 1}; {view.PinState()}");
+                            check(await ReachMeasuredBottom(arrival == 2 ? 4 : 8), $"scroll-preserve driver: returns near the end before reply {update + 1}; {view.PinState()}");
+                        }
                         update++;
                         var prior = fixture.Activity!.Response!;
                         var turn = StoredTurn(turns + update);

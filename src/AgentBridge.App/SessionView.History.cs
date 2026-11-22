@@ -15,7 +15,7 @@ public sealed partial class SessionView
     // From opening a session until the person scrolls: whatever grows the conversation keeps it at its end.
     bool pinEnd;
     int pinReleases;
-    string? released;
+    readonly Queue<string> pinReleased = new(), pinRequests = new();
     string? shownHistory;
     string? rowsOf;
     int historyVisible = 1;

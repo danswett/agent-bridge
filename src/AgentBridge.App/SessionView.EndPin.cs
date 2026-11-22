@@ -104,12 +104,13 @@ public sealed partial class SessionView
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
-        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; released = $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen}";
+        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++;
+        RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen}");
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
     }
 
     bool HistoryAtEnd() => navigationPending is null && scrollbarPointers.Count == 0 && (pinEnd || !panning && !scrolling && keyTarget is null
-        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.Slack);
+        && ConversationScroll is { ScrollableHeight: > 0 } scroll && scroll.VerticalOffset >= scroll.ScrollableHeight - ConversationFollow.EndFollowSlack);
 
     // Older turns can finish measuring after KeepPlace restored an earlier end. Follow the
     // measured end on layout and final view changes, including while an older target is pending.
@@ -122,13 +123,26 @@ public sealed partial class SessionView
     }
 
     // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
-    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released={released}";
+    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released=[{string.Join(" | ", pinReleased)}] requests=[{string.Join(" | ", pinRequests)}]";
+
+    static void RecordPin(Queue<string> records, string record)
+    {
+        if (records.Count == 3) { records.Dequeue(); }
+        records.Enqueue(record);
+    }
+
+    internal bool ChangeConversationView(ScrollViewer scroll, double to, bool disableAnimation = true,
+        [System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
+    {
+        RecordPin(pinRequests, $"{by}:{line} at ({scroll.VerticalOffset}, {scroll.ScrollableHeight}) to={to}");
+        return scroll.ChangeView(null, to, null, disableAnimation: disableAnimation);
+    }
 
     void Anchoring(ScrollViewer scroll, double to)
     {
         anchoring = to;
         anchorAt = to;
-        if (!scroll.ChangeView(null, to, null, disableAnimation: true)) { anchoring = null; }
+        if (!ChangeConversationView(scroll, to)) { anchoring = null; }
     }
 }
 

@@ -4,6 +4,47 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory, InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6), InlineData(7), InlineData(8), InlineData(11), InlineData(299)]
+    public void Returning_near_the_end_reengages_replies_but_a_reader_remaining_back_is_not_pulled(double gap)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 52147);
+        view.Moved(52147); view.Moved(51848);
+        Assert.False(view.Pinned);
+        view.Moved(52147 - gap);
+        view.FollowState.Scrolled(51848, 52147);
+        view.FollowState.Scrolled(view.Scroller.VerticalOffset, 52147);
+        Assert.Equal(gap <= 8, view.FollowState.AtEnd);
+        Assert.Equal(gap <= 8, view.HistoryEnd);
+        foreach (var extent in new[] { 52145.0, 52287 })
+        {
+            view.ReplyForProbe();
+            view.MeasuredExtent = extent;
+            view.DrainForProbe();
+            if (gap <= 8)
+            {
+                if (view.Scroller.Targets.Count > 0) { view.Moved(Assert.Single(view.Scroller.Targets)); }
+                Assert.True(Math.Abs(extent - view.Scroller.VerticalOffset) <= 1.5, view.PinState());
+                view.Scroller.Targets.Clear();
+            }
+            else { Assert.Empty(view.Scroller.Targets); Assert.Equal(52147 - gap, view.Scroller.VerticalOffset); }
+        }
+    }
+
+    [Fact]
+    public void Pin_diagnostics_keep_only_the_last_three_releases_and_view_requests()
+    {
+        var view = new SessionView();
+        for (var n = 1; n <= 4; n++)
+        {
+            view.ReleasePin($"release{n}", n);
+            view.ChangeConversationView(view.Scroller, n, by: $"request{n}", line: n);
+        }
+        var state = view.PinState();
+        Assert.DoesNotContain("release1:", state); Assert.DoesNotContain("request1:", state);
+        for (var n = 2; n <= 4; n++) { Assert.Contains($"release{n}:{n} at (100, 200)", state); Assert.Contains($"request{n}:{n} at (100, 200) to={n}", state); }
+    }
+
     [Theory, InlineData(1), InlineData(4), InlineData(8)]
     public void A_layout_drop_under_a_line_keeps_the_pin_and_renders_replies_5_and_6_at_the_end(double drop)
     {
