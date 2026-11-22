@@ -296,16 +296,13 @@ The app never reissues the same id to repair missing state.
 
 ### Sealed grant.revoke request and receipt
 
-`FleetGrantRevokeProof.SealRequest/VerifyRequest` bind `FleetGrantConfirmation`
-(challenge, id, generation, digest) to the caller-retained `FleetGrantRevokeContext`.
+`FleetGrantRevokeProof.SealRequest/VerifyRequest` bind `FleetGrantConfirmation` (challenge, id, generation, digest) to caller-retained `FleetGrantRevokeContext`.
 GUIDs: nonempty lowercase D; generation: positive Int64; digest: 64 lowercase hex; approved tuple must match; challenge differs from fresh RPC GUID.
 Outer context is the caller's account/profile/receiver/action `grant.revoke`/request, never reply-supplied.
-Seals enable no producer, UI, dispatch, policy or authority; existing person/host/confirm gates remain.
-`SealReceipt/VerifyReceipt` return a sealed snapshot/typed `FleetGrantRevokeOutcome`.
+Seals enable no producer, UI, dispatch, policy or authority; existing person/host/confirm gates remain. `SealReceipt/VerifyReceipt` return a sealed snapshot/typed `FleetGrantRevokeOutcome`.
 Success requires exactly id/generation/receiver/account/profile/action/digest/problem/finalState/tombstone/counters/inFlightRequests, with none/revoked/true; only success may use none.
 Counters use the complete DATA schema, nonnegative counts and required nullable lastCaller/lastOutcome.
-In-flight ids are explicit, canonical, unique and ordinal ascending; [] proves none; refusals require
-exactly the first nine fields, no counters/tombstone/in-flight data. Closed problem codes 0..8:
+In-flight ids: explicit, canonical, unique, ordinal ascending; [] proves none; refusals require exactly the first nine fields, no counters/tombstone/in-flight data. Closed problem codes 0..8:
 none, unavailable, notFound, generation, auditIncomplete, writeFailed, personRequired, policy, other.
 Refused proves no mutation begun; unconfirmed/no receipt/offline stay **RevocationPending**, never revoked.
 Success means audited durable tombstone, not submission, undo or killed sessions.

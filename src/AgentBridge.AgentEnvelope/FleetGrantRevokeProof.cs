@@ -92,7 +92,7 @@ public static class FleetGrantRevokeProof
     {
         if (receipt.ValueKind != JsonValueKind.Object || !receipt.TryGetProperty("problem", out var problem)
             || problem.ValueKind != JsonValueKind.String) { throw Invalid(); }
-        var code = Array.IndexOf(Problems, problem.GetString()); if (code < 0) { throw Invalid(); }
+        var code = Array.IndexOf(Problems, Read<string>(problem)); if (code < 0) { throw Invalid(); }
         Refusal value; JsonElement snapshot; byte[][] tail = [];
         if (code == 0)
         {

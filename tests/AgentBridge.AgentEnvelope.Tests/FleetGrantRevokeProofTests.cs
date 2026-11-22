@@ -152,6 +152,9 @@ public sealed class FleetGrantRevokeProofTests : IDisposable
         Assert.Null(Assert.Throws<InvalidDataException>(() => FleetGrantRevokeProof.ParseReceipt(tooLarge)).InnerException);
         var obj = Reply(); obj["counters"]!["lastOutcome"] = new string('x', 31 * 1024);
         Assert.Throws<InvalidDataException>(() => Seal(obj));
+        byte[] invalid = [.. Encoding.UTF8.GetBytes("{\"receipt\":{\"problem\":\""), 0xff, .. Encoding.UTF8.GetBytes("\"},\"proof\":{\"body\":\"a\",\"signature\":\"b\"}}")];
+        using var doc = JsonDocument.Parse(invalid); Assert.Throws<InvalidDataException>(() => FleetGrantRevokeProof.ParseReceipt(invalid));
+        Assert.Throws<InvalidDataException>(() => FleetGrantRevokeProof.VerifyReceipt(new(doc.RootElement.GetProperty("receipt"), Seal().Proof), Point, expected));
     }
 
     [Fact]
