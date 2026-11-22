@@ -641,7 +641,7 @@ public sealed partial class ReplyService : ISessionReplier
     // proves activity since this process started. Composer safety is checked separately.
     async Task<string?> FirstReplyHoldAsync(int pid, string label, CopilotInput input, DateTimeOffset? startedAt)
     {
-        bool Active() => startedAt is { } at && input.Read().StartedSince(at);
+        bool Active() => startedAt is { } at && new CopilotInput(input.Path, at).Read().StartedSince(at);
         ConsoleScreen screen;
         try { screen = await injector.ReadScreenAsync(pid); }
         catch (Exception e)

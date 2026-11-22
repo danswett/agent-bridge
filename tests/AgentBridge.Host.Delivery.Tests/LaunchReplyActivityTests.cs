@@ -25,6 +25,8 @@ public sealed class LaunchReplyActivityTests
         if (argumentPrompt) { Fixture.Append(r.Events, Copilot.User("launch argument", 3599)); }
         var from = File.Exists(r.Events) ? new FileInfo(r.Events).Length : 0;
         await r.BeginAsync(followed, argumentPrompt ? "launch argument" : null);
+        var ready = 0;
+        r.Launcher.SeenReadyLate += _ => Interlocked.Increment(ref ready);
         if (!argumentPrompt)
         {
             Assert.NotNull(r.Launcher.HeldForReply(Rig.Id));
@@ -39,6 +41,8 @@ public sealed class LaunchReplyActivityTests
         Assert.Empty(CopilotPrompts.Since(r.Events, from).Prompts);
 
         Assert.Null(r.Launcher.HeldForReply(Rig.Id));
+        Assert.Null(r.Launcher.HeldForReply(Rig.Id));
+        Assert.Equal(followed ? 0 : 1, ready);
         r.Rows = Rig.Ready;
         Assert.Equal(AnswerOutcome.Delivered, (await r.ReplyAsync()).Outcome);
         Assert.Single(r.Typed);
@@ -153,18 +157,30 @@ public sealed class LaunchReplyActivityTests
             var gate = new DeliveryGate();
             Launcher = new(gate, source, this, this, this, this, new AgencyCatalog(this), new LaunchServiceOptions
             {
-                Time = f.Time, Config = LaunchConfig.Default with { Workspaces = [new("App", workspace, false)] },
-                CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, CodexHome = f.CodexHome,
-                PlatformSupported = true, IsSystemDirectory = _ => false, RegistrationWait = TimeSpan.FromSeconds(5),
-                ReadyWait = TimeSpan.Zero, ScreenAfter = TimeSpan.Zero, ScreenEvery = TimeSpan.FromDays(1),
-                PollInterval = TimeSpan.FromSeconds(1), FollowFor = TimeSpan.FromMinutes(1),
+                Time = f.Time,
+                Config = LaunchConfig.Default with { Workspaces = [new("App", workspace, false)] },
+                CopilotHome = f.CopilotHome,
+                ClaudeHome = f.ClaudeHome,
+                CodexHome = f.CodexHome,
+                PlatformSupported = true,
+                IsSystemDirectory = _ => false,
+                RegistrationWait = TimeSpan.FromSeconds(5),
+                ReadyWait = TimeSpan.Zero,
+                ScreenAfter = TimeSpan.Zero,
+                ScreenEvery = TimeSpan.FromDays(1),
+                PollInterval = TimeSpan.FromSeconds(1),
+                FollowFor = TimeSpan.FromMinutes(1),
                 ProvenanceFile = Path.Combine(f.Root, "provenance.json"),
-            }, log: line => { if (line.Contains("replies to session", StringComparison.Ordinal) || line.Contains("registered as session", StringComparison.Ordinal)) { followDone.TrySetResult(); } }, account: this);
+            }, log: line => { if (line.Contains("replies to session", StringComparison.Ordinal) || line.Contains("registered as session", StringComparison.Ordinal) && !line.Contains("but its window", StringComparison.Ordinal)) { followDone.TrySetResult(); } }, account: this);
             Replier = new(gate, source, f.Processes, this, this, this, new ReplyOptions
             {
-                CopilotHome = f.CopilotHome, PlatformSupported = true, PreRead = false,
-                ConfirmTimeout = TimeSpan.FromSeconds(1), PollInterval = TimeSpan.FromMilliseconds(1),
-            }) { LaunchHeld = Launcher.HeldForReply, Stopping = stopping.Token };
+                CopilotHome = f.CopilotHome,
+                PlatformSupported = true,
+                PreRead = false,
+                ConfirmTimeout = TimeSpan.FromSeconds(1),
+                PollInterval = TimeSpan.FromMilliseconds(1),
+            })
+            { LaunchHeld = Launcher.HeldForReply, Stopping = stopping.Token };
         }
 
         public async Task BeginAsync(bool followed, string? prompt = null)

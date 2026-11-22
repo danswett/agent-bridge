@@ -23,7 +23,7 @@ public sealed record CopilotPromptsSince(IReadOnlyList<CopilotPrompt> Prompts, b
 // only that subagent, so other work can write any amount after it, and the session source
 // does not report a subagent's question at all. So it is read once from the start, then
 // only what has been added since, keeping the open questions in between.
-public sealed class CopilotInput(string path)
+public sealed class CopilotInput(string path, DateTimeOffset? activityFrom = null)
 {
     readonly Lock gate = new();
     // Open ask_user calls (by tool call id, with the agent that asked) and permission
@@ -79,18 +79,20 @@ public sealed class CopilotInput(string path)
         var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
         var answer = (asks.Count > 0 || stale.Count > 0) && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
         var typed = stale.Count > 0 && bytes.IndexOf("\"type\":\"user.message\""u8) >= 0;
-        var activity = bytes.IndexOf("\"type\":\"user.message\""u8) >= 0
+        // Ordinary reply/stop reads keep their cheap scan; a launch needs only one witness.
+        var activity = activityFrom is { } from && (activityAt is null || activityAt < from)
+            && (bytes.IndexOf("\"type\":\"user.message\""u8) >= 0
             || bytes.IndexOf("\"type\":\"assistant."u8) >= 0
             || bytes.IndexOf("\"type\":\"tool.execution_"u8) >= 0
-            || bytes.IndexOf("\"type\":\"subagent."u8) >= 0;
+            || bytes.IndexOf("\"type\":\"subagent."u8) >= 0);
         if (!ask && !permission && !ending && !answer && !typed && !activity) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
             var data = e.Data;
-            if (e.Type is "user.message" or "assistant.turn_start" or "assistant.message"
+            if (activity && e.Type is ("user.message" or "assistant.turn_start" or "assistant.message"
                 or "tool.execution_start" or "tool.execution_complete"
-                or "subagent.started" or "subagent.completed" or "subagent.failed"
+                or "subagent.started" or "subagent.completed" or "subagent.failed")
                 && Jsonl.Timestamp(e.Doc.RootElement) is { } at && (activityAt is null || at > activityAt))
             {
                 activityAt = at;

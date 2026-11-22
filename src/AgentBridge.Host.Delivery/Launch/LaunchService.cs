@@ -1304,8 +1304,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
             // Last chance to withdraw: nothing has started yet.
             if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
-            // Read from the head: a launch-argument prompt may precede the follow's first read.
-            var transcript = TranscriptOf(plan.Launcher, sessionId);
             var launchId = Guid.NewGuid().ToString("N");
             Action<string>? auditRegistered = null;
             if (prepare is not null && plan.Resume is null && plan.Transfer is null)
@@ -1343,7 +1341,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-            { Transcript = transcript, AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
+            { Transcript = TranscriptOf(plan.Launcher, sessionId, started.StartedAt), AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1540,7 +1538,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             lock (pendingGate)
             {
                 pending.Remove(p);
-                if (unready is not null && alive is not null)
+                if (unready is not null && alive is not null && !p.RegisteredLate)
                 {
                     neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
                         string.Equals(p.SessionId, unready, StringComparison.OrdinalIgnoreCase) ? p.Transcript : null, p.Started.StartedAt);
@@ -1620,9 +1618,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             lock (pendingGate)
             {
                 if (!active || p.Question != StartupQuestion.None) { return Waiting(p.Launcher.Label, p.Question); }
+                if (!pending.Remove(p)) { return null; }
                 p.Ready = true;
                 p.RegisteredLate = true;
-                pending.Remove(p);
                 neverReady.Remove(sessionId);
             }
             Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = sessionId, Launched = p.Launched });
@@ -1669,10 +1667,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return () => source.ProcessOf(sessionId)?.Id == owner.Id;
     }
 
-    CopilotInput? TranscriptOf(Launcher launcher, string sessionId)
+    CopilotInput? TranscriptOf(Launcher launcher, string sessionId, DateTimeOffset startedAt)
     {
         if (launcher.Kind != AgentKind.Copilot || !Guid.TryParseExact(sessionId, "D", out _)) { return null; }
-        return new CopilotInput(Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl"));
+        return new CopilotInput(Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl"), startedAt);
     }
 
     // Whether a launch has started an agent on this session that is still running.
@@ -1693,6 +1691,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Decide(Pending p, LaunchResult result)
     {
+        if (result.Outcome == LaunchOutcome.Started && Interlocked.Exchange(ref p.StartedDecided, 1) != 0) { return; }
         PublishStatus(p.Principal, p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
@@ -2077,6 +2076,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         public bool ReadyMissed { get; set; }
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }
+        public int StartedDecided;
         public string? Bound { get; set; }
     }
 
