@@ -222,6 +222,35 @@ public class HistoryTests
         Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
     }
 
+    [Theory]
+    [InlineData("task_started")]
+    [InlineData("conflicting-prompt")]
+    [InlineData("duplicate-prompt")]
+    public async Task Codex_history_never_updates_an_earlier_reply_after_identity_becomes_unknown(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        var prompt = Codex.Event(new { type = "user_message", message = "Question", turn_id = shape == "conflicting-prompt" ? "other-turn" : "native-turn" }, 1);
+        if (shape == "duplicate-prompt") { prompt = prompt.Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
+        Fixture.Append(transcript, prompt, CodexReply("same", "Original answer", 2));
+        if (shape == "task_started") { Fixture.Append(transcript, Codex.Event(new { type = "task_started" }, 3)); }
+        Fixture.Append(transcript, CodexReply("same", "Later answer", 4, true));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+        Assert.Equal(["Original answer", "Later answer"], parts.Select(p => p.Text));
+        Assert.NotEqual(parts[0].Id, parts[1].Id);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next", turn_id = "native-turn" }, 5),
+            CodexReply("same", "Fresh answer", 6), CodexReply("same", "Fresh answer updated", 7, true));
+        await source.RefreshAsync();
+        var fresh = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
+        Assert.Equal("Fresh answer updated", fresh.Text);
+        Assert.Equal(fresh.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
     [Fact]
     public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
     {
