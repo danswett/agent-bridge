@@ -177,8 +177,8 @@ The decision's required admission predicate runs before consumption: known refus
 `lane-full`, spends nothing and permits a same-UUID retry only when it is unchanged: the `requested` fact stores a
 keyed MAC-covered `priorityBinding` over target, sender, exact receiver and canonical body, so a changed body or receiver is refused.
 The `requested` header stores the requested priority (`normal` for an invalid value) and `granted`/`consumed` store the effective `urgent`.
-Every successful current-authority check appends a `checked` fact that advances the durable time high-water, so a rolled-back
-clock is refused after replay too; slice 3b must bound this record growth. Consumed UUIDs never renew.
+Every successful current-authority check appends a `checked` fact that advances the durable time high-water, at most one per second per receiver, so a rolled-back
+clock is refused after replay too (a rollback inside the last unrecorded second is accepted); slice 3b still owns the wider record-growth bound. Consumed UUIDs never renew.
 Clock refusal before a write does not mark the journal uncertain; actual append failure does.
 Slice 3b alone integrates Offer/Query, scheduler-locked preflight and final fenced capability rechecks.
 No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.

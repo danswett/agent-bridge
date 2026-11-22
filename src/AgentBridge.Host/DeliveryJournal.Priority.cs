@@ -103,7 +103,10 @@ public sealed partial class DeliveryJournal
             if (cap is null || sender.Owner || cap.Audience != receiver || !ActivePriority(cap, now)) { return false; }
             if (Uncertain || now < priorityRecords[^1].RecordedAt) { return false; }
             // Every successful check is observed time: persist it so a rolled-back clock is refused, even after replay.
-            if (now > priorityRecords[^1].RecordedAt) { PriorityRecord(request, target, sender, "checked", now, cap); }
+            // At most one append per second per receiver bounds the fsync rate; a rollback inside that second is accepted.
+            var lastCheck = priorityRecords.LastOrDefault(r => r.Reason == "checked" && r.Capability?.Audience == cap.Audience)?.RecordedAt;
+            if (now > priorityRecords[^1].RecordedAt && (lastCheck is null || now - lastCheck >= TimeSpan.FromSeconds(1)))
+            { PriorityRecord(request, target, sender, "checked", now, cap); }
             return true;
         }
     }

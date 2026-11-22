@@ -228,6 +228,28 @@ public sealed class PriorityCapabilityTests
     }
 
     [Fact]
+    public void Successful_current_checks_coalesce_to_one_durable_append_per_second_per_receiver()
+    {
+        using var f = new Fake(); f.Issue(f.Cap()); var id = Guid.NewGuid(); f.Decide(id);
+        int Checked() => f.Records.Count(r => r.Reason == "checked");
+        foreach (var step in new[] { 100, 100, 700 })
+        {
+            f.Clock.Advance(TimeSpan.FromMilliseconds(step));
+            Assert.True(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()));
+            Assert.Equal(1, Checked());
+        }
+        f.Clock.Advance(TimeSpan.FromMilliseconds(200));
+        Assert.True(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()));
+        Assert.Equal(2, Checked());
+        using var replay = new Fake(f.Records); replay.Clock.Advance(TimeSpan.FromMilliseconds(1200));
+        Assert.True(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.DoesNotContain(replay.Records, r => r.Reason == "checked");
+        replay.Clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.Single(replay.Records, r => r.Reason == "checked");
+    }
+
+    [Fact]
     public void Requested_priority_and_the_accepted_effective_priority_are_stored_in_the_record_headers()
     {
         using var f = new Fake(); f.Issue(f.Cap());
