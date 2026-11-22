@@ -78,13 +78,22 @@ and only the agent's clock. Fix without CLI changes: self-describing deliveries,
 `[ab:from=<sender>|id=<id>|seq=<lane><n>|at=<time>|pri=<urgent|normal|fyi>|n=<chars>] <text>`, one line. No target field: delivery is to the session the host already resolved by ID.
 - **One formatter and parser** in `AgentBridge.Protocol` (`DeliveryEnvelope`), shared by host and app,
   called by `ReplyService` and `LiteDeliver.Frame`. The formatter adds `id` (HA `rid` or request UUID).
-- **`from`** displays the authenticated sender class and label, never a routing address: `owner` (his HA user or paired device), `system` (the host), `agent:<label>` (agent token or Lite principal; cleaned label `[A-Za-z0-9 ._-]{1,48}`, shown, never trusted). Slice 1 carries the press's HA user id into `ReplyRequest`; unknown is `agent`.
+- **`from`** displays the authenticated sender class, never a routing address: `owner` (his HA user or paired device), `system`
+  (the host), or agent (agent token or Lite principal). **Owner-approved CHANGE, 14:49 PT Nov 21:**
+  `from` carries `owner:<opaque-id>` or `agent:<opaque-id>` (id percent-encoded), optionally followed
+  by ` (<display>)`. Display is `[A-Za-z0-9 ._-]{1,48}` only; anything else shows the id alone.
+  Slice 1 carries the authenticated HA context user id into host-only `ReplyRequest.Sender`;
+  unknown is `agent:unknown`. Payload sender/driver labels never supply this identity or intent.
   Sender and target IDs belong in journal/receipt records, not routing from envelope or body text; receipt names are display labels only. Envelope `id` is the delivery request ID, not a sender or target ID.
 - **`at`** is the host's receipt time, Pacific, to the second with offset; it never changes, and any
   clock in the body is ignored. The time typed goes to the journal.
 - **`seq`** is per session and lane (`u7`, `q12`), reserved by the flushed pre-key `handoff` record.
   **Change** (ruling: at enqueue): priority and drops reorder the queue; a crash can skip a number.
-- **Escape:** the text typed is NFKC with format characters removed; any `[` before text whose UTS 39 skeleton is `ab:` (any case) becomes `(`. **`n`** counts UTF-16 units: `héllo 👍` is `n=8`.
+- **Escape:** the text typed is NFKC with format characters removed; any `[` before text that
+  is `ab:` (any case) becomes `(`. **Owner-approved CHANGE, 14:49 PT Nov 21:** full UTS 39
+  skeleton matching is deferred to [#3583](https://github.com/danswett/agent-bridge/issues/3583);
+  no look-alike list is substituted.
+  **`n`** counts UTF-16 units: `héllo 👍` is `n=8`.
 - **Parser:** a header counts only at the start of a turn or right after `\n\n`. Its body is the next
   `n` units (the host types one collapsed line, so `n` is known). The rest, up to the next header, is
   `from=console` text kept verbatim, blank lines included: words typed at the machine, which the
