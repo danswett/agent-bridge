@@ -10,6 +10,16 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
+G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
+G7 core adds `App.Core.Grants` receiver contracts and the issuance view model: the
+receiver prepares the exact document/digest, the app displays its fields and narrower
+policy, and only a matching authenticated receiver receipt makes the row Active.
+The receiver interface is a trusted verification boundary, not a caller-set "signed"
+flag: implementations must authenticate receipts/counters and recheck person ancestry
+before signing through G4's writer. G7b supplies that production adapter and WinUI
+wiring separately; this core has no issuing transport, signing key or enabled UI.
+G8 read/revoke contracts require verified snapshots and a confirmation bound to
+account/profile/receiver/id/generation/action; G4's unsigned CLI tombstone is not proof.
 Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
 - Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
   machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.
@@ -31,7 +41,6 @@ Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inf
 Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
 external anchor (#3569); the designated-verifier MAC means this device key could compute a genesis; retention
 pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
-G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
 
 ## Authority and existing boundaries
 
@@ -160,9 +169,13 @@ refusals consume no launch quota; distinct attempts retain existing attempt limi
 
 Clock windows are rolling durations, not Pacific calendar midnight resets.
 Persist the last observed time; backwards clock movement refuses new grant use
-until trustworthy time catches up. Expiry, caps and kill are checked again at the
-actual execution slot, not only when queued. A large forward jump expires rather
-than extends authority. UI dates/times follow the viewer's local-time convention.
+until trustworthy time catches up. Counter refusals for observed expiry durably
+advance that watermark before returning; restart and clock rollback cannot
+restore authority. Known reservation refusals retain their binding for watermark
+persistence. Unchanged same-time counter operations add no intents. Expiry, caps
+and kill are checked again at the actual execution slot, not only when queued.
+A large forward jump expires rather than extends authority. UI dates/times follow
+the viewer's local-time convention.
 
 There is no coordinator tied to a particular VM. A receiver leaving stops actions
 there; its quota allocations stay spent/reserved and are not silently moved.
@@ -283,6 +296,18 @@ The list/details screen shows issuer, subjects, actions/scope, expiry, spent
 hour/day counts, pending/live sessions, last caller/outcome, and remaining budget.
 Counters come from the receiver, never an agent's report; read is not an acting
 grant. Audit details omit prompt text, tokens, secrets and raw command lines.
+Snapshot reads do not advance the watermark, reconcile reservations or write
+state. New use behind the verified audit tip or persisted watermark refuses.
+Clock-refusal metadata retains the actual observation time; only its audit append
+timestamp is floored to the verified tip and watermark, never a raw file name.
+Documents, counters, pending/live bindings and safe last-operation metadata
+come from verified receiver state. Receiver proofs use the existing roster-bound
+HostSign key and a distinct domain binding account, profile, receiver, action,
+fresh request UUID and exact payload bytes. The app authenticates HostSign metadata
+through the trusted local App pipe only after active-roster `AcceptHostSign` and
+collision checks; a seal is not proof independent of that pipe. Verification uses
+that authenticated receiver key, never a key or verification flag supplied by the
+proof. The adapter remains unavailable when the gate is off.
 
 Revoke takes the same person path and persists an audit intent and tombstone
 before acknowledging success. New reservations and queued operations refuse.
