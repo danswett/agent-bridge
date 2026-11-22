@@ -262,8 +262,10 @@ public sealed partial class ReplyService : ISessionReplier
             {
                 return Refused($"replying is not supported for {session.Agent.ToString().ToLowerInvariant()} yet; reply at the machine");
             }
-            if (request.StillCurrent is not null && session.Agent != AgentKind.Copilot)
-            { return Refused("retry fencing is supported only for Copilot"); }
+            // Claude takes the fence too, for verified Lite delivery (AgentAsync); the lane handoff stays Copilot's.
+            if (request.StillCurrent is not null && session.Agent is not (AgentKind.Copilot or AgentKind.Claude)
+                || request.HandoffText is not null && session.Agent != AgentKind.Copilot)
+            { return Refused("retry fencing is supported only for Copilot and Claude"); }
             if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             Claim? claim = null;
             var keysWent = false;
@@ -278,7 +280,7 @@ public sealed partial class ReplyService : ISessionReplier
                 }
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
@@ -691,7 +693,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -699,6 +701,9 @@ public sealed partial class ReplyService : ISessionReplier
         if (session.ProcessId is not { } pid) { return Done(Refused("the session's process is not known; reply at the machine")); }
         if (!processes.GetAgentProcesses(agent).Any(p => p.Id == pid)) { return Done(Stale("the session's process has ended")); }
         if (guard.Refuse(pid) is { } refused) { return Done(Refused(refused)); }
+        // The process as it was when the sender was checked: a fenced send types only into this incarnation.
+        var process = stillCurrent is null ? null : source.ProcessOf(session.Id);
+        const string changedReason = "the send is no longer current, so nothing was typed";
 
         IReadOnlyList<string> staged = [];
         if (claim is not null)
@@ -728,6 +733,11 @@ public sealed partial class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            if (stillCurrent?.Invoke() == false) { return Done(Stale(changedReason)); }
+            if (requireIdle && now.Status != SessionStatus.Idle)
+            {
+                return Done(Refused("the session is no longer idle, so the agent message was not typed") with { Refusal = ReplyRefusal.Busy });
+            }
             // Again once its turn has come: a launch of it may have begun meanwhile.
             if (LaunchHeld?.Invoke(session.Id) is { } held) { return Done(Refused(held)); }
             working = now.Status == SessionStatus.Working;
@@ -759,6 +769,13 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
+            // Checked again by the injector just before its first key, as the Copilot path does.
+            string? Fence() => probe.Active() is not null || LaunchHeld?.Invoke(session.Id) is not null || guard.Refuse(pid) is not null
+                || source.Get(session.Id) is not { Agent: AgentKind.Claude, Question: null } live
+                || requireIdle && live.Status != SessionStatus.Idle || live.Status is not (SessionStatus.Idle or SessionStatus.Working)
+                || live.ProcessId != pid || process is not { StartedAt: not null } || source.ProcessOf(session.Id) != process
+                || !processes.GetAgentProcesses(agent).Any(p => p.Id == pid && p.StartedAt == process.StartedAt) || stillCurrent!() == false
+                ? changedReason : null;
             foreach (var send in plan.Sends)
             {
                 if (send.After is { } after)
@@ -775,7 +792,7 @@ public sealed partial class ReplyService : ISessionReplier
                         return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
-                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]);
+                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
                 try { result = await injector.InjectAsync(pid, keys); }

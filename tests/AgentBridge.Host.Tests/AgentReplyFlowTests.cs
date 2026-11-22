@@ -156,6 +156,34 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal([(4, Rule), (5, ">"), (6, Rule)], send.Expect!.Select(r => (r.Row, r.Text)));
     }
 
+    [Fact]
+    public async Task A_Claude_reply_that_requires_an_idle_session_is_refused_as_busy_while_it_works()
+    {
+        console.Rows = ClaudeIdle(); // the fixture's transcript ends on the person's prompt: the turn is still running
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Busy), (result.Outcome, result.Refusal));
+        Assert.Empty(console.Plans);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fenced_Claude_reply_is_typed_only_while_the_fence_holds_at_both_looks(bool current)
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal(current ? AnswerOutcome.Delivered : AnswerOutcome.Stale, result.Outcome);
+        Assert.Equal(current ? 1 : 0, console.Plans.Count);
+        Assert.All(console.Plans, p => Assert.NotNull(p.Plan.Proceed));
+    }
+
     [Theory]
     [InlineData("\u276F")]
     [InlineData(">")]

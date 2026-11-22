@@ -122,7 +122,7 @@ Receiver refusals, in the order they are checked:
 | `malformed`, envelope codes | no `signPoint` (the sender's agent signing key); unsigned, bad signature, expired, from the future, another account, not the reply action, lacks the lite markers, or the text is not bound or too long (each has its own code) |
 | `replay` | this request was already seen |
 | `rate` | the pair went over its limit |
-| `notReplyTarget` | the target is not a session this host can type into |
+| `notReplyTarget` | the target is not a session this host can type into. Lite types into Copilot and Claude Code sessions only (**owner-approved CHANGE, ~15:20 PT Nov 22**: Claude was refused before); Codex and unknown agents stay refused, and the lane (`laneDelivery`) still takes Copilot targets only. A Claude session is held to the same gates, idle, rate, signed account and process-incarnation fences as Copilot; its input box is read as the replier reads it (on screen, no `/` or `!` command waiting). Claude shows a suggested prompt in an empty box that a screen read cannot tell from typed words, so only a box that is off screen or holds a command is `composerNotEmpty` for Claude |
 | `busy` | the target is not idle, or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held. A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |

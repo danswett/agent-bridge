@@ -5,6 +5,7 @@ using AgentBridge.AgentEnvelope;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.AgentReplies;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Protocol;
 
@@ -87,7 +88,9 @@ public sealed class LiteDeliver(
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
-        if (session.Agent != AgentKind.Copilot || session.ProcessId is not { } pid) { return Refused(LiteCodes.NotReplyTarget); }
+        // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
+        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot)
+        { return Refused(LiteCodes.NotReplyTarget); }
         if (Lane is { } lane)
         {
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
@@ -103,7 +106,7 @@ public sealed class LiteDeliver(
             return FromLane(lane.Offer(request, id, sender, laneBody, Current, Revoked));
         }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
-        if (!await ComposerEmptyAsync(pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
+        if (!await ComposerEmptyAsync(session.Agent, pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
         // A node id is resolved again: a sibling or a hold that appeared while the composer was read
         // makes it ambiguous now, whatever it named a moment ago.
@@ -199,12 +202,16 @@ public sealed class LiteDeliver(
         }
     }
 
-    async Task<bool> ComposerEmptyAsync(int pid, CancellationToken ct)
+    // Claude's box is found by its rules; it shows a suggested prompt in an empty box that a screen read
+    // cannot tell from typed words, so it is held to what the replier checks: on screen, no command waiting.
+    async Task<bool> ComposerEmptyAsync(AgentKind agent, int pid, CancellationToken ct)
     {
         try
         {
             var screen = await injector.ReadScreenAsync(pid, ct);
-            return screen.Rows is { } rows && CopilotInputBoxReader.Read(rows).Box is not null;
+            return screen.Rows is { } rows && (agent == AgentKind.Claude
+                ? ClaudeComposer.Find(rows) is { } box && !box.Content.StartsWith('/') && !box.Content.StartsWith('!')
+                : CopilotInputBoxReader.Read(rows).Box is not null);
         }
         catch (Exception e) when (e is not OperationCanceledException) { return false; }
     }

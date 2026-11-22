@@ -23,6 +23,7 @@ public sealed class AgentLiteDeliveryTests
         public bool FenceCurrent = true, ProcessKnown = true;
         public bool ForbidDiscovery;
         public int ProcessId = 42;
+        public AgentKind Agent = AgentKind.Copilot;
         public string Remote = AgentMessagingSettings.OwnAccount;
         public string Account = "acct";
         public string[] AllowAllTargetSessions = [];
@@ -77,7 +78,7 @@ public sealed class AgentLiteDeliveryTests
             OnSnapshot?.Invoke();
             return listed;
         }
-        Session Live(string id, int pid) => new() { Id = id, Agent = AgentKind.Copilot, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
+        Session Live(string id, int pid) => new() { Id = id, Agent = Agent, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
@@ -569,6 +570,42 @@ public sealed class AgentLiteDeliveryTests
         Action reuse = () => f.ProcessAt = f.ProcessAt.AddTicks(1);
         if (inSlot) { f.OnReply = reuse; } else { f.OnReadScreen = reuse; }
         Assert.Equal(new LiteDelivery(false, "noSuchSession"), await Send(f));
+        Assert.Empty(f.Typed);
+    }
+    static readonly string[] ClaudeBox = ["────────────", "> ", "────────────", "  ⏵⏵ auto mode on"];
+    [Fact]
+    public async Task A_claude_session_gets_the_text_behind_the_provenance_line_like_a_copilot_one()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f, "please look at x")).Typed);
+        Assert.StartsWith($"[Slipgates · from an agent on SENDER · session sess-9 · request {Req} · not typed by your user] please look at x", Assert.Single(f.Typed).Text);
+    }
+    [Fact]
+    public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
+    {
+        var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working }; busy.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "busy"), await Send(busy));
+        var asking = new Fixture { Agent = AgentKind.Claude, Rows = ["Do you want to proceed?", " > 1. Yes"] }; asking.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(asking));
+        var command = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)] }; command.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
+        Assert.Empty(busy.Typed.Concat(asking.Typed).Concat(command.Typed));
+    }
+    [Theory]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Unknown)]
+    public async Task Other_agent_kinds_are_still_refused_as_not_a_reply_target(AgentKind kind)
+    {
+        var f = new Fixture { Agent = kind }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await Send(f));
+        Assert.Empty(f.Typed);
+    }
+    [Fact]
+    public async Task A_claude_session_is_not_offered_to_the_lane_whose_handoff_is_copilots_alone()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await r.Send());
         Assert.Empty(f.Typed);
     }
     [Fact]
