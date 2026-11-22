@@ -24,7 +24,8 @@ public sealed class LaunchGrantDispatchTests : LaunchFlowFixture
         var prepared = false;
         try
         {
-            await reached.Task.WaitAsync(Patience);
+            await Task.WhenAny(reached.Task, first).WaitAsync(Patience);
+            Assert.True(reached.Task.IsCompleted, "The concrete launcher did not call the fenced grant dispatch overload.");
             queued = launcher.LaunchAuditedAsync(Request(), "agent:second", _ =>
             {
                 prepared = true;
