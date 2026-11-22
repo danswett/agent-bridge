@@ -11,6 +11,15 @@ an incomplete transaction or replay refuses all use rather than repairing/resett
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
 G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
+G7 core adds `App.Core.Grants` receiver contracts and the issuance view model: the
+receiver prepares the exact document/digest, the app displays its fields and narrower
+policy, and only a matching authenticated receiver receipt makes the row Active.
+The receiver interface is a trusted verification boundary, not a caller-set "signed"
+flag: implementations must authenticate receipts/counters and recheck person ancestry
+before signing through G4's writer. G7b supplies that production adapter and WinUI
+wiring separately; this core has no issuing transport, signing key or enabled UI.
+G8 read/revoke contracts require verified snapshots and a confirmation bound to
+account/profile/receiver/id/generation/action; G4's unsigned CLI tombstone is not proof.
 Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
 - Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
   machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.

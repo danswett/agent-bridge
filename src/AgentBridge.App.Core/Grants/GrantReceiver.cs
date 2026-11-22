@@ -9,7 +9,8 @@ public sealed record GrantIssuePreview(Guid Id, long Generation, string Receiver
     ImmutableArray<string> UnavailableActions);
 public sealed record GrantReceipt(Guid Id, long Generation, string Receiver, string Digest);
 public sealed record GrantReceiverCounters(int Hour, int Day, int Pending, int Live,
-    ImmutableArray<string> Requests, string? LastCaller, string? LastOutcome, DateTimeOffset ObservedAt);
+    ImmutableArray<string> Requests, string? LastCaller, string? LastOutcome, DateTimeOffset ObservedAt,
+    ImmutableArray<string> PendingRequests, ImmutableArray<string> LiveSessions);
 public sealed record GrantSnapshot(JsonElement Document, GrantReceiverCounters Counters, bool Stale);
 public sealed record GrantReadResult(ImmutableArray<GrantSnapshot> Grants, string? Problem);
 public sealed record GrantRevokePreview(Guid Id, long Generation, string Receiver, string Account,
