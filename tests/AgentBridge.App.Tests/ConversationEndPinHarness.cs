@@ -173,10 +173,11 @@ namespace AgentBridge.App
         public SessionView()
         {
             pinEnd = true;
-            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = 100 + historyShown.Count * 100 };
+            HistoryColumn = new() { Layout = () => Scroller.ScrollableHeight = MeasuredExtent ?? 100 + historyShown.Count * 100 };
             HookConversationInput(Scroller);
         }
         public Microsoft.UI.Xaml.Controls.ScrollViewer Scroller => ConversationScroll!;
+        public double? MeasuredExtent { get; set; }
         public bool Pinned => pinEnd;
         public bool IsScrolling => scrolling;
         public int Releases => pinReleases;
@@ -197,6 +198,7 @@ namespace AgentBridge.App
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
         public void DrainForProbe() => DispatcherQueue.Drain();
         public void KeepPlaceForProbe() => KeepPlace(false, Scroller.VerticalOffset);
+        public void ReplyForProbe() => KeepPlace(HistoryAtEnd(), Scroller.VerticalOffset);
         public void GestureForProbe(string gesture)
         {
             panning = gesture == "pan";

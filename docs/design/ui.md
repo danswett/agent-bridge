@@ -1738,6 +1738,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
   scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
+  Returning within 8 px of the Windows conversation's measured end re-engages following
+  on the next reply or history update, including after a screen-reader retreat.
+  This end-entry tolerance is separate from the 1 px movement tolerance; it does not
+  widen pin-release exemptions or override active navigation, scrolling or holds.
   A question brought into view, a block requested by a screen reader or any other move back from
   the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
   even before navigation first moves.
