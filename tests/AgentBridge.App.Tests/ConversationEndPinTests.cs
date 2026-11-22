@@ -4,6 +4,21 @@ namespace AgentBridge.App.Tests;
 
 public sealed class ConversationEndPinTests
 {
+    [Theory, InlineData(1), InlineData(4), InlineData(8)]
+    public void A_layout_drop_under_a_line_keeps_the_pin_and_renders_replies_5_and_6_at_the_end(double drop)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 52145);
+        view.Moved(52145); view.Moved(52145 - drop);
+        foreach (var extent in new[] { 52145.0, 52287 })
+        {
+            view.Scroller.ScrollableHeight = extent;
+            view.Follow();
+            view.Moved(System.Linq.Enumerable.LastOrDefault(view.Scroller.Targets));
+            Assert.True(Math.Abs(extent - view.Scroller.VerticalOffset) <= 1.5, $"{view.Scroller.VerticalOffset} of {extent}; {view.PinState()}");
+        }
+    }
+
     [Theory]
     [InlineData("pan", false)]
     [InlineData("scroll", false)]

@@ -90,8 +90,8 @@ public sealed partial class SessionView
         {
             var remeasure = Math.Abs(extent - was.Extent);
             // A remeasure can shift the virtualised anchor by the extent delta plus one viewport.
-            // A queued end correction keeps that residual exempt even if its target remeasures again.
-            var layoutOnly = Math.Abs(extent - offset) <= 1.5
+            // A queued end correction keeps that residual exempt; a drop under a text line is layout rounding, not a person.
+            var layoutOnly = Math.Abs(extent - offset) <= 1.5 || was.Offset - offset <= 8
                 || remeasure >= 0.5 && Math.Abs(offset - was.Offset) <= remeasure + scroll.ViewportHeight + 1.5
                 || anchoring is not null && extent - offset <= scroll.ViewportHeight + 1.5;
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
@@ -102,9 +102,9 @@ public sealed partial class SessionView
     void CompleteNavigation() { if (navigationPending?.Invoke() == false) { navigationPending = null; } }
 
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
-    internal void ReleasePin()
+    internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
-        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++;
+        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; pinReleases++; released = $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen}";
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
     }
 
@@ -122,7 +122,7 @@ public sealed partial class SessionView
     }
 
     // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
-    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen}";
+    internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released={released}";
 
     void Anchoring(ScrollViewer scroll, double to)
     {
