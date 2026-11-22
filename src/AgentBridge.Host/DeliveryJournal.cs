@@ -5,11 +5,11 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed }
+public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed, Demoted }
 public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header, string State,
-    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null);
+    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null);
 
-// Node-bound evidence only: no payload retention, sequence reservation, replay or key sends.
+// Node-bound evidence only: no payload retention, replay or key sends.
 public sealed class DeliveryJournal : IDisposable
 {
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -19,16 +19,45 @@ public sealed class DeliveryJournal : IDisposable
     readonly Action<string> log;
     readonly Dictionary<(string, string), DeliveryJournalRecord> latest = [];
     readonly Dictionary<(string, string), DeliveryJournalRecord> handoffs = [];
+    readonly Dictionary<(string, char), long> reserved = [];
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
-        : this(HostKey(diagnosticsFile), b => Append(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(diagnosticsFile))!, "delivery.jsonl"), b), log) { }
+        : this(HostKey(diagnosticsFile), b => Append(JournalFile(diagnosticsFile), b), log,
+            Reservations(JournalFile(diagnosticsFile))) { }
 
-    internal DeliveryJournal(byte[] key, Action<byte[]> append, Action<string> log)
+    internal DeliveryJournal(byte[] key, Action<byte[]> append, Action<string> log,
+        IEnumerable<DeliveryJournalRecord>? reservations = null)
     {
         hmac = new HMACSHA256(key);
         CryptographicOperations.ZeroMemory(key);
         this.append = append;
         this.log = log;
+        foreach (var r in reservations ?? [])
+        {
+            if (r.State != "handoff") { continue; }
+            _ = DeliveryEnvelope.Format(r.Header, "");
+            var seq = r.Header.Seq!;
+            var lane = (r.Session, seq[0]);
+            reserved[lane] = Math.Max(reserved.GetValueOrDefault(lane), long.Parse(seq[1..], System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
+
+    static string JournalFile(string diagnosticsFile) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(diagnosticsFile))!, "delivery.jsonl");
+    static IEnumerable<DeliveryJournalRecord> Reservations(string file) => !File.Exists(file) ? [] :
+        File.ReadLines(file).Select(line => JsonSerializer.Deserialize<DeliveryJournalRecord>(line, ProtocolJson.Options)
+            ?? throw new InvalidDataException("Invalid delivery journal reservation."));
+
+    internal DeliveryHeader ReserveHandoff(string session, DeliveryHeader header, string body, char lane)
+    {
+        lock (gate)
+        {
+            if (lane is not ('u' or 'q')) { throw new ArgumentException("Invalid delivery lane.", nameof(lane)); }
+            var next = checked(reserved.GetValueOrDefault((session, lane)) + 1);
+            header = header with { Seq = lane + next.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            Write(session, header, body, DeliveryState.Handoff);
+            return header;
+        }
     }
 
     public DeliveryState? State(string session, string id)
@@ -37,7 +66,7 @@ public sealed class DeliveryJournal : IDisposable
     }
 
     public DeliveryState Write(string session, DeliveryHeader header, string body, DeliveryState state,
-        int? injectorResult = null, bool? boxClear = null)
+        int? injectorResult = null, bool? boxClear = null, string? reason = null)
     {
         lock (gate)
         {
@@ -46,8 +75,10 @@ public sealed class DeliveryJournal : IDisposable
             var id = (session, header.Id);
             latest.TryGetValue(id, out var prior);
             if (!Enum.IsDefined(state) || state == DeliveryState.Enqueued && prior is not null ||
-                state == DeliveryState.Handoff && (header.Seq is null || prior?.State != "enqueued" ||
+                state == DeliveryState.Handoff && (header.Seq is null || prior?.State is not ("enqueued" or "demoted") ||
                     prior.Header != header with { Seq = prior.Header.Seq } || !Matches(prior, body)) ||
+                state == DeliveryState.Demoted && (prior?.State != "enqueued" || reason is null ||
+                    prior.Header != header with { Priority = prior.Header.Priority } || !Matches(prior, body)) ||
                 state is DeliveryState.Typed or DeliveryState.Delivered or DeliveryState.Acked or DeliveryState.Unconfirmed &&
                     !VerifyHandoff(session, header, body) ||
                 state == DeliveryState.Acked && prior?.State != "delivered")
@@ -55,7 +86,7 @@ public sealed class DeliveryJournal : IDisposable
                 throw new InvalidOperationException("Delivery journal transition lacks durable evidence.");
             }
             var record = new DeliveryJournalRecord(session, header, state.ToString().ToLowerInvariant(),
-                DateTimeOffset.UtcNow, "", injectorResult, boxClear);
+                DateTimeOffset.UtcNow, "", injectorResult, boxClear, reason);
             record = record with { Hmac = Convert.ToBase64String(Mac(record, body)) };
             try { append(JsonSerializer.SerializeToUtf8Bytes(record, ProtocolJson.Options)); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
@@ -66,7 +97,14 @@ public sealed class DeliveryJournal : IDisposable
                 return DeliveryState.Unconfirmed;
             }
             latest[id] = record;
-            if (state == DeliveryState.Handoff) { handoffs[id] = record; }
+            if (state == DeliveryState.Handoff)
+            {
+                handoffs[id] = record;
+                var seq = header.Seq!;
+                var key = (session, seq[0]);
+                reserved[key] = Math.Max(reserved.GetValueOrDefault(key),
+                    long.Parse(seq[1..], System.Globalization.CultureInfo.InvariantCulture));
+            }
             return state;
         }
     }
