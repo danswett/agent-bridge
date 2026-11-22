@@ -5,6 +5,10 @@ frame for [#1396](https://github.com/danswett/agent-bridge/issues/1396), not a n
 API, permission grant, live parity result or cutover authorization. Public
 third-party API delivery remains parked in
 [#1398](https://github.com/danswett/agent-bridge/issues/1398).
+Later owner direction (Nov 21, 08:25 PT, fleet `docs/owner-decisions.md`): fleet
+messaging, lookup, launch and end become native Slipgates app and host CLI commands
+under [#3237](https://github.com/danswett/agent-bridge/issues/3237); this records the
+direction only, not implementation.
 
 The PWA is not special. PWA, Windows, Mac, iOS, Android and Linux when shipped must
 offer the same parity capabilities. An optional HA client and a future third-party
