@@ -13,6 +13,18 @@ public sealed class DeliveryJournalTests : IDisposable
     public void Dispose() { if (Directory.Exists(folder)) { Directory.Delete(folder, true); } }
 
     [Fact]
+    public void Historical_handoff_MACs_remain_verifiable_with_no_priority_fields()
+    {
+        var legacy = new { Session = "s", Header, State = "handoff", RecordedAt = DateTimeOffset.UtcNow, Hmac = "",
+            InjectorResult = (int?)null, BoxClear = (bool?)null, Reason = (string?)null };
+        var key = RandomNumberGenerator.GetBytes(32);
+        var mac = HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(JsonSerializer.Serialize(legacy, ProtocolJson.Options) + "\nsecret words"));
+        var record = new DeliveryJournalRecord("s", Header, "handoff", legacy.RecordedAt, Convert.ToBase64String(mac));
+        using var reopened = new DeliveryJournal(key, _ => { }, _ => { }, [record]);
+        Assert.True(reopened.VerifyHandoff("s", Header, "secret words"));
+    }
+
+    [Fact]
     public void Journal_records_are_ordered_metadata_only_and_only_handoff_verifies()
     {
         var lines = new List<byte[]>();

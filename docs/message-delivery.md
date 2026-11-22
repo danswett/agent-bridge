@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: slice 2b2b host-only adapter source; live wiring/shared-store acceptance held, 2026-11-22 PT. Inputs: #2568
+Status: slice 3a standalone priority journal core; delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -151,6 +151,25 @@ Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 be
   per hour is demoted to normal (owner: no quota). Requests, grants and demotions are journaled and shown
   on the status surface, never paged; the ack says which. **Known limit:** every HA agent shares one
   token, so the quota is per token until host-signed principals exist (follow-up to be filed).
+Slice 3a defines host-only `DeliveryPriorityRequest` wire fields `priority` (`normal|fyi|urgent`)
+and `reason` (required for urgent, <=256 characters), and the standalone journal decision kernel.
+An agent cannot self-grant: trusted ingress must first authenticate a person's issue and capture
+the exact `GrantAudience` device/profile and agent principal. `IssuePriority`/`RevokePriority` are
+internal trusted-person seams only; the compatible `GrantIssuer` is already authenticated, not a payload claim.
+The separate `PriorityCapability` lives in the existing node-bound DeliveryJournal, not the fleet
+GrantStore: it conveys no read/reply/answer/trust authority and is not a fleet launch/stop grant.
+Request, issue, grant, consumption, refusal, demotion and revocation are flushed/MACed journal facts.
+Policy facts link their previous MAC; whole-file rollback still requires the held
+[external/keyed anchor (#3720)](https://github.com/danswett/agent-bridge/issues/3720) before activation.
+Max three consumptions per principal/receiver rolling hour spans all its capabilities; stricter caps,
+expiry, revocation and observed clock high-water survive replay. No capability/quota decides normal,
+waiting idle; owner urgent retains its existing path without a capability or quota.
+The decision's required admission predicate runs before consumption: known refusal journals
+`lane-full`, spends nothing and permits a bound same-UUID retry. Consumed UUIDs never renew.
+Clock refusal before a write does not mark the journal uncertain; actual append failure does.
+Slice 3b alone integrates Offer/Query, scheduler-locked preflight and final fenced capability rechecks.
+No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.
+Canonical Fleet flags remain [#651](https://github.com/danswett/slipgates-fleet/issues/651), owned by Fleet Quality.
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
   TTL: fyi 30 min, normal 4 h, urgent none. Each delivery carries a summary line (`q=3 Quality 2, SRE 1`).
 ## Guarantees, each with its hosted-CI test (fakes for console, clock and transcript)
@@ -214,7 +233,8 @@ uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing 
 | 2b1 | Submit key (`none`/`Enter`/`Queue`, ctrl+q VK `Q` left-ctrl), default-Unknown per-terminal capability table; no production scheduler wiring or live qualification | <=400 | after 2a |
 | 2b2a | Queue write evidence and explicit Submit compatibility, [#3681](https://github.com/danswett/agent-bridge/issues/3681) P2s only | <=400 | plain child of pushed 2b1 |
 | 2b2b | Host-only offer/query/Dispatch, canonical pre-key handoff, truthful UUID replay; unwired, no shared store means pending only | <=400 | plain child of pushed 2b2a |
-| 3 | Priority authority, `reply-session.ps1 -Priority -Reason`, per-principal quota, journaled grants | ~130 | after 2 |
+| 3a | Standalone person-issued priority capability, DTO/wire decision core, principal/receiver quota, journal replay and MAC-chain; no scheduler wiring | <=400 | after 2b2b |
+| 3b | Host-only Offer/Query capacity-before-consumption, final-slot priority checks and truthful demotion; Fleet flags #651 separate | <=400 | after 3a lands on main |
 | 4 | Topic, TTL, summary line, confirmation by id, gap detector, bounded retry; over 250: 4b takes confirmation and retry | ~200 | after 3 |
 ## Live test (SRE Lead, disposable sessions; builder's harness): 1, 3, 4, 5 after slice 2; 2 after 4
 1. Urgent, 5 queued and urgent within 2 s: 2 steered entries and 5 separate `queued` turns, in order.

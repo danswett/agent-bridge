@@ -5,12 +5,17 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed, Demoted }
+public enum DeliveryState { Enqueued, Handoff, Typed, Delivered, Acked, Dropped, Unconfirmed, Demoted, Priority }
 public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header, string State,
-    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null);
+    DateTimeOffset RecordedAt, string Hmac, int? InjectorResult = null, bool? BoxClear = null, string? Reason = null)
+{
+    public PriorityCapability? Capability { get; init; }
+    public string? PriorityReason { get; init; }
+    public string? PriorityPrevious { get; init; }
+}
 
 // Node-bound evidence only: replay metadata, never payloads or key sends.
-public sealed class DeliveryJournal : IDisposable
+public sealed partial class DeliveryJournal : IDisposable
 {
     static readonly UTF8Encoding StrictUtf8 = new(false, true);
     readonly object gate = new();
@@ -36,7 +41,8 @@ public sealed class DeliveryJournal : IDisposable
         this.log = log;
         foreach (var r in reservations ?? [])
         {
-            _ = Enum.Parse<DeliveryState>(r.State, true);
+            var state = Enum.Parse<DeliveryState>(r.State, true);
+            if (state == DeliveryState.Priority) { ReplayPriority(r); continue; }
             var id = (r.Session, r.Header.Id);
             latest[id] = r;
             replayed.Add(id);
@@ -101,7 +107,7 @@ public sealed class DeliveryJournal : IDisposable
             _ = DeliveryEnvelope.Format(header with { Seq = header.Seq ?? "q1" }, body);
             var id = (session, header.Id);
             latest.TryGetValue(id, out var prior);
-            if (!Enum.IsDefined(state) || state == DeliveryState.Enqueued && prior is not null ||
+            if (!Enum.IsDefined(state) || state == DeliveryState.Priority || state == DeliveryState.Enqueued && prior is not null ||
                 state == DeliveryState.Handoff && (header.Seq is null || prior?.State is not ("enqueued" or "demoted") ||
                     prior.Header != header with { Seq = prior.Header.Seq } || !Matches(prior, body)) ||
                 state == DeliveryState.Demoted && (prior?.State != "enqueued" || reason is null ||
