@@ -53,8 +53,8 @@ public sealed class LiteDeliver(
         var byNode = false;
         if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
-        // The text was signed for one account, and a local send checks it only before this await (#3595): a sign-out or
-        // switch while the composer is read or the typing slot is awaited types nothing, here and at both replier fences.
+        // The text was signed for one account, and a local send checks it only before this await (#3595): an account
+        // switch (or no account) while the composer is read or the typing slot is awaited types nothing, here and at both replier fences.
         bool Signed() => account is null || account() == body.Account;
         if (!Signed()) { return Refused(LiteReceiver.NotSameAccount); }
         var stillAllowed = targetFence?.Invoke(id);

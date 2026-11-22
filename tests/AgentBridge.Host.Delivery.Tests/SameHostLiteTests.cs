@@ -185,7 +185,7 @@ public sealed class SameHostLiteTests
     }
 
     // #3595 P1: the local link checks the account once, before the await that reads the composer and waits for the typing
-    // slot. A sign-out or switch during that wait must type nothing, not the old account's signed text.
+    // slot. An account switch (or no account) during that wait must type nothing, not the old account's signed text.
     [Theory]
     [InlineData("composer", "other")]
     [InlineData("composer", "signed out")]
