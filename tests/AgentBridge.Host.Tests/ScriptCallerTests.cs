@@ -162,6 +162,22 @@ public sealed class ScriptCallerTests : IDisposable
         Assert.Contains("fleet.list and fleet.find", refusal.Message);
     }
 
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task An_unknown_id_still_checks_completion_liveness_and_rotation(bool expire)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        Mint(store);
+        var newer = Mint(store);
+        var channel = new Chan();
+        store.Accept(channel, newer.Credential);
+        var roster = new Roster { Machines = [], OnRead = () => { if (expire) { clock.Now = Started.AddHours(1); } } };
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => new FleetList(store, roster, audit: new AgentAuditLog(root))
+            .FindAsync(channel, JsonSerializer.SerializeToElement(new { sessionId = "agent_bridge_1234567890abcdef" })));
+        Assert.Contains(expire ? "credential is no longer live" : "agent_bridge_1234567890abcdef", refusal.Message);
+        Assert.Equal(expire ? 2 : 1, Store().Count);
+    }
+
     [Fact]
     public async Task Expiry_during_a_fleet_read_refuses_the_result_without_retiring_the_old_hash()
     {

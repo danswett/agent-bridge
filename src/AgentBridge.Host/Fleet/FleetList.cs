@@ -300,7 +300,8 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         { throw new InvalidOperationException($"fleet.find registry-get: {e.Message}", e); }
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, sessionId, machine)));
+        var result = snapshot.CompleteRead(() => Complete(caller, Find(snapshot, sessionId, machine)));
+        return result is FindRefusal refused ? throw new InvalidOperationException(refused.Reason) : result;
     }
 
     static object Find(FleetRosterSnapshot snapshot, string sessionId, string? machine)
@@ -316,11 +317,14 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
-            throw new InvalidOperationException($"refused: fleet.find sessionId {JsonSerializer.Serialize(sessionId)} is unknown, stale or offline");
+            // Finish the scoped read and credential-rotation fence before surfacing a refusal.
+            return new FindRefusal($"refused: fleet.find sessionId {JsonSerializer.Serialize(sessionId)} is unknown, stale or offline");
         }
         // One live routing match; messaging trust never authorizes another operation.
         return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
     }
+
+    sealed record FindRefusal(string Reason);
 
     sealed record FindMachine(string Machine,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,
