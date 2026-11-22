@@ -323,7 +323,7 @@ format without a last-whole-line position are stale too.
 |---|---|---|
 | `turn` | string? | **New (#292).** The id of the latest turn: the one `userMessage`, `reasoning`, `currentTool` and `question` belong to. The same id `session.history` gives that turn. Absent before the first prompt, when the host could not read where the latest turn began (a transcript longer than it reads at first sight), and after a record that may have started a turn but could not be read (not JSON, or a line longer than the host reads), until the next prompt it can read: history shows that turn as `unreadable`. Never trimmed by the session budget |
 | `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply was written in: `own.response` when `source.response` names a delegate, else `response`. It is `turn` once the latest turn has replied; until then the reply still showing is an earlier turn's, as today's clients show it. Absent with no such reply, or when the host does not know its turn. Never trimmed |
-| `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude replies: the main reply's response-part id in `responseTurn`. It is derived from the assistant record's identity and response part index, exactly as history derives it. Different ids are distinct replies, even with equal text; updates to one id replace only that streaming slot |
+| `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude/Codex replies: the main reply's response-part id in `responseTurn`. It is derived from the assistant record's identity and response part index, exactly as history derives it. Different ids are distinct replies, even with equal text; updates to one id replace only that streaming slot |
 
 **Reply retention (#2667; owner-approved 14:34 PT Nov 21, 2026).** Distinct history
 response-part ids are the source of truth within a turn. Clients retain them in order
@@ -331,13 +331,21 @@ and render all replies in the current turn, not just the latest live text. A liv
 `responseId` is one streaming slot; a page replaces it by the same part id, without a
 second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
-single-live-reply fallback is unchanged; Codex and older hosts omit it.
+single-live-reply fallback is unchanged; older hosts omit it.
 Older clients ignore the optional field and continue reading `response`/`own.response`.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 It omits identity for composite legacy text, text after a tool in the same record,
 duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
 in a turn. A readable new prompt reestablishes identity; text never supplies an id.
+Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
+the first record's part id across both streams and updates. Distinct ids retain equal
+text replies. Missing ids, flat events and `last_agent_message` never inherit identity;
+conflicting or malformed native turn ids, duplicate identity fields, unread/skimmed/skipped beginnings,
+or more than 4,096 item ids omit it until a readable prompt. Neither text, time nor
+record order correlates unidentified records. Legacy text dedup remains unchanged.
+These are history identities, not delivery sender identities; [message delivery](../message-delivery.md)
+remains the canonical delivery design, without routing or authentication changes.
 
 **The dedup key is the turn id**, within a session. Part ids dedupe within a turn. A client holds
 a session's turns in the order the host gave them, keyed by id:

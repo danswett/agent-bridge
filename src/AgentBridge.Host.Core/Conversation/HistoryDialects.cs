@@ -654,10 +654,11 @@ internal sealed class CodexHistory : HistoryDialect
     public override void Apply(JsonElement e, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
     {
         var p = Json.Obj(e, "payload") ?? default;
+        var reply = CodexReplyIds.Read(e);
         switch (Json.Str(e, "type"))
         {
             case "event_msg":
-                Event(p, at, turn, context);
+                Event(p, at, turn, context, reply);
                 break;
             case "response_item":
                 switch (Json.Str(p, "type"))
@@ -668,7 +669,7 @@ internal sealed class CodexHistory : HistoryDialect
                     // The same reply and reasoning as the event stream's, in rollouts that write
                     // both: said once (TurnBuilder.Said).
                     case "message" when Json.Str(p, "role") == "assistant" && CodexParser.OutputText(p) is { } text:
-                        turn.Said(HistoryPartKind.Response, text, at);
+                        turn.Said(HistoryPartKind.Response, text, at, reply);
                         break;
                     case "reasoning" when Json.Arr(p, "summary") is { } summary:
                         foreach (var s in summary.EnumerateArray())
@@ -697,7 +698,7 @@ internal sealed class CodexHistory : HistoryDialect
         }
     }
 
-    static void Event(JsonElement p, DateTimeOffset at, TurnBuilder turn, HistoryContext context)
+    static void Event(JsonElement p, DateTimeOffset at, TurnBuilder turn, HistoryContext context, CodexReplyKey reply)
     {
         switch (Json.Str(p, "type"))
         {
@@ -746,7 +747,7 @@ internal sealed class CodexHistory : HistoryDialect
                 switch (Json.Str(item, "type"))
                 {
                     case "AgentMessage" when CodexParser.ContentText(item) is { } text:
-                        turn.Said(HistoryPartKind.Response, text, at);
+                        turn.Said(HistoryPartKind.Response, text, at, reply);
                         break;
                     case "Reasoning" when Json.Arr(item, "summary_text") is { } summary:
                         foreach (var s in summary.EnumerateArray())
