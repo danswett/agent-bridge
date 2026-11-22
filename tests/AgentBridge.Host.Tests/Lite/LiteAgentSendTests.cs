@@ -30,7 +30,32 @@ public sealed class LiteAgentSendTests : IDisposable
         LiteAgentSend.HandleAsync(store, sender, channel, JsonDocument.Parse(json).RootElement, windows: true, appendAttempt: audit.Append);
 
     const string Sess = "agent_bridge_0123456789abcdef";
-    const string Body = """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
+    const string Device = "33333333333333333333333333333333";
+    const string Body = """{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
+
+    [Theory, InlineData("m2"), InlineData("m"), InlineData("33333333")]
+    public async Task A_name_or_fragment_is_refused_with_its_id_before_audit_or_sender(string machine)
+    {
+        var refused = await Assert.ThrowsAsync<ArgumentException>(() => Send(hello,
+            JsonSerializer.Serialize(new { machine, session = Sess, text = "hi" })));
+        Assert.Contains("refused:", refused.Message);
+        Assert.Contains(machine, refused.Message);
+        Assert.Empty(sender.Calls);
+        Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
+    }
+
+    [Fact]
+    public async Task An_invalid_machine_diagnostic_is_escaped_bounded_and_keeps_the_unicode_boundary()
+    {
+        var prefix = "\n\u202e" + new string('x', 61);
+        var machine = prefix + "\U0001F680" + new string('y', 100);
+        var refused = await Assert.ThrowsAsync<ArgumentException>(() => Send(hello,
+            JsonSerializer.Serialize(new { machine, session = Sess, text = "hi" })));
+        Assert.Contains(JsonSerializer.Serialize(prefix + "..."), refused.Message);
+        Assert.DoesNotContain("\n", refused.Message);
+        Assert.Empty(sender.Calls);
+        Assert.False(Directory.Exists(Path.Combine(root, AgentAuditLog.FolderName)));
+    }
 
     JsonElement[] AuditLines() => Directory.GetFiles(Path.Combine(root, AgentAuditLog.FolderName), "agents-*.jsonl")
         .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line)).Where(line => line.TryGetProperty("action", out _)).ToArray();
@@ -46,7 +71,7 @@ public sealed class LiteAgentSendTests : IDisposable
         };
         var reply = Assert.IsType<LiteSendReply>(await Send(hello, JsonSerializer.Serialize(new
         {
-            machine = "m2", session = Sess, text, principal = "owner", chain = new[] { "owner" },
+            machine = Device, session = Sess, text, principal = "owner", chain = new[] { "owner" },
         })));
 
         Assert.Equal("delivered", reply.Outcome);
@@ -58,7 +83,7 @@ public sealed class LiteAgentSendTests : IDisposable
         Assert.Equal("agent:upstream/parent", Assert.Single(entry.GetProperty("chain").EnumerateArray()).GetString());
         Assert.Equal("out", entry.GetProperty("direction").GetString());
         Assert.Equal("agent.send", entry.GetProperty("action").GetString());
-        Assert.Equal($"m2/{Sess}", entry.GetProperty("target").GetString());
+        Assert.Equal($"{Device}/{Sess}", entry.GetProperty("target").GetString());
         Assert.Equal("attempted", entry.GetProperty("outcome").GetString());
         Assert.True(Guid.TryParse(entry.GetProperty("request").GetString(), out _));
         Assert.Equal(System.Text.Encoding.UTF8.GetByteCount(text), entry.GetProperty("textLength").GetInt32());
@@ -192,10 +217,10 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task A_principal_in_the_body_is_ignored_and_the_credential_is_the_sender()
     {
-        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi","principal":"agent:other:sess-9","caller":{"session":"sess-9"}}""");
+        await Send(hello, """{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"hi","principal":"agent:other:sess-9","caller":{"session":"sess-9"}}""");
         var call = Assert.Single(sender.Calls);
         Assert.Equal("sess-1", call.Caller.Session);
-        Assert.Equal(new LiteSendInput("m2", Sess, "hi"), call.Input);
+        Assert.Equal(new LiteSendInput(Device, Sess, "hi"), call.Input);
     }
 
     [Theory]
@@ -214,9 +239,9 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task Text_over_4096_characters_is_refused_before_the_sender_is_called()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = Sess, text = new string('x', 4097) })));
+        await Assert.ThrowsAsync<ArgumentException>(() => Send(hello, JsonSerializer.Serialize(new { machine = Device, session = Sess, text = new string('x', 4097) })));
         Assert.Empty(sender.Calls);
-        await Send(hello, JsonSerializer.Serialize(new { machine = "m2", session = Sess, text = new string('x', 4096) }));
+        await Send(hello, JsonSerializer.Serialize(new { machine = Device, session = Sess, text = new string('x', 4096) }));
         Assert.Single(sender.Calls);
     }
 
@@ -225,21 +250,21 @@ public sealed class LiteAgentSendTests : IDisposable
     [InlineData("""{"machine":"","session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
     [InlineData("""{"machine":5,"session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
     [InlineData("""{"machine":"bad name","session":"agent_bridge_0123456789abcdef","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":7,"text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"s2","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789ABCDEF","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef\n","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcde","text":"hi"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":""}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":null}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":4}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"  \n "}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u001b[31m"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u0007b"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u0000b"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":7,"text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"s2","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789ABCDEF","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef\n","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcde","text":"hi"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":""}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":null}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":4}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"  \n "}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"a\u001b[31m"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"a\u0007b"}""")]
+    [InlineData("""{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"a\u0000b"}""")]
     [InlineData("[1]")]
     public async Task A_bad_request_is_refused_before_the_sender_runs(string json)
     {
@@ -251,7 +276,7 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task Tab_CR_and_LF_are_allowed_in_text()
     {
-        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\tb\r\nc"}""");
+        await Send(hello, """{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"a\tb\r\nc"}""");
         Assert.Single(sender.Calls);
     }
 

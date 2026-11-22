@@ -330,7 +330,7 @@ connection gets the `off` outcome below): any `principal` or other extra field i
 ignored.
 
 ```json
-{ "id": 2, "op": "agent.send", "data": { "machine": "<machine>", "session": "<session id>", "text": "..." } }
+{ "id": 2, "op": "agent.send", "data": { "machine": "<device ID>", "session": "<session node>", "text": "..." } }
 ```
 
 All three are required strings, checked before anything is sent; a bad request is refused with a
@@ -338,22 +338,26 @@ code in the message:
 
 | Field | Rule | Code |
 |---|---|---|
-| `machine` | 1 to 64 of letters, digits, `.`, `_`, `-` | `badMachine` |
+| `machine` | exact present host device ID: 32 hex digits, canonical publishers lowercase, ordinal comparison; never a display name or fragment | `badMachine` |
 | `session` | the receiver's roster node id: `agent_bridge_` and exactly 16 lowercase hex digits | `badSession` |
 | `text` | not empty, not blank, no control characters except tab, CR and LF | `badText` |
 | `text` | at most 4096 characters (UTF-16 code units, not bytes) | `textTooLong` |
 
-A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
+A body that isn't an object is refused with `badRequest`. Unknown or offline device IDs return
+`refused` with `noSuchMachine`, naming the ID, before signing or opening a channel. Invalid
+machine diagnostics are escaped and bounded. Neither selector retries, resolves a name or falls
+back to HA. There is no sender-side session-roster acquisition in this cut; receiver session-ID
+and final-effect fences are unchanged. The host hands the request to the AP5-lite
 sender, which answers
 `{ "outcome", "code", "request" }`:
 
-| `outcome` | Meaning | Caller |
+| `outcome` | Meaning | Legacy fleet caller policy (not implemented by the host) |
 |---|---|---|
 | `delivered` | the target host typed it into the session | done |
-| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is outcome `refused` with code `rate`: it is final, with no Home Assistant fallback | fall back to Home Assistant on `notReplyTarget` or `busy` only |
+| `refused` | the target or device selector refused; identity diagnostics name the ID, other receiver reasons include `notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ... | identity or rate refusal is final, no HA fallback; legacy fallback on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
 | `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
-| `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
+| `off` | the mode is off, killed, or no sender is wired; no channel was opened | legacy fallback to Home Assistant |
 
 `request` is the sender's request id.
 
