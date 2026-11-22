@@ -106,7 +106,7 @@ public sealed class HaltPolicyStoreTests : IDisposable
         var verdict = await store.CheckAsync(Policy(42, run: 7400, issued: Issued.AddHours(issuedHours)), "0.1.7214");
         Assert.Equal(KnownHalted, verdict.Outcome);
         Assert.Equal(7300, verdict.Floors["win/prerelease"]);
-        foreach (var cached in new[] { store, Store() })
+        foreach (var cached in new[] { Store(), store })
         {
             Assert.Equal(KnownHalted, await Outcome(null, "0.1.7213", cached));
             Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", cached));
@@ -139,13 +139,13 @@ public sealed class HaltPolicyStoreTests : IDisposable
         Assert.Equal(2, saves);
         if (failLatch) { Assert.Equal("halt policy state not saved", verdict.Reason); }
         at.Now = Issued.AddHours(2);
-        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", store));
-        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", store));
         if (!failLatch)
         {
             Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", Store(at)));
             Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", Store(at)));
         }
+        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", store));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", store));
     }
 
     [Fact]
