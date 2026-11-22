@@ -44,8 +44,8 @@ internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegate
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
 // cursor (or the end) to the prompts that start the page's turns, by byte search, parsing only the
-// lines that search picks; then forwards through each turn. Codex also validates ignored records
-// so unreadable gaps invalidate reply identity. Read-only and shared, as the tail reads: only
+// lines that search picks; then forwards through each turn, parsing as its dialect
+// wants. Read-only and shared, as the tail reads: the agent keeps writing meanwhile, and only
 // whole lines before where this read began are read.
 internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 {
