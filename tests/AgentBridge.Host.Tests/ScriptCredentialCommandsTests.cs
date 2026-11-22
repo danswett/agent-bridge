@@ -127,7 +127,8 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         var started = DateTimeOffset.UtcNow;
         var known = new List<KnownProcess>();
         var guard = new CallerGuard(() => known, null, agentNames: [],
-            ancestryOf: _ => new ProcessAncestry([new PeerProcess(100, started, image)], true), hostImage: image);
+            ancestryOf: _ => new ProcessAncestry([new PeerProcess(100, started, image),
+                new PeerProcess(99, started, @"C:\Windows\explorer.exe")], true), hostImage: image);
         Assert.Equal(CallerKind.HostCli, guard.Classify(channel).Kind);
         known.Add(new KnownProcess(100, started, "an agent session"));
         var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
