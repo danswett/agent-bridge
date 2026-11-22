@@ -6,7 +6,7 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
 | `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
-| `fleet.find` | read | Finds one session of the agent's own account by exact name; unsigned matches answer `unverified` except for messaging-only `trust: "own-account"` below. |
+| `fleet.find` | read | Finds one live session of the agent's own account by session ID; unsigned matches answer `unverified` except for messaging-only `trust: "own-account"` below. |
 
 ## `fleet.list`
 
@@ -46,33 +46,32 @@ The table lists implemented selector branches. The [own-account lite exception](
 as a future change; signed replacement selection remains unimplemented.
 
 ```json
-{ "id": 4, "op": "fleet.find", "data": { "name": "SG Quality" } }
+{ "id": 4, "op": "fleet.find", "data": { "sessionId": "agent_bridge_1234567890abcdef" } }
 ```
 
-Optional `"machine"` (1 to 64 of letters, digits, `.`, `_`, `-`) limits the match to that machine. Replies, per [the design](../design/fleet-session-registry.md) ("Names and lookup"), the first rule that applies:
+The exclusive `sessionId` accepts a live node, its bare 16 lowercase hex digits, or a full canonical UUID published by the roster and bound to that node. No UUID truncation, name or substring matching. Supplying `name` or `machineName` refuses, even beside a valid ID. Optional `machine` is an exact device ID (32 lowercase hex digits), never a display name. Replies retain the following trust/completeness precedence:
 
 | `result` | Meaning | Body |
 | --- | --- | --- |
 | `incomplete` | A live machine in scope published a truncated list, so a duplicate could be hidden | `machines`: ids |
 | `unverified` | A live unverified match without own-account messaging trust exists, even beside a verified match | `machines`: `{ machine, online }`, no node |
 | `ambiguous` | Two or more verified or own-account messaging live matches, including on one machine | `candidates`: `{ id, node, machine, state, since, online, model?, trust? }` |
-| `offline` | Matches only on offline machines | `machines`: `{ machine }` |
+| refusal | Unknown, stale or offline ID; nothing routable | Readable `refused:` reason naming the requested ID |
 | `found` | One verified live match or one own-account messaging live match, with or without a `machine` filter | `session`: `{ id, node, machine, state, since, online, model?, sessionId?, trust? }` |
-| `notFound` | Otherwise | none |
 
 - Every machine object, session and candidate above also carries optional `machineName` under the same rules as `fleet.list`; `incomplete` remains an array of IDs. A display name is never a machine pin.
 - Every result carries `fleetScope`, the authenticated relay account ID captured with the roster. Request `account`/`fleetScope` fields are ignored; missing authenticated scope refuses explicitly. Reconnect during the read refuses rather than mixing scopes.
-- Name-only lookup is canonical (#2151); offline matches do not create a live duplicate. `model` is carried only when the authenticated roster supplies a string, never inferred from caller data or names. Missing model is omitted, so model-dependent callers fail closed. No publisher or relay allow-list change supplies model today.
+- ID-only lookup supersedes #2151/#2574's name lookup ([#3607](https://github.com/danswett/agent-bridge/issues/3607)); offline matches do not create a live duplicate. `model` is carried only when the authenticated roster supplies a string, never inferred from caller data or names. Missing model is omitted, so model-dependent callers fail closed.
 - `found.session.sessionId`, when present, is the full lowercase hyphenated UUID (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`). The publisher carries the source session ID, only to a relay whose `ready` advertises the `rosterSessionId` capability ([roster.md](roster.md)), and the finding host verifies `node == "agent_bridge_" + sessionId.Replace("-", "")[..16]` before exposing it. Missing, noncanonical or mismatched values are omitted; consumers must refuse an unverified ID, never truncate or prefix-match a caller UUID. Existing 16-hex `id` and `node` are unchanged; no role ID or name-derived value is used.
 - Until #1776's signing and trusted reader integration lands no record is roster-verified. The temporary own-account exception returns `session.trust: "own-account"` (also `trust` on fresh `fleet.list` session rows) for messaging only; it never grants launches, stop or remote manage. Registry account and presence come from one connection snapshot and must still agree with the host's current identity account when the read completes; a switch refuses `notSameAccount`. Actual sends still check the same account and channel key matching the device id. Other unsigned matches remain `unverified`, without a routable node.
-- The name is trimmed, then matched exactly and case-sensitively; it is refused if empty or over 64 characters (before any audit entry). It is never echoed back, so the call does not taint the caller with session text.
+- IDs are exact and untrimmed. A rename or successor reusing a name cannot retarget a lookup; names remain display text. Invalid selectors refuse before auditing or reading the roster. Role-ID routing and claims remain paused.
 - Same account, scope and refusal rules as `fleet.list`. Each accepted call invokes the same `AuditFleetList` hook.
 
-### Approved future name enrollment and replacement behavior (#2360)
+### Historical name enrollment and replacement proposal (#2360)
 
 The [canonical #2360 design](../design/fleet-session-registry.md) owns the complete
 enrollment, disclosure, warning, ordering, dependency and failing-first test contracts.
 Only explicit host-owned names publish; no inferred fallback or agent rename.
 After incomplete/unverified checks, same-host live duplicates stay ambiguous; cross-host proof is specified there.
-This is not implemented. #1776 and the design's unowned reader/clock prerequisites
+Name-based routing is superseded by ID-only lookup; this proposal grants no routing or role-claim authority. #1776 and the design's unowned reader/clock prerequisites
 still gate roster verification and replacement selection: no interim key and no unsigned `found` beyond the messaging-only own-account exception above.

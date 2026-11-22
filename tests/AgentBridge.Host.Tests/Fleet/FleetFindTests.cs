@@ -16,6 +16,8 @@ public sealed class FleetFindTests : IDisposable
     readonly string root = Path.Combine(Path.GetTempPath(), "abfind-" + Guid.NewGuid().ToString("N")[..8]);
     static readonly DateTimeOffset Started = new(2026, 11, 7, 12, 0, 0, TimeSpan.Zero);
     static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
+    const string Node = "agent_bridge_1234567890abcdef";
+    const string Uuid = "12345678-90ab-cdef-1111-111111111111";
     readonly AgentCredentials store;
     readonly List<string> audited = [];
 
@@ -65,7 +67,7 @@ public sealed class FleetFindTests : IDisposable
     FleetList Op(params FleetMachine[] machines) => new(store, new Roster(machines), audit: new AgentAuditLog(root)) { AuditFleetList = audited.Add };
 
     static FleetMachine M(string id, bool online, string? name, bool truncated = false, bool verified = false) =>
-        new(id, online, name is null ? [] : [new FleetSession("n-" + id, name, "working", Started, "s-" + id)], truncated, verified);
+        new(id, online, name is null ? [] : [new FleetSession(Node, name, "working", Started, "s-" + id)], truncated, verified);
 
     static JsonElement Body(object o) => JsonSerializer.SerializeToElement(o);
 
@@ -107,7 +109,7 @@ public sealed class FleetFindTests : IDisposable
         new(() => link.Capture(frames), mode, identityAccount ?? (() => "account-a"), accountGate ?? new());
 
     static JsonElement LiteFrame() => Body(new { machine = "a", online = true,
-        record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } } });
+        record = new { sessions = new[] { new { node = Node, name = "SG Quality", state = "idle", since = Started } } } });
 
     sealed class AfterReadRoster(IScopedFleetRoster inner, Action after) : IScopedFleetRoster
     {
@@ -115,45 +117,90 @@ public sealed class FleetFindTests : IDisposable
         public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { var result = await inner.ReadScopedAsync(ct); after(); return result; }
     }
 
+    [Theory]
+    [InlineData(Node)]
+    [InlineData("1234567890abcdef")]
+    [InlineData(Uuid)]
+    public async Task Session_matching_uses_the_live_id_after_a_rename_never_the_reused_name(string id)
+    {
+        var renamed = new FleetSession(Node, "Renamed", "idle", Started, SessionId: Uuid);
+        var successor = renamed with { Node = "agent_bridge_fedcba0987654321", Name = "Old name", SessionId = null };
+        Assert.True(FleetSessionMatch.Matches(renamed, id));
+        Assert.False(FleetSessionMatch.Matches(successor, id));
+        Assert.False(FleetSessionMatch.Matches(successor, "Old name"));
+        Assert.False(FleetSessionMatch.Matches(successor, "Old"));
+        Assert.False(FleetSessionMatch.Matches(renamed with { State = "ended" }, id));
+        Assert.False(FleetSessionMatch.Matches(renamed with { Evidence = SessionEvidence.Read(Body(new { stale = true })) }, id));
+    }
+
+    [Theory]
+    [InlineData(Node)]
+    [InlineData("1234567890abcdef")]
+    [InlineData(Uuid)]
+    public async Task Lookup_reaches_a_renamed_session_by_id_and_refuses_its_missing_or_stale_id(string id)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var renamed = new FleetSession(Node, "Renamed", "idle", Started, SessionId: Uuid);
+        var successor = renamed with { Node = "agent_bridge_fedcba0987654321", Name = "Old name", SessionId = null };
+        var machine = M("a", true, null, verified: true) with { Sessions = [renamed, successor] };
+        var result = await Find(Op(machine), new { sessionId = id });
+        Assert.Equal(Node, result.GetProperty("session").GetProperty("node").GetString());
+        foreach (var rows in new[] { new[] { successor }, new[] { renamed with { Evidence = SessionEvidence.Read(Body(new { stale = true })) }, successor } })
+        {
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine with { Sessions = rows }), new { sessionId = id }));
+            Assert.Contains("refused:", refusal.Message);
+            Assert.Contains(id, refusal.Message);
+        }
+    }
+
+    [Theory]
+    [InlineData("Old name")]
+    [InlineData("Old")]
+    [InlineData("12345678-90ab-cdef-2222-222222222222")]
+    public async Task Lookup_never_resolves_a_name_fragment_or_unpublished_uuid(string id)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var machine = M("a", true, null, verified: true) with { Sessions = [new(Node, "Old name", "idle", Started, SessionId: Uuid)] };
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = id }));
+        Assert.Contains("refused:", refusal.Message);
+        Assert.Contains(id, refusal.Message);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = Node, name = "Old name" }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(machine), new { sessionId = Node, machineName = "a" }));
+    }
+
     [Fact]
-    public async Task Normalized_exact_live_names_ignore_successors_and_ended_or_dead_rows()
+    public async Task A_machine_pin_never_resolves_a_display_name_that_looks_like_a_device_id()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var device = new string('a', 32);
+        var renamed = M(device, true, "SG Quality", verified: true) with { Name = "Renamed" };
+        var successor = M(new string('b', 32), true, "SG Quality", verified: true) with { Name = device };
+        Assert.Equal(device, (await Find(Op(renamed, successor), new { sessionId = Node, machine = device })).GetProperty("session").GetProperty("machine").GetString());
+        Assert.Contains(Node, (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(successor), new { sessionId = Node, machine = device }))).Message);
+    }
+
+    [Fact]
+    public async Task Normalized_display_names_are_refused_before_a_roster_read()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var live = M("a", true, "Copilot: SG  Engineering Lead Status", verified: true) with { Name = "VM-A" };
         var successor = M("b", true, "SG Engineering Lead Successor", verified: true);
         var ended = M("c", true, "SG Engineering Lead", verified: true) with
         { Sessions = [new("n-c", "SG Engineering Lead", "ended", Started), new("n-d", "SG Engineering Lead", "dead", Started)] };
-        var found = await Find(Op(live, successor, ended), new { name = "SG Engineering Lead" });
-        Assert.Equal("found", found.GetProperty("result").GetString());
-        Assert.Equal("a", found.GetProperty("session").GetProperty("machine").GetString());
-        Assert.Equal("found", (await Find(Op(live, successor, ended), new { name = "SG Engineering Lead", machineName = "VM-A" })).GetProperty("result").GetString());
-        Assert.Equal("notFound", (await Find(Op(live, successor), new { name = "SG Engineering Lead", machineName = "VM-B" })).GetProperty("result").GetString());
-        Assert.Equal("notFound", (await Find(Op(ended), new { name = "SG Engineering Lead" })).GetProperty("result").GetString());
-        Assert.Equal("notFound", (await Find(Op(live, successor), new { name = "SG Engineering" })).GetProperty("result").GetString());
-        var duplicate = live with { Id = "e", Name = "VM-E" };
-        var ambiguous = await Find(Op(live, duplicate, ended), new { name = "Claude: SG Engineering Lead Status" });
-        Assert.Equal("ambiguous", ambiguous.GetProperty("result").GetString());
-        Assert.Equal(new[] { "VM-A", "VM-E" }, ambiguous.GetProperty("candidates").EnumerateArray()
-            .Select(c => c.GetProperty("machineName").GetString()));
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(live, successor, ended), new { name = "SG Engineering Lead" }));
+        Assert.Contains("refused:", refusal.Message);
+        Assert.Empty(audited);
     }
 
     [Theory]
     [InlineData("Build Status Status", "Build Status")]
     [InlineData("Copilot: Copilot: Build", "Copilot: Build")]
-    public async Task Native_find_preserves_the_raw_query_until_the_host_matches_it(string exact, string shorter)
+    public async Task Native_find_rejects_display_name_queries_without_normalizing_them(string exact, string shorter)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        const string node = "agent_bridge_1234567890abcdef";
         var live = M("a", true, null) with { MessagingTrust = LiteFleetRoster.Trust,
-            Sessions = [new(node, exact, "idle", Started), new("agent_bridge_fedcba0987654321", shorter, "idle", Started)] };
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        var op = Op(live);
-        Assert.Equal(0, await SessionsFindCommands.ExecuteAsync(["sessions", "find", "--name", exact, "--json"],
-            output, error, "fixture-token", async (verb, data) => verb == FleetList.FindOp
-                ? await Find(op, data!) : Body(new { })));
-        Assert.Equal(node, JsonSerializer.Deserialize<JsonElement>(output.ToString())
-            .GetProperty("matches")[0].GetProperty("node").GetString());
+            Sessions = [new(Node, exact, "idle", Started), new("agent_bridge_fedcba0987654321", shorter, "idle", Started)] };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(live), new { name = exact }));
     }
 
     [Theory]
@@ -168,14 +215,16 @@ public sealed class FleetFindTests : IDisposable
     public async Task Only_active_nonstale_rows_qualify(string state, bool stale, string expected)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var row = new FleetSession("n-a", "SG Lead", state, Started, Evidence: SessionEvidence.Read(Body(new { stale })));
-        var result = await Find(Op(M("a", true, null, verified: true) with { Sessions = [row] }), new { name = "SG Lead" });
+        var row = new FleetSession(Node, "SG Lead", state, Started, Evidence: SessionEvidence.Read(Body(new { stale })));
+        if (expected == "notFound")
+        { await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(M("a", true, null, verified: true) with { Sessions = [row] }), new { sessionId = Node })); return; }
+        var result = await Find(Op(M("a", true, null, verified: true) with { Sessions = [row] }), new { sessionId = Node });
         Assert.Equal(expected, result.GetProperty("result").GetString());
         var ended = row with { State = "ended" };
         if (expected == "found")
-        { Assert.Equal("found", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [ended, row] }), new { name = "SG Lead" })).GetProperty("result").GetString()); }
+        { Assert.Equal("found", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [ended, row] }), new { sessionId = Node })).GetProperty("result").GetString()); }
         if (state == "waiting")
-        { Assert.Equal("ambiguous", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [row, row with { State = "idle" }] }), new { name = "SG Lead" })).GetProperty("result").GetString()); }
+        { Assert.Equal("ambiguous", (await Find(Op(M("a", true, null, verified: true) with { Sessions = [row, row with { State = "idle" }] }), new { sessionId = Node })).GetProperty("result").GetString()); }
     }
 
     [Theory]
@@ -192,9 +241,9 @@ public sealed class FleetFindTests : IDisposable
         if (failure is "since" or "lastSeen")
         { frames = new FrameRoster(new RelayFleetRoster(), Body(new { machine = "a", online = true,
             lastSeen = failure == "lastSeen" ? "invalid" : Started.ToString("O"),
-            record = new { sessions = new[] { new { node = "n-a", name = "SG Lead", state = "idle", since = failure == "since" ? "invalid" : Started.ToString("O") } } } })); }
+            record = new { sessions = new[] { new { node = Node, name = "SG Lead", state = "idle", since = failure == "since" ? "invalid" : Started.ToString("O") } } } })); }
         var op = new FleetList(store, frames, audit: new AgentAuditLog(root));
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Lead" }));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node }));
         Assert.Contains("fleet.find registry-get:", error.Message);
         Assert.Contains(failure == "503" ? "503" : failure is "since" or "lastSeen" ? "format" : "key", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("notFound", error.Message);
@@ -209,7 +258,7 @@ public sealed class FleetFindTests : IDisposable
         var inner = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink(), () => identityAccount, gate);
         var own = new AfterReadRoster(inner, () => { lock (gate) { identityAccount = "account-b"; } });
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
         Assert.Equal("account-b", identityAccount);
@@ -229,7 +278,7 @@ public sealed class FleetFindTests : IDisposable
         }
         var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), link, IdentityAccount, gate);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
         Assert.Equal(3, checks);
@@ -248,7 +297,7 @@ public sealed class FleetFindTests : IDisposable
         var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = () => { Assert.False(Monitor.IsEntered(gate)); return Task.CompletedTask; } };
         var own = LiteRoster(frames, new LiteKill(root), link, () => identityAccount, gate);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
         Assert.Equal(3, checks);
@@ -266,7 +315,7 @@ public sealed class FleetFindTests : IDisposable
         var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { BeforeRead = async () => { entered.SetResult(); await release.Task; } };
         var own = LiteRoster(frames, new LiteKill(root), new LiteLink(), () => identityAccount);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); identityAccount = "account-b"; }
         finally { release.TrySetResult(); }
@@ -283,7 +332,7 @@ public sealed class FleetFindTests : IDisposable
         link.ReadingPresence = () => { link.Account = "account-b"; link.Presence = [new("a", "host-b", "host", Started)]; };
         var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), link);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
     }
@@ -298,7 +347,7 @@ public sealed class FleetFindTests : IDisposable
         var frames = new FrameRoster(new RelayFleetRoster(), LiteFrame()) { Reading = () => link.Connection = new() };
         var own = LiteRoster(frames, new LiteKill(root), link);
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
-        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { name = "SG Quality" }))
+        var pending = find ? op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(new { sessionId = Node }))
             : op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { }));
         Assert.Contains("refused: notSameAccount", (await Assert.ThrowsAsync<InvalidOperationException>(() => pending)).Message);
     }
@@ -320,7 +369,7 @@ public sealed class FleetFindTests : IDisposable
         var op = new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own);
         if (find)
         {
-            var found = await Find(op, new { name = "SG Quality" });
+            var found = await Find(op, new { sessionId = Node });
             Assert.Equal("found", found.GetProperty("result").GetString());
             Assert.Equal("own-account", found.GetProperty("session").GetProperty("trust").GetString());
         }
@@ -345,7 +394,7 @@ public sealed class FleetFindTests : IDisposable
         var signed = new FrameRoster(new RelayFleetRoster(() => verified), LiteFrame());
         Assert.Empty(await signed.ReadAsync(default));
         var own = LiteRoster(new FrameRoster(new RelayFleetRoster(), LiteFrame()), new LiteKill(root), new LiteLink());
-        var result = await Find(new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own), new { name = "SG Quality" });
+        var result = await Find(new FleetList(store, signed, audit: new AgentAuditLog(root), messagingRoster: own), new { sessionId = Node });
         Assert.Equal("found", result.GetProperty("result").GetString());
         Assert.Equal("own-account", result.GetProperty("session").GetProperty("trust").GetString());
         Assert.Empty(await signed.ReadAsync(default));
@@ -365,7 +414,7 @@ public sealed class FleetFindTests : IDisposable
         else { frames.Reading = () => mode.Kill(); }
         var own = LiteRoster(frames, mode, new LiteLink());
         var op = new FleetList(store, new Roster(M("a", true, "SG Quality", verified: true)), audit: new AgentAuditLog(root), messagingRoster: own);
-        Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }))).Message);
+        Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node }))).Message);
         Assert.Contains("refused: off:", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })))).Message);
     }
 
@@ -388,14 +437,13 @@ public sealed class FleetFindTests : IDisposable
         var op = new FleetList(store, new Roster(), audit: new AgentAuditLog(root), messagingRoster: own);
         if (state is "absent-host" or "non-host")
         {
-            var found = await Find(op, new { name = "SG Quality" });
-            Assert.Equal("offline", found.GetProperty("result").GetString());
-            Assert.False(found.TryGetProperty("session", out _));
+            var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node }));
+            Assert.Contains(Node, refusal.Message);
             Assert.Null(Assert.Single((await own.ReadScopedAsync(default)).Machines).MessagingTrust);
         }
         else
         {
-            Assert.Contains("refused: notSameAccount:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }))).Message);
+            Assert.Contains("refused: notSameAccount:", (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node }))).Message);
             Assert.Contains("refused: notSameAccount:", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.HandleAsync(Hello(AgentProtocol.ScopeRead), Body(new { })))).Message);
         }
     }
@@ -410,9 +458,9 @@ public sealed class FleetFindTests : IDisposable
         var machines = reader.Read([Body(new
         {
             machine = "a", online = true,
-            record = new { sessions = new[] { new { node = "n-a", name = "SG Quality", state = "idle", since = Started } } },
+            record = new { sessions = new[] { new { node = Node, name = "SG Quality", state = "idle", since = Started } } },
         })]);
-        var result = await Find(Op(machines.ToArray()), new { name = "SG Quality" });
+        var result = await Find(Op(machines.ToArray()), new { sessionId = Node });
         Assert.Equal("unverified", result.GetProperty("result").GetString());
         Assert.False(result.TryGetProperty("session", out _));
         Assert.DoesNotContain("\"node\"", result.GetRawText());
@@ -422,18 +470,18 @@ public sealed class FleetFindTests : IDisposable
     }
 
     [Fact]
-    public async Task A_unique_verified_live_name_is_found_without_a_machine_pin_and_returns_its_model()
+    public async Task A_unique_verified_live_id_is_found_without_a_machine_pin_and_returns_its_model()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var session = JsonSerializer.Deserialize<FleetSession>("""
-            {"id":"s-a","node":"n-a","name":"SG Quality","state":"working",
+            {"id":"s-a","node":"agent_bridge_1234567890abcdef","name":"SG Quality","state":"working",
              "since":"2026-11-07T12:00:00Z","model":"gpt-6.1-sol"}
             """, Web)!;
         var op = Op(M("a", true, null, verified: true) with { Sessions = [session] });
-        var result = await Find(op, new { name = "SG Quality", model = "caller-spoof" });
+        var result = await Find(op, new { sessionId = Node, model = "caller-spoof" });
         Assert.Equal("found", result.GetProperty("result").GetString());
         var found = result.GetProperty("session");
-        Assert.Equal("n-a", found.GetProperty("node").GetString());
+        Assert.Equal(Node, found.GetProperty("node").GetString());
         Assert.Equal("gpt-6.1-sol", found.GetProperty("model").GetString());
         Assert.DoesNotContain("SG Quality", result.GetRawText());
         Assert.DoesNotContain("caller-spoof", result.GetRawText());
@@ -457,7 +505,7 @@ public sealed class FleetFindTests : IDisposable
             return Task.CompletedTask;
         }, relaySupportsSessionId: true));
         var result = await Find(new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root)),
-            new { name = "SG Quality", sessionId = "caller-spoof" });
+            new { sessionId = uuid });
         Assert.Equal("found", result.GetProperty("result").GetString());
         var found = result.GetProperty("session");
         Assert.Equal(hex, found.GetProperty("id").GetString());
@@ -534,7 +582,7 @@ public sealed class FleetFindTests : IDisposable
             } } },
         });
         var machine = Assert.Single(RelayFleetRoster.Parse([frame])) with { Verified = true };
-        var result = await Find(Op(machine), new { name = "SG Quality" });
+        var result = await Find(Op(machine), new { sessionId = "agent_bridge_1234567812345678" });
         Assert.Equal("found", result.GetProperty("result").GetString());
         Assert.False(result.GetProperty("session").TryGetProperty("sessionId", out _));
     }
@@ -572,7 +620,7 @@ public sealed class FleetFindTests : IDisposable
     [Theory]
     [InlineData(false, "notFound")]
     [InlineData(true, "found")]
-    public async Task A_name_in_another_account_cannot_be_selected_or_create_ambiguity_by_spoofing_the_scope(bool ownMatch, string expected)
+    public async Task An_id_in_another_account_cannot_be_selected_or_create_ambiguity_by_spoofing_the_scope(bool ownMatch, string expected)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var registry = new SessionRegistry(TimeProvider.System);
@@ -586,7 +634,10 @@ public sealed class FleetFindTests : IDisposable
             })));
         }
         var op = new FleetList(store, new RegistryRoster(registry, "account-a"), audit: new AgentAuditLog(root));
-        var result = await Find(op, new { name = "SG Quality", account = "account-b", fleetScope = "account-b" });
+        var query = new { sessionId = "agent_bridge_aaaaaaaaaaaaaaaa", account = "account-b", fleetScope = "account-b" };
+        if (!ownMatch)
+        { Assert.Contains(query.sessionId, (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, query))).Message); return; }
+        var result = await Find(op, query);
         Assert.Equal(expected, result.GetProperty("result").GetString());
         Assert.Equal("account-a", result.GetProperty("fleetScope").GetString());
         Assert.DoesNotContain("account-b", result.GetRawText());
@@ -740,12 +791,11 @@ public sealed class FleetFindTests : IDisposable
         }));
         var roster = new RelayFleetRoster();
         roster.Attach(own.Relay);
-        var result = await Find(new FleetList(store, roster, audit: new AgentAuditLog(root)),
-            new { name = "SG Other", fleetScope = other.Relay.AccountId, account = other.Relay.AccountId });
-        Assert.Equal("notFound", result.GetProperty("result").GetString());
-        Assert.Equal(own.Relay.AccountId, result.GetProperty("fleetScope").GetString());
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(new FleetList(store, roster, audit: new AgentAuditLog(root)),
+            new { sessionId = "agent_bridge_" + hex, fleetScope = other.Relay.AccountId, account = other.Relay.AccountId }));
+        Assert.Contains("agent_bridge_" + hex, refusal.Message);
         Assert.NotEqual(own.Relay.AccountId, other.Relay.AccountId);
-        Assert.DoesNotContain("node", result.GetRawText());
+        Assert.DoesNotContain(other.Relay.AccountId, refusal.Message);
     }
 
     [Theory]
@@ -755,7 +805,7 @@ public sealed class FleetFindTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var op = new FleetList(store, new Roster { Scope = scope }, audit: new AgentAuditLog(root));
-        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { name = "SG Quality" }));
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node }));
         Assert.Contains("no authenticated account scope", refusal.Message);
     }
 
@@ -767,88 +817,90 @@ public sealed class FleetFindTests : IDisposable
         var frame = Body(new
         {
             machine = "a", online = true,
-            record = new { sessions = new[] { new { id = "s-a", node = "n-a", name = "SG Quality", state = "idle", since = Started, model } } }
+            record = new { sessions = new[] { new { id = "s-a", node = Node, name = "SG Quality", state = "idle", since = Started, model } } }
         });
         var machine = Assert.Single(RelayFleetRoster.Parse([frame])) with { Verified = true };
         if (!OperatingSystem.IsWindows()) { return; }
-        var result = await Find(Op(machine), new { name = "SG Quality", model = "caller-spoof" });
+        var result = await Find(Op(machine), new { sessionId = Node, model = "caller-spoof" });
         Assert.Equal("found", result.GetProperty("result").GetString());
         Assert.False(result.GetProperty("session").TryGetProperty("model", out _));
     }
 
     [Fact]
-    public async Task A_name_alone_never_yields_found_or_a_node_and_an_impostor_beside_an_offline_original_is_unverified()
+    public async Task An_unverified_id_never_yields_found_or_a_node_even_beside_an_offline_duplicate()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var op = Op(M("orig", false, "SG Quality"), M("impostor", true, "SG Quality"));
-        var r = await Find(op, new { name = "SG Quality" });
+        var orig = new string('a', 32);
+        var impostor = new string('b', 32);
+        var op = Op(M(orig, false, "SG Quality"), M(impostor, true, "SG Quality"));
+        var r = await Find(op, new { sessionId = Node });
         Assert.Equal("unverified", r.GetProperty("result").GetString());
         Assert.DoesNotContain("node", r.GetRawText());
-        Assert.Equal("unverified", (await Find(op, new { name = "SG Quality", machine = "impostor" })).GetProperty("result").GetString());
-        Assert.Equal("offline", (await Find(op, new { name = "SG Quality", machine = "orig" })).GetProperty("result").GetString());
+        Assert.Equal("unverified", (await Find(op, new { sessionId = Node, machine = impostor })).GetProperty("result").GetString());
+        Assert.Contains(Node, (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(op, new { sessionId = Node, machine = orig }))).Message);
         Assert.Equal([AgentProtocol.Principal("machine1", "sess-1")], audited.Distinct());
     }
 
     [Fact]
-    public async Task Verified_names_are_found_ambiguous_or_unknown_without_echoing_the_name()
+    public async Task Verified_ids_are_found_ambiguous_or_refused_without_echoing_display_names()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var one = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, verified: true));
-        var named = await Find(one, new { name = "SG Quality" });
+        var named = await Find(one, new { sessionId = Node });
         Assert.Equal("found", named.GetProperty("result").GetString());
         Assert.Equal("a", named.GetProperty("session").GetProperty("machine").GetString());
-        var trimmed = await Find(one, new { name = " SG Quality " });
-        Assert.Equal("found", trimmed.GetProperty("result").GetString());
-        var pinned = await Find(one, new { name = "SG Quality", machine = "a" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(one, new { sessionId = " " + Node + " " }));
+        var device = new string('a', 32);
+        var pinned = await Find(Op(M(device, true, "SG Quality", verified: true)), new { sessionId = Node, machine = device });
         Assert.Equal("found", pinned.GetProperty("result").GetString());
         Assert.Equal(["id", "machine", "node", "online", "since", "state"], pinned.GetProperty("session").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
         var two = Op(M("a", true, "SG Quality", verified: true), M("b", true, "SG Quality", verified: true), M("c", false, null));
-        var amb = await Find(two, new { name = "SG Quality" });
+        var amb = await Find(two, new { sessionId = Node });
         Assert.Equal("ambiguous", amb.GetProperty("result").GetString());
-        var withOffline = await Find(Op(M("a", true, "SG Quality", verified: true), M("c", false, "SG Quality")), new { name = "SG Quality" });
+        var withOffline = await Find(Op(M("a", true, "SG Quality", verified: true), M("c", false, "SG Quality")), new { sessionId = Node });
         Assert.Equal("found", withOffline.GetProperty("result").GetString());
         var sameMachine = await Find(Op(M("a", true, "SG Quality", verified: true) with
         {
-            Sessions = [new("n-1", "SG Quality", "idle", Started), new("n-2", "SG Quality", "working", Started)],
-        }), new { name = "SG Quality" });
+            Sessions = [new(Node, "SG Quality", "idle", Started), new(Node, "SG Quality", "working", Started)],
+        }), new { sessionId = Node });
         Assert.Equal("ambiguous", sameMachine.GetProperty("result").GetString());
-        var none = await Find(one, new { name = "SG Nobody" });
-        Assert.Equal("notFound", none.GetProperty("result").GetString());
-        foreach (var r in new[] { named, trimmed, pinned, amb, none, sameMachine, withOffline })
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(one, new { sessionId = "agent_bridge_fedcba0987654321" }));
+        foreach (var r in new[] { named, pinned, amb, sameMachine, withOffline })
         {
             Assert.Equal("account-a", r.GetProperty("fleetScope").GetString());
             Assert.DoesNotContain("SG Quality", r.GetRawText());
             Assert.DoesNotContain("SG Nobody", r.GetRawText());
         }
-        Assert.Equal("notFound", (await Find(one, new { name = "sg quality" })).GetProperty("result").GetString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find(one, new { sessionId = "sg quality" }));
     }
 
     [Fact]
     public async Task A_truncated_live_machine_makes_the_answer_incomplete_even_with_a_verified_match()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var op = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, truncated: true));
-        var r = await Find(op, new { name = "SG Quality" });
+        var device = new string('a', 32);
+        var op = Op(M(device, true, "SG Quality", verified: true), M("b", true, null, truncated: true));
+        var r = await Find(op, new { sessionId = Node });
         Assert.Equal("incomplete", r.GetProperty("result").GetString());
         Assert.Equal("b", r.GetProperty("machines")[0].GetString());
-        Assert.Equal("found", (await Find(op, new { name = "SG Quality", machine = "a" })).GetProperty("result").GetString());
+        Assert.Equal("found", (await Find(op, new { sessionId = Node, machine = device })).GetProperty("result").GetString());
     }
 
     [Fact]
-    public async Task Find_is_refused_without_hello_or_the_read_scope_or_a_usable_name_and_routes_through_the_local_api()
+    public async Task Find_is_refused_without_hello_or_the_read_scope_or_a_usable_id_and_routes_through_the_local_api()
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var op = Op(M("a", true, "SG Quality"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(new Chan(), Body(new { name = "x" })));
         var low = await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeNone), Body(new { name = "x" })));
         Assert.Contains("fleet.find needs at least 'read'", low.Message);
-        foreach (var bad in new object[] { new { }, new { name = "   " }, new { name = new string('x', 65) }, new { name = "x", machine = "bad machine" } })
+        foreach (var bad in new object[] { new { }, new { sessionId = "   " }, new { sessionId = new string('x', 65) }, new { sessionId = Node, machine = "bad machine" }, new { sessionId = Node, name = "SG Quality" }, new { sessionId = Node, machineName = "a" } })
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(bad)));
         }
         Assert.Empty(audited);
         var handler = LocalApi.Handler(null!, null!, null!, null, null, store, null, op);
-        var json = JsonSerializer.Serialize(await handler(Hello(AgentProtocol.ScopeRead), FleetList.FindOp, Body(new { name = "SG Quality" })), Web);
+        var json = JsonSerializer.Serialize(await handler(Hello(AgentProtocol.ScopeRead), FleetList.FindOp, Body(new { sessionId = Node })), Web);
         Assert.Contains("\"unverified\"", json);
     }
 }

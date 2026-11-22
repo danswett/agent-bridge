@@ -15,7 +15,7 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
     const string Target = "88888888-8888-4888-8888-888888888888";
     static readonly JsonElement Body = JsonSerializer.SerializeToElement(new
     {
-        id = Target, name = "private lookup name", text = "private answer", principal = "owner", chain = new[] { "owner" },
+        id = Target, sessionId = Target, text = "private answer", principal = "owner", chain = new[] { "owner" },
     });
 
     public AgentAnswerLookupAuditTests()
@@ -49,6 +49,8 @@ public sealed class AgentAnswerLookupAuditTests : IDisposable
             var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, op, Body));
             Assert.Contains("for the person", refusal.Message);
         }
+        else if (op == FleetList.FindOp)
+        { Assert.Contains(Target, (await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, op, Body))).Message); }
         else { Assert.NotNull(await handle(channel, op, Body)); }
         var entry = Assert.Single(Lines());
         Assert.Equal("agent:machine1/sess-1", entry.GetProperty("principal").GetString());
