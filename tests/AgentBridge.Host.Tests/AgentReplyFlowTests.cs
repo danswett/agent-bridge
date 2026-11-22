@@ -169,6 +169,21 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
+    {
+        console.Rows = ClaudeIdle();
+        var current = true;
+        console.BeforeInject = () => current = false;
+        var stale = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+        Assert.Equal(AnswerOutcome.Stale, (await (replier ??= Replier()).ReplyAsync(stale, Peer)).Outcome);
+        Assert.Empty(console.Plans);
+
+        var handoff = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => true, HandoffText = () => "x" };
+        Assert.Equal(AnswerOutcome.Refused, (await replier.ReplyAsync(handoff, Peer)).Outcome);
+        Assert.Empty(console.Plans);
+    }
+
+    [Fact]
     public async Task A_Claude_replys_injector_fence_stops_the_keys_once_the_send_or_the_session_changes()
     {
         console.Rows = ClaudeIdle();
@@ -715,6 +730,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             BeforeInject?.Invoke();
             BeforeInject = null;
+            // As the real injector: a fence that fails stops the keys before any are typed.
+            if (plan.Proceed?.Invoke() is { } stop) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, $"stopped before typing: {stop}")); }
             var rows = Rows;
             if (plan.Sends[0].Expect is { } expect && expect.Any(e => e.Row >= rows.Count || Worker.Read(rows[e.Row]) != Worker.Read(e.Text)))
             {

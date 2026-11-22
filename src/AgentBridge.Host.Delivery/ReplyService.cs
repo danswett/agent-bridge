@@ -811,6 +811,9 @@ public sealed partial class ReplyService : ISessionReplier
         log($"typed a reply into {name} {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {string.Join(" | ", described)} -> {result.Status} {result.Detail}");
         switch (result.Status)
         {
+            // The fence failed inside the injector: as at the look before it, the send is stale, not refused.
+            case InjectionStatus.NothingTyped when !sent && stillCurrent is not null && result.Detail.EndsWith(changedReason, StringComparison.Ordinal):
+                return Done(Stale(changedReason));
             case InjectionStatus.NothingTyped when !sent:
                 return Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                     ? $"{name}'s screen changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"

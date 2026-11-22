@@ -63,7 +63,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
-  uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
+  uses, and text goes only into an idle session with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: with explicit `remote: "own-account"`, a session receives only if this host launched it in allow-all mode and either the existing `agentMessaging.allowAllTargets` plus exact `agentMessaging.allowAllTargetSessions` list grants it, or the owner has enabled `agentMessaging.allowAllLaunchedTargets` on this machine. The new boolean switch defaults false, invalid/non-boolean is false, and it is read afresh per message. It is independent of the unchanged list path; display names and wildcards never grant access.
 - Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it and session discovery is not held (a held pass may miss a second one); none, several or a hold is refused as `noSuchSession`, never guessed. A full session id is not affected by a hold. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
@@ -76,7 +76,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-   could message his sessions, and any message from a present own host is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
+   could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
 ## Turn it on (a person at each machine, in the agreed order)
 
