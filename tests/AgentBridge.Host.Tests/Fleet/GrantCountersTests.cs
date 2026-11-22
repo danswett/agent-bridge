@@ -63,6 +63,24 @@ public sealed class GrantCountersTests : IDisposable
         Assert.True(Reserve(Open(), grant).Accepted);
     }
 
+    [Theory]
+    [InlineData(1, 2, 1, 1, 2, 1, GrantCounterProblem.Hourly)]
+    [InlineData(3, 1, 6, 3, 1, 6, GrantCounterProblem.Daily)]
+    [InlineData(3, 10, 1, 3, 10, 1, GrantCounterProblem.Live)]
+    [InlineData(1001, 5001, 101, 3, 10, 6, GrantCounterProblem.None)]
+    public void Receiver_caps_are_narrowed_persisted_across_restart_and_never_exceed_the_document(
+        int hour, int day, int live, int expectedHour, int expectedDay, int expectedLive, GrantCounterProblem boundary)
+    {
+        var grant = Issue(new(3, 10, 6));
+        var request = Guid.NewGuid();
+        var admitted = Open().Reserve(grant.Id, 1, request, grant.Subjects[0], new('b', 64), new(hour, day, live));
+        Assert.True(admitted.Accepted);
+        Assert.Equal(new(expectedHour, expectedDay, expectedLive),
+            Open().Lookup(grant.Id, request, grant.Subjects[0], new('b', 64)).Reservation!.Caps);
+        Assert.Equal(boundary,
+            Open().Reserve(grant.Id, 1, Guid.NewGuid(), grant.Subjects[0], new('c', 64), new(hour, day, live)).Problem);
+    }
+
     [Fact]
     public void Restart_reconciles_request_records_and_exact_process_instances_without_refunding_launches()
     {

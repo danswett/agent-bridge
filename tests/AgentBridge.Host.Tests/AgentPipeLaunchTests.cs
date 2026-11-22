@@ -431,6 +431,54 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(1, launcher.Launches);
     }
 
+    [Fact]
+    public async Task A_missing_persisted_policy_snapshot_refuses_dispatch_and_duplicate_replay()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        launcher.BeforeDispatch = () => Assert.True(store.Transaction(state =>
+            (GrantStore.Next(state with { Counters = state.Counters! with
+                { Reservations = state.Counters.Reservations.Select(r => r with { Caps = null }).ToArray() } },
+                grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task Policy_narrowing_after_admission_refuses_at_the_execution_slot()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        Assert.True(new GrantCounters(store).Reserve(grant.Id, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64)).Accepted);
+        var path = Path.Combine(folder, HostSettings.FileName);
+        launcher.BeforeDispatch = () => File.WriteAllText(path,
+            File.ReadAllText(path).Replace("\"launchesPerOriginPerHour\":3", "\"launchesPerOriginPerHour\":1"));
+        Assert.Equal("grant-exhausted", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(GrantLaunchOutcome.Unconfirmed, LaunchOutcome.Unconfirmed)]
+    [InlineData(GrantLaunchOutcome.Failed, LaunchOutcome.Failed)]
+    [InlineData(GrantLaunchOutcome.Refused, LaunchOutcome.Refused)]
+    public async Task Missing_snapshot_replay_preserves_uncertainty_and_definitive_failure(GrantLaunchOutcome terminal, LaunchOutcome expected)
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await GrantedLaunch(pipe, GrantBody(grant))).Result.Outcome);
+        if (terminal != GrantLaunchOutcome.Unconfirmed)
+        { Assert.True(new GrantCounters(store).Complete(Guid.Parse(request), terminal, "policy").Accepted); }
+        Assert.True(store.Transaction(state =>
+            (GrantStore.Next(state with { Counters = state.Counters! with
+                { Reservations = state.Counters.Reservations.Select(r => r with { Caps = null }).ToArray() } },
+                grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        var replay = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(expected, replay.Result.Outcome);
+        Assert.False(replay.Registered);
+        Assert.Equal(1, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;
