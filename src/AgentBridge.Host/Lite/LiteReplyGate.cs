@@ -41,13 +41,13 @@ public interface ILiteLaunches
 // the routine never names a gate itself.
 public static class LiteComposition
 {
-    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, LaunchService launcher, string folder, P256KeyPair key, Action<string> log)
+    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, Func<string?> account, LaunchService launcher, string folder, P256KeyPair key, Action<string> log)
     {
         var launches = new LiteLaunchLog(id => LiveProcess(source, id), folder, key, log);
         launcher.SessionStarted += launches.Launched;
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn));
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account);
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)
