@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Grants;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -22,6 +23,7 @@ public partial class App : Application
     AutoUpdater? autoUpdater;
     UpdateReporter? updateReporter;
     HostConnection? connection;
+    LocalGrantBinding? grantBinding;
     DemoHost? demo;
     DemoHost? remoteDemo;
     Fleet? fleet;
@@ -172,13 +174,18 @@ public partial class App : Application
             fleet = new Fleet(link, main, ui, Remote);
             fleet.Start();
         }
-        else { _ = StartFleetAsync(connection, ui, Remote, l => link = l); }
+        else { _ = StartFleetAsync(connection, ui, Remote, l => { link = l; grantBinding?.Refresh(); }); }
         var launch = new LaunchViewModel(main, ui);
         // Where the window was left, kept beside the settings (#180).
         window = new MainWindow(main, launch, options.SelfTest is not null, Path.Combine(appData, $"{options.Profile}-window.json"));
         // The panes' widths as their dividers were left, beside them too (#297); the self-test's are its own.
         window.Sessions.Widths = new PaneWidths(options.SelfTest is null ? Path.Combine(appData, $"{options.Profile}-panes.json") : null);
         window.CloseRequested += OnWindowClosing;
+        if (!options.Demo && options.SelfTest is null)
+        {
+            grantBinding = new LocalGrantBinding(connection, options.Profile, () => link as IGrantConfirmationSigner,
+                window.BindGrantReceiver, () => _ = window?.RefreshGrantListAsync());
+        }
         connection.Start();
 
         if (options.SelfTest is not null)
@@ -398,6 +405,8 @@ public partial class App : Application
     {
         if (quitting) { return; }
         quitting = true;
+        grantBinding?.Dispose();
+        grantBinding = null;
         timer?.Stop();
         updateTimer?.Stop();
         // What was seen since the last tick's flush (SessionOrder.MarkSeen).
