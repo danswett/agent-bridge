@@ -7,6 +7,14 @@ rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 686754007
 - **12:12:** "Perhaps you need two GUIDs: one for the unique session and one for its role (SRE, Chief, etc). That lets you not rely on friendly name which could easily misfire."
 - **12:27:** the recorded decision says "The role-ID design is approved (12:27)." Person-signed assignments and per-successor approval are detailed in [#3334](https://github.com/danswett/agent-bridge/pull/3334) and [role-ids.md](design/role-ids.md).
 **Nov 21, 2026, 17:05 PT:** the owner re-approved ID-first addressing, per Chief S9 relay to Engineering R6 / brief 313; not yet recorded on main's owner-decisions.md at this edit. This is relayed provenance, not a direct owner quote. Role-ID code remains paused (Nov 19, 17:58 PT); this doc claims no built role routing.
+## Phase 1 path: owner decisions, Nov 22, 2026, 14:13 and 14:14 PT
+Relayed by Engineering R7 from the recheck plan; not yet in owner-decisions.md. Building these slices is approved; enabling is not.
+- **Flag:** `agentMessaging.laneDelivery`, default off in code, read afresh and fail closed (see host-config.md), and always ANDed with `liteKill.On`. Slice S1 adds the setting and nothing reads it yet.
+- **Slices:** S1 flag, S2 composition behind the flag, S3 dispatch pump, S4 Lite wiring, S5 notices, S6 restart and shutdown. Each is at most 400 WHOLE and sensitive (Sol and Sonnet through Quality).
+- **No agent urgent:** with the flag on, agent-sent urgent stays refused. A separate later slice and owner go would be needed.
+- **No S8:** the disposable-VM acceptance slice is dropped. Once S1-S6 land through their gates, `laneDelivery` is enabled on the fleet directly. That enabling is a separate act; the default stays off in code. Load and stress tests still never run on live machines.
+- **Priority, Option A:** authority lives in memory per host run. The journal is audit and subtract only. A restart voids every capability and the person re-issues it. Slice 3a is respun to this after #3721 lands.
+- **Journal cannot open:** with the flag on, delivery refuses and fails closed. There is no legacy idle-only typing fallback.
 ## Inactive qualification source (A-ii-1)
 The source-only producer remains unwired: no launch, reply, submit planner, hooks
 verification or API invokes it. The later authorized controller/SRE control entry

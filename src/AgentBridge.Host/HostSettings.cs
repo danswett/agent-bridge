@@ -47,7 +47,7 @@ namespace AgentBridge.Host;
 //
 // agentMessaging (#728): the temporary AP5-lite mode (AgentMessagingSettings). remote "own-account"
 // (the default for an absent key, owner decision Nov 19, 2026) or "off"; allowAllTargets false (the default) or true, with allow-all sessions
-// also requiring an exact id in allowAllTargetSessions; allowAllLaunchedTargets separately grants live host launches. Invalid values and unreadable files fail closed. Read afresh by
+// also requiring an exact id in allowAllTargetSessions; allowAllLaunchedTargets separately grants live host launches; laneDelivery (default false) is the owner-gated lane delivery flag. Invalid values and unreadable files fail closed. Read afresh by
 // CurrentAgentMessaging: no restart needed.
 //
 // agents (#1295): the agents policy (AgentPolicy, docs/host-config.md). Absent means agents are off;
