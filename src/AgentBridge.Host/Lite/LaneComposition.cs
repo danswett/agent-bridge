@@ -24,7 +24,6 @@ internal sealed class LaneComposition : IDisposable
     readonly Func<bool> modeOn;
     readonly DeliveryGate gate;
     readonly ISessionReplier replier;
-    readonly Func<string, (bool? Idle, bool? Empty)> screen;
     readonly Func<DeliveryJournal> open;
     readonly Action<string> log;
     readonly object sync = new();
@@ -35,20 +34,23 @@ internal sealed class LaneComposition : IDisposable
     int draining;
 
     public LaneComposition(Func<AgentMessagingSettings> settings, Func<bool> modeOn, DeliveryGate gate, ISessionReplier replier,
-        Func<string, (bool? Idle, bool? Empty)> screen, string folder, Action<string> log, TimeProvider? time = null,
+        LaneScreens screens, string folder, Action<string> log, TimeProvider? time = null,
         Func<DeliveryJournal>? open = null)
     {
         this.settings = settings;
         this.modeOn = modeOn;
         this.gate = gate;
         this.replier = replier;
-        this.screen = screen;
+        Screens = screens;
         this.log = log;
         Time = time ?? TimeProvider.System;
         this.open = open ?? (() => new DeliveryJournal(Path.Combine(folder, "diagnostics-journal.jsonl"), log));
     }
 
     public TimeProvider Time { get; }
+
+    // The screen snapshots the scheduler admits from; a pump awaits Screens.RefreshAsync(target) before it asks for a delivery.
+    public LaneScreens Screens { get; }
 
     // Typed notices, in order, delivered by a drainer outside every scheduler and journal lock; subscribe once, for the host run.
     public event Action<LaneNoticeEvent>? Notices;
@@ -72,7 +74,7 @@ internal sealed class LaneComposition : IDisposable
             try
             {
                 journal = open();
-                scheduler = new(journal, gate, screen, (_, _, _) => Task.FromException(new InvalidOperationException("The lane sends only through its dispatcher.")),
+                scheduler = new(journal, gate, Screens.Get, (_, _, _) => Task.FromException(new InvalidOperationException("The lane sends only through its dispatcher.")),
                     Capture, Time)
                 { Dispatch = (request, cancellation) => replier.ReplyAsync(request, null, cancellation) };
                 return new(LaneStatus.Ready, scheduler);

@@ -28,7 +28,7 @@ public sealed class LaneCompositionTests : IDisposable
 
     LaneComposition Create() => new(
         () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flag },
-        () => kill, new DeliveryGate(clock), new Replier(), _ => screen, root, log.Add, clock, open);
+        () => kill, new DeliveryGate(clock), new Replier(), new LaneScreens((_, _) => Task.FromResult(screen), clock), root, log.Add, clock, open);
 
     static DeliveryJournal Memory() => new(new byte[32], _ => { }, _ => { });
     static DeliveryHeader Header(string id) => new("owner:user", id, null, DateTimeOffset.UnixEpoch, "normal", 0);
