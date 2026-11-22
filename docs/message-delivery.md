@@ -24,6 +24,39 @@ Verified. Replay, another host/target, stripped delivery, key-write success and
 hooks/provider confirmation cannot qualify. No caller supplies a Verified flag.
 The older design below does not authorize an idle-Enter fallback or capability table.
 
+## Inactive qualification authority (A-ii-2a)
+The host-only grant kernel accepts one approval id once, bound to exact SHA,
+disposable VM/run/host identities, the complete `QueueTarget` snapshot and the
+exact `QueueQualification` challenge nonce, for at most 60 minutes. Only trusted
+owner approval or SRE may issue; only SRE CLI on that disposable run may consume by CAS.
+Every target field and binding id must be present and well formed, or issue refuses. A nonce is
+issued once: any journaled grant holding it, in any state and after restart, refuses a new approval id.
+Consume and current-grant checks require that same target and nonce; a second consume or any
+different target/challenge refuses. Expiry is journaled when first observed, so a wall-clock
+rollback cannot revive it, including consumed replays and mismatched current-grant checks.
+The journal durably advances a time high-water before checks; issue, consume, current and revoke
+refuse an earlier clock even after restart, and every append atomically fences against that high-water.
+Revocation requires SRE CLI with the grant's own binding and retries a competing transition's CAS.
+Journal replay preserves binding, state and time high-water, not challenge object references.
+Every transition requires an atomic append and durable flush through the Fleet
+journal adapter; revocation never erases history. Missing adapters refuse.
+This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,
+Fleet store writer, qualification keys or live run is enabled.
+
+## Inactive qualification controller (A-ii-2b)
+`qualification.start` has a source-only core requiring the grant id and host-owned
+approved target/challenge; registration and trusted adapters remain absent, hence
+default refusal. Each consumed grant permits that nonce once and at most one minute
+of qualification/receipt validity, bounded by the grant. Final-effect fencing,
+raw queued correlation and current
+identity are mandatory; ambiguity stays Unknown. Explicit unsupported transport
+is a negative result, never permission to fall back. Receipt fields contain only
+the SHA, hashed bindings/nonce/snapshot, verdict, expiry and content hash, appended
+through the durable Fleet boundary. Revocation, expiry or identity change removes
+current capability; teardown/failure revokes. No host starts or live keys ran.
+Consumers must ask the controller for current capability; a stored receipt alone
+never authorizes delivery, and restart defaults to Unknown.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
 `RequireIdle` (`ReplyService.cs:422`), so replies land in a working session with no sender boundary

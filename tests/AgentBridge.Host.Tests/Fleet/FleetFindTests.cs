@@ -180,6 +180,21 @@ public sealed class FleetFindTests : IDisposable
         Assert.Contains(Node, (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Op(successor), new { sessionId = Node, machine = device }))).Message);
     }
 
+    [Theory, InlineData(Node), InlineData("1234567890abcdef"), InlineData(Uuid)]
+    public async Task Native_cli_reaches_the_renamed_session_id_not_the_successor_reusing_its_name(string id)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var live = M("a", true, null) with { MessagingTrust = LiteFleetRoster.Trust,
+            Sessions = [new(Node, "Renamed", "idle", Started, SessionId: Uuid),
+                new("agent_bridge_fedcba0987654321", "Old name", "idle", Started)] };
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var op = Op(live);
+        Assert.Equal(0, await SessionsFindCommands.ExecuteAsync(["sessions", "find", "--session-id", id, "--json"],
+            output, error, "fixture-token", async (verb, data) => verb == FleetList.FindOp ? await Find(op, data!) : Body(new { })));
+        Assert.Equal(Node, JsonSerializer.Deserialize<JsonElement>(output.ToString()).GetProperty("matches")[0].GetProperty("node").GetString());
+    }
+
     [Fact]
     public async Task Normalized_display_names_are_refused_before_a_roster_read()
     {

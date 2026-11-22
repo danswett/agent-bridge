@@ -13,14 +13,18 @@ follow.
 
 ## Finding a live session
 
-`agent-bridge-host sessions find --name "<exact>" [--machine <name>] [--json]`
+`agent-bridge-host sessions find --session-id <ID> [--machine <device-ID>] [--json]`
 uses this machine's local host pipe and the session's `AGENT_BRIDGE_TOKEN`, with
 the same own-account lite identity, off and kill gates as `fleet.find`; no HA fallback.
-Names are trimmed, whitespace collapsed, and `Copilot: ` / `Claude: ` and ` Status`
-decorations removed before case-sensitive exact matching. Only idle, working, waiting, agents
-and shell sessions on online machines qualify. `--machine` pins an exact machine id or name.
-Each match has `node`, `machine`, `state`, `name`; JSON has `result` and `matches`.
-Exits: 0 one live match; 3 notFound; 4 ambiguous (all candidate machines shown);
+IDs are exact live `agent_bridge_` nodes, bare 16 lowercase hex digits, or full canonical
+UUIDs explicitly published and bound to the node by the roster. Names are display only;
+`--name`, names, fragments and normalization are refused, never retried or retargeted.
+Only idle, working, waiting, agents and shell sessions on online machines qualify.
+`--machine` pins an exact device ID (32 hex digits), never a displayed machine name.
+The CLI validates every returned candidate against the requested ID and pin.
+Each match has `node`, `machine` (display label when available), `state`; JSON has `result` and `matches`.
+Unknown, stale or offline IDs are loud refusals naming the ID, including legacy notFound replies.
+Exits: 0 one live match; 2 invalid selector/usage; 4 ambiguous (all candidate machines shown);
 5 refused with reason; 6 unreachable/invalid host response with stage and reason.
 Fleet scripts will call this command in S5; this change does not update those scripts.
 
