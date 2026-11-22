@@ -17,10 +17,11 @@ public interface IGrantWireDispatcher
     Task<FleetGrantBindingResult> BindAsync(FleetGrantBindingRequest request, CancellationToken ct);
     Task<FleetGrantSignedPayload> CallAsync(FleetGrantCall call, CancellationToken ct);
     Task<FleetGrantIssueReceiptResult> ConfirmIssueAsync(FleetGrantCall call, CancellationToken ct);
+    Task<FleetGrantReadResult> ReadProblemAsync(FleetGrantCall call, CancellationToken ct);
 }
 
 public sealed partial class GrantWireReceiver(IGrantWireDispatcher dispatcher, string receiver, string profile,
-    Func<IGrantConfirmationSigner?> signer) : IGrantIssueReceiver
+    Func<IGrantConfirmationSigner?> signer) : IGrantIssueReceiver, IVerifiedGrantReader
 {
     static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web)
     {
@@ -34,7 +35,29 @@ public sealed partial class GrantWireReceiver(IGrantWireDispatcher dispatcher, s
     public string? Problem => Online ? null : "target-offline";
 
     public Task<GrantReadResult> ReadAsync(CancellationToken ct = default) =>
+        ReadPagesAsync(null, ct);
+
+    Task<GrantReadResult> ReadPagesAsync(FleetGrantBinding? expected, CancellationToken ct) =>
         Task.FromResult(new GrantReadResult([], "unavailable"));
+
+    async Task<VerifiedGrantRead> IVerifiedGrantReader.ReadAsync(CancellationToken ct)
+    {
+        try
+        {
+            var (context, bound, _) = await ContextAsync("grant.read", ct);
+            var call = new FleetGrantCall(context, JsonSerializer.SerializeToElement(new FleetGrantReadRequest(), ProtocolJson.Options));
+            var reply = await dispatcher.ReadProblemAsync(call, ct).WaitAsync(TimeSpan.FromSeconds(30), ct);
+            var problem = FleetGrantReadProof.Verify(reply, Codec.FromBase64Url(bound.HostSign, "HostSign"), context);
+            var (latest, _) = await VerifyBindingAsync(ct);
+            if (latest != bound) { throw new InvalidDataException("grant-binding-changed"); }
+            var ready = problem is FleetGrantReadProblem.None or FleetGrantReadProblem.RotationRequired && signer() is not null;
+            var data = problem == FleetGrantReadProblem.None ? await ReadPagesAsync(bound, ct)
+                : new GrantReadResult([], problem == FleetGrantReadProblem.RotationRequired ? "RotationRequired" : "unavailable");
+            return new(problem, ready, data);
+        }
+        catch (Exception error) when (Handled(error))
+        { return new(FleetGrantReadProblem.Unavailable, false, new([], Reason(error))); }
+    }
 
     public async Task<GrantPrepareResult> PrepareIssueAsync(JsonElement document, CancellationToken ct = default)
     {
@@ -70,7 +93,10 @@ public sealed partial class GrantWireReceiver(IGrantWireDispatcher dispatcher, s
             { throw new InvalidDataException("grant-receipt"); }
             return new(receipt, null);
         }
-        catch (HostErrorException error) { return new(null, error.Message); }
+        catch (HostErrorException error)
+        { return new(null, error.Message == "RotationRequired"
+            ? "Grant refused: this machine's audit log needs rotation and could not be rotated automatically (RotationRequired). Nothing was issued."
+            : error.Message); }
         catch (Exception error) when (Handled(error)) { throw new IOException(Reason(error), error); }
     }
 

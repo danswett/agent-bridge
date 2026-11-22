@@ -15,6 +15,32 @@ namespace AgentBridge.App.Tests;
 public sealed partial class GrantWireReceiverTests
 {
     [Theory]
+    [InlineData("rotation", FleetGrantReadProblem.RotationRequired, true)]
+    [InlineData("signer-missing", FleetGrantReadProblem.RotationRequired, false)]
+    [InlineData("none", FleetGrantReadProblem.None, true)]
+    [InlineData("other", FleetGrantReadProblem.Other, false)]
+    [InlineData("unavailable", FleetGrantReadProblem.Unavailable, false)]
+    [InlineData("read-context", FleetGrantReadProblem.Unavailable, false)]
+    [InlineData("read-proof", FleetGrantReadProblem.Unavailable, false)]
+    [InlineData("binding-proof", FleetGrantReadProblem.Unavailable, false)]
+    [InlineData("read-binding", FleetGrantReadProblem.Unavailable, false)]
+    public async Task Read_readiness_requires_verified_context_binding_and_a_person_signer(
+        string change, FleetGrantReadProblem expected, bool ready)
+    {
+        using var wire = new Dispatcher(change);
+        using var app = P256KeyPair.Generate();
+        var person = new Signer(app, () => Assert.Fail("A read must not sign a command"));
+        IGrantIssueReceiver receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default",
+            () => change == "signer-missing" ? null : person);
+        var reader = receiver as IVerifiedGrantReader ?? new UnavailableVerifiedGrantReader();
+        var result = await reader.ReadAsync();
+        Assert.Equal(expected, result.Problem);
+        Assert.Equal(ready, result.G7Ready);
+        Assert.Equal(change == "binding-proof" ? 0 : 1, wire.Calls.Count);
+        Assert.All(wire.Calls, call => Assert.Equal("grant.read", call.Context.Action));
+    }
+
+    [Theory]
     [InlineData("proof")]
     [InlineData("challenge")]
     [InlineData("receipt")]
@@ -23,6 +49,7 @@ public sealed partial class GrantWireReceiverTests
     [InlineData("missing-rotated")]
     [InlineData("rotated-type")]
     [InlineData("receipt-proof")]
+    [InlineData("rotation-refused")]
     [InlineData("rotated")]
     [InlineData("none")]
     public async Task Only_a_matching_verified_preparation_and_receipt_can_become_active(string change)
@@ -41,6 +68,8 @@ public sealed partial class GrantWireReceiverTests
         await model.ConfirmAsync(model.Digest);
         Assert.Equal(change == "binding" ? 0 : 1, signed);
         Assert.Equal(change is "none" or "rotated", model.Active);
+        if (change == "rotation-refused") { Assert.Equal(
+            "Grant refused: this machine's audit log needs rotation and could not be rotated automatically (RotationRequired). Nothing was issued.", model.Problem); }
         if (model.Active) { Assert.Equal(change == "rotated", model.Receipt!.Rotated); }
         if (change == "binding") { Assert.Single(wire.Calls); return; }
         Assert.Equal(2, wire.Calls.Select(call => call.Context.Request).Distinct().Count());
@@ -84,7 +113,7 @@ public sealed partial class GrantWireReceiverTests
         }
         public Task<FleetGrantBindingResult> BindAsync(FleetGrantBindingRequest request, CancellationToken ct)
         {
-            var latest = change == "binding" && Calls.Count > 0 ? Binding with { RosterGeneration = new('b', 32) } : Binding;
+            var latest = change is "binding" or "read-binding" && Calls.Count > 0 ? Binding with { RosterGeneration = new('b', 32) } : Binding;
             var reply = FleetGrantBindingProof.Seal(latest,
                 new(latest.Account, request.Profile, request.Receiver, "grant.binding", request.Request), new EcdsaEnvelopeSigner(key));
             if (change == "binding-proof") { reply = reply with { Proof = reply.Proof with { Body = "e30" } }; }
@@ -111,6 +140,7 @@ public sealed partial class GrantWireReceiverTests
         public Task<FleetGrantIssueReceiptResult> ConfirmIssueAsync(FleetGrantCall call, CancellationToken ct)
         {
             Calls.Add(call);
+            if (change == "rotation-refused") { throw new HostErrorException("RotationRequired"); }
             var document = Document;
             var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document)));
             var receipt = new GrantReceipt(id, 1, Binding.Receiver, change == "receipt" ? new('0', 64) : digest, change == "rotated");
@@ -121,6 +151,16 @@ public sealed partial class GrantWireReceiverTests
             if (change == "rotated-type") { result = result with { Receipt = JsonSerializer.SerializeToElement(new { id,
                 generation = 1, receiver = Binding.Receiver, digest, rotated = "false" }) }; }
             if (change == "receipt-proof") { result = result with { Proof = result.Proof with { Body = "e30" } }; }
+            return Task.FromResult(result);
+        }
+        public Task<FleetGrantReadResult> ReadProblemAsync(FleetGrantCall call, CancellationToken ct)
+        {
+            Calls.Add(call);
+            var problem = change == "none" ? FleetGrantReadProblem.None : change == "other" ? FleetGrantReadProblem.Other
+                : change == "unavailable" ? FleetGrantReadProblem.Unavailable : FleetGrantReadProblem.RotationRequired;
+            var context = change == "read-context" ? call.Context with { Request = Guid.NewGuid() } : call.Context;
+            var result = FleetGrantReadProof.Seal(FleetGrantReadProof.Reply(problem), context, new EcdsaEnvelopeSigner(key));
+            if (change == "read-proof") { result = result with { Proof = result.Proof with { Body = "e30" } }; }
             return Task.FromResult(result);
         }
         public void Dispose() { key.Dispose(); target.Dispose(); }
