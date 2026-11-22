@@ -273,6 +273,26 @@ public sealed class GrantStoreTests : IDisposable
     }
 
     [Fact]
+    public void An_empty_adoption_proof_cannot_resurrect_a_rolled_back_revoked_grant()
+    {
+        var grant = Issued();
+        var auditFolder = Path.Combine(Folder, "audit");
+        var head = Path.Combine(auditFolder, "agents.head");
+        var old = new[] { PathName, head, Directory.GetFiles(auditFolder, "agents-*.jsonl").Single() }.ToDictionary(f => f, File.ReadAllBytes);
+        Assert.True(Open().Revoke(grant.Id, 1).Usable);
+        foreach (var (file, bytes) in old) { File.WriteAllBytes(file, bytes); }
+        File.Delete(head);
+        Assert.True(Audit.Bootstrap());
+        var json = JsonNode.Parse(File.ReadAllText(head))!;
+        Assert.True(json["adoptedGatedRows"]!.GetValue<long>() > 0);
+        json["adoptedGatedRows"] = 0;
+        json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}""");
+        File.WriteAllText(head, json.ToJsonString());
+        Assert.True(Audit.Verify().Intact);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+    }
+
+    [Fact]
     public void Replaying_an_old_valid_mac_file_cannot_resurrect_revocation_in_a_running_or_restarted_receiver()
     {
         var grant = Grant();
