@@ -336,16 +336,24 @@ In order, for every reply:
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
    reply. The process is the live agent process, and not elevated. A session this host
-   launched, resumed or restored whose window has not been seen ready is `refused`: it may
+   launched, resumed or restored without readiness evidence is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
    #780). While following it says what the window shows: the folder-trust question (answered from
    a device where allowed, #947, else on that machine), another startup question (on that machine),
-   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
-   process it handed the session to), until a prompt of the person's is in its transcript after the
-   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
-   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
-   that registers only once ready, it registers. The attachments are staged (below).
+   or only "still starting, send it again in a moment" (#1018). Activity in **its own transcript
+   after launch began** releases the startup hold, even if following ended unready or the launch
+   is `unconfirmed`: any `user.message`, regardless of source, an `assistant.turn_start`,
+   tool execution or subagent activity recorded there counts. An unconfirmed launch no longer
+   pins an active session. `session.resume` alone, old transcript activity, another session's
+   activity or a turn count is not evidence. With no readable transcript or no such activity,
+   an unready launch stays refused; there is no timeout release. A window seen ready, or
+   registration by an agent that registers only once ready, remains readiness evidence.
+   Visible trust/startup questions and open transcript `ask_user`, `permission.requested` or
+   trust questions still refuse replies, even after activity; the checks below still apply.
+   Owner-approved change ([#3634](https://github.com/danswett/agent-bridge/issues/3634)):
+   owner `ask_user` answer "release on any transcript activity", relayed by Chief S10,
+   Nov 21, 2026, ~22:30 PT. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its

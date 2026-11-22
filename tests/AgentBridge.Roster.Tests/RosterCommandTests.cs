@@ -31,6 +31,8 @@ public sealed class RosterCommandTests
         w.Add("+R", "G", "R", "+H");
         w.Remove("G-R", "G", "+R", "+R");
         w.Add("+N", "G", "N", "G-R");
+        w.Add("+X", "G", "X", "+N", presence: Presence.None);
+        w.Confirm("cX", "G", "+X", "+X");
         return w;
     }
 
@@ -141,6 +143,12 @@ public sealed class RosterCommandTests
     static CommandContext Context(World w, string action, string? floor = null, byte[]? nonce = null, string[]? previous = null) =>
         new(w.Id("H"), action, Instant.Parse(Now), floor is null ? null : Instant.Parse(floor), nonce ?? HostNonce, previous?.Select(p => w[p].Hash).ToList());
 
+    static string RawCommand(World w, Func<string, string> edit)
+    {
+        var bytes = Encoding.UTF8.GetBytes(edit(Encoding.UTF8.GetString(Bytes(CommandBody(w, AcceptHostSign, "A")))));
+        return PersonCommand.Canonical(bytes, World.Keys("A").Sign.Sign(PersonCommand.Signed(bytes)), null);
+    }
+
     static CommandCase Case(string name, string about, string action, string by, string? code = null, Func<JsonObject, JsonObject>? edit = null, string? signAs = null, bool? uv = null, Func<World, CommandContext>? context = null, string issued = "2026-11-04T11:59:00Z", string expires = "2026-11-04T12:04:00Z", string machine = "H", string head = "+N", string to = "H2", string? refusal = null) =>
         new(name, about, w =>
         {
@@ -157,6 +165,15 @@ public sealed class RosterCommandTests
         Case("accept-host-sign", "a confirmed person's key authorizes this host's v2 command contract", AcceptHostSign, "A"),
         Case("accept-host-sign-webauthn", "a confirmed person's WebAuthn assertion binds this command body", AcceptHostSign, "P"),
         Case("accept-host-sign-without-presence", "a WebAuthn signer must prove presence", AcceptHostSign, "P", Invalid.Presence, uv: false),
+        Case("accept-host-sign-presence-none", "a confirmed person's signature without a presence mechanism confers no authority", AcceptHostSign, "X", Invalid.Presence),
+        new("accept-host-sign-malformed-wrapper", "invalid wrapper JSON is refused before verification", _ => "{", w => Context(w, AcceptHostSign), Refusal: Refusal.Json),
+        new("accept-host-sign-malformed-body", "validly framed signature over malformed body JSON is refused", w => RawCommand(w, b => b[..^1]), w => Context(w, AcceptHostSign), Refusal: Refusal.Json),
+        new("accept-host-sign-duplicate-member", "identical repeated action members are still ambiguous", w => RawCommand(w, b => b[..^1] + ",\"action\":\"accept-host-sign\"}"), w => Context(w, AcceptHostSign), Refusal: Refusal.Duplicate),
+        new("accept-host-sign-extra-wrapper", "a complete valid wrapper cannot carry an unsigned enable flag", w => SignCommand(w, CommandBody(w, AcceptHostSign, "A"), "A")[..^1] + ",\"enable\":true}", w => Context(w, AcceptHostSign), Refusal: Refusal.Unknown),
+        Case("accept-host-sign-nonce-type", "a nonce must be a string", AcceptHostSign, "A", edit: b => { b["nonce"] = 1; return b; }, refusal: Refusal.Type),
+        Case("accept-host-sign-nonce-base64", "a padded nonce is not canonical base64url", AcceptHostSign, "A", edit: b => { b["nonce"] = Codec.Base64Url(HostNonce) + "="; return b; }, refusal: Refusal.Base64),
+        Case("accept-host-sign-extra-question", "this action cannot name a trust question", AcceptHostSign, "A", edit: b => { b["target"]!["question"] = "trust-1"; return b; }, refusal: Refusal.Unknown),
+        Case("accept-host-sign-extra-choice", "this action cannot carry a trust choice", AcceptHostSign, "A", edit: b => { b["choice"] = "once"; return b; }, refusal: Refusal.Unknown),
         Case("accept-host-sign-agent-principal", "an unrostered agent principal's key confers no person authority", AcceptHostSign, "Agent", Invalid.Signer),
         Case("accept-host-sign-probation", "an active person on probation cannot authorize v2", AcceptHostSign, "N", Invalid.Probation),
         Case("accept-host-sign-old-channel-nonce", "a valid command replayed onto a new channel has the old nonce", AcceptHostSign, "A", Invalid.Nonce, context: w => Context(w, AcceptHostSign, nonce: OtherNonce)),
@@ -227,6 +244,35 @@ public sealed class RosterCommandTests
         {
             var code = CommandOutcome(v, c.Wrapper(w), c.Context(w), out var refusal);
             Assert.True((c.Code, c.Refusal) == (code, refusal), $"{c.Name}: expected ({c.Code}, {c.Refusal}), got ({code}, {refusal})");
+        }
+    }
+
+    [Fact]
+    public void Committed_accept_host_sign_proofs_reject_missing_presence_and_malformed_commands()
+    {
+        var vectors = VectorFiles.Read("roster-commands.json");
+        var (w, v) = Held();
+        foreach (var (name, code, refusal) in new (string, string?, string?)[]
+        {
+            ("presence-none", Invalid.Presence, null), ("malformed-wrapper", null, Refusal.Json), ("malformed-body", null, Refusal.Json),
+            ("duplicate-member", null, Refusal.Duplicate), ("extra-wrapper", null, Refusal.Unknown),
+            ("nonce-type", null, Refusal.Type), ("nonce-base64", null, Refusal.Base64),
+            ("extra-question", null, Refusal.Unknown), ("extra-choice", null, Refusal.Unknown),
+        })
+        {
+            var c = Assert.Single(vectors["commands"]!.AsArray(), c => c!["name"]!.GetValue<string>() == $"accept-host-sign-{name}")!;
+            var actual = CommandOutcome(v, c["wrapper"]!.GetValue<string>(), Context(w, AcceptHostSign), out var rejected);
+            Assert.True((code, refusal) == (actual, rejected), $"{name}: expected ({code}, {refusal}), got ({actual}, {rejected})");
+        }
+        foreach (var k in vectors["collisions"]!.AsArray())
+        {
+            var (_, cv) = Colliding(k!["name"]!.GetValue<string>() == "host-first");
+            var c = Assert.Single(k["commands"]!.AsArray(), c => c!["name"]!.GetValue<string>() == "accept-host-sign-by-host-key")!;
+            var wrapper = c["wrapper"]!.GetValue<string>();
+            var context = new CommandContext(c["context"]!["host"]!.GetValue<string>(), AcceptHostSign, Instant.Parse(Now), Nonce: HostNonce);
+            Assert.NotEqual(PersonCommand.Parse(Encoding.UTF8.GetBytes(wrapper)).Body.By, context.Host);
+            Assert.Equal(Invalid.Signer, CommandOutcome(cv, wrapper, context, out var rejected));
+            Assert.Null(rejected);
         }
     }
 
@@ -324,7 +370,7 @@ public sealed class RosterCommandTests
     [
         Case("update-by-a-key-shared-with-a-host", "a person's update command signed with the key a sibling host holds as its hostSign, after probation", CommandAction.Update, "Q", Invalid.HostKey, signAs: "H", head: "cA"),
         Case("update-by-a-key-of-its-own", "another person's update command, in the same roster", CommandAction.Update, "A", head: "cA"),
-        Case("accept-host-sign-by-host-key", "a rostered v2 host signing with its hostSign is not a person", AcceptHostSign, "H", Invalid.Signer, head: "cA"),
+        Case("accept-host-sign-by-host-key", "a rostered v2 host signing for a different machine is not a person, after probation", AcceptHostSign, "H", Invalid.Signer, head: "cA", machine: "H2", context: w => new(w.Id("H2"), AcceptHostSign, Instant.Parse(Now), Nonce: HostNonce)),
         Case("accept-host-sign-signed-with-host-key", "a person's command signed by hostSign fails its signature check", AcceptHostSign, "A", Invalid.Signature, signAs: "H", head: "cA"),
         Case("accept-host-sign-shared-host-key", "a person's key shared with hostSign confers no authority after probation", AcceptHostSign, "Q", Invalid.HostKey, signAs: "H", head: "cA"),
     ];
@@ -438,7 +484,7 @@ public sealed class RosterCommandTests
             ["generatedBy"] = "tests/AgentBridge.Roster.Tests/RosterCommandTests.cs",
             ["account"] = Account,
             ["generation"] = Generation,
-            ["devices"] = new JsonObject([.. new[] { "G", "A", "P", "H", "R", "N", "H2" }.Select(n => KeyValuePair.Create(n, (JsonNode?)w.Id(n)))]),
+            ["devices"] = new JsonObject([.. new[] { "G", "A", "P", "H", "R", "N", "X", "H2" }.Select(n => KeyValuePair.Create(n, (JsonNode?)w.Id(n)))]),
             ["entries"] = entries,
             ["heldReset"] = Codec.Base64Url(HeldReset),
             ["vetoes"] = vetoes,
