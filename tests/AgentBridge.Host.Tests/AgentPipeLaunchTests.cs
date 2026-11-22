@@ -45,7 +45,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var audit = new AgentAuditLog(folder) { DeviceKey = grantKey };
         var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, time: auditTime, fleetGrants: grantKey is null ? null
-            : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
+            : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, launcher));
         launcher.RequestRegistered += agentLaunch.Registered;
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
             credentials: credentials, audit: audit, auditTime: auditTime, agentLaunch: legacy || grantOnly ? null : agentLaunch,
@@ -136,16 +136,18 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null, bool grantOnly = false,
-        FleetPublisherTests.Source? source = null, (LaunchRequestStore?, string?)? launchStore = null)
+        bool allScope = false, bool allowAllLaunch = false, FleetPublisherTests.Source? source = null,
+        (LaunchRequestStore?, string?)? launchStore = null)
     {
         var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly, source: source, store: launchStore);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
-        var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
+        var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"],
+            allScope ? ["ask", "allowAll"] : ["ask"]);
         var store = new GrantStore(folder, key, new(folder), scope);
         var grant = new GrantDocument(1, Guid.NewGuid(), "123", new("123", new('a', 32), "AQ", now, new('a', 64)),
             new(new('a', 32), Path.GetFileName(folder)), [new("123", new('a', 32), caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc))],
-            ["launch"], scope, caps ?? new(3, 3, 2), now, 1, now.AddHours(8));
+            ["launch"], scope, caps ?? new(3, 3, 2), now, 1, now.AddHours(8), AllowAllLaunch: allowAllLaunch);
         Assert.True(store.Issue(grant).Usable);
         return (pipe, grant, store);
     }
@@ -287,6 +289,32 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(first.Result.Outcome, duplicate.Result.Outcome);
         Assert.Equal(1, launcher.Launches);
         Assert.Equal("duplicate-id", (await GrantedLaunch(pipe, GrantBody(grant, prompt: "different"))).Reason);
+        var process = Assert.IsType<AgentBridge.Host.Core.SessionProcess>(source.ProcessOf(first.Result.Session!));
+        var target = new StopTarget(first.Result.Session!, new(process.Id, Assert.IsType<DateTimeOffset>(process.StartedAt)));
+        Assert.True(new GrantCounters(store).Commit(Guid.Parse(request), target, "ask").Accepted);
+        source.Sessions.Clear();
+        source.Binding = _ => null;
+        Assert.True((await GrantedLaunch(pipe, GrantBody(grant))).Registered);
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Receiver_all_launch_needs_both_flags_and_never_changes_ordinary_legacy_launch(bool flag, bool enabled)
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key, grantOnly: true, allScope: true, allowAllLaunch: flag);
+        var path = Path.Combine(folder, HostSettings.FileName);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"permissions\":\"ask\"",
+            "\"permissions\":\"ask\",\"allowAllLaunch\":" + enabled.ToString().ToLowerInvariant()));
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body(permissions: "allowAll")));
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)! with { Permissions = "allowAll" };
+        var result = await GrantedLaunch(pipe, JsonSerializer.SerializeToElement(input, ProtocolJson.Options));
+        Assert.Equal(flag && enabled ? 1 : 0, launcher.Launches);
+        if (!flag || !enabled) { Assert.Equal("scope", result.Reason); }
     }
 
     [Fact]
@@ -346,7 +374,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         launcher.Statuses.Add(new(input.Request.ToString("D"), "started", foreign, "ask", false, DateTimeOffset.UtcNow)
         { Principal = "agent:machine/another-session", SourceRequest = Guid.NewGuid().ToString("D") });
         var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher);
         await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
         var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
         Assert.Equal(GrantLaunchOutcome.Unconfirmed, replay.Reservation!.Outcome);
@@ -375,7 +403,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var launchedAt = source.ProcessOf(started.Session!)?.StartedAt ?? throw new InvalidOperationException("fixture lost the launched process");
         source.Binding = id => id == started.Session ? new(int.MaxValue - 1, launchedAt.AddSeconds(1)) : null;
         var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher);
         await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
         var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
         Assert.Equal(GrantLaunchOutcome.Unconfirmed, replay.Reservation!.Outcome);
@@ -403,7 +431,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
         source.Binding = id => id == launched.Session ? new(int.MaxValue - 1, launched.ProcessInstance.StartedAt.AddSeconds(1)) : null;
         var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher);
         await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
         var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
         Assert.Equal(GrantLaunchOutcome.Started, replay.Reservation!.Outcome);
@@ -441,8 +469,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             row => row.Action == "session.launch" && row.Gate?.Phase == "terminal");
         if (reconcile)
         {
-            var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials,
-                new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher), launcher);
+            var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher);
             await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)! with { Request = Guid.NewGuid() });
         }
         var duplicate = await GrantedLaunch(pipe, GrantBody(grant));
