@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.AgentEnvelope;
@@ -59,24 +58,10 @@ public sealed partial class GrantWireReceiver(IGrantWireDispatcher dispatcher, s
         { return new(FleetGrantReadProblem.Unavailable, false, new([], Reason(error))); }
     }
 
-    public async Task<GrantPrepareResult> PrepareIssueAsync(JsonElement document, CancellationToken ct = default)
+    public Task<GrantPrepareResult> PrepareIssueAsync(JsonElement document, CancellationToken ct = default)
     {
         issue = null;
-        try
-        {
-            var (context, bound, _) = await ContextAsync("grant.prepareIssue", ct);
-            var prepared = Parse<FleetGrantPrepared>(await BytesAsync(context, bound, new { document }, null, ct));
-            var preview = Parse<GrantIssuePreview>(Encoding.UTF8.GetBytes(prepared.Preview.GetRawText()));
-            CheckChallenge(prepared.Challenge, context, "grant.issue", preview.Id, preview.Generation,
-                preview.Receiver, preview.Profile, preview.Digest, preview.Document);
-            if (!BoundDocument(JsonSerializer.Deserialize<JsonElement>(preview.Document), context.Account) || preview.UnavailableActions.IsDefault)
-            { throw new InvalidDataException("grant-preview"); }
-            if (preview.UnavailableActions.Length > 0) { return new(null, "action-unavailable"); }
-            issue = new(prepared.Challenge, bound);
-            return new(preview, null);
-        }
-        catch (Exception error) when (Handled(error))
-        { return new(null, Reason(error)); }
+        return Task.FromResult(new GrantPrepareResult(null, "unavailable"));
     }
 
     public async Task<GrantIssueResult> ConfirmIssueAsync(Guid id, long generation, string digest, CancellationToken ct = default)
@@ -150,33 +135,6 @@ public sealed partial class GrantWireReceiver(IGrantWireDispatcher dispatcher, s
             new(latest.Account, profile, receiver, "grant.binding", request.Request));
         return (latest, receiverKey);
     }
-
-    async Task<byte[]> BytesAsync(FleetGrantProofContext context, FleetGrantBinding bound, object args,
-        JsonElement? command, CancellationToken ct)
-    {
-        var (latest, _) = await VerifyBindingAsync(ct);
-        if (latest != bound) { throw new InvalidDataException("grant-binding-changed"); }
-        var proof = await dispatcher.CallAsync(new(context, JsonSerializer.SerializeToElement(args, ProtocolJson.Options), command), ct);
-        return FleetGrantProof.Verify(proof, Codec.FromBase64Url(bound.HostSign, "HostSign"), context);
-    }
-
-    void CheckChallenge(FleetGrantChallenge challenge, FleetGrantProofContext context, string action, Guid id,
-        long generation, string machine, string targetProfile, string digest, string document)
-    {
-        if (challenge is null || challenge.Request != context.Request || challenge.Id != id || id == Guid.Empty
-            || challenge.Generation != generation || generation <= 0 || challenge.Account != context.Account
-            || challenge.Profile != profile || targetProfile != profile || challenge.Receiver != receiver || machine != receiver
-            || challenge.Action != action || challenge.Digest != digest || challenge.ExpiresAt <= DateTimeOffset.UtcNow
-            || document is not { Length: > 0 and <= 64 * 1024 }
-            || Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document))) != digest)
-        { throw new InvalidDataException("grant-challenge"); }
-    }
-
-    bool BoundDocument(JsonElement document, string expectedAccount) => document.ValueKind == JsonValueKind.Object
-        && document.TryGetProperty("account", out var account) && account.GetString() == expectedAccount
-        && document.TryGetProperty("audience", out var audience) && audience.ValueKind == JsonValueKind.Object
-        && audience.TryGetProperty("device", out var machine) && machine.GetString() == receiver
-        && audience.TryGetProperty("profile", out var targetProfile) && targetProfile.GetString() == profile;
 
     internal static T Parse<T>(byte[] bytes)
     {

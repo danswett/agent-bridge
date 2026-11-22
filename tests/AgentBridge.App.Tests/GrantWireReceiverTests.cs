@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.AgentEnvelope;
@@ -14,6 +15,17 @@ namespace AgentBridge.App.Tests;
 
 public sealed partial class GrantWireReceiverTests
 {
+    [Fact]
+    public async Task Production_preparation_is_unavailable_without_the_typed_contract()
+    {
+        using var wire = new Dispatcher("none");
+        var receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default", () => null);
+        var result = await receiver.PrepareIssueAsync(JsonSerializer.SerializeToElement(new { }));
+        Assert.Null(result.Preview);
+        Assert.Equal("unavailable", result.Problem);
+        Assert.Empty(wire.Calls);
+    }
+
     [Theory]
     [InlineData("rotation", FleetGrantReadProblem.RotationRequired, true)]
     [InlineData("signer-missing", FleetGrantReadProblem.RotationRequired, false)]
@@ -59,7 +71,7 @@ public sealed partial class GrantWireReceiverTests
         var signed = 0;
         var person = new Signer(app, () => signed++);
         var receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default", () => person);
-        var model = new GrantIssueViewModel(receiver);
+        var model = new GrantIssueViewModel(new PreparedReceiver(receiver, wire));
         await model.PrepareAsync(JsonSerializer.SerializeToElement(new { }));
         Assert.Equal(0, signed);
         if (change is "proof" or "challenge" or "binding-proof") { Assert.False(model.CanConfirm); return; }
@@ -90,6 +102,37 @@ public sealed partial class GrantWireReceiverTests
         {
             signed();
             return Transfers.SignGrantConfirmation(key, receiverKey, context, args, now);
+        }
+    }
+
+    // Test-only preparation; production stays unavailable until the canonical contract exists.
+    sealed class PreparedReceiver(GrantWireReceiver inner, Dispatcher wire) : IGrantIssueReceiver
+    {
+        public string Receiver => inner.Receiver;
+        public bool Online => inner.Online;
+        public string? Problem => inner.Problem;
+        public Task<GrantReadResult> ReadAsync(CancellationToken ct = default) => inner.ReadAsync(ct);
+        public Task<GrantRevokePreview> PrepareRevokeAsync(Guid id, long generation, CancellationToken ct = default) => inner.PrepareRevokeAsync(id, generation, ct);
+        public Task<GrantRevokeReceipt> ConfirmRevokeAsync(Guid id, long generation, string digest, CancellationToken ct = default) => inner.ConfirmRevokeAsync(id, generation, digest, ct);
+        public Task<GrantIssueResult> ConfirmIssueAsync(Guid id, long generation, string digest, CancellationToken ct = default) => inner.ConfirmIssueAsync(id, generation, digest, ct);
+        public async Task<GrantPrepareResult> PrepareIssueAsync(JsonElement document, CancellationToken ct = default)
+        {
+            try
+            {
+                var request = new FleetGrantBindingRequest(Receiver, "default", Guid.NewGuid());
+                var binding = await wire.BindAsync(request, ct);
+                var point = Codec.FromBase64Url(binding.Binding.HostSign, "HostSign");
+                FleetGrantBindingProof.Verify(binding, point, new(binding.Binding.Account, "default", Receiver, "grant.binding", request.Request));
+                var context = new FleetGrantProofContext(binding.Binding.Account, "default", Receiver, "grant.prepareIssue", Guid.NewGuid());
+                var proof = await wire.CallAsync(new(context, JsonSerializer.SerializeToElement(new { document })), ct);
+                var prepared = JsonSerializer.Deserialize<FleetGrantPrepared>(FleetGrantProof.Verify(proof, point, context), ProtocolJson.Options)!;
+                if (prepared.Challenge.Action != "grant.issue") { throw new InvalidDataException("test challenge"); }
+                var type = typeof(GrantWireReceiver).GetNestedType("PreparedGrant", BindingFlags.NonPublic)!;
+                var state = Activator.CreateInstance(type, prepared.Challenge, binding.Binding);
+                typeof(GrantWireReceiver).GetField("issue", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(inner, state);
+                return new(prepared.Preview.Deserialize<GrantIssuePreview>(ProtocolJson.Options), null);
+            }
+            catch (InvalidDataException) { return new(null, "test preparation refused"); }
         }
     }
 
