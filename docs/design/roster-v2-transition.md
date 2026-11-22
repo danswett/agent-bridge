@@ -21,7 +21,8 @@ The implementation sequence belongs to
 [#1776](https://github.com/danswett/agent-bridge/issues/1776) registry signing
 and reader verification are separate.
 
-Today `CommandAction` has no `accept-host-sign` action.
+The C# and PWA person-command parsers register `accept-host-sign`; their shared
+vectors prove the command contract, not authorization to enable v2.
 `RosterVerifier.AcceptHostSign` is init-only and defaults to false in production;
 the PWA verifier also defaults to false. `HostRosterReader` reads an existing
 four-field pin and retains a verifier in memory, but has no disk write API.
@@ -314,5 +315,9 @@ behavior, so it has no runtime failing-first claim; those tests belong to the
 subsequently authorized code PRs. Run `quality/run.ps1` and the selected docs checks
 here, retaining complete output and disclosing any unavailable checks.
 Do not enroll live hosts, change `security.roster`, deploy, or start #1776 as a
-consequence of merging this note. `fleet.find` stays the canonical name lookup;
-no machine/session node ids are embedded in configuration or this design.
+consequence of merging this note. `fleet.find` stays the
+[canonical live session-ID lookup](../protocol/agent-operations.md#fleetfind):
+names are display only, exact device IDs pin machines, and stale, unknown or offline
+IDs refuse without name, fragment or HA fallback. Its trust/completeness precedence
+and messaging-only own-account exception do not authorize roster transition.
+No machine/session node roster is embedded in configuration or this design.

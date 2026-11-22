@@ -10,6 +10,16 @@ made. It builds on the signed device roster proposed for #55 in PR #391,
 (revision 2, head `ed9ca862`, not yet merged). In this note, "#391 §n" means a section of that
 note, and a bare "§n" means a section of this one.
 
+**Current addressing (ID-first).** [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code),
+updated by [PR 3606](https://github.com/danswett/agent-bridge/pull/3606), owns the addressing
+contract: sends target a session ID or role ID; names are display only and never route.
+A stale or unknown ID fails loudly and holds, naming the target ID, with no name, substring
+or HA fallback. A role ID requires exactly one verified live holder; none or two refuses.
+Role-ID code, claims and succession remain paused under [role-ids.md](role-ids.md);
+this design note claims no implemented role routing. Legacy lookup reconciliation is tracked
+in [issue 3607](https://github.com/danswett/agent-bridge/issues/3607). Protocol fields and
+authorization, account, kill-switch and final-effect fences are unchanged by this clarification.
+
 §8 covers the owner-requested overlap with connectors: Home Assistant as the first client of the
 third-party connector API, and #388's headless identity. That section is the one place where
 the three principal kinds (agents, connectors and cross-account peers) are set against each
@@ -1731,9 +1741,11 @@ Nothing is built before #55 and AP5 (AP11, §11.2).
 * **Attribution (M6).** A message delivered under the grant sets the additive
   `driverFrom.grant: "group:<id>@<gen>"` (§6.1), only from the verified grant, and is audited per
   message (§5.6). After a restart the driver shows as unknown or agent, never as the person.
-* **The HA route (M7).** Once a member's machine runs the grant, members aren't driven over HA.
-  Product sets the order HA is retired per machine. The HA route stays as the fallback until the
-  grant ships, and gains no authority from this.
+* **The HA route (M7), historical.** Product sets the order HA is retired per machine.
+  This historical retirement sequence does not authorize HA fallback for ID-first messaging.
+  [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code)
+  owns current addressing and refusal behavior; a missing target never becomes a name lookup
+  or a retry over HA. The grant gains no authority from a transport.
 * **Expiry.** 8 hours by default, 4 or 24 hours otherwise, and 24 hours at most (owner decision
   (a)). Renewal is in the app only, never pushed (c): the expiry item and **Approve again** are
   never pushed and never ride the hourly aggregate.

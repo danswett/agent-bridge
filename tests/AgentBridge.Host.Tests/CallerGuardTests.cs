@@ -71,6 +71,19 @@ public sealed class CallerGuardTests
         Assert.Equal(CallerKind.Other, guard.Classify(new ProcessAncestry([P(30, host, 9)], Complete: false)).Kind);
     }
 
+    [Theory]
+    [InlineData(25, "pwsh.exe", 0)]
+    [InlineData(25, "python.exe", 0)]
+    [InlineData(25, "explorer.exe", 0)]
+    [InlineData(4, "explorer.exe", 1)]
+    [InlineData(4, "explorer.exe", 0)]
+    public void Where_required_only_this_desktops_own_shell_as_direct_parent_is_a_person_CLI(int parent, string image, int minutes)
+    {
+        var guard = new CallerGuard(() => [], null, hostImage: App, desktopShell: () => P(4, @"C:\Windows\explorer.exe"));
+        Assert.Equal(parent == 4 && minutes == 0 ? CallerKind.HostCli : CallerKind.Other,
+            guard.Classify([P(30, App, 9), P(parent, @"C:\" + image, minutes), P(4, @"C:\Windows\explorer.exe")]).Kind);
+    }
+
     [Fact]
     public void Only_a_migrate_or_rollback_that_is_not_a_dry_run_is_refused_inside_a_session()
     {

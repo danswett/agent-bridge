@@ -11,6 +11,7 @@
     "H": "c69c83474da2ac399b19623b26479f44",
     "R": "e731c3a09f80abc6a0530d5ff6827ab6",
     "N": "93efee42fd1e60de206b8a2d5df77194",
+    "X": "88c789bc31999ab1368bb3ddec40029a",
     "H2": "aafcd86566b2c1c13a1fd4cc05525b53"
   },
   "entries": [
@@ -58,6 +59,16 @@
       "label": "+N",
       "hash": "DEwLzLJVWhS4d11CTl1FT7DidjhOpgrpPJaehzmXLQc",
       "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo4LCJwcmV2IjpbIkxla1I0Z2NOY29sSjQ3dDMyZzZYUXB0dGlXa0dadGtvLV9UOHYzTWFKaVUiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowOFoiLCJkZXZpY2UiOnsiaWQiOiI5M2VmZWU0MmZkMWU2MGRlMjA2YjhhMmQ1ZGY3NzE5NCIsImRoIjoiQkhKeVZKeEk0dWRKNjd1dGo3b1pHNWNndFNMUXlndnJMQmNEc04xZGQtQUtUVFRtSlZHREVUMk9NaEJGY1JfcFR5VkZKY3dUVy1VeWRLSTFrZUNjUHVrIiwic2lnbiI6IkJJTzJlejVTVnNhVVhGTlc4NmJoZko5d1kzcnBuM2NFOXRPN1U1VU5hd2xYN3BSQWJKS2JvVGhyM0hXRXMzRVZGT2FEYm5SM3o3S25nYjdVWmZDaGp6cyIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6ImtleSIsImtpbmQiOiJwaG9uZSIsInBsYXRmb3JtIjoiaW9zIiwibmFtZSI6Ik4ifSwiYXBwcm92YWwiOnsibWV0aG9kIjoiY29kZSIsInRyYW5zY3JpcHQiOiJMN3UwQ1JuYkpwUHhjY3VlMGtCTnU1ZWpHRGdtS0JzbHl6Mno4UFdjOFIwIn19\",\"sig\":\"MEUCIQCSn7zGcojb6ghJJ7F8lKVKm2_98Ng2OY32r9uiPJJuwgIgJiQ04bEnex4GQSuzDPvvVsdCXiGzOHPTySNysz-kjSo\"}"
+    },
+    {
+      "label": "+X",
+      "hash": "FTdt61w48L8JH2UxvmHcvzaJNxPnZ-vrnh_Kj9mfjbs",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjo5LCJwcmV2IjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXSwiYnkiOiI0MjUyMDczNjUzMzNhNmJkM2U2YmE4NWIzNzk4MWNlZSIsImF0IjoiMjAyNi0xMS0wNFQxMDowMDowOVoiLCJkZXZpY2UiOnsiaWQiOiI4OGM3ODliYzMxOTk5YWIxMzY4YmIzZGRlYzQwMDI5YSIsImRoIjoiQkFxTll0SHNFTGhzTVVfWUdBOVYwRkdFSU5KclJudEVFck04S29rQUstTmNWcG9CUVFsWU9hclF4bmJ6S1NXSlc1M0kwRkg3bmNnN2lLWTJMR2dFTVJrIiwic2lnbiI6IkJMZzZjNHlBaldpdUNtcm4zNXQ2U3N0MVU5bHprRTlSYTV6WGFNajIyZlNCUnhrbFZWVjAzZzQtei1JZzMxYXVyNGROel81RjFlSFhqQ185SkpHd05BWSIsInNpZ25BbGciOiJwMjU2LXNoYTI1Ni1kZXIiLCJwcmVzZW5jZSI6Im5vbmUiLCJraW5kIjoicGhvbmUiLCJwbGF0Zm9ybSI6ImlvcyIsIm5hbWUiOiJYIn0sImFwcHJvdmFsIjp7Im1ldGhvZCI6ImNvZGUiLCJ0cmFuc2NyaXB0IjoielhOSDktTE5DS2xyODdjaHU5dlJFM3poZlNPOEtyc1dMWUh0WTkzUGJIQSJ9fQ\",\"sig\":\"MEQCIFvS9SdD_Kt5FRdRV09dv1FUTDtNcsICdMlhmJvAWyB_AiB-jP9rLK6zCPZxdDsadqygVYyyypeIRnCt1DS9LGpMFg\"}"
+    },
+    {
+      "label": "cX",
+      "hash": "j1P-prQk4EHyqZs0jIUXYWSJ3Ev5wwIaD7vfP9EDv28",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJvcCI6ImNvbmZpcm0iLCJhY2NvdW50Ijoib3duZXJAZXhhbXBsZSIsImdlbmVyYXRpb24iOiJhYjRmYjNjYzI0YTNjYzk5MjQ5YWIwNjk0YzM2MWE4OCIsInNlcSI6MTAsInByZXYiOlsiRlRkdDYxdzQ4TDhKSDJVeHZtSGN2emFKTnhQblotdnJuaF9LajltZmpicyJdLCJieSI6IjQyNTIwNzM2NTMzM2E2YmQzZTZiYTg1YjM3OTgxY2VlIiwiYXQiOiIyMDI2LTExLTA0VDEwOjAwOjEwWiIsInRhcmdldCI6eyJpZCI6Ijg4Yzc4OWJjMzE5OTlhYjEzNjhiYjNkZGVjNDAwMjlhIiwiYWRkIjoiRlRkdDYxdzQ4TDhKSDJVeHZtSGN2emFKTnhQblotdnJuaF9LajltZmpicyJ9fQ\",\"sig\":\"MEUCIQCJzw1gfuUoWMGvjW2kzhAimkWNfc8vLF2lHxT3pmU_2gIgK2NLnuKCHeaERLeOouuLSeFzxKGFv13clb1JHQZxH2s\"}"
     }
   ],
   "heldReset": "Jsg3mM9MaDViSbftgkqFzDHpL0tfGqePHPVAbd8-6-U",
@@ -237,6 +248,114 @@
         "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
       },
       "code": "presence"
+    },
+    {
+      "name": "accept-host-sign-presence-none",
+      "about": "a confirmed person's signature without a presence mechanism confers no authority",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiODhjNzg5YmMzMTk5OWFiMTM2OGJiM2RkZWM0MDAyOWEiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEMCIHdQXjAskosqZMxP-211TvjbSUeWLLFX6bvEhS6V5n-7Ah8RbHySBuyymISUhKvoFsFaaJszq9ImL46jrgiqXGpB\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "code": "presence"
+    },
+    {
+      "name": "accept-host-sign-malformed-wrapper",
+      "about": "invalid wrapper JSON is refused before verification",
+      "wrapper": "{",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "json"
+    },
+    {
+      "name": "accept-host-sign-malformed-body",
+      "about": "validly framed signature over malformed body JSON is refused",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXQ\",\"sig\":\"MEUCIQC_KdgfDFB9UUUR18w0b145kZsTDMCUlwpQFHYZKvNeVwIgVJ0n_QBG1MqbDNUyBSn39EqyPrAnMJH3fL2dUy77vUw\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "json"
+    },
+    {
+      "name": "accept-host-sign-duplicate-member",
+      "about": "identical repeated action members are still ambiguous",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXSwiYWN0aW9uIjoiYWNjZXB0LWhvc3Qtc2lnbiJ9\",\"sig\":\"MEUCIQCJHJsoxLXfu20_qK0Zxa0kRb9zWDoziJYNcjYfVCre4AIgbg-IMt0vN-XMPBZCVo9uIwW4xMMPGNwDIKNWdtes_rQ\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "duplicate-member"
+    },
+    {
+      "name": "accept-host-sign-extra-wrapper",
+      "about": "a complete valid wrapper cannot carry an unsigned enable flag",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQCnFaXHmhjGOwlyn7CjsagjrdKxmJkEXm3aIbpF-ddR2gIgX68BLGWZubOMXqqaVTIrGU8IeQlX1_XbmdacxZJVCAk\",\"enable\":true}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "unknown-member"
+    },
+    {
+      "name": "accept-host-sign-nonce-type",
+      "about": "a nonce must be a string",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoxLCJpc3N1ZWRBdCI6IjIwMjYtMTEtMDRUMTE6NTk6MDBaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowNDowMFoiLCJoZWFkcyI6WyJERXdMekxKVldoUzRkMTFDVGwxRlQ3RGlkamhPcGdycFBKYWVoem1YTFFjIl19\",\"sig\":\"MEUCIQD6m0rsM9WLa6lUbfR6enCKhvSSJpxTNFpJfKeqW_EtBwIgOvYOaayDpnhWQ8hiz8J9S47k8t58p11ASZAoMhKE1bU\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "type"
+    },
+    {
+      "name": "accept-host-sign-nonce-base64",
+      "about": "a padded nonce is not canonical base64url",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVT0iLCJpc3N1ZWRBdCI6IjIwMjYtMTEtMDRUMTE6NTk6MDBaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowNDowMFoiLCJoZWFkcyI6WyJERXdMekxKVldoUzRkMTFDVGwxRlQ3RGlkamhPcGdycFBKYWVoem1YTFFjIl19\",\"sig\":\"MEQCIBD6QN8JUCGDi5XNyrYD8MY4PhawfLab8dUhiulnkay6AiASOjiDT15JAeUJDh7wrIqs_SJYu8KNhidtlVK8-NmcPg\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "base64"
+    },
+    {
+      "name": "accept-host-sign-extra-question",
+      "about": "this action cannot name a trust question",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0IiwicXVlc3Rpb24iOiJ0cnVzdC0xIn0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEQCIFMr7DofM2ieK58NFzaaT1O6oewm8DVkiHz1gymnX16TAiAn9Urhk4RyonHP5BiHeFqG9DFjKn2aK_QTpGQbsQSspg\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "unknown-member"
+    },
+    {
+      "name": "accept-host-sign-extra-choice",
+      "about": "this action cannot carry a trust choice",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXSwiY2hvaWNlIjoib25jZSJ9\",\"sig\":\"MEUCIQDnAHyvGd37fllgJnMhg9ZKHJO7_8jGIfB20ZZfQN8jgQIgQadiuDO9qrMmcBnm4JWuAzU0whAjVNwC3TZSQkZ7NaA\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "accept-host-sign",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "unknown-member"
     },
     {
       "name": "accept-host-sign-agent-principal",
@@ -782,10 +901,10 @@
         },
         {
           "name": "accept-host-sign-by-host-key",
-          "about": "a rostered v2 host signing with its hostSign is not a person",
-          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXX0\",\"sig\":\"MEQCID5p4VW3ZGu7seyO-3hiGzBwtfrGs_6giV5jy7W2lQ9BAiBQDW4kXNmOfKGU-vIDizK0bjWNH6d1iI2emFnp2y_fVw\"}",
+          "about": "a rostered v2 host signing for a different machine is not a person, after probation",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImFhZmNkODY1NjZiMmMxYzEzYTFmZDRjYzA1NTI1YjUzIn0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXX0\",\"sig\":\"MEQCIEaLX5md6QjlaaWLzA9B3Y25gty1Kx7W9s_rRpiM_uuhAiBtum07Ky3M47Nn83ybI35lmdjqT5kIFcHaEOLztUiFWQ\"}",
           "context": {
-            "host": "c69c83474da2ac399b19623b26479f44",
+            "host": "aafcd86566b2c1c13a1fd4cc05525b53",
             "action": "accept-host-sign",
             "now": "2026-11-04T12:00:00Z",
             "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
@@ -896,10 +1015,10 @@
         },
         {
           "name": "accept-host-sign-by-host-key",
-          "about": "a rostered v2 host signing with its hostSign is not a person",
-          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0In0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXX0\",\"sig\":\"MEQCID5p4VW3ZGu7seyO-3hiGzBwtfrGs_6giV5jy7W2lQ9BAiBQDW4kXNmOfKGU-vIDizK0bjWNH6d1iI2emFnp2y_fVw\"}",
+          "about": "a rostered v2 host signing for a different machine is not a person, after probation",
+          "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJhY2NlcHQtaG9zdC1zaWduIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImFhZmNkODY1NjZiMmMxYzEzYTFmZDRjYzA1NTI1YjUzIn0sIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkpxM1ptZ3Y4UHFfRGZCWFhmSTRfZHVNV3U0bmxOdUdseHZVdXVkOWtkcjQiXX0\",\"sig\":\"MEQCIEaLX5md6QjlaaWLzA9B3Y25gty1Kx7W9s_rRpiM_uuhAiBtum07Ky3M47Nn83ybI35lmdjqT5kIFcHaEOLztUiFWQ\"}",
           "context": {
-            "host": "c69c83474da2ac399b19623b26479f44",
+            "host": "aafcd86566b2c1c13a1fd4cc05525b53",
             "action": "accept-host-sign",
             "now": "2026-11-04T12:00:00Z",
             "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
@@ -943,14 +1062,14 @@
     "account": "owner@example",
     "generation": "ab4fb3cc24a3cc99249ab0694c361a88",
     "heads": [
-      "DEwLzLJVWhS4d11CTl1FT7DidjhOpgrpPJaehzmXLQc"
+      "j1P-prQk4EHyqZs0jIUXYWSJ3Ev5wwIaD7vfP9EDv28"
     ],
     "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU",
     "revoked": [
       "grj7PiHXSp8Gu7K0olB-JQ5QZCv0eV9a72okIaO7-eE"
     ],
-    "message": "0000001b6167656e742d62726964676520726f7374657220686561642076310000000d6f776e6572406578616d706c65000000206162346662336363323461336363393932343961623036393463333631613838000000200c4c0bccb2555a14b8775d424e5d454fb0e276384ea60ae93c969e8739972d07000000206336396338333437346461326163333939623139363233623236343739663434000000201d3faf2ed4e5906c8aa515bdd58453a3f4d753344b012492dfc7f9a71e7d2e750000002082b8fb3e21d74a9f06bbb2b4a2507e250e50642bf4795f5aef6a2421a3bbf9e1",
-    "mac": "sa8rxCuR3ojcqvxl8KDAeKpyY7ielqQDeMtqJhP3Qvc",
+    "message": "0000001b6167656e742d62726964676520726f7374657220686561642076310000000d6f776e6572406578616d706c65000000206162346662336363323461336363393932343961623036393463333631613838000000208f53fea6b424e041f2a99b348c8517616489dc4bf9c3021a0fbbdf3fd103bf6f000000206336396338333437346461326163333939623139363233623236343739663434000000201d3faf2ed4e5906c8aa515bdd58453a3f4d753344b012492dfc7f9a71e7d2e750000002082b8fb3e21d74a9f06bbb2b4a2507e250e50642bf4795f5aef6a2421a3bbf9e1",
+    "mac": "y-0PNHqMAMfSgv1rQBYfOnIA6THwvW31MPN3Wl4_FXQ",
     "command": {
       "body": "eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiREV3THpMSlZXaFM0ZDExQ1RsMUZUN0RpZGpoT3BncnBQSmFlaHptWExRYyJdfQ",
       "mac": "nzaC16shvNty6Jrq91LVtvhjSGng2BkKWhhwPSPJzN0"

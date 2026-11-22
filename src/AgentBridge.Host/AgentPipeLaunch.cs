@@ -12,11 +12,11 @@ namespace AgentBridge.Host;
 // The record keeps no principal, so an id is kept under a hash of the principal and the id:
 // another caller's id never matches, and reading it finds nothing.
 public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials, SessionService sessions,
-    AgentAuditLog audit, LaunchRequestStore? store, string? storeProblem, TimeProvider? time = null, FleetGrantLaunch? fleetGrants = null)
+    AgentAuditLog audit, LaunchRequestStore? store, string? storeProblem, TimeProvider? time = null)
 {
     readonly AgentLaunchCallerCheck callers = new(audit, time);
     readonly LocalApi.RefusalAudits refusals = new(time ?? TimeProvider.System);
-    readonly Dictionary<Guid, (string Principal, string Request, string Key, FleetLaunchContext? Fleet)> unconfirmed = [];
+    readonly Dictionary<Guid, (string Principal, string Request, string Key)> unconfirmed = [];
 
     const string Prefix = "pipe-";
 
@@ -38,32 +38,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         return credentials.LaunchGate.CheckPolicy() is { Allowed: false } off ? off.Reason ?? "agent launch is off on this machine" : null;
     }
 
-    public Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data) => LaunchAsync(caller, data, null);
-    public async Task<FleetLaunchReceipt> LaunchGrantedAsync(AgentCredential caller, JsonElement data)
-    {
-        FleetLaunchInput? input = null;
-        FleetLaunchContext? context = null;
-        try
-        {
-            input = FleetGrantLaunch.Parse(data);
-            if (fleetGrants is null) { throw new FleetLaunchDenied("unavailable"); }
-            context = await fleetGrants.PrepareAsync(caller, input);
-            if (context.Replay is { } replay) { return replay; }
-            var result = await LaunchAsync(caller, JsonSerializer.SerializeToElement(context.Request, ProtocolJson.Options), context);
-            return fleetGrants.Finish(context, result);
-        }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException or TimeoutException)
-        {
-            if (context?.Starting == true) { return fleetGrants!.Finish(context, new(LaunchOutcome.Unconfirmed)); }
-            var reason = e is FleetLaunchDenied ? e.Message : e is JsonException ? "bad-argument" : "policy";
-            if (!audit.Append(new("local", input?.Request.ToString() ?? "", credentials.PrincipalOf(caller), caller.Chain,
-                "session.launch", input?.Request.ToString() ?? "", "refused", reason) { Grant = input?.Grant.ToString() }))
-            { reason = "audit-unavailable"; }
-            return context?.Admitted == true ? fleetGrants!.Finish(context, new(LaunchOutcome.Refused, reason))
-                : FleetGrantLaunch.Receipt(context, new(LaunchOutcome.Refused), input, reason);
-        }
-    }
-    async Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data, FleetLaunchContext? fleet)
+    public async Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data)
     {
         var principal = credentials.PrincipalOf(caller);
         if (store is null) { throw Refused(caller, data, $"the launch request record can't be used ({storeProblem ?? "not open"}); no request with an id is launched"); }
@@ -76,7 +51,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         var (settings, settingsProblem) = HostSettings.Load(folder);
         var (policy, policyProblem) = HostSettings.CurrentAgents(folder);
         if (settingsProblem is not null || policyProblem is not null) { throw Refused(caller, data, "the launch settings cannot be read safely"); }
-        if (AgentLaunchRequestCheck.Check(data, request.Agent is { } named ? settings.Launch.Agent(named).ExtraArgs : [], fleet is not null) is { } invalid)
+        if (AgentLaunchRequestCheck.Check(data, request.Agent is { } named ? settings.Launch.Agent(named).ExtraArgs : []) is { } invalid)
         { throw Refused(caller, data, invalid); }
         var grant = policy.Enabled ? policy.InboundLocal.Launch : null;
         var approved = settings.Launch.Workspaces.Where(w => w.Isolate && grant is not null
@@ -90,7 +65,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         var key = Key(principal, request.Request);
         var gate = credentials.LaunchGate;
         if (gate.CheckPolicy() is { Allowed: false } off) { throw Refused(caller, data, off.Reason ?? "agent launch is off on this machine"); }
-        var binding = fleet?.Binding ?? LaunchService.RequestBinding(request);
+        var binding = LaunchService.RequestBinding(request);
         EnqueueResult held;
         try { held = store.Enqueue(key, binding); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -118,13 +93,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // The launcher hears an id of this caller's own, so no other launch (HA's or another caller's)
         // shares its events or audit rows. Pending first: a registration may come before the launch returns.
         var id = LaunchId(principal, request.Request);
-        if (fleet is not null)
-        {
-            try { fleetGrants!.Admit(fleet); }
-            catch (FleetLaunchDenied) { gate.LaunchFinished(principal, request.Request); Save(() => store.Refuse(key, "refused")); throw; }
-        }
         sessions.PublishLaunchAlias(principal, request.Request, request with { Request = id.ToString("D") }, new(LaunchOutcome.Unconfirmed));
-        Pending(id, principal, request.Request, key, fleet);
+        Pending(id, principal, request.Request, key);
         // Launching on the record first: a restart from here reads it as unconfirmed, never as one to start.
         try { store.Begin(key); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -133,10 +103,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
             throw Refused(caller, data, "the launch request record could not be written; nothing was launched");
         }
         // An exception from here leaves the record launching and the slot held: something may have started.
-        if (fleet is not null) { fleet.Starting = true; }
-        var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit,
-            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString(),
-            confirmed: fleet is null ? null : session => Registered(id, session, confirmed: true));
+        var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit, () => Still(caller, request));
         sessions.PublishLaunchAlias(principal, request.Request, request with { Request = id.ToString("D") }, result);
         if (result is { Outcome: LaunchOutcome.Started, Session: { } session })
         {
@@ -159,14 +126,11 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     }
 
     // The launcher's word on a launch (ISessionLauncher's events), also after it answered unconfirmed.
-    public void Registered(Guid id, string session) => Registered(id, session, confirmed: false);
-
-    void Registered(Guid id, string session, bool confirmed)
+    public void Registered(Guid id, string session)
     {
-        if (Take(id, unverifiedRegistration: !confirmed) is not { } p) { return; }
+        if (Take(id) is not { } p) { return; }
         try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session); } catch (InvalidOperationException) { }
         Save(() => store!.Launched(p.Key, session));
-        if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Started) { Session = session }); }
     }
 
     public void Failed(Guid id)
@@ -174,7 +138,6 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         if (Take(id) is not { } p) { return; }
         credentials.LaunchGate.LaunchFinished(p.Principal, p.Request);
         Save(() => store!.Fail(p.Key, "failed"));
-        if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Failed, "policy")); }
     }
 
     // A record write that fails after the launch decided keeps the record as it was; the gate is settled regardless.
@@ -184,16 +147,11 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
-    void Pending(Guid id, string principal, string request, string key, FleetLaunchContext? fleet) { lock (unconfirmed) { unconfirmed[id] = (principal, request, key, fleet); } }
+    void Pending(Guid id, string principal, string request, string key) { lock (unconfirmed) { unconfirmed[id] = (principal, request, key); } }
 
-    (string Principal, string Request, string Key, FleetLaunchContext? Fleet)? Take(Guid id, bool unverifiedRegistration = false)
+    (string Principal, string Request, string Key)? Take(Guid id)
     {
-        lock (unconfirmed)
-        {
-            if (!unconfirmed.TryGetValue(id, out var p) || unverifiedRegistration && p.Fleet is not null) { return null; }
-            unconfirmed.Remove(id);
-            return p;
-        }
+        lock (unconfirmed) { return unconfirmed.Remove(id, out var p) ? p : null; }
     }
 
     static LaunchResult Told(LaunchRequestRecord r) => r.State switch

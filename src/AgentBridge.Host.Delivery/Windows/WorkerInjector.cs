@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Delivery.Copilot;
 
 namespace AgentBridge.Host.Delivery.Windows;
 
@@ -122,6 +123,55 @@ public sealed class WorkerInjector : IConsoleInjector
                     return new ConsoleWidth(null, $"the console could not be widened ({stage} error {code})", stage == "attach" && code is 6 or 31 or 87);
                 }
                 return new ConsoleWidth(null, $"the injector stopped before widening the console (exit 0x{process.ExitCode:X8})", false);
+            }
+        }
+        finally { One.Release(); }
+    }
+
+    internal async Task<string?> CaptureIdentityAsync(int processId, DateTimeOffset createdAt, CancellationToken cancellationToken = default)
+    {
+        await One.WaitAsync(cancellationToken);
+        try
+        {
+            var start = new ProcessStartInfo(path)
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
+            start.ArgumentList.Add("--identity");
+            start.ArgumentList.Add(createdAt.ToFileTime().ToString(CultureInfo.InvariantCulture));
+            Process? process;
+            try { process = ProcessLaunch.Start(start); }
+            catch (Exception e) { CouldNotStart(processId, e); return null; }
+            if (process is null) { log(NotStarted); return null; }
+            using (process)
+            {
+                process.StandardInput.Close();
+                var errors = process.StandardError.ReadToEndAsync();
+                using var patience = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                patience.CancelAfter(TimeSpan.FromSeconds(10));
+                try
+                {
+                    var output = await process.StandardOutput.ReadToEndAsync(patience.Token);
+                    await process.WaitForExitAsync(patience.Token);
+                    await errors;
+                    var rows = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    if (process.ExitCode == 0 && rows is [var identity, "ok"]
+                        && QueueTarget.Decode(identity) is { } target && target.ProcessId == processId
+                        && target.StartedAt == createdAt.ToFileTime() && target.InjectorPath == Path.GetFullPath(path)) { return identity; }
+                    log("the injector could not capture the bound target identity");
+                    return null;
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(); } catch (InvalidOperationException) { }
+                    await process.WaitForExitAsync();
+                    await errors;
+                    log("the injector identity capture was cancelled or timed out");
+                    return null;
+                }
             }
         }
         finally { One.Release(); }

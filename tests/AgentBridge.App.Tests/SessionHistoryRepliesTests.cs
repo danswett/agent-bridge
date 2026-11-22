@@ -55,6 +55,45 @@ public sealed class SessionHistoryRepliesTests
     };
 
     [Fact]
+    public async Task Finished_history_parts_replace_live_slots_by_identity_including_an_answer_present_when_opening()
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        await using var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        var first = Snapshot("owner", "Question", "Same answer", "owner");
+        first = first with { Activity = first.Activity with { ResponseId = "first" } };
+        var card = Card(connection, first);
+        try
+        {
+            _ = card.Stored;
+            card.Update(first with { Activity = first.Activity with { ResponseId = "second" } });
+            var parts = new[] { "first", "second" }.Select(id => new HistoryPart
+            {
+                Id = id, Kind = HistoryPartKind.Response, Text = "Same answer", At = T0,
+            }).ToArray();
+            host.On(HistoryProtocol.Op, (JsonElement _) => new HistoryResult
+            {
+                Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = parts }],
+            });
+            await card.Stored!.LoadNewestAsync();
+            card.Update(card.Session);
+            Assert.Equal("Same answer\n\nSame answer", card.Response);
+            Assert.Equal(["first", "second"], card.Stored.Turns.Single().Parts.Select(p => p.Id));
+            Assert.All(card.Stored.Turns.Single().Parts, p => Assert.Equal(T0, p.At));
+            card.Update(card.Session with { Activity = card.Session.Activity with { Response = "Stale partial", ResponseTruncated = true } });
+            Assert.Equal("Same answer\n\nSame answer", card.Response);
+            host.On(HistoryProtocol.Op, (JsonElement _) => new HistoryResult
+            {
+                Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = [parts[0]] }],
+            });
+            await card.Stored.LoadNewestAsync();
+            Assert.Equal("Same answer\n\nSame answer", card.Response);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Fact]
     public async Task A_notification_turn_that_ran_before_the_owners_queued_answer_leaves_each_reply_under_its_own_prompt()
     {
         await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
