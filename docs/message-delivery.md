@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: slice 2a lane scheduler core (host-only, fake-tested, unwired); slice 2b key/capability/ack/replay pending, 2026-11-21 PT. Inputs: #2568
+Status: slice 2b2b host-only adapter source; live wiring/shared-store acceptance held, 2026-11-22 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -107,6 +107,18 @@ Slice 2 is split: **2a** is the inert host-only lane scheduler, overflow notices
 sequence reservation/high-water recovery; **2b1** supplies submit keys (`none`, `Enter`, `Queue`,
 ctrl+q VK `Q` left-ctrl) and the per-terminal capability table; **2b2** owns production
 offer/query by UUID, final fenced/flushed handoff, truthful states and restart classification/replay.
+Engineering split 2b2 into P2-only **2b2a** and the host-only adapter **2b2b**, each <=400 WHOLE.
+2b2b adds no entry point or second scheduler: trusted ingress must resolve the live target and sender,
+then call `Offer(UUID, target, DeliverySender, body, capturedFence)` / `Query(UUID, target, sender)`.
+Set `Dispatch` to ReplyService's callback on that same scheduler/gate; `DeliverNextAsync` holds
+only lifecycle admission, not ReplyService's claim/typing slot. Its host-only `HandoffText` calls
+`ReserveHandoff` in the final fenced typing path and returns the canonical flushed header/frame;
+flush failure sends zero keys. Owner urgent may steer a known working empty box; agents wait idle.
+The host owns memory-only pending payloads; no shared-store adapter means never `Queued`.
+Node loss drops never-handed-off pending metadata; prior handoff stays `Unconfirmed`, never resubmitted.
+Known UUIDs bind sender class/id, target and canonical body; re-offers neither renew authority nor
+promote `Typed`/uncertainty. Post-key journal failure atomically freezes further admission.
+State stays node-bound injector evidence; protected cross-node recoverable payloads remain held.
 The dispatcher must not hold ReplyService's shared claim/typing slot across its callback.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
@@ -194,7 +206,8 @@ uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing 
 | 1 | `DeliveryEnvelope`, `n`, `at`, escape, authenticated `from` end to end, journal writer (**moved earlier**: every later drop needs it) | ~180 | after acceptance, #2574 |
 | 2a | Host-only lane scheduler, bounds, reserved `seq` and high-water recovery, idle/empty-box gate, shared `DeliveryGate`; fake-only, unwired plain child of slice 1 | <=400 | after 1 |
 | 2b1 | Submit key (`none`/`Enter`/`Queue`, ctrl+q VK `Q` left-ctrl), default-Unknown per-terminal capability table; no production scheduler wiring or live qualification | <=400 | after 2a |
-| 2b2 | Production offer/query by UUID, canonical pre-key flushed handoff, callback without ReplyService gate reentry, truthful states and UUID replay; accepted `queued` only once the shared store exists | <=400 | plain child of pushed 2b1 |
+| 2b2a | Queue write evidence and explicit Submit compatibility, [#3681](https://github.com/danswett/agent-bridge/issues/3681) P2s only | <=400 | plain child of pushed 2b1 |
+| 2b2b | Host-only offer/query/Dispatch, canonical pre-key handoff, truthful UUID replay; unwired, no shared store means pending only | <=400 | plain child of pushed 2b2a |
 | 3 | Priority authority, `reply-session.ps1 -Priority -Reason`, per-principal quota, journaled grants | ~130 | after 2 |
 | 4 | Topic, TTL, summary line, confirmation by id, gap detector, bounded retry; over 250: 4b takes confirmation and retry | ~200 | after 3 |
 ## Live test (SRE Lead, disposable sessions; builder's harness): 1, 3, 4, 5 after slice 2; 2 after 4

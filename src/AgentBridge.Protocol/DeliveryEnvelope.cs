@@ -34,7 +34,7 @@ public static class DeliveryEnvelope
             }
             else if (Rune.GetUnicodeCategory(rune) != UnicodeCategory.Control) { body.Append(rune); }
         }
-        var words = Marker.Replace(body.ToString().TrimEnd(), m => "(" + m.Value[1..]);
+        var words = Marker.Replace(body.ToString().TrimEnd().Normalize(NormalizationForm.FormKC), m => "(" + m.Value[1..]);
         var at = TimeZoneInfo.ConvertTime(header.At, Pacific);
         at = new DateTimeOffset(at.Ticks - at.Ticks % TimeSpan.TicksPerSecond, at.Offset);
         return (header with { At = at, N = words.Length }, words);
