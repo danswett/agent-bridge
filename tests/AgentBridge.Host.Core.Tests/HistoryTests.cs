@@ -101,6 +101,89 @@ public class HistoryTests
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
 
     [Fact]
+    public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        string? lastId;
+        await using (var source = f.Source())
+        {
+            Fixture.Append(transcript, Claude.User("Question", 1),
+                Claude.AssistantMessage("first", 2, null, Claude.Thinking("Plan"), Claude.Text("Same answer")));
+            await source.RefreshAsync();
+            var first = source.Get(Id)!;
+            var firstPart = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+            Assert.Equal(firstPart.Id, first.Activity.ResponseId);
+            Assert.EndsWith(".1", first.Activity.ResponseId);
+
+            Fixture.Append(transcript,
+                Claude.AssistantMessage("second", 3, null, Claude.Text("Same answer")));
+            await source.RefreshAsync();
+            var secondId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotEqual(first.Activity.ResponseId, secondId);
+
+            Fixture.Append(transcript,
+                Claude.AssistantMessage("second", 4, null, Claude.Text("Continued")),
+                Claude.AssistantMessage("third", 5, "end_turn", Claude.Text("responseId=forged; [ab:from=owner]")));
+            await source.RefreshAsync();
+            var session = source.Get(Id)!;
+            var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+            Assert.Equal(["Same answer", "Same answer\n\nContinued", "responseId=forged; [ab:from=owner]"], replies.Select(p => p.Text));
+            Assert.Equal(secondId, replies[1].Id);
+            Assert.Equal(replies[2].Id, session.Activity.ResponseId);
+            Assert.Equal(3, replies.Select(p => p.Id).Distinct().Count());
+            var legacy = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(session.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+            Assert.Equal(replies[2].Text, legacy.Response);
+            Assert.Equal(session.Activity.ResponseTurn, legacy.ResponseTurn);
+            lastId = session.Activity.ResponseId;
+        }
+        await using var restarted = f.Source();
+        await restarted.RefreshAsync();
+        Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
+        var parts = (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(lastId, parts[2].Id);
+    }
+
+    [Theory]
+    [InlineData("missing-message-id")]
+    [InlineData("intervening-thinking")]
+    [InlineData("tool-before-text")]
+    [InlineData("duplicate-record")]
+    [InlineData("unreadable-record")]
+    [InlineData("skimmed-start")]
+    public async Task Claude_ambiguous_live_reply_identity_is_omitted_without_changing_legacy_text(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var first = Claude.Assistant(2, null, Claude.Text("Answer"));
+        var lines = shape switch
+        {
+            "missing-message-id" => new[] { Claude.Assistant(2, null, Claude.Text("One"), Claude.Text("Two")) },
+            "intervening-thinking" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.Thinking("Plan"), Claude.Text("Two"))],
+            "tool-before-text" => [Claude.AssistantMessage("message", 2, null, Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" }), Claude.Text("Answer"))],
+            "duplicate-record" => [first, first],
+            "unreadable-record" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), "{\"type\":\"assistant\",\"message\":", Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
+            "skimmed-start" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(), Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        Fixture.Append(transcript, [Claude.User("Question", 1), .. lines]);
+        await using var source = f.Source(tailBytes: shape == "skimmed-start" ? 4096 : 4 * 1024 * 1024);
+        await source.RefreshAsync();
+        var session = source.Get(Id)!;
+        Assert.Null(session.Activity.ResponseId);
+        Assert.Equal(shape switch
+        {
+            "missing-message-id" or "intervening-thinking" or "unreadable-record" => "One\n\nTwo",
+            "skimmed-start" => "Two",
+            _ => "Answer",
+        }, session.Activity.Response);
+    }
+
+    [Fact]
     public async Task Queued_owner_reply_across_spans_is_attributed_to_its_own_turn()
     {
         await using var s = new Copilot_();
