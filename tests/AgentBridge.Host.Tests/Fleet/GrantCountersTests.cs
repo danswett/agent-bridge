@@ -12,7 +12,13 @@ public sealed class GrantCountersTests : IDisposable
     const string Device = "0123456789abcdef0123456789abcdef";
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
-    GrantStore Store(Action<string, byte[]>? write = null) => new(Folder, key, new(Folder, clock), Scope, clock, write);
+    AgentAuditLog Audit => new(Folder, clock) { DeviceKey = key };
+    bool rotated;
+    GrantStore Store(Action<string, byte[]>? write = null)
+    {
+        if (!rotated) { Assert.Null(AuditRotationTests.Rotate(Audit, key, clock.GetUtcNow())); rotated = true; }
+        return new(Folder, key, Audit, Scope, clock, write);
+    }
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);
     GrantDocument Issue(GrantCaps caps)
     {
@@ -245,7 +251,8 @@ public sealed class GrantCountersTests : IDisposable
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
-        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
+        var store = new GrantStore(Folder, key,
+            new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))) { DeviceKey = key }, Scope, clock);
         Assert.True(store.Revoke(grant.Id, 1).Usable);
     }
 
