@@ -66,9 +66,11 @@ public sealed class GrantStoreTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Tampering_an_adopted_gated_prefix_count_to_zero_refuses(bool launch)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Tampering_an_adopted_gated_prefix_count_to_zero_refuses(bool launch, bool empty)
     {
         var grant = Grant();
         Assert.True(Open().Issue(grant).Usable);
@@ -88,6 +90,7 @@ public sealed class GrantStoreTests : IDisposable
         var json = JsonNode.Parse(File.ReadAllText(head))!;
         Assert.True(json["adoptedGatedRows"]!.GetValue<long>() > 0);
         json["adoptedGatedRows"] = 0;
+        if (empty) { json["adoptedPrefix"] = JsonNode.Parse("""{"root":"","rootSha256":"","tail":"","tailSha256":"","length":0,"sequence":0,"empty":true}"""); }
         File.WriteAllText(head, json.ToJsonString());
         if (launch)
         {

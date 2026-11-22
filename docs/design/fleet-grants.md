@@ -10,6 +10,11 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
+Legacy-only adoption requires file-backed proof of zero adopted gated rows.
+An empty adoption sentinel is accepted only when the surviving audit files and
+head have no gated or grant history; the head's zero count alone is not proof.
+Legacy retention preserves a hashed file boundary before newer gated rows,
+never an empty sentinel that could hide adopted issuance or revocation.
 
 ## Authority and existing boundaries
 

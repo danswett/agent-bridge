@@ -189,7 +189,19 @@ public sealed class AgentAuditLog
 
     void Bootstrap(string folder)
     {
-        if (HasHeads(folder)) { return; }
+        if (HasHeads(folder))
+        {
+            foreach (var launch in new[] { false, true })
+            {
+                if (ReadHead(folder, launch) is not { Adopted: true, AdoptedPrefix.Empty: true } head) { continue; }
+                if (!AdoptionProofMatches(folder, launch, head, out var count) || count != 0)
+                { throw new IOException("empty adoption proof contradicts audit evidence"); }
+                var actual = CaptureHead(folder, launch);
+                SaveHead(folder, launch, head with { AdoptedPrefix =
+                    new(actual.Root, actual.RootSha256, actual.Tail, actual.TailSha256, actual.Length, 0) });
+            }
+            return;
+        }
         var streams = new[] { false, true }.Where(launch => Files(folder, launch).Any()).ToArray();
         var candidates = new List<(bool Launch, string Fault)>();
         foreach (var launch in streams)
@@ -291,18 +303,38 @@ public sealed class AgentAuditLog
         {
             var head = ReadHead(folder, launch);
             if (head?.Adopted != true) { continue; }
-            if (head.AdoptedGatedRows is null || head.AdoptedPrefix is not { } prefix
-                || !TryCountAdoptedRows(folder, launch, prefix, out var count)
-                || count != head.AdoptedGatedRows || count != 0) { return false; }
+            if (!AdoptionProofMatches(folder, launch, head, out var count) || count != 0) { return false; }
         }
         return true;
+    }
+    static bool AdoptionProofMatches(string folder, bool launch, Head head, out long count)
+    {
+        count = 0;
+        return head.AdoptedGatedRows is { } expected && head.AdoptedPrefix is { } prefix
+            && TryCountAdoptedRows(folder, launch, prefix, out count) && count == expected;
     }
     static bool TryCountAdoptedRows(string folder, bool launch, AdoptionPrefix prefix, out long count)
     {
         count = 0;
         try
         {
-            if (prefix.Empty) { return prefix is { Root: "", RootSha256: "", Tail: "", TailSha256: "", Length: 0, Sequence: 0 }; }
+            if (prefix.Empty)
+            {
+                if (prefix is not { Root: "", RootSha256: "", Tail: "", TailSha256: "", Length: 0, Sequence: 0 }) { return false; }
+                // Empty is a claim about all surviving files, not an alternative to checking them.
+                foreach (var stream in new[] { false, true })
+                {
+                    var head = ReadHead(folder, stream);
+                    if (head is { Sequence: > 0 } or { RetainedThrough: > 0 } or { AdoptedGatedRows: > 0 }
+                        or { AdoptedPrefix.Sequence: > 0 }) { return false; }
+                    if (!Files(folder, stream).Any()) { if (head is not null) { return false; } continue; }
+                    var actual = CaptureHead(folder, stream);
+                    if (!TryCountAdoptedRows(folder, stream,
+                        new(actual.Root, actual.RootSha256, actual.Tail, actual.TailSha256, actual.Length, 0), out var found)
+                        || found != 0) { return false; }
+                }
+                return true;
+            }
             var files = Files(folder, launch).Where(f => StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Root) >= 0
                 && StringComparer.Ordinal.Compare(Path.GetFileName(f), prefix.Tail) <= 0).ToArray();
             if (files.Length == 0 || Path.GetFileName(files[0]) != prefix.Root || Path.GetFileName(files[^1]) != prefix.Tail
@@ -323,6 +355,9 @@ public sealed class AgentAuditLog
                     stream.Position = start; stream.ReadExactly(bytes); end = start;
                     using var doc = JsonDocument.Parse(bytes);
                     if (doc.RootElement.ValueKind != JsonValueKind.Object) { throw new IOException("invalid adopted audit row"); }
+                    if (doc.RootElement.TryGetProperty("action", out var action) && action.GetString() is "grant.issue" or "grant.revoke"
+                        && (!doc.RootElement.TryGetProperty("gate", out var grantGate) || grantGate.ValueKind == JsonValueKind.Null))
+                    { throw new IOException("unproven adopted grant history"); }
                     if (doc.RootElement.TryGetProperty("gate", out var metadata) && metadata.ValueKind != JsonValueKind.Null)
                     {
                         if (metadata.ValueKind != JsonValueKind.Object || !metadata.TryGetProperty("sequence", out var field)
@@ -345,7 +380,9 @@ public sealed class AgentAuditLog
         if (!TryCountAdoptedRows(folder, false, prefix, out var count) || count != head.AdoptedGatedRows) { return null; }
         // A positive bootstrap count is never cleared, even after its evidence is retired.
         if (count != 0) { return prefix; }
-        return prefix.Root == prefix.Tail ? new("", "", "", "", 0, 0, Empty: true)
+        // Keep a file-backed boundary before newer gated rows instead of claiming an empty history.
+        return prefix.Root == prefix.Tail ? new(next, nextHash, next, nextHash,
+                Encoding.UTF8.GetByteCount(File.ReadLines(Path.Combine(folder, next)).First()) + 1L, 0)
             : prefix with { Root = next, RootSha256 = nextHash };
     }
     static Head CaptureHead(string folder, bool launch, string? retiringRoot = null)
