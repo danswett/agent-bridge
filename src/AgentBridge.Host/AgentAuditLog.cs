@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Host.Delivery.Staging;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
@@ -37,7 +38,7 @@ internal sealed record AuditLockTiming(Func<long> TickCount, Action Wait);
 // returns false and never throws, and the caller must then refuse the action it was auditing
 // and release any slot. A failure (read-only folder, disk full) is said once in the host log and
 // the next success says it recovered. agent.send appends before dispatch (#1985).
-public sealed class AgentAuditLog
+public sealed partial class AgentAuditLog
 {
     public const string FolderName = "audit";
     public const int KeepDays = 30;
@@ -95,6 +96,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
+                Resume(folder);
                 if (entry.Gate is not null) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
@@ -168,7 +170,7 @@ public sealed class AgentAuditLog
 
     public (bool Intact, bool LegacyPrefix) Verify(bool launch = false)
     {
-        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true); }
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: true, key: DeviceKey); }
     }
 
     internal bool Bootstrap()
@@ -179,6 +181,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var held = Lock(folder);
+                Resume(folder);
                 Bootstrap(folder);
             }
             return true;
@@ -213,7 +216,7 @@ public sealed class AgentAuditLog
     }
 
     static (bool Intact, bool LegacyPrefix) VerifyProfile(string profile, bool launch, Action<string> log,
-        bool synchronize = false, bool chainOnly = false)
+        bool synchronize = false, bool chainOnly = false, P256KeyPair? key = null)
     {
         var legacy = false;
         try
@@ -237,6 +240,9 @@ public sealed class AgentAuditLog
                         if (doc is null) { if (fragment) { return (false, legacy); } fragment = true; continue; }
                         if (reader.Read() || reader.BytesConsumed != Encoding.UTF8.GetByteCount(raw)) { return (false, legacy); }
                         var root = doc.RootElement;
+                        // A genesis is only ever the stream's first record, and a full verify needs its signature.
+                        if (root.TryGetProperty("rotation", out _) && (previous is not null
+                            || !chainOnly && (key is null || GenesisOf(folder, launch, key, retired: true) is null))) { return (false, legacy); }
                         if (root.TryGetProperty("gate", out var metadata) && metadata.ValueKind != JsonValueKind.Null) { gated = true; }
                         if (!root.TryGetProperty("v", out var version))
                         {

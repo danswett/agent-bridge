@@ -6,7 +6,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host.Fleet.Grants;
 
-public enum GrantStoreProblem { None, Missing, Unreadable, Oversize, BadMac, Version, Malformed, AuditIncomplete, Generation, WriteFailed, NotFound, Revoked, NotYetValid, Expired }
+public enum GrantStoreProblem { None, Missing, Unreadable, Oversize, BadMac, Version, Malformed, AuditIncomplete, Generation, WriteFailed, NotFound, Revoked, NotYetValid, Expired, RotationRequired }
 public sealed record GrantStoreResult(GrantStoreProblem Problem, GrantDocument? Grant = null)
 {
     public bool Usable => Problem == GrantStoreProblem.None;
@@ -106,6 +106,7 @@ public sealed class GrantStore
             return audit.Append(entry with { Outcome = GateAuditProjection.SuccessFor(intent.Action)!,
                 Gate = metadata with { Phase = "terminal" } }) ? result : new(failure = GrantStoreProblem.WriteFailed);
         }
+        catch (StoreFault e) when (e.Problem == GrantStoreProblem.RotationRequired) { return new(e.Problem); }
         catch (StoreFault e) { return new(failure = e.Problem); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         { return new(failure = GrantStoreProblem.Unreadable); }
@@ -140,6 +141,10 @@ public sealed class GrantStore
         long retained = 0;
         var adopted = false;
         var (rows, complete) = GateAuditProjection.Load(folder, boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        // Heads never prove a cutoff: grants need both streams to start with one verified person-signed genesis. Only a
+        // profile with no grant history can still rotate; for any other, a lost genesis is lost evidence.
+        if (AgentAuditLog.Rotation(folder, key) is null) { throw new StoreFault(body is null && retained == 0
+            && !rows.Any(r => r.Action is "grant.issue" or "grant.revoke") ? GrantStoreProblem.RotationRequired : GrantStoreProblem.AuditIncomplete); }
         // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
         if (!complete || adopted || retained > 0 || !audit.Verify().Intact || !audit.Verify(launch: true).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())

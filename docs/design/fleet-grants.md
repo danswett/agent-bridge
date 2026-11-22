@@ -10,14 +10,26 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
-Adopted audit history fails closed for grants: any adopted stream refuses with AuditIncomplete.
-Bootstrap adopts existing files whenever no head exists, including after an attacker
-deletes a head over rolled-back store and audit files. Heads are never trusted to prove a
-legacy-only cutoff, and nothing else tamper-evident proves one, so no cutoff claim is accepted.
-No migration: grants are unshipped. A legacy profile's first Issue adopts it; that grant and all
-later grant use refuse. Native launch/stop gates and the launch preflight are unaffected.
-Residual (pre-existing): rolling back store, audit and heads together, or clearing a head's
-`adopted` flag, is undetectable without a keyed or external anchor.
+Grants require ONE person-signed audit rotation per VM (#3566); no cutoff is inferred and heads are never trusted.
+- Command: a `SignedCommands` body, action `audit.rotate`, UUID request (nonce), issue/expiry time and this
+  machine, whose args give each active stream's (agents, launches) length, SHA-256 and `TailHash` chain tail.
+  The MAC proves a device, not a person (docs/design/agent-principals.md §2), so only a `user` principal whose
+  device is pinned here as a person's, never this machine's own key, may rotate; an agent, script or relay kind cannot.
+- Rotate: the signed values must equal the active files now (else "press again"); grant history (store file or
+  `grant.*` rows) refuses, so budgets, revocations and tombstones are never reset. Each stream moves to
+  `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first record is a genesis: `previousSha256` = the
+  signed tail plus `rotation` {retired name, length, SHA-256, signed command}. New heads are not adopted.
+- Verify: a genesis is only ever a stream's first record and its MAC verifies, as of its issue time, with this
+  device key; a retired file still present must match its length and SHA-256. A missing one is accepted:
+  grants never read retired history. Grants need both streams bound to one genesis, plus the existing adopted,
+  retained, chain and sequence checks; otherwise a profile with no grant history is `RotationRequired`
+  ("rotation-required") and any other is AuditIncomplete.
+- Crash safety: `audit/rotation.pending` journals the command first; every later audit write or bootstrap
+  finishes that rotation, reusing a matching retired file, or refuses. A same-request retry is a no-op.
+- Native launch/stop gates and the launch preflight work before and after; gate sequences restart at 1.
+Residuals: rolling back every file (store, streams, heads) to a post-rotation point still needs the keyed or
+external anchor (#3569); the designated-verifier MAC means this device key could compute a genesis; retention
+pruning the genesis day refuses grants; an operation in flight across the rotation stays unresolved.
 
 ## Authority and existing boundaries
 
