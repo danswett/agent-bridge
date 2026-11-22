@@ -20,7 +20,9 @@ public sealed class StandaloneHooks(
     const string Marketplace = "agent-bridge";
     static readonly JsonSerializerOptions Pretty = new() { WriteIndented = true };
     string HookFolder => Path.Combine(profile, "hooks");
-    string Hook => Path.Combine(HookFolder, "agent-bridge-host-hook.exe");
+    // Set by Preflight, which every install and removal runs first.
+    MigrationRecord.HookRecord? adopted;
+    string Hook => adopted?.Path ?? Path.Combine(HookFolder, "agent-bridge-host-hook.exe");
     string Runtime => Path.Combine(profile, "runtime");
     string CodexMarketplace => Path.Combine(HookFolder, "codex");
     string Instructions(string agent) => agent switch
@@ -99,18 +101,21 @@ public sealed class StandaloneHooks(
             throw new InvalidOperationException("Agents require separate instruction files; shared targets cannot be safely installed or removed.");
         }
         if (active() is { } why) { throw new InvalidOperationException($"agent-ha-bridge is active or cannot be checked ({why}); use Migrate instead"); }
-        // Even a stopped legacy install must go through its reversible migration, not
-        // acquire a second set of hooks when its task next starts.
-        if (Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
         var (state, problem) = IntakeState.Load(profile);
+        // A profile migrate completed may add Codex (#3648): its retained legacy root is the
+        // rollback copy, not fresh state. Any other profile with a legacy root, even a stopped
+        // one, must go through its reversible migration, not acquire a second set of hooks.
+        adopted = agent == "codex" && problem is null ? Migrated(state) : null;
+        if (adopted is null && Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
         if (problem is not null) { throw new InvalidOperationException(problem); }
-        if (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName)))
+        if (adopted is null && (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName))))
         {
             throw new InvalidOperationException("this profile belongs to a migration; use migration status or rollback");
         }
+        // A migrated profile keeps the runtime and bridge home migrate wrote; only the homes must agree.
         if (state is not null && (state.Homes is not { } saved || !Same(saved.Copilot, homes.Copilot)
             || !Same(saved.Claude, homes.Claude) || !Same(saved.Codex, homes.Codex)
-            || !Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))
+            || (adopted is null && (!Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))))
         {
             throw new InvalidOperationException("this profile already uses different agent homes or a different runtime");
         }
@@ -125,18 +130,20 @@ public sealed class StandaloneHooks(
         }
         else if (removing) { throw new InvalidOperationException($"{agent} has no hook registration owned by this profile"); }
         if (!removing && !File.Exists(hookSource)) { throw new FileNotFoundException("The native hook is missing beside the host; reinstall the app.", hookSource); }
+        // Migrate re-pointed the other agents' registrations; they are not this Codex add's concern.
         foreach (var path in new[] { Path.Combine(homes.Copilot, "hooks", "decision-notifier.json"), Path.Combine(homes.Claude, "ha-bridge"),
             Path.Combine(homes.Codex, "agent-ha-bridge-owner.json"),
-            Path.Combine(homes.Copilot, "instructions", "agent-ha-bridge.instructions.md") })
+            Path.Combine(homes.Copilot, "instructions", "agent-ha-bridge.instructions.md") }.Where(p => adopted is null || Same(Path.GetDirectoryName(p)!, homes.Codex)))
         {
             if (File.Exists(path) || Directory.Exists(path)) { throw new InvalidOperationException($"{path} is a legacy registration; use Migrate"); }
         }
-        foreach (var path in new[] { Instructions("claude"), Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") })
+        foreach (var path in adopted is null ? new[] { Instructions("claude"), Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") }
+            : new[] { Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") })
         {
             ManagedInstructions.CheckLegacy(path);
         }
         var claudeSettings = Path.Combine(homes.Claude, "settings.json");
-        if (File.Exists(claudeSettings))
+        if (adopted is null && File.Exists(claudeSettings))
         {
             var claudeOwner = Path.Combine(homes.Claude, OwnerFile);
             var record = File.Exists(claudeOwner) ? Read(claudeOwner) : null;
@@ -147,6 +154,23 @@ public sealed class StandaloneHooks(
                 throw new InvalidOperationException($"{claudeSettings} retains legacy or unowned bridge commands; use Migrate or inspect the registrations; it was left alone");
             }
         }
+    }
+
+    // The migrated profile's hook, when migrate finished and nothing else is half-done; null for
+    // every other profile (fresh, mid-migration, rolled back or unreadable), which keep refusing.
+    MigrationRecord.HookRecord? Migrated(IntakeState? state) =>
+        state is { Standalone: false, Homes: not null } && MigrationRecord.Load(profile) is ({ State: "migrated", Hook: { } hook }, null)
+            && Path.IsPathFullyQualified(hook.Path) ? hook : null;
+
+    // Migrate's hook keeps its own pointer at the runtime migrate chose, so a migrated profile only
+    // brings the hook up to this version, by the same recoverable swap migrate uses, and never
+    // writes a pointer of its own (that would be a second runtime).
+    void RefreshHook()
+    {
+        if (adopted is null) { RefreshFiles(profile, hookSource); return; }
+        Directory.CreateDirectory(Path.GetDirectoryName(adopted.Path)!);
+        Migrator.RecoverHook(adopted.Path);
+        if (MigrationRecord.Hash(adopted.Path) != MigrationRecord.Hash(hookSource)) { Migrator.CopyHook(hookSource, adopted.Path); }
     }
 
     internal static bool Same(string left, string right) =>
@@ -244,7 +268,7 @@ public sealed class StandaloneHooks(
         // outlive a repair that fails below; readiness reports this record as incomplete.
         var incomplete = Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile });
         DurableFile.Replace(owner, incomplete, ownerBefore);
-        RefreshFiles(profile, hookSource);
+        RefreshHook();
         instructions.Apply(InstructionBackup(agent));
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
         else
@@ -253,21 +277,26 @@ public sealed class StandaloneHooks(
             if (!marketplacePresent) { await RunCodexAsync(executable, ["plugin", "marketplace", "add", CodexMarketplace], ct); }
             await RunCodexAsync(executable, ["plugin", "add", $"{Marketplace}@{Marketplace}"], ct);
         }
-        var (state, _) = IntakeState.Load(profile);
-        var savedState = state ?? new IntakeState(Runtime, profile, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow)
+        // A migrated profile's intake.json is migrate's and stays byte for byte as it wrote it.
+        if (adopted is null)
         {
-            Standalone = true, Homes = homes,
-        };
-        if (savedState.Homes is { ClaudeConfigDirExplicit: null } saved && homes.ClaudeConfigDirExplicit is { } explicitConfigDir)
-        {
-            savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
+            var (state, _) = IntakeState.Load(profile);
+            var savedState = state ?? new IntakeState(Runtime, profile, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow)
+            {
+                Standalone = true, Homes = homes,
+            };
+            if (savedState.Homes is { ClaudeConfigDirExplicit: null } saved && homes.ClaudeConfigDirExplicit is { } explicitConfigDir)
+            {
+                savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
+            }
+            savedState.Save(profile);
         }
-        savedState.Save(profile);
         // Only now, after registrations, the Codex plugin and intake are all written, does the
         // record say setup completed. That is setup evidence, not proof that hooks run.
         DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile, ["setupCompleted"] = true }),
             MigrationRecord.Hash(incomplete));
-        output.WriteLine($"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks.");
+        output.WriteLine(adopted is null ? $"Registered. Restart the host from the {Product.App}, then start new agent sessions to load the hooks."
+            : "Registered on the migrated runtime; the host keeps running. Start new Codex sessions to load the hook.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }
 

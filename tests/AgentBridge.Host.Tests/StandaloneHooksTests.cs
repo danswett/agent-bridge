@@ -1611,6 +1611,103 @@ public sealed class StandaloneHooksTests : IDisposable
         public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => [];
     }
 
+    // What migrate leaves: the legacy root kept for rollback, intake.json on the legacy runtime,
+    // and the hook and pointer migrate installed (not this profile's own hooks folder).
+    string MigratedHook => Path.Combine(root, "bin", "legacy", "agent-bridge-host-hook.exe");
+    string MigratedPointer => Path.Combine(Path.GetDirectoryName(MigratedHook)!, HookRunner.PointerFile);
+    void Migrate(string? hook = null)
+    {
+        hook ??= MigratedHook;
+        Directory.CreateDirectory(Legacy);
+        new IntakeState(Path.Combine(Legacy, "runtime"), Legacy, "legacy", DateTimeOffset.UtcNow) { Homes = Homes }.Save(Profile);
+        Write(hook, "migrated hook");
+        Write(MigratedPointer, "migrated pointer");
+        new MigrationRecord { InstallationId = "legacy", BridgeHome = Legacy, State = "migrated", Hook = new(hook, MigratedPointer, true, true) }.Save(Profile);
+    }
+
+    [Fact]
+    public async Task Codex_is_added_to_a_migrated_profile_on_its_migrated_runtime_and_is_idempotent()
+    {
+        Migrate();
+        var intake = File.ReadAllBytes(Path.Combine(Profile, IntakeState.FileName));
+        var record = File.ReadAllBytes(MigrationRecord.PathIn(Profile));
+        var pointer = File.ReadAllBytes(MigratedPointer);
+        var legacy = Listing().Where(l => l.StartsWith(Legacy, StringComparison.Ordinal)).ToArray();
+
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        var once = Listing();
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+
+        Assert.Equal(once, Listing());
+        Assert.Equal(intake, File.ReadAllBytes(Path.Combine(Profile, IntakeState.FileName)));
+        Assert.Equal(record, File.ReadAllBytes(MigrationRecord.PathIn(Profile)));
+        Assert.Equal(pointer, File.ReadAllBytes(MigratedPointer));
+        Assert.Equal(legacy, Listing().Where(l => l.StartsWith(Legacy, StringComparison.Ordinal)).ToArray());
+        Assert.Equal("native hook fixture", File.ReadAllText(MigratedHook));
+        Assert.False(Directory.Exists(Path.Combine(Profile, "runtime")));
+        Assert.False(File.Exists(Hook));
+        Assert.Contains("agent-bridge-host-hook.exe", File.ReadAllText(Registration("codex")));
+        Assert.True(File.Exists(Owner("codex")));
+    }
+
+    [Fact]
+    public async Task Removing_Codex_from_a_migrated_profile_reverses_only_that_registration()
+    {
+        Migrate();
+        var intake = File.ReadAllBytes(Path.Combine(Profile, IntakeState.FileName));
+        var record = File.ReadAllBytes(MigrationRecord.PathIn(Profile));
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+
+        Assert.False(File.Exists(Owner("codex")));
+        Assert.Equal(intake, File.ReadAllBytes(Path.Combine(Profile, IntakeState.FileName)));
+        Assert.Equal(record, File.ReadAllBytes(MigrationRecord.PathIn(Profile)));
+        Assert.True(File.Exists(MigratedHook));
+        Assert.True(File.Exists(MigratedPointer));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task A_migrated_profile_still_refuses_to_add_the_other_agents_here(string agent)
+    {
+        Migrate();
+        var before = Listing();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("marketplace")]
+    [InlineData("foreign-owner")]
+    [InlineData("unreadable-list")]
+    [InlineData("space")]
+    [InlineData("active")]
+    public async Task A_migrated_profile_keeps_the_codex_refusals_without_mutation(string reason)
+    {
+        Migrate(reason == "space" ? Path.Combine(root, "with space", "hook.exe") : null);
+        switch (reason)
+        {
+            case "marketplace": Directory.CreateDirectory(Homes.Codex); codex.LegacyMarketplace = "agent-ha-bridge"; break;
+            case "foreign-owner": Write(Owner("codex"), new JsonObject { ["version"] = 1, ["profile"] = Path.Combine(root, "other") }.ToJsonString()); break;
+            case "unreadable-list": Directory.CreateDirectory(Homes.Codex); codex.FailListing = true; break;
+            case "active": active = "probe could not check"; break;
+        }
+        var before = Listing();
+        await Assert.ThrowsAnyAsync<Exception>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task An_unmigrated_profile_with_a_legacy_root_still_refuses_Codex()
+    {
+        Directory.CreateDirectory(Legacy);
+        var before = Listing();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
     sealed class CodexRunner : ICommandRunner
     {
         public string Root = "";

@@ -184,6 +184,12 @@ anything back: a link made there since the migration refuses the whole rollback,
 rolled back and `migration.json` and the snapshot kept, naming the link and the snapshot copy
 to put back by hand if it cannot be made a plain folder or file again.
 
+Migration only re-points Codex registrations that already exist. A migrated profile with no
+Codex registration can add one afterwards (Settings > Agents Set up or Repair, or `hooks install
+codex`, #3648): it registers the `agent-bridge` plugin in the Codex home with migrate's own hook,
+leaves `intake.json` and the migrated runtime alone, and is not in `migration.json`, so a
+rollback does not undo it (Remove connection does). The Codex trust prompt is still the owner's to approve.
+
 A rehearsal baseline (`agent-bridge-rehearsal baseline save`) hashes these cached copies too,
 in the Codex home (and Copilot and Claude homes) agent-ha-bridge's `installation.json` records,
 which are the ones a migration rewrites, whatever `CODEX_HOME` or `--home` says. A record that
