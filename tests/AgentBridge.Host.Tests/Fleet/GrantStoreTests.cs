@@ -116,20 +116,24 @@ public sealed class GrantStoreTests : IDisposable
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
 
-    [Fact]
-    public void Retiring_an_adopted_positive_prefix_never_makes_it_usable()
+    [Theory]
+    [InlineData(false), InlineData(true)]
+    public void Retiring_an_adopted_prefix_refuses_grants_but_preserves_non_grant_gates(bool legacy)
     {
+        if (legacy) { Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent"))); }
         var grant = Grant();
         Assert.True(Open().Issue(grant).Usable);
         var head = Path.Combine(Folder, "audit", "agents.head");
-        File.Delete(head);
-        Assert.True(Audit.Bootstrap());
+        if (!legacy) { File.Delete(head); Assert.True(Audit.Bootstrap()); }
         clock.Advance(TimeSpan.FromDays(35));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         clock.Advance(TimeSpan.FromDays(1));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
-        Assert.True(JsonNode.Parse(File.ReadAllText(head))!["adoptedGatedRows"]!.GetValue<long>() > 0);
+        Assert.Equal(!legacy, JsonNode.Parse(File.ReadAllText(head))!["adoptedGatedRows"]!.GetValue<long>() > 0);
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
+        var op = Guid.NewGuid();
+        Assert.True(Audit.Append(new("local", op.ToString(), "person:local", [], "session.stop", op.ToString(), "reserved", Gate: new(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none"))));
+        Assert.True(Audit.Bootstrap());
     }
 
     [Theory]
