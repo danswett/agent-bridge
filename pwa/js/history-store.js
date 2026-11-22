@@ -55,6 +55,10 @@ function mergeParts(held, incoming) {
   }
   return parts;
 }
+function keepReplies(parts) {
+  const kept = new Set(parts.filter((p) => p.kind === 'response').slice(-50));
+  return parts.filter((p) => p.kind !== 'response' || kept.has(p));
+}
 const adopt = (page, held) => ({
   ...page, ...(held.live ? { live: held.live } : {}),
   parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts : mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text), page.parts),
@@ -156,7 +160,7 @@ export class HistoryStore {
     return {
       hostId, sessionId, turns: [], cursors: new Map(), before: null, start: null, endPartial: false, phase: 'idle', why: null,
       unsupported: false, loading: null, error: null, atLatest: true, latest: null, last: null, recovering: null, seen: false,
-      generation: 0, tail: Promise.resolve(), queued: {}, running: {}, revision: 0, noticeRecovery: null,
+      generation: 0, tail: Promise.resolve(), queued: {}, running: {}, revision: 0, noticeRecovery: null, revisions: new Map(),
     };
   }
 
@@ -228,13 +232,14 @@ export class HistoryStore {
     if (!e.seen && e.phase !== 'unavailable' && e.phase !== 'missing') { e.phase = 'loading'; }
     this.#emit(e, 'state');
     let result;
+    const started = e.revision;
     try { result = await this.#ask(client, e, null); } catch (err) {
       if (gen === e.generation) { this.#fail(e, 'newest', err.reason ?? err.message, err.fromHost === true); }
       return;
     }
     if (gen !== e.generation) { return; }
     if (result.stale) { this.#fail(e, 'newest', 'the machine called a request with no cursor stale', true); return; }
-    this.#land(e, result, 'newest');
+    this.#land(e, result, 'newest', started);
   }
 
   async #earlier(e, gen, keepLatest) {
@@ -246,6 +251,7 @@ export class HistoryStore {
     e.error = null;
     this.#emit(e, 'state');
     let cursor = e.before;
+    const started = e.revision;
     // Pages walked back from the newest after a stale cursor, newest first, until one shares a turn
     // with what is held (or the host serves nothing older): held turns are never dropped for a page
     // that is not known to follow them.
@@ -270,7 +276,7 @@ export class HistoryStore {
         pending.length = 0;
         continue;
       }
-      if (!result.turns) { this.#land(e, result, 'earlier'); return; }
+      if (!result.turns) { this.#land(e, result, 'earlier', started); return; }
       let oldest;
       if (collecting) {
         pending.push(result);
@@ -280,12 +286,12 @@ export class HistoryStore {
           this.#fail(e, 'earlier', 'history moved on before earlier messages could be loaded', false);
           return;
         }
-        oldest = this.#join(e, pending, reached);
+        oldest = this.#join(e, pending, reached, started);
         collecting = false;
         // Nothing held is within reach: what the host serves now takes its place.
         if (!reached) { e.recovering = null; break; }
       } else {
-        oldest = this.#page(e, result, 'earlier', keepLatest);
+        oldest = this.#page(e, result, 'earlier', keepLatest, started);
       }
       cursor = result.before;
       if (!e.recovering) { break; }
@@ -304,7 +310,7 @@ export class HistoryStore {
   }
 
   // A result that is not a page, or a page.
-  #land(e, result, kind) {
+  #land(e, result, kind, started = Infinity) {
     const before = e.turns;
     if (result.missing) {
       Object.assign(e, { loading: null, phase: 'missing' });
@@ -313,7 +319,7 @@ export class HistoryStore {
       Object.assign(e, { loading: null, phase: 'unavailable', why: result.unavailable, unsupported: false });
       this.#emit(e, 'state');
     } else {
-      this.#page(e, result, kind);
+      this.#page(e, result, kind, false, started);
       Object.assign(e, { loading: null, seen: true, phase: 'ready', why: null, unsupported: false, error: null });
       this.#emit(e, kind, before);
     }
@@ -323,7 +329,7 @@ export class HistoryStore {
   // where it belongs by the turns it shares with what is held; one that shares none is not known
   // to follow it, and takes its place (but for turns only activity has said, which are the newest).
   // Returns whether the page's own cursor (or its start) is the held turns' now.
-  #page(e, page, kind, keepLatest = false) {
+  #page(e, page, kind, keepLatest = false, started = Infinity) {
     const aligned = alignHistoryTurns(e.turns, page.turns, kind === 'newest', e.latest);
     e.turns = aligned.held;
     const P = aligned.turns;
@@ -344,7 +350,7 @@ export class HistoryStore {
       turns = this.#newestMerge(e, P);
       e.atLatest = true;
     }
-    turns = this.#keepNotices(e, turns);
+    turns = this.#keepNotices(e, this.#keepRevisions(e, turns, started));
     e.turns = turns;
     let oldest = turns[0]?.id === P[0]?.id;
     if (!oldest && P.length === 0 && (kind === 'earlier' || !turns.some((t) => !t.provisional))) {
@@ -371,7 +377,7 @@ export class HistoryStore {
   // when they share one (reached): the older held turns stay below them, each held turn they hold
   // too is replaced in place, and the newest turn only activity has said stays after. Otherwise they
   // are all there is. Returns whether the oldest page's cursor is the held turns' now.
-  #join(e, pending, reached) {
+  #join(e, pending, reached, started) {
     const pages = pending.slice().reverse();
     let all = [];
     // A turn two of the pages share (the host's cursors shifted between asks) is held once.
@@ -388,7 +394,8 @@ export class HistoryStore {
     const held = new Map(e.turns.map((t) => [t.id, t]));
     const firstHeld = reached ? e.turns.findIndex((h) => ids.has(h.id) && !h.provisional) : -1;
     const older = firstHeld > 0 ? e.turns.slice(0, firstHeld) : [];
-    e.turns = this.#keepNotices(e, [...older, ...all.map((t) => (held.has(t.id) ? adopt(t, held.get(t.id)) : t)), ...this.#tail(e, ids)]);
+    e.turns = this.#keepNotices(e, this.#keepRevisions(e,
+      [...older, ...all.map((t) => (held.has(t.id) ? adopt(t, held.get(t.id)) : t)), ...this.#tail(e, ids)], started));
     e.atLatest = true;
     const oldest = older.length === 0;
     if (oldest) {
@@ -425,6 +432,14 @@ export class HistoryStore {
     return out;
   }
 
+  #keepRevisions(e, turns, started) {
+    return turns.map((turn) => {
+      const reply = e.revisions.get(turn.id);
+      return reply?.version > started ? { ...turn, parts: keepReplies(mergeParts(turn.parts,
+        [{ id: reply.id, kind: 'response', text: reply.text, truncated: reply.truncated }])) } : turn;
+    });
+  }
+
   // Keeps the held turns to about `keep`, letting go of the end farthest from where the turns
   // were added (H6): at the old end when turns came in at the new, in whole pages, to one whose
   // cursor the host gave, so that earlier ones can be loaded again; at the new end when earlier
@@ -433,6 +448,7 @@ export class HistoryStore {
     const over = e.turns.length - this.keep;
     if (over <= 0) { return; }
     if (side === 'new') {
+      for (const turn of e.turns.slice(this.keep)) { e.revisions.delete(turn.id); }
       e.turns = e.turns.slice(0, this.keep);
       e.atLatest = false;
       return;
@@ -451,6 +467,7 @@ export class HistoryStore {
     }
     Object.assign(e, { endPartial: false, recovering: null });
     const held = new Set(e.turns.map((t) => t.id));
+    for (const id of e.revisions.keys()) { if (!held.has(id)) { e.revisions.delete(id); } }
     for (const id of e.cursors.keys()) { if (!held.has(id)) { e.cursors.delete(id); } }
   }
 
@@ -511,25 +528,34 @@ export class HistoryStore {
     }
     if (a.kind && !turns[i].kind) { turns[i] = { ...turns[i], kind: a.kind }; changed = true; }
     const replied = a.responseTurn === latest && !!voice.response;
-    const next = { ...turns[i].live, response: replied ? voice.response : (turns[i].live?.response ?? null), responseTruncated: replied ? voice.responseTruncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
+    const mutable = session.agent === 'codex' && a.responseId && voice.response && at(a.responseTurn) >= 0;
+    const prior = e.revisions.get(a.responseTurn);
+    const current = !session.updatedAt || !prior?.at || Date.parse(session.updatedAt) >= Date.parse(prior.at);
+    const revised = current && (prior?.id !== a.responseId || prior?.text !== voice.response || !!prior?.truncated !== !!voice.responseTruncated);
+    const heldPart = turns.find((t) => t.id === a.responseTurn)?.parts.find((p) => p.id === a.responseId);
+    if (mutable && (!current || voice.responseTruncated && heldPart && !heldPart.truncated)) { return changed; }
+    if (mutable) { e.revisions.set(a.responseTurn, { at: session.updatedAt ?? prior?.at, id: a.responseId,
+      text: voice.response, truncated: voice.responseTruncated, version: revised ? e.revision + 1 : prior?.version ?? 0 }); }
+    const retained = mutable && !revised && heldPart?.at && !heldPart.truncated;
+    const response = retained ? heldPart.text : voice.response;
+    const truncated = retained ? false : voice.responseTruncated;
+    const next = { ...turns[i].live, response: replied ? response : (turns[i].live?.response ?? null), responseTruncated: replied ? truncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
     if (replied && a.responseId) { next.responseId = a.responseId; } else if (replied) { delete next.responseId; }
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
     // A reply that is an earlier turn's is drawn there, never under the new prompt.
     const of = voice.response && a.responseTurn && a.responseTurn !== latest ? at(a.responseTurn) : -1;
     if (of >= 0) {
-      const reply = { reasoning: null, currentTool: null, ...turns[of].live, response: voice.response, responseTruncated: voice.responseTruncated };
+      const reply = { reasoning: null, currentTool: null, ...turns[of].live, response, responseTruncated: truncated };
       if (a.responseId) { reply.responseId = a.responseId; } else { delete reply.responseId; }
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
     }
     const target = replied ? i : of;
-    const finished = target >= 0 && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
+    const finished = target >= 0 && (!mutable || !revised) && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
     if (target >= 0 && a.responseId && voice.response && !finished) {
       const parts = mergeParts(turns[target].parts, [{
         id: a.responseId, kind: 'response', text: voice.response, truncated: voice.responseTruncated,
       }]);
-      const responses = parts.filter((p) => p.kind === 'response');
-      const kept = new Set(responses.slice(-50));
-      const bounded = parts.filter((p) => p.kind !== 'response' || kept.has(p));
+      const bounded = keepReplies(parts);
       if (!same(bounded, turns[target].parts)) { turns[target] = { ...turns[target], parts: bounded }; changed = true; }
     }
     return changed;

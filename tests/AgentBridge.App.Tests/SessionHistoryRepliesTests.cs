@@ -64,6 +64,8 @@ public sealed class SessionHistoryRepliesTests
         var partial = Snapshot("owner", "Question", "Partial answer", "owner") with { Agent = AgentKind.Codex };
         partial = partial with { Activity = partial.Activity with { ResponseId = "answer" } };
         var card = Card(connection, partial);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             _ = card.Stored;
@@ -81,8 +83,21 @@ public sealed class SessionHistoryRepliesTests
             card.Update(complete with { UpdatedAt = T0.AddSeconds(3), Activity = complete.Activity with { Response = "Cut", ResponseTruncated = true } });
             Assert.Equal("Complete answer", card.Response);
             Assert.Equal("answer", Assert.Single(card.Stored.Turns.Single().Parts).Id);
+            host.OnAsync(HistoryProtocol.Op, async _ =>
+            {
+                captured.SetResult();
+                await release.Task;
+                return new HistoryResult { Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = [
+                    new HistoryPart { Id = "answer", Kind = HistoryPartKind.Response, Text = "Partial answer", At = T0 }] }] };
+            });
+            var loading = card.Stored.LoadNewestAsync();
+            await captured.Task.WaitAsync(FakeHost.Patience);
+            card.Update(complete with { UpdatedAt = T0.AddSeconds(4), Activity = complete.Activity with { Response = "Complete revised answer" } });
+            release.SetResult();
+            await loading;
+            Assert.Equal("Complete revised answer", card.Response);
         }
-        finally { card.Detach(); }
+        finally { release.TrySetResult(); card.Detach(); }
     }
 
     [Fact]

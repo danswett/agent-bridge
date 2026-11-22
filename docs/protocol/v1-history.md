@@ -333,6 +333,10 @@ second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
 single-live-reply fallback is unchanged; older hosts omit it.
 Older clients ignore the optional field and continue reading `response`/`own.response`.
+Codex can revise the same identified slot after a full history page: a part's time
+and non-truncated text are not completion markers. Clients accept newer live
+revisions, reject older or truncated snapshots that would regress a full reply,
+and preserve revisions received while a history request was in flight.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 It omits identity for composite legacy text, text after a tool in the same record,

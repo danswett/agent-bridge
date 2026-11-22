@@ -74,8 +74,9 @@ test('finished history parts replace live slots by identity without duplicating 
 
 test('Codex live revisions after history replace the same part without accepting stale snapshots', async () => {
   let page = [];
+  let pending = null;
   const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
-    history: async () => readHistoryResult({ turns: page }),
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
   } }) });
   await store.open('h', ID);
   const session = (response, seconds, responseTruncated = false) => readSession({ id: ID, agent: 'codex',
@@ -92,6 +93,14 @@ test('Codex live revisions after history replace the same part without accepting
   store.live('h', session('Cut', 3, true));
   assert.equal(currentReply(store.get('h', ID), session('Cut', 3, true)), 'Complete answer');
   assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['answer']);
+  let release;
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  store.live('h', session('Complete revised answer', 4));
+  release();
+  await loading;
+  assert.equal(currentReply(store.get('h', ID), session('Complete revised answer', 4)), 'Complete revised answer');
 });
 
 for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
