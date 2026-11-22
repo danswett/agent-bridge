@@ -32,7 +32,7 @@ public sealed class GrantCommandsTests : IDisposable
     public void Production_caller_guard_refuses_a_script_parent_before_revoke_opens_the_store()
     {
         var opened = false;
-        var guard = new CallerGuard(() => [], null, hostImage: @"C:\host.exe");
+        var guard = new CallerGuard(() => [], null, hostImage: @"C:\host.exe", desktopShell: () => new PeerProcess(7, clock.GetUtcNow(), @"C:\Windows\explorer.exe"));
         var ancestry = new ProcessAncestry([new PeerProcess(42, clock.GetUtcNow(), @"C:\host.exe"),
             new PeerProcess(43, clock.GetUtcNow(), @"C:\pwsh.exe")], true);
         Assert.Equal(4, GrantCommands.Run(["grants", "revoke", Guid.NewGuid().ToString(), "1"],

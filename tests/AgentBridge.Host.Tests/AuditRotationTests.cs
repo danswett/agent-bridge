@@ -174,4 +174,16 @@ public sealed class AuditRotationTests : IDisposable
         Assert.NotNull(AgentAuditLog.Rotation(Folder, device));
         Assert.Equal(GrantStoreProblem.Missing, Grants());
     }
+
+    [Fact]
+    public void A_read_only_verify_never_waits_on_the_writer_gate_since_its_caller_may_hold_the_folder_lock()
+    {
+        Legacy();
+        var log = Log();
+        var gate = typeof(AgentAuditLog).GetField("gate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(log)!;
+        var intact = false;
+        var reader = new Thread(() => intact = log.Verify(readOnly: true, key: device).Intact);
+        lock (gate) { reader.Start(); Assert.True(reader.Join(TimeSpan.FromSeconds(10))); }
+        Assert.True(intact);
+    }
 }

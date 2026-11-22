@@ -26,7 +26,7 @@ public static class GrantCommands
             var known = new Func<IReadOnlyList<KnownProcess>>(() => KnownAgents.Running(new SystemProcessInspector()));
             return Console.IsInputRedirected || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN"))
                 || AgentAncestry.Inside(Environment.GetEnvironmentVariable(AgentAncestry.SessionVariable), ancestry, known) is not null
-                || new CallerGuard(known, null, hostImage: Environment.ProcessPath).Classify(ancestry).Kind != CallerKind.HostCli;
+                || new CallerGuard(known, null, hostImage: Environment.ProcessPath, desktopShell: CallerGuard.DesktopShell).Classify(ancestry).Kind != CallerKind.HostCli;
         }
         if (args is not ["grants", "list"] && Refused()) { return Deny(args, audit, error); }
         try
