@@ -21,6 +21,7 @@ public sealed class AgentLiteDeliveryTests
         public SessionStatus Status = SessionStatus.Idle;
         public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
         public string Remote = AgentMessagingSettings.OwnAccount;
+        public string Account = "acct";
         public string[] AllowAllTargetSessions = [];
         public string[] Rows = EmptyBox;
         public int Gets, TargetGets;
@@ -47,7 +48,8 @@ public sealed class AgentLiteDeliveryTests
                 AllowAllTargets = AllowAllTargets,
                 AllowAllTargetSessions = AllowAllTargetSessions
             })
-        ], this, this, this, Log.Add, Clock, id => () => Launches.PermissionsOf(id) is not null) { Lane = lane };
+        ], this, this, this, Log.Add, Clock, id => () => Launches.PermissionsOf(id) is not null,
+            account: lane is null ? null : () => Account) { Lane = lane };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -225,6 +227,31 @@ public sealed class AgentLiteDeliveryTests
         f.Exists = false;
         Assert.Equal(LiteKind.Delivered, (await r.Send()).Outcome);
         Assert.Single(f.Typed);
+    }
+
+    [Fact]
+    public async Task A_history_query_refuses_a_changed_account_before_reading_bound_state()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        f.Account = "other";
+        var result = await ((ILiteReplayQuery)r.Deliver).QueryAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteReceiver.NotSameAccount, result.Code);
+        Assert.False(result.Typed);
+        Assert.Empty(f.Typed);
+    }
+
+    [Fact]
+    public async Task A_lane_final_fence_refuses_a_changed_account_before_handoff()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        f.Account = "other"; f.Status = SessionStatus.Idle;
+        Assert.Equal(LaneResult.Waiting, await r.Lane.DeliverNextAsync(Target));
+        Assert.Empty(f.Typed);
+        Assert.DoesNotContain(r.Records, record => record.State == "handoff");
     }
 
                 // What the roster and fleet.find publish for Target (HaContract.NodeId).

@@ -12,22 +12,14 @@ public sealed class GrantCountersTests : IDisposable
     const string Device = "0123456789abcdef0123456789abcdef";
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
-    bool rotated;
-    // Grants need a genesis-bound audit (PR1), so the profile is rotated once, as a person would before the first issue.
-    GrantStore Store(Action<string, byte[]>? write = null)
-    {
-        var audit = new AgentAuditLog(Folder, clock) { DeviceKey = key };
-        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(audit, key, clock.GetUtcNow())); }
-        return new(Folder, key, audit, Scope, clock, write);
-    }
+    GrantStore Store(Action<string, byte[]>? write = null) => new(Folder, key, new(Folder, clock), Scope, clock, write);
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);
-    GrantDocument Grant(GrantCaps caps) => new(1, Guid.NewGuid(), "123",
-        new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
-        [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
-        ["launch"], Scope, caps, clock.GetUtcNow(), 1, clock.GetUtcNow().AddHours(24), [], []);
     GrantDocument Issue(GrantCaps caps)
     {
-        var grant = Grant(caps);
+        var grant = new GrantDocument(1, Guid.NewGuid(), "123",
+            new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
+            [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
+            ["launch"], Scope, caps, clock.GetUtcNow(), 1, clock.GetUtcNow().AddHours(24), [], []);
         Assert.True(Store().Issue(grant).Usable);
         return grant;
     }
@@ -35,13 +27,6 @@ public sealed class GrantCountersTests : IDisposable
         counters.Reserve(grant.Id, 1, request ?? Guid.NewGuid(), grant.Subjects[0], binding ?? new('b', 64));
     StopTarget Target() => new(Guid.NewGuid().ToString(), new(99, clock.GetUtcNow()));
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
-
-    [Fact]
-    public void An_unrotated_profile_still_refuses_the_issue_that_counters_would_need()
-    {
-        Assert.Equal(GrantStoreProblem.RotationRequired, new GrantStore(Folder, key, new(Folder, clock), Scope, clock).Issue(Grant(new(1, 2, 2))).Problem);
-        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)));
-    }
 
     [Theory]
     [InlineData(1)]
@@ -223,6 +208,112 @@ public sealed class GrantCountersTests : IDisposable
     }
 
     [Theory]
+    [InlineData(GrantLaunchOutcome.Refused, "scope")]
+    [InlineData(GrantLaunchOutcome.Failed, "policy")]
+    public void Duplicate_requests_return_the_durable_terminal_outcome_without_spending_again(GrantLaunchOutcome outcome, string reason)
+    {
+        var grant = Issue(new(3, 3, 2));
+        var request = Guid.NewGuid();
+        Assert.True(Reserve(Open(), grant, request).Accepted);
+        Assert.True(Open().Complete(request, outcome, reason).Accepted);
+        var duplicate = Reserve(Open((_, _) => throw new IOException("duplicate must not write")), grant, request);
+        Assert.Equal(GrantCounterProblem.Duplicate, duplicate.Problem);
+        Assert.Equal(outcome, duplicate.Reservation!.Outcome);
+        Assert.Equal(reason, duplicate.Reservation.Reason);
+        Assert.Equal(new GrantUsage(1, 1, 0), duplicate.Usage);
+        Assert.True(Open().Reconcile(grant.Id, _ => throw new Exception("terminal must not reconcile"),
+            _ => throw new Exception("terminal has no process")).Accepted);
+        Assert.Equal(GrantCounterProblem.Binding, Reserve(Open(), grant, request, new('c', 64)).Problem);
+        Assert.Equal(GrantCounterProblem.Binding, Open().Complete(request,
+            outcome == GrantLaunchOutcome.Refused ? GrantLaunchOutcome.Failed : GrantLaunchOutcome.Refused, reason).Problem);
+        Assert.Equal(GrantCounterProblem.Binding, Open().Commit(request, Target()).Problem);
+    }
+
+    [Fact]
+    public void A_started_duplicate_retains_its_exact_process_and_survives_revocation_and_expiry()
+    {
+        var grant = Issue(new(3, 3, 2));
+        var request = Guid.NewGuid();
+        var target = Target();
+        Assert.True(Reserve(Open(), grant, request).Accepted);
+        Assert.True(Open().Commit(request, target).Accepted);
+        Assert.True(Store().Revoke(grant.Id, 1).Usable);
+        clock.Advance(TimeSpan.FromHours(24));
+        var duplicate = Reserve(Open(), grant, request);
+        Assert.Equal(GrantCounterProblem.Duplicate, duplicate.Problem);
+        Assert.Equal(GrantLaunchOutcome.Started, duplicate.Reservation!.Outcome);
+        Assert.Equal(target, duplicate.Reservation.Target);
+        Assert.Equal(GrantCounterProblem.Binding, Reserve(Open(), grant, request, new('c', 64)).Problem);
+    }
+
+    [Fact]
+    public void Only_settled_requests_expire_at_thirty_days_and_uncertain_capacity_is_never_pruned()
+    {
+        var grant = Issue(new(3, 3, 2));
+        var settled = Guid.NewGuid();
+        var uncertain = Guid.NewGuid();
+        Assert.True(Reserve(Open(), grant, settled).Accepted);
+        Assert.True(Reserve(Open(), grant, uncertain).Accepted);
+        clock.Advance(TimeSpan.FromHours(1));
+        Assert.True(Open().Complete(settled, GrantLaunchOutcome.Failed, "policy").Accepted);
+        clock.Advance(TimeSpan.FromDays(30).Subtract(TimeSpan.FromTicks(1)));
+        var next = Issue(new(3, 3, 2));
+        Assert.Equal(GrantCounterProblem.Binding, Reserve(Open(), next, settled).Problem);
+        clock.Advance(TimeSpan.FromTicks(1));
+        Assert.True(Reserve(Open(), next, settled).Accepted);
+        Assert.Equal(GrantCounterProblem.Binding, Reserve(Open(), next, uncertain).Problem);
+        Assert.Equal(new GrantUsage(0, 0, 1), Open().Read(grant.Id, 1).Usage);
+    }
+
+    [Fact]
+    public void Terminal_failure_is_persisted_before_acknowledgment_and_never_repaired_on_restart()
+    {
+        var grant = Issue(new(3, 3, 2));
+        var request = Guid.NewGuid();
+        Assert.True(Reserve(Open(), grant, request).Accepted);
+        Assert.Equal(GrantStoreProblem.WriteFailed, Open((_, _) => throw new IOException("fixture"))
+            .Complete(request, GrantLaunchOutcome.Failed, "policy").StoreProblem);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Reserve(Open(), grant, request).StoreProblem);
+    }
+
+    [Fact]
+    public void Full_admission_keeps_every_unexpired_binding_but_still_answers_an_exact_duplicate()
+    {
+        var grant = Issue(new(3, 3, 2));
+        var now = clock.GetUtcNow();
+        var reservations = Enumerable.Range(0, 4096).Select(_ => new GrantReservation(Guid.NewGuid(), grant.Id, 1,
+            grant.Subjects[0], new('b', 64), now, GrantReservationState.Failed, Reason: "policy")).ToArray();
+        var state = new GrantCounterState(now, reservations);
+        var full = GrantCounters.Admit(state, grant, grant.Id, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64), now);
+        Assert.Equal(GrantCounterProblem.Full, full.Result.Problem);
+        Assert.Same(state, full.State);
+        var duplicate = GrantCounters.Admit(state, grant, grant.Id, 1, reservations[0].Request, grant.Subjects[0], new('b', 64), now);
+        Assert.Equal(GrantCounterProblem.Duplicate, duplicate.Result.Problem);
+        Assert.Equal(reservations[0], duplicate.Result.Reservation);
+        Assert.Same(state, duplicate.State);
+    }
+
+    [Fact]
+    public void A_full_persisted_store_refuses_a_new_request_but_returns_the_recorded_terminal_duplicate()
+    {
+        var grant = Issue(new(3, 3, 2));
+        var request = Guid.NewGuid();
+        Assert.True(Reserve(Open(), grant, request).Accepted);
+        Assert.True(Open().Complete(request, GrantLaunchOutcome.Failed, "policy").Accepted);
+        var path = Path.Combine(Folder, GrantStore.FileName);
+        var before = File.ReadAllBytes(path);
+        var full = new GrantCounters(new GrantStore(Folder, key, new(Folder, clock), Scope, clock, null,
+            maxBytes: before.Length + 1), clock);
+        Assert.Equal(GrantCounterProblem.Full, Reserve(full, grant).Problem);
+        Assert.Equal(before, File.ReadAllBytes(path));
+        var duplicate = Reserve(full, grant, request);
+        Assert.Equal(GrantCounterProblem.Duplicate, duplicate.Problem);
+        Assert.Equal(GrantLaunchOutcome.Failed, duplicate.Reservation!.Outcome);
+        Assert.Equal("policy", duplicate.Reservation.Reason);
+        Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Expiry_before_any_reservation_is_durable_even_if_install_fails(bool failWrite)
@@ -260,7 +351,7 @@ public sealed class GrantCountersTests : IDisposable
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
-        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))) { DeviceKey = key }, Scope, clock);
+        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
         Assert.True(store.Revoke(grant.Id, 1).Usable);
     }
 

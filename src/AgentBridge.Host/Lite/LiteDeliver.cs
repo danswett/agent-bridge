@@ -21,7 +21,8 @@ public sealed class LiteDeliver(
     IConsoleInjector injector,
     Action<string> log,
     TimeProvider? clock = null,
-    Func<string, Func<bool>>? targetFence = null) : ILiteDeliver, ILiteReplayQuery
+    Func<string, Func<bool>>? targetFence = null,
+    Func<string?>? account = null) : ILiteDeliver, ILiteReplayQuery
 {
     public const int MaxChars = 4096;
     public const int MaxPerMinute = 6;
@@ -62,6 +63,10 @@ public sealed class LiteDeliver(
         var request = Guid.Parse(body.Request);
         // Journal NFKC must not restore an escaped attachment token.
         var laneBody = safe.Replace("\uFF20", "(at)", StringComparison.Ordinal);
+        // The text was signed for one account, and a local send checks it only before this await (#3595): an account
+        // switch (or no account) while the composer is read or the typing slot is awaited types nothing, here and at both replier fences.
+        bool Signed() => account is null || account() == body.Account;
+        if (!Signed()) { return Refused(LiteReceiver.NotSameAccount); }
         if (Lane is { } history)
         {
             var prior = history.Query(request, id, sender);
@@ -78,7 +83,7 @@ public sealed class LiteDeliver(
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
             if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
             { return Refused(LiteCodes.Busy); }
-            bool Current() => stillAllowed() && (!byNode || FromNodeId(target) == id) &&
+            bool Current() => Signed() && stillAllowed() && (!byNode || FromNodeId(target) == id) &&
                 source.Get(id) is { Agent: AgentKind.Copilot, Question: null } live && live.ProcessId == pid &&
                 live.Status is SessionStatus.Idle or SessionStatus.Working;
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
@@ -93,15 +98,16 @@ public sealed class LiteDeliver(
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
-        // just before the injector starts. The host rechecks kill, remote, current grant and process generation at both fences.
+        // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
-            StillCurrent = byNode || stillAllowed is not null ? () => (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
+            StillCurrent = byNode || stillAllowed is not null || account is not null
+                ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
         var result = await replier.ReplyAsync(reply, null, ct);
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
-            AnswerOutcome.Stale => Refused(LiteCodes.NoSuchSession),
+            AnswerOutcome.Stale => Refused(Signed() ? LiteCodes.NoSuchSession : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
