@@ -655,6 +655,7 @@ internal sealed class CodexHistory : HistoryDialect
     {
         var p = Json.Obj(e, "payload") ?? default;
         var reply = CodexReplyIds.Read(e);
+        turn.ValidateReplyScope(reply);
         switch (Json.Str(e, "type"))
         {
             case "event_msg":

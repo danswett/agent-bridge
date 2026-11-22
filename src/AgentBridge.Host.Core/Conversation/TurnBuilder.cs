@@ -104,17 +104,27 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
         var part = kind == HistoryPartKind.Response ? _replyIds.Match(reply, _record, _index) : null;
         if (part is not null)
         {
-            _said.Add((kind, text));
-            if (_replyParts.TryGetValue(part, out var i)) { _parts[i] = _parts[i] with { Text = text }; }
+            if (_replyParts.TryGetValue(part, out var i))
+            {
+                var prior = (kind, _parts[i].Text);
+                if (--_said[prior] == 0) { _said.Remove(prior); }
+                _parts[i] = _parts[i] with { Text = text };
+            }
             else
             {
                 Add(Blank(kind, at) with { Text = text });
                 _replyParts[part] = _parts.Count - 1;
             }
+            _said[(kind, text)] = _said.GetValueOrDefault((kind, text)) + 1;
             return;
         }
-        if (!_said.Add((kind, text))) { return; }
+        if (!_said.TryAdd((kind, text), 1)) { return; }
         Add(Blank(kind, at) with { Text = text });
+    }
+
+    public void ValidateReplyScope(CodexReplyKey reply)
+    {
+        if (!_replyIds.Validate(reply)) { _replyParts.Clear(); }
     }
 
     public void ReplyScope(bool known, string? nativeTurn = null)
@@ -125,7 +135,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
 
     readonly CodexReplyIds _replyIds = new();
     readonly Dictionary<string, int> _replyParts = new(StringComparer.Ordinal);
-    readonly HashSet<(HistoryPartKind, string)> _said = [];
+    readonly Dictionary<(HistoryPartKind, string?), int> _said = [];
 
     public void ToolStarted(string callId, string name, string? summary, DateTimeOffset at)
     {

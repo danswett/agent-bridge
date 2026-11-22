@@ -638,7 +638,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                     if (codex) { into.ReplyScope(false); }
                     return true;
                 }
-                if (!wants) { return true; }
+                if (!wants) { into.ValidateReplyScope(CodexReplyIds.Read(doc.RootElement)); return true; }
                 at = Json.Time(doc.RootElement, "timestamp") ?? at;
                 // A turn whose own start could not be read is placed by the first time after it.
                 if (s.At is null && at is { } first && turn.At == DateTimeOffset.UnixEpoch) { turn.At = first; }

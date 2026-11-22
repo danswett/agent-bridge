@@ -18,16 +18,21 @@ internal sealed class CodexReplyIds(bool known = false)
         (_known, _turn) = (known, turn);
     }
 
-    public string? Match(CodexReplyKey key, string record, int index)
+    public bool Validate(CodexReplyKey key)
     {
-        if (!_known) { return null; }
+        if (!_known) { return false; }
         if (key.Ambiguous || key.Turn is { } turn && _turn is not null && turn != _turn)
         {
             Reset(false);
-            return null;
+            return false;
         }
-        if (key.Item is not { } item) { return null; }
         _turn ??= key.Turn;
+        return true;
+    }
+
+    public string? Match(CodexReplyKey key, string record, int index)
+    {
+        if (!Validate(key) || key.Item is not { } item) { return null; }
         if (_parts.TryGetValue(item, out var part)) { return part; }
         if (_parts.Count >= 4096) { Reset(false); return null; }
         return _parts[item] = TurnIds.Part(record, index);

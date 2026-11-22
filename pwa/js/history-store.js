@@ -38,13 +38,13 @@ import { HISTORY, alignHistoryTurns } from './history.js';
 const MAX_WALK = 100;
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-function mergeParts(held, incoming) {
+function mergeParts(held, incoming, newer = false) {
   const parts = held.slice();
   let previous = -1;
   for (const [n, p] of incoming.entries()) {
     const i = parts.findIndex((q) => q.id === p.id);
     if (i >= 0) {
-      if ((!p.truncated || parts[i].truncated) && (p.kind !== 'response' || p.text || !parts[i].text)) { parts[i] = { ...parts[i], ...p }; }
+      if ((newer || !p.truncated || parts[i].truncated) && (p.kind !== 'response' || p.text || !parts[i].text)) { parts[i] = { ...parts[i], ...p }; }
       previous = i;
     } else {
       const next = incoming.slice(n + 1).find((q) => parts.some((r) => r.id === q.id));
@@ -436,9 +436,15 @@ export class HistoryStore {
     const held = new Set(turns.map((turn) => turn.id));
     for (const id of e.revisions.keys()) { if (!held.has(id)) { e.revisions.delete(id); } }
     return turns.map((turn) => {
-      const reply = e.revisions.get(turn.id);
-      return reply?.version > started ? { ...turn, parts: keepReplies(mergeParts(turn.parts,
-        [{ id: reply.id, kind: 'response', text: reply.text, truncated: reply.truncated }])) } : turn;
+      const items = e.revisions.get(turn.id);
+      const replies = [...(items ?? [])].filter(([, reply]) => reply.version > started)
+        .map(([id, reply]) => ({ id, kind: 'response', text: reply.text, truncated: reply.truncated }));
+      const order = e.turns.find((t) => t.id === turn.id)?.parts.map((p) => p.id) ?? [];
+      replies.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      const parts = replies.length ? keepReplies(mergeParts(turn.parts, replies, true)) : turn.parts;
+      const kept = new Set(parts.filter((p) => p.kind === 'response').map((p) => p.id));
+      for (const id of items?.keys() ?? []) { if (!kept.has(id)) { items.delete(id); } }
+      return replies.length ? { ...turn, parts } : turn;
     });
   }
 
@@ -531,16 +537,21 @@ export class HistoryStore {
     if (a.kind && !turns[i].kind) { turns[i] = { ...turns[i], kind: a.kind }; changed = true; }
     const replied = a.responseTurn === latest && !!voice.response;
     const mutable = session.agent === 'codex' && a.responseId && voice.response && at(a.responseTurn) >= 0;
-    const prior = e.revisions.get(a.responseTurn);
+    let items = e.revisions.get(a.responseTurn);
+    const prior = items?.get(a.responseId);
     const current = !session.updatedAt || !prior?.at || Date.parse(session.updatedAt) >= Date.parse(prior.at);
-    const revised = current && (prior?.id !== a.responseId || prior?.text !== voice.response || !!prior?.truncated !== !!voice.responseTruncated);
+    const revised = current && (prior?.text !== voice.response || !!prior?.truncated !== !!voice.responseTruncated);
     const heldPart = turns.find((t) => t.id === a.responseTurn)?.parts.find((p) => p.id === a.responseId);
-    if (mutable && (!current || voice.responseTruncated && heldPart && !heldPart.truncated)) { return changed; }
-    if (mutable) { e.revisions.set(a.responseTurn, { at: session.updatedAt ?? prior?.at, id: a.responseId,
-      text: voice.response, truncated: voice.responseTruncated, version: revised ? e.revision + 1 : prior?.version ?? 0 }); }
-    const retained = mutable && !revised && heldPart?.at && !heldPart.truncated;
-    const response = retained ? heldPart.text : voice.response;
-    const truncated = retained ? false : voice.responseTruncated;
+    const blocked = mutable && (!current || voice.responseTruncated && heldPart && !heldPart.truncated);
+    if (mutable && !blocked) {
+      if (!items) { items = new Map(); e.revisions.set(a.responseTurn, items); }
+      items.set(a.responseId, { at: session.updatedAt ?? prior?.at, text: voice.response,
+        truncated: voice.responseTruncated, version: revised ? e.revision + 1 : prior?.version ?? 0 });
+      changed = revised || changed;
+    }
+    const retained = blocked || mutable && !revised && heldPart?.at && !heldPart.truncated;
+    const response = retained ? heldPart?.text ?? prior?.text : voice.response;
+    const truncated = retained ? !!(heldPart?.truncated ?? prior?.truncated) : voice.responseTruncated;
     const next = { ...turns[i].live, response: replied ? response : (turns[i].live?.response ?? null), responseTruncated: replied ? truncated : (turns[i].live?.responseTruncated ?? false), reasoning: voice.reasoning, currentTool: a.currentTool ?? null };
     if (replied && a.responseId) { next.responseId = a.responseId; } else if (replied) { delete next.responseId; }
     if (!same(next, turns[i].live)) { turns[i] = { ...turns[i], live: next }; changed = true; }
@@ -552,13 +563,17 @@ export class HistoryStore {
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
     }
     const target = replied ? i : of;
-    const finished = target >= 0 && (!mutable || !revised) && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
+    const finished = blocked || target >= 0 && (!mutable || !revised) && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
     if (target >= 0 && a.responseId && voice.response && !finished) {
       const parts = mergeParts(turns[target].parts, [{
         id: a.responseId, kind: 'response', text: voice.response, truncated: voice.responseTruncated,
       }]);
       const bounded = keepReplies(parts);
       if (!same(bounded, turns[target].parts)) { turns[target] = { ...turns[target], parts: bounded }; changed = true; }
+    }
+    if (mutable && items) {
+      const kept = new Set(turns[target].parts.filter((p) => p.kind === 'response').map((p) => p.id));
+      for (const id of items.keys()) { if (!kept.has(id)) { items.delete(id); } }
     }
     return changed;
   }

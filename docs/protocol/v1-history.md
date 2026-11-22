@@ -336,7 +336,11 @@ Older clients ignore the optional field and continue reading `response`/`own.res
 Codex can revise the same identified slot after a full history page: a part's time
 and non-truncated text are not completion markers. Clients accept newer live
 revisions, reject older or truncated snapshots that would regress a full reply,
-and preserve revisions received while a history request was in flight.
+and preserve each revised item received while a history request was in flight,
+including when a later item is unchanged. Rejected replies do not freeze tool or
+reasoning updates. Codex validates native-turn scope on every decoded record,
+including non-replies; conflicting or ambiguous metadata disables correlation
+until a readable prompt. Legacy text dedup counts currently retained texts only.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 It omits identity for composite legacy text, text after a tool in the same record,

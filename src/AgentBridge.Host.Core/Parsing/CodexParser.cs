@@ -84,6 +84,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     protected override void Count(JsonElement e)
     {
+        _replyIds.Validate(CodexReplyIds.Read(e));
         var payload = Json.Obj(e, "payload") ?? default;
         switch (Json.Str(e, "type"))
         {
@@ -123,6 +124,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     {
         var payload = Json.Obj(e, "payload") ?? default;
         var reply = CodexReplyIds.Read(e);
+        _replyIds.Validate(reply);
         switch (Json.Str(e, "type"))
         {
             case "session_meta":
