@@ -338,7 +338,9 @@ expiry the exact round-trip `O` representation, and other strings UTF-8.
 Challenge action must be `grant.confirmIssue`; outer context action must be
 `grant.prepareIssue`. Account/profile/receiver match the caller-retained context;
 preview id/generation/receiver/profile/digest match the challenge.
-The outer request is the caller's fresh RPC GUID, distinct from the challenge nonce.
+The outer request is the caller's fresh RPC GUID; an equal challenge nonce refuses.
+Verify authenticates expiry but is not a clock/policy check: the consumer must
+refuse an expired challenge before signing or confirming it.
 Read and receipt domains cannot be substituted, even if re-signed for this context.
 This is contract-only: no producer, App/UI, dispatch, policy, or authority is enabled.
 

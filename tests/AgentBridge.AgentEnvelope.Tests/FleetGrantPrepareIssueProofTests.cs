@@ -216,4 +216,16 @@ public sealed class FleetGrantPrepareIssueProofTests : IDisposable
         { result = FleetGrantPrepareIssueProof.Seal(p with { Preview = doc.RootElement }, context, new EcdsaEnvelopeSigner(key)); }
         Assert.Empty(FleetGrantPrepareIssueProof.Verify(result, Point, context).Preview.GetProperty("unavailableActions").EnumerateArray());
     }
+
+    [Fact]
+    public void A_challenge_nonce_echoing_the_callers_request_is_refused_even_with_a_valid_host_signature()
+    {
+        var result = Seal();
+        var bad = result.Prepared with { Challenge = result.Prepared.Challenge with { Request = context.Request } };
+        var body = Codec.FromBase64Url(result.Proof.Body, "body");
+        Framing.Utf8(context.Request.ToString("D")).CopyTo(body, 4 + Framing.Label(FleetGrantPrepareIssueProof.Domain).Length + 4);
+        var proof = FleetGrantProof.Seal(body, context, new EcdsaEnvelopeSigner(key));
+        Assert.Throws<InvalidDataException>(() => FleetGrantPrepareIssueProof.Verify(new(bad, proof), Point, context));
+        Assert.Throws<InvalidDataException>(() => FleetGrantPrepareIssueProof.Seal(bad, context, new EcdsaEnvelopeSigner(key)));
+    }
 }

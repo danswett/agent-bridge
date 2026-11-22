@@ -71,7 +71,8 @@ public static class FleetGrantPrepareIssueProof
         var c = prepared.Challenge;
         var v = prepared.Preview.Deserialize<Preview>(Wire)!;
         if (!FleetGrantProof.Valid(context) || context.Action != "grant.prepareIssue"
-            || c.Request == Guid.Empty || c.Id == Guid.Empty || c.Generation <= 0 || c.ExpiresAt == default
+            || c.Request == Guid.Empty || c.Request == context.Request
+            || c.Id == Guid.Empty || c.Generation <= 0 || c.ExpiresAt == default
             || c.Action != "grant.confirmIssue" || c.Account != context.Account
             || c.Profile != context.Profile || c.Receiver != context.Receiver || !Digest(c.Digest)
             || v.Id != c.Id || v.Generation != c.Generation || v.Receiver != c.Receiver
