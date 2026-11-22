@@ -5,7 +5,10 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // What a transcript says before a reply is typed: whether it could be read at all, whether
 // anything is asking the person, and the line boundary later records are read from. Resumed:
 // all that is asking was left open by a CLI since replaced, and may or may not still be shown.
-public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedTo, bool Resumed = false);
+public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedTo, bool Resumed = false, DateTimeOffset? ActivityAt = null)
+{
+    public bool StartedSince(DateTimeOffset at) => Readable && !Asking && !Resumed && ActivityAt is { } activity && activity >= at;
+}
 
 // A prompt the person gave: a main-agent user.message with no other source, the offset its
 // line starts at, which identifies it, and the paths of the files Copilot attached to it
@@ -38,6 +41,7 @@ public sealed class CopilotInput(string path)
     // abort or shutdown settles its own (Copilot on #837).
     readonly Dictionary<string, string?> stale = new(StringComparer.Ordinal);
     long scannedTo;
+    DateTimeOffset? activityAt;
 
     public string Path => path;
 
@@ -52,6 +56,7 @@ public sealed class CopilotInput(string path)
                 permissions.Clear();
                 stale.Clear();
                 scannedTo = 0;
+                activityAt = null;
             }
             if (Jsonl.Lines(path, scannedTo, skipFirst: false, Line) is not { } to)
             {
@@ -60,7 +65,7 @@ public sealed class CopilotInput(string path)
             BytesRead += to - scannedTo;
             scannedTo = to;
             var fresh = asks.Count > 0 || permissions.Count > 0;
-            return new CopilotInputState(true, fresh || stale.Count > 0, scannedTo, Resumed: !fresh && stale.Count > 0);
+            return new CopilotInputState(true, fresh || stale.Count > 0, scannedTo, Resumed: !fresh && stale.Count > 0, ActivityAt: activityAt);
         }
     }
 
@@ -74,11 +79,22 @@ public sealed class CopilotInput(string path)
         var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
         var answer = (asks.Count > 0 || stale.Count > 0) && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
         var typed = stale.Count > 0 && bytes.IndexOf("\"type\":\"user.message\""u8) >= 0;
-        if (!ask && !permission && !ending && !answer && !typed) { return; }
+        var activity = bytes.IndexOf("\"type\":\"user.message\""u8) >= 0
+            || bytes.IndexOf("\"type\":\"assistant."u8) >= 0
+            || bytes.IndexOf("\"type\":\"tool.execution_"u8) >= 0
+            || bytes.IndexOf("\"type\":\"subagent."u8) >= 0;
+        if (!ask && !permission && !ending && !answer && !typed && !activity) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
             var data = e.Data;
+            if (e.Type is "user.message" or "assistant.turn_start" or "assistant.message"
+                or "tool.execution_start" or "tool.execution_complete"
+                or "subagent.started" or "subagent.completed" or "subagent.failed"
+                && Jsonl.Timestamp(e.Doc.RootElement) is { } at && (activityAt is null || at > activityAt))
+            {
+                activityAt = at;
+            }
             switch (e.Type)
             {
                 case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:

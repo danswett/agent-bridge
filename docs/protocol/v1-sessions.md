@@ -1124,6 +1124,15 @@ agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and
 it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
 
+**Startup readiness (#3634).** Activity recorded in the session's **own transcript after
+launch began** releases its startup reply hold, even for an `unconfirmed` launch:
+any `user.message` (any source), `assistant.turn_start`, tool execution or subagent
+activity recorded there counts. `session.resume` alone, old or other-session activity,
+and turn counts do not. Without a readable transcript or qualifying activity an unready
+launch stays refused, with no timeout release. Visible trust/startup questions and open
+transcript `ask_user`, `permission.requested` or trust questions still refuse replies.
+See [the owner-approved decision and readiness checks](../host-replies.md#before-and-after-typing).
+
 **Queue confirmation contract (#2468 slice 2).** On a working Copilot session,
 `queue` types the text then Ctrl+Q under every existing input-box check, including
 the 80-column rule; `steer`
@@ -1980,6 +1989,11 @@ running (`working`); the main agent idle with background agents or commands stil
 (`idle` with `background`, shown as delegating); otherwise `idle`. Only the second is new,
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
+
+An `unconfirmed` launch does not pin an active session's status: once its own transcript
+has qualifying activity after launch began, the ordinary precedence above applies.
+Startup readiness and its remaining reply refusals are defined under [`session.reply`](#sessionreply);
+this is not a timeout or a change to launch/reply delivery confirmation.
 
 ### Phone sign-in (#800 slice 2, enabled per machine by #972)
 

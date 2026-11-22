@@ -465,7 +465,10 @@ public sealed partial class ReplyService : ISessionReplier
             var noTranscriptYet = !before.Readable && NotYetWritten(transcript, now);
             if (noTranscriptYet)
             {
-                if (await FirstReplyHoldAsync(pid, "Copilot") is { } hold) { return Done(Refused(hold)); }
+                if (await FirstReplyHoldAsync(pid, "Copilot", input, target.StartedAt) is { } hold) { return Done(Refused(hold)); }
+                before = input.Read();
+                noTranscriptYet = !before.Readable && NotYetWritten(transcript, now);
+                if (!before.Readable && !noTranscriptYet) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             }
             else if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Resumed)
@@ -634,18 +637,19 @@ public sealed partial class ReplyService : ISessionReplier
     }
 
     // Why a reply to a Copilot session with no transcript yet must wait, or null when its window
-    // shows the prompt's box with no startup question over it (#1018). A window that cannot be
-    // read, or does not show the box yet, is "waiting to start", never "at the machine".
-    async Task<string?> FirstReplyHoldAsync(int pid, string label)
+    // shows the prompt's box with no startup question over it (#1018), or its own transcript
+    // proves activity since this process started. Composer safety is checked separately.
+    async Task<string?> FirstReplyHoldAsync(int pid, string label, CopilotInput input, DateTimeOffset? startedAt)
     {
+        bool Active() => startedAt is { } at && input.Read().StartedSince(at);
         ConsoleScreen screen;
         try { screen = await injector.ReadScreenAsync(pid); }
         catch (Exception e)
         {
             log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
-            return FirstReplyWords.WaitingToStart;
+            return Active() ? null : FirstReplyWords.WaitingToStart;
         }
-        if (screen.Rows is not { } rows) { return FirstReplyWords.WaitingToStart; }
+        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.WaitingToStart; }
         switch (StartupQuestions.Read(rows))
         {
             case StartupQuestion.None: break;
@@ -654,7 +658,7 @@ public sealed partial class ReplyService : ISessionReplier
         }
         // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
         // is named by the check that types, which comes next.
-        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } ? null : FirstReplyWords.WaitingToStart;
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.WaitingToStart;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
