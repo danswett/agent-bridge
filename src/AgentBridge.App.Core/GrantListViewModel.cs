@@ -20,7 +20,7 @@ public sealed class GrantListRow
         HourCap = Count(caps, "hourly"); DayCap = Count(caps, "daily"); LiveCap = Count(caps, "live");
         if (HourCap is <= 0 or > 1000 || DayCap is <= 0 or > 5000 || LiveCap is <= 0 or > 100 || HourCap > DayCap
             || snapshot.Counters is not { Hour: >= 0, Day: >= 0, Pending: >= 0, Live: >= 0 }
-            || snapshot.Counters.Requests.IsDefault) { throw new InvalidDataException("invalid receiver counters"); }
+            || snapshot.Counters.PendingRequests.IsDefault || snapshot.Counters.LiveSessions.IsDefault) { throw new InvalidDataException("invalid receiver counters"); }
         var issuer = Get(d, "issuer");
         var subjects = Items(Get(d, "subjects")).Select(s => $"{Display(Text(s, "account"))}/{Display(Text(s, "sourceHost"))}/{Display(Text(s, "session"))} process {Count(Get(s, "processInstance"), "pid")} since {Time(Get(s, "processInstance"), "startedAt").ToLocalTime():g}");
         var scope = Get(d, "scope");
@@ -40,7 +40,7 @@ public sealed class GrantListRow
     public string State => (Tombstone is not null ? "Revoked" : RevocationPending ? "Revocation pending" : "Receiver verified")
         + (Unavailable || Snapshot.Stale ? " (stale: receiver offline or unavailable)" : "");
     public string Counters => $"{Snapshot.Counters.Hour}/{HourCap} hour; {Snapshot.Counters.Day}/{DayCap} day; {(long)Snapshot.Counters.Pending + Snapshot.Counters.Live}/{LiveCap} occupied (pending {Snapshot.Counters.Pending}, live {Snapshot.Counters.Live})\nRemaining: {Math.Max(0, HourCap - Snapshot.Counters.Hour)} hour; {Math.Max(0, DayCap - Snapshot.Counters.Day)} day; {Math.Max(0, LiveCap - (long)Snapshot.Counters.Pending - Snapshot.Counters.Live)} live\nAs of {Snapshot.Counters.ObservedAt.ToLocalTime():g}";
-    public string InFlight => string.Join(", ", Snapshot.Counters.Requests.Concat(Tombstone?.InFlightRequests ?? []).Distinct().Select(Caller));
+    public string InFlight => string.Join(", ", Snapshot.Counters.PendingRequests.Concat(Snapshot.Counters.LiveSessions).Concat(Tombstone?.InFlightRequests ?? []).Distinct().Select(Caller));
     public string Receipt => Tombstone is { } receipt ? $"Tombstone receipt: {receipt.Digest}" : "";
     public bool CanRevoke => !Unavailable && !Snapshot.Stale && !RevocationPending && Tombstone is null;
     internal static JsonElement Get(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var value) ? value : throw new InvalidDataException("incomplete grant snapshot");
@@ -82,6 +82,7 @@ public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
         {
             var result = await receiver.ReadAsync();
             if (!ReceiverAvailable) { Availability(); return; }
+            if (result is null) { throw new InvalidDataException("missing receiver result"); }
             if (result.Problem is not null) { readProblem = result.Problem is "RotationRequired" or "rotation-required" ? "RotationRequired" : "unavailable"; throw new InvalidDataException("receiver read unavailable"); }
             if (result.Grants.IsDefault) { throw new InvalidDataException("missing receiver snapshot"); }
             var previous = rows.ToDictionary(r => (r.Id, r.Generation, r.Receiver));
@@ -92,10 +93,10 @@ public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
                 return row;
             }).ToList();
             if (refreshed.Select(r => (r.Id, r.Generation, r.Receiver)).Distinct().Count() != refreshed.Count) { throw new InvalidDataException("duplicate grant snapshot"); }
-            refreshed.AddRange(previous.Values.Where(row => row.Tombstone is not null || row.RevocationPending));
+            refreshed.AddRange(previous.Values.Where(row => row.Tombstone is not null || row.RevocationPending).Select(row => { row.Snapshot = row.Snapshot with { Stale = true }; return row; }));
             rows = refreshed; readProblem = null; Availability();
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or TimeoutException or JsonException)
+        catch (Exception e) when (UnavailableError(e))
         {
             readProblem ??= "unavailable";
             error = readProblem == "RotationRequired" ? "RotationRequired: person key rotation is required."
@@ -114,6 +115,7 @@ public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
         try
         {
             var preview = await receiver.PrepareRevokeAsync(row.Id, row.Generation);
+            if (preview is null || preview.Document is null || preview.Digest is null) { throw new InvalidDataException("missing revoke preview"); }
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(preview.Document)));
             var digest = preview.Digest;
             if (preview.Id != row.Id || preview.Generation != row.Generation || preview.Receiver != row.Receiver
@@ -123,16 +125,17 @@ public sealed class GrantListViewModel(IGrantListReceiver receiver) : Observable
             if (!Available || receiver.Receiver != row.Receiver) { Availability(); return; }
             row.RevocationPending = true; RaiseAll();
             var receipt = await receiver.ConfirmRevokeAsync(row.Id, row.Generation, digest);
-            if (receipt.Id != preview.Id || receipt.Generation != preview.Generation || receipt.Receiver != preview.Receiver
+            if (receipt is null || receipt.Id != preview.Id || receipt.Generation != preview.Generation || receipt.Receiver != preview.Receiver
                 || receipt.Account != preview.Account || receipt.Profile != preview.Profile || receipt.Action != preview.Action
                 || receipt.Digest != digest || !receipt.Tombstone || receipt.InFlightRequests.IsDefault)
             { throw new InvalidDataException("unmatched tombstone receipt"); }
             row.Tombstone = receipt; row.RevocationPending = false; Availability();
         }
-        catch (Exception e) when (e is IOException or InvalidDataException or TimeoutException)
+        catch (Exception e) when (UnavailableError(e))
         { readProblem = "unavailable"; Availability(); error = row.RevocationPending ? "Revocation pending. No matching tombstone receipt was confirmed; in-flight sessions may continue." : "Revoke unavailable. No revocation is confirmed."; }
         finally { busy = false; RaiseAll(); }
     }
+    static bool UnavailableError(Exception e) => e is IOException or InvalidDataException or TimeoutException or JsonException or HttpRequestException or OperationCanceledException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException or InvalidOperationException;
     sealed class UnavailableReceiver : IGrantListReceiver
     {
         public string Receiver => "";

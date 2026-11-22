@@ -19,15 +19,16 @@ public sealed class GrantListTests
             agents = new[] { "copilot" }, models = new[] { "codex" }, profiles = new[] { "default" }, efforts = new[] { "high" },
             contexts = new[] { "default" }, permissions = new[] { "ask" } }, caps = new { hourly = 10, daily = 20, live = 3 }, expiresAt = DateTimeOffset.UtcNow.AddHours(8),
         prompt = "PRIVATE_PROMPT", token = "PRIVATE_TOKEN", command = "pwsh RAW_COMMAND"
-    }), new(3, 7, 2, 1, ["pending-one", "live-one"], caller, outcome, DateTimeOffset.UtcNow), false);
+    }), new(3, 7, 2, 1, ["completed-old"], caller, outcome, DateTimeOffset.UtcNow, ["pending-one", "pending-two"], ["live-one"]), false);
     static GrantRevokeReceipt Receipt() => new(Id, 2, "receiver-1", "1042", "default", "grant.revoke", Digest, true, ["pending-one"]);
+    static Exception Failure(string kind) => kind switch { "transport" => new HttpRequestException(), "cancelled" => new OperationCanceledException(), "access" => new UnauthorizedAccessException(), "json" => new JsonException(), _ => new IOException("PRIVATE_TOKEN RAW_COMMAND") };
     static string Visible(GrantListViewModel vm) => vm.Error + " " + string.Join(" ", vm.Rows.Select(r => $"{r.Title} {r.Details} {r.State} {r.Counters} {r.InFlight} {r.Receipt}"));
     static void Safe(string text) {
         foreach (var forbidden in new[] { "PRIVATE_PROMPT", "PRIVATE_TOKEN", "PRIVATE_SECRET", "PRIVATE_PROOF", "PRIVATE_CREDENTIAL", "RAW_COMMAND", "pwsh" })
             Assert.DoesNotContain(forbidden, text);
     }
-    [Fact]
-    public async Task Receiver_counts_remain_stale_while_offline_and_never_come_from_a_callers_report()
+    [Theory] [InlineData("transport")] [InlineData("cancelled")] [InlineData("access")]
+    public async Task Receiver_counts_remain_stale_while_offline_or_unavailable_and_never_come_from_a_callers_report(string failure)
     {
         var receiver = new FakeReceiver { Value = Snapshot(outcome: "caller reports hour=999 day=999") };
         var vm = new GrantListViewModel(receiver); await vm.RefreshAsync(); var counters = Assert.Single(vm.Rows).Counters;
@@ -37,18 +38,20 @@ public sealed class GrantListTests
         receiver.Online = false; receiver.Value = receiver.Value with { Counters = receiver.Value.Counters with { Hour = 9, Day = 19 } };
         await vm.RefreshAsync(); var row = Assert.Single(vm.Rows);
         Assert.Equal(counters, row.Counters); Assert.Contains("stale", row.State, StringComparison.OrdinalIgnoreCase); Assert.False(row.CanRevoke); Assert.Equal(2, receiver.Reads);
+        receiver.Online = true; receiver.ReadFailure = failure; await vm.RefreshAsync(); Assert.False(vm.Available);
+        Assert.Equal(counters, row.Counters); Assert.False(row.CanRevoke); Assert.Contains("stale", row.State); Safe(Visible(vm));
     }
-    [Fact]
-    public async Task Declining_the_person_confirmation_never_confirms_a_revoke()
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task Declining_or_losing_the_person_confirmation_never_confirms_a_revoke(bool dialogUnavailable)
     {
         var receiver = new FakeReceiver(); var vm = new GrantListViewModel(receiver); await vm.RefreshAsync(); var asked = false;
         await vm.RevokeAsync(Assert.Single(vm.Rows), summary =>
         {
             asked = true; Assert.Contains(Digest, summary); Assert.Contains(Id.ToString(), summary); Assert.Contains("receiver-1", summary);
-            Assert.NotEqual(PreparedDocument, summary); Safe(summary); return Task.FromResult(false);
+            Assert.NotEqual(PreparedDocument, summary); Safe(summary); return dialogUnavailable ? Task.FromException<bool>(new System.Runtime.InteropServices.COMException("PRIVATE_TOKEN")) : Task.FromResult(false);
         });
         Assert.True(asked); Assert.Equal(1, receiver.Prepares); Assert.Equal(0, receiver.Confirms);
-        var row = Assert.Single(vm.Rows); Assert.Empty(row.Receipt); Assert.True(row.CanRevoke); Assert.False(vm.Busy); Safe(Visible(vm));
+        var row = Assert.Single(vm.Rows); Assert.Empty(row.Receipt); Assert.Equal(!dialogUnavailable, row.CanRevoke); Assert.False(vm.Busy); Safe(Visible(vm));
     }
     [Fact]
     public async Task Only_a_verified_tombstone_marks_revoked_and_it_does_not_hide_in_flight_or_live_work()
@@ -59,15 +62,16 @@ public sealed class GrantListTests
         Assert.DoesNotContain("revoked", Assert.Single(vm.Rows).State, StringComparison.OrdinalIgnoreCase);
         receiver.Ack.SetResult(Receipt()); await revoke; var row = Assert.Single(vm.Rows);
         Assert.Contains("revoked", row.State, StringComparison.OrdinalIgnoreCase); Assert.Contains(Digest, row.Receipt);
-        Assert.Contains("pending-one", row.InFlight); Assert.Contains("live-one", row.InFlight);
+        Assert.Contains("pending-one", row.InFlight); Assert.Contains("live-one", row.InFlight); Assert.DoesNotContain("completed-old", row.InFlight);
         Assert.Contains("3/10", row.Counters); Assert.Contains("7/20", row.Counters); Assert.False(row.CanRevoke); Assert.False(vm.Busy); Safe(Visible(vm));
+        receiver.Empty = true; await vm.RefreshAsync(); Assert.Contains("stale", Assert.Single(vm.Rows).State); Assert.Contains(Digest, Assert.Single(vm.Rows).Receipt);
     }
     [Theory]
     [InlineData("agent:123/session", "prompt=PRIVATE_PROMPT token=PRIVATE_TOKEN secret=PRIVATE_SECRET command=pwsh RAW_COMMAND")]
     [InlineData("agent:123/session\nprompt=PRIVATE_PROMPT token=PRIVATE_TOKEN secret=PRIVATE_SECRET pwsh RAW_COMMAND", "delivered")]
     public async Task Malicious_caller_or_outcome_words_never_expose_prompts_tokens_secrets_or_raw_commands(string caller, string outcome)
     {
-        var vm = new GrantListViewModel(new FakeReceiver { Value = Snapshot(caller, outcome) }); await vm.RefreshAsync();
+        var value = Snapshot(caller, outcome); var vm = new GrantListViewModel(new FakeReceiver { Value = value with { Counters = value.Counters with { PendingRequests = [caller], LiveSessions = [caller] } } }); await vm.RefreshAsync();
         Assert.Single(vm.Rows); Safe(Visible(vm));
         if (outcome != "delivered") Assert.Contains("Unknown", Visible(vm), StringComparison.OrdinalIgnoreCase);
     }
@@ -98,10 +102,11 @@ public sealed class GrantListTests
         Assert.Empty(row.Receipt); Assert.False(row.CanRevoke); Assert.False(vm.Busy); Safe(Visible(vm));
     }
     [Theory]
-    [InlineData(false)] [InlineData(true)]
-    public async Task A_lost_confirmation_even_if_the_receiver_goes_offline_never_claims_revoked_or_hides_work(bool offline)
+    [InlineData(false, "io")] [InlineData(true, "io")]
+    [InlineData(false, "transport")] [InlineData(false, "cancelled")] [InlineData(false, "access")] [InlineData(false, "json")]
+    public async Task A_lost_confirmation_even_if_the_receiver_goes_offline_never_claims_revoked_or_hides_work(bool offline, string failure)
     {
-        var receiver = new FakeReceiver { Lost = true, OfflineAfterSend = offline }; var vm = new GrantListViewModel(receiver); await vm.RefreshAsync();
+        var receiver = new FakeReceiver { Lost = true, OfflineAfterSend = offline, FailureKind = failure }; var vm = new GrantListViewModel(receiver); await vm.RefreshAsync();
         await vm.RevokeAsync(Assert.Single(vm.Rows), _ => Task.FromResult(true)); var row = Assert.Single(vm.Rows);
         Assert.Equal(1, receiver.Confirms); Assert.Contains("pending", row.State, StringComparison.OrdinalIgnoreCase);
         if (offline) Assert.Contains("stale", row.State, StringComparison.OrdinalIgnoreCase);
@@ -114,16 +119,16 @@ public sealed class GrantListTests
         public bool Online { get; set; } = true;
         public string? Problem { get; set; } public string? ReadProblem;
         public GrantSnapshot Value = Snapshot(); public GrantRevokeReceipt Result = Receipt();
-        public bool Lost, OfflineAfterSend; public int Reads, Prepares, Confirms;
+        public bool Lost, OfflineAfterSend, Empty; public int Reads, Prepares, Confirms; public string FailureKind = "io"; public string? ReadFailure;
         public TaskCompletionSource<GrantRevokeReceipt>? Ack;
         public Task<GrantReadResult> ReadAsync(CancellationToken ct = default)
-        { Reads++; return Task.FromResult(new GrantReadResult(ReadProblem is null ? [Value] : [], ReadProblem ?? Problem)); }
+        { Reads++; if (ReadFailure is { } failure) throw Failure(failure); return Task.FromResult(new GrantReadResult(ReadProblem is null && !Empty ? [Value] : [], ReadProblem ?? Problem)); }
         public Task<GrantRevokePreview> PrepareRevokeAsync(Guid id, long generation, CancellationToken ct = default)
         { Assert.Equal(Id, id); Assert.Equal(2, generation); Prepares++; return Task.FromResult(new GrantRevokePreview(id, generation, Receiver, "1042", "default", "grant.revoke", PreparedDocument, Digest)); }
         public Task<GrantRevokeReceipt> ConfirmRevokeAsync(Guid id, long generation, string digest, CancellationToken ct = default)
         {
             Assert.Equal(Id, id); Assert.Equal(2, generation); Assert.Equal(Digest, digest); Confirms++;
-            if (Lost) { Online = !OfflineAfterSend; throw new IOException("PRIVATE_TOKEN RAW_COMMAND"); }
+            if (Lost) { Online = !OfflineAfterSend; throw Failure(FailureKind); }
             return Ack?.Task ?? Task.FromResult(Result);
         }
     }
