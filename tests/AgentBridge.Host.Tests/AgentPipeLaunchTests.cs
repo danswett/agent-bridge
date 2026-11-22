@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.Launch;
 using AgentBridge.Host.Delivery.Launch;
@@ -27,11 +28,12 @@ public sealed class AgentPipeLaunchTests : IDisposable
     LaunchConfig Running(params string[] extraArgs) => LaunchConfig.Default with { Workspaces = [new("App", folder, true)],
         Agents = new Dictionary<string, AgentConfig> { ["claude"] = AgentConfig.Default with { ExtraArgs = extraArgs } } };
 
-    sealed record Pipe(Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, Chan Channel, AgentCredentials Credentials);
+    sealed record Pipe(Func<IProtocolChannel, string, JsonElement, Task<object?>> Handle, Chan Channel, AgentCredentials Credentials,
+        AgentPipeLaunch Launch);
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false)
+        P256KeyPair? grantKey = null, bool legacy = false, FleetPublisherTests.Source? source = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -41,11 +43,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
             new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!);
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder);
-        var service = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, agentLaunch: legacy ? null : agentLaunch), channel, credentials);
+            credentials: credentials, audit: audit, agentLaunch: legacy ? null : agentLaunch), channel, credentials, agentLaunch);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -131,16 +133,17 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
-    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key)
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null,
+        FleetPublisherTests.Source? source = null)
     {
-        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key);
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, source: source);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
         var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
         var store = new GrantStore(folder, key, new(folder), scope);
         var grant = new GrantDocument(1, Guid.NewGuid(), "123", new("123", new('a', 32), "AQ", now, new('a', 64)),
             new(new('a', 32), Path.GetFileName(folder)), [new("123", new('a', 32), caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc))],
-            ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
+            ["launch"], scope, caps ?? new(3, 3, 2), now, 1, now.AddHours(8));
         Assert.True(store.Issue(grant).Usable);
         return (pipe, grant, store);
     }
@@ -202,6 +205,87 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    [Fact]
+    public async Task Reviewer_recovery_does_not_bind_a_foreign_principals_status()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, store) = Granted(key, source: source);
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+        var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        var counters = new GrantCounters(store);
+        Assert.True(counters.Reserve(grant.Id, 1, input.Request, grant.Subjects[0], binding).Accepted);
+        Assert.True(counters.Abandon(input.Request, false).Accepted);
+        var foreign = Guid.NewGuid().ToString("D");
+        source.Sessions.Add(source.Sessions[0] with { Id = foreign });
+        source.Binding = id => id == foreign ? new(int.MaxValue, DateTimeOffset.UtcNow) : null;
+        launcher.Statuses.Add(new(input.Request.ToString("D"), "started", foreign, "ask", false, DateTimeOffset.UtcNow)
+        { Principal = "agent:machine/another-session", SourceRequest = Guid.NewGuid().ToString("D") });
+        var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
+        var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
+        Assert.Equal(GrantLaunchOutcome.Unconfirmed, replay.Reservation!.Outcome);
+        Assert.Null(replay.Reservation.Target);
+    }
+
+    void RegistrationEvidence(Pipe pipe, FleetPublisherTests.Source source)
+    {
+        launcher.BeforeTerminal = (launch, principal, session) =>
+        {
+            var startedAt = DateTimeOffset.UtcNow;
+            source.Sessions.Add(source.Sessions[0] with { Id = session });
+            source.Binding = id => id == session ? new(int.MaxValue, startedAt) : null;
+            launcher.Statuses.Add(new(launch.Request, "started", session, "ask", false, DateTimeOffset.UtcNow)
+            { Principal = principal });
+            launcher.Statuses.Add(new(request, "started", session, "ask", false, DateTimeOffset.UtcNow)
+            { Principal = principal, SourceRequest = launch.Request });
+        };
+        launcher.AfterTerminal = (launch, _, session) => pipe.Launch.Registered(Guid.Parse(launch.Request), session);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reviewer_registration_without_terminal_audit_never_replays_started(bool reconcile)
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, _) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        launcher.SkipTerminal = true;
+        var first = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Unconfirmed, first.Result.Outcome);
+        Assert.DoesNotContain(GateAuditProjection.Load(folder).Rows,
+            row => row.Action == "session.launch" && row.Gate?.Phase == "terminal");
+        if (reconcile)
+        {
+            var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials,
+                new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher), launcher);
+            await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)! with { Request = Guid.NewGuid() });
+        }
+        var duplicate = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Unconfirmed, duplicate.Result.Outcome);
+    }
+
+    [Fact]
+    public async Task Reviewer_confirmed_permission_replay_uses_registered_process_evidence()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, store) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        var first = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Started, first.Result.Outcome);
+        Assert.Equal("ask", first.Permissions);
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
+        var duplicate = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(first.Result.Session, duplicate.Result.Session);
+        Assert.Equal("ask", duplicate.Permissions);
+        Assert.Equal(LaunchOutcome.Started, duplicate.Result.Outcome);
+        Assert.Equal(1, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;
@@ -209,6 +293,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public LaunchConfig? FleetConfig { get; set; }
         public bool Available => true;
         public Action? BeforeDispatch;
+        public List<LaunchStatus> Statuses { get; } = [];
+        public IReadOnlyList<LaunchStatus> LaunchStatuses() => Statuses;
+        public Action<LaunchRequest, string, string>? BeforeTerminal, AfterTerminal;
+        public bool SkipTerminal;
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => Task.FromResult(new LaunchOptions
         { Agents = [new() { Id = "claude", Label = "Claude", Kind = AgentKind.Claude, Models = ["small"], Efforts = ["medium"], Contexts = ["default"] }],
             Workspaces = [new() { Label = "App", Path = "unused", Isolate = true }], Defaults = new() { Permissions = "ask" } });
@@ -226,9 +314,12 @@ public sealed class AgentPipeLaunchTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             if (prepare(Guid.Parse(request.Request)) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "audit")); }
-            var session = $"session-{Interlocked.Increment(ref Launches)}";
+            var count = Interlocked.Increment(ref Launches);
+            var session = BeforeTerminal is null ? $"session-{count}" : Guid.NewGuid().ToString("D");
             Peers.Add(peer);
-            registered(session);
+            BeforeTerminal?.Invoke(request, peer, session);
+            if (!SkipTerminal) { registered(session); }
+            AfterTerminal?.Invoke(request, peer, session);
             return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
         }
     }

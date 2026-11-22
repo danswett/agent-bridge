@@ -23,6 +23,9 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     static string Key(string principal, string request) =>
         Prefix + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(principal + "\n" + request)))[..59];
 
+    internal static Guid LaunchId(string principal, string request) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes("launcher\n" + Key(principal, request))).AsSpan(0, 16));
+
     // Again at dispatch, after the launch service's own waits: the credential, grant and policy as they are now.
     string? Still(AgentCredential caller, LaunchRequest r)
     {
@@ -114,7 +117,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         }
         // The launcher hears an id of this caller's own, so no other launch (HA's or another caller's)
         // shares its events or audit rows. Pending first: a registration may come before the launch returns.
-        var id = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("launcher\n" + key)).AsSpan(0, 16));
+        var id = LaunchId(principal, request.Request);
         if (fleet is not null)
         {
             try { fleetGrants!.Admit(fleet); }
@@ -132,7 +135,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // An exception from here leaves the record launching and the slot held: something may have started.
         if (fleet is not null) { fleet.Starting = true; }
         var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit,
-            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString());
+            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString(),
+            confirmed: fleet is null ? null : session => Registered(id, session, confirmed: true));
         sessions.PublishLaunchAlias(principal, request.Request, request with { Request = id.ToString("D") }, result);
         if (result is { Outcome: LaunchOutcome.Started, Session: { } session })
         {
@@ -155,9 +159,11 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     }
 
     // The launcher's word on a launch (ISessionLauncher's events), also after it answered unconfirmed.
-    public void Registered(Guid id, string session)
+    public void Registered(Guid id, string session) => Registered(id, session, confirmed: false);
+
+    void Registered(Guid id, string session, bool confirmed)
     {
-        if (Take(id) is not { } p) { return; }
+        if (Take(id, unverifiedRegistration: !confirmed) is not { } p) { return; }
         try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session); } catch (InvalidOperationException) { }
         Save(() => store!.Launched(p.Key, session));
         if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Started) { Session = session }); }
@@ -180,9 +186,14 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
 
     void Pending(Guid id, string principal, string request, string key, FleetLaunchContext? fleet) { lock (unconfirmed) { unconfirmed[id] = (principal, request, key, fleet); } }
 
-    (string Principal, string Request, string Key, FleetLaunchContext? Fleet)? Take(Guid id)
+    (string Principal, string Request, string Key, FleetLaunchContext? Fleet)? Take(Guid id, bool unverifiedRegistration = false)
     {
-        lock (unconfirmed) { return unconfirmed.Remove(id, out var p) ? p : null; }
+        lock (unconfirmed)
+        {
+            if (!unconfirmed.TryGetValue(id, out var p) || unverifiedRegistration && p.Fleet is not null) { return null; }
+            unconfirmed.Remove(id);
+            return p;
+        }
     }
 
     static LaunchResult Told(LaunchRequestRecord r) => r.State switch
