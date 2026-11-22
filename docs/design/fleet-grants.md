@@ -316,6 +316,40 @@ is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
 
+### Sealed paginated grant.read DATA
+
+`FleetGrantReadDataResult(Page, Proof)` and `FleetGrantReadDataProof.Seal/Verify/Parse`
+are DATA-only contracts, distinct from the required read-problem seal; neither
+substitutes for the other. Verify returns a typed, snapshotted `FleetGrantReadDataPage`
+or `InvalidDataException`. No producer, UI, dispatch, policy or authority is enabled.
+The required camelCase page fields are offset, requestedGeneration, generation,
+observedAt, grants, next, total. Rows are exactly document/counters/stale, reusing
+the normalized full G1 grant document and App counters: every constructor field
+is required, including explicit expiresAt/roles/stopTargets/allowAllLaunch.
+Only counters.lastCaller/lastOutcome permit explicit null; missing, unknown,
+duplicate, wrong-case, wrong-type and other null fields refuse recursively.
+
+Offsets and sealed total are 0..256; pages contain 0..16 complete id-ascending,
+nonduplicate rows and at most a 30 KiB framed body. Fewer rows may fit the byte cap;
+oversize refuses, never truncates. Let end=offset+rowCount: end<=total;
+next=-1 iff end==total, otherwise next=end>offset. Empty final pages are allowed,
+empty continuations and premature/missing end markers refuse.
+Caller retains `FleetGrantReadDataContext(Context, Offset, Generation, Total)`.
+Initial selectors are (0,0,-1), where -1 means the total is not yet known.
+Verified DATA generation must be >0. Continuations retain positive generation,
+positive offset and the same verified total; changed generation/total refuses.
+Outer Context is the caller's account/profile/receiver/action grant.read/fresh GUID.
+Document account/audience match it; a reply never supplies the expected context.
+
+Body: `Framing.F(Framing.Label("agent-bridge fleet read data v1"), offset,
+requestedGeneration, generation, observedAt, total, framed rows, next)`.
+Numbers are signed 64-bit big-endian and observedAt invariant round-trip `O` UTF-8.
+Each row frames canonical UTF-8 document JSON, canonical counters JSON, stale byte.
+Canonical JSON uses the normalized G1/App record property order, camelCase, strict
+typed values, explicit fields/nulls and ordered arrays, independent of input object
+property order. Producers must keep all rows/counters/total in a generation immutable;
+consumers retain verified selectors and do not automatically mix/restart snapshots.
+
 ### Sealed grant.prepareIssue prepared value
 
 `FleetGrantPrepareIssueResult(Prepared, Proof)` carries `FleetGrantPrepared`
