@@ -294,6 +294,28 @@ An offline receiver is **Revocation pending**, not revoked; no future-use
 guarantee exists there until its receipt or the maximum 24-hour expiry.
 The app never reissues the same id to repair missing state.
 
+### Sealed grant.read problem
+
+A `grant.read` reply carries a REQUIRED closed `Problem` inside the seal:
+`FleetGrantReadProblem` = None 0, RotationRequired 1, Unavailable 2, Other 3.
+The reply JSON is exactly `{"problem":"<name>"}` with the exact, case-sensitive
+names `none`, `rotationRequired`, `unavailable`, `other`; a missing, null, number,
+unknown, extra, duplicate or differently cased name or value refuses. There is no default,
+and the diagnostic `GrantReadResult.Problem` string, an audit line or an unsigned
+flag never supplies it.
+
+`FleetGrantReadProof.Seal(reply, context, signer)` returns
+`FleetGrantReadResult(Reply, Proof)`. The binary body is
+`Framing.F("agent-bridge fleet read problem v1", problem byte)`. The outer
+`FleetGrantProof` context (account, profile, receiver, action `grant.read`, fresh
+request) is the caller-retained one, never one echoed by the reply.
+`FleetGrantReadProof.Verify(result, trustedHostSign, expected)` returns the typed
+problem only after the signature and the exact body match; anything else throws
+`InvalidDataException`. First issuance may be enabled only when the verified value
+is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
+refusal never qualify. This contract has no producer: until the receiver seals it
+the value is unavailable, not None.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
