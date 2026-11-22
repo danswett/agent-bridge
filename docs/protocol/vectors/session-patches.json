@@ -4098,7 +4098,8 @@
             "set": {
               "activity": {
                 "response": "Started both delegates and the background command; I will summarise when they finish.",
-                "responseTurn": "vVPp6iICyk4Dsv2Y"
+                "responseTurn": "vVPp6iICyk4Dsv2Y",
+                "responseId": "jBlKJOpyPU7GlGWb.0"
               },
               "class": "done"
             }
@@ -4121,6 +4122,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4208,6 +4210,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4303,6 +4306,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "jBlKJOpyPU7GlGWb.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4358,7 +4362,8 @@
             "revision": 13,
             "set": {
               "activity": {
-                "response": "The first delegate listed two files."
+                "response": "The first delegate listed two files.",
+                "responseId": "8FIP-LAV9q1bmU3g.0"
               }
             }
           },
@@ -4380,6 +4385,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4471,6 +4477,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4552,6 +4559,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "8FIP-LAV9q1bmU3g.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4609,7 +4617,8 @@
             "revision": 16,
             "set": {
               "activity": {
-                "response": "The nested delegate reported the latest commit."
+                "response": "The nested delegate reported the latest commit.",
+                "responseId": "OAlfw3XyYSpSIBhY.0"
               }
             }
           },
@@ -4631,6 +4640,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "OAlfw3XyYSpSIBhY.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4712,6 +4722,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "OAlfw3XyYSpSIBhY.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4766,7 +4777,8 @@
             "set": {
               "status": "idle",
               "activity": {
-                "response": "Both delegates finished: two files, and one commit.\nThe background command finished too."
+                "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
+                "responseId": "dqGYhzcIYcQgBlat.0"
               },
               "class": "done"
             }
@@ -4788,6 +4800,7 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turn": "vVPp6iICyk4Dsv2Y",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4865,6 +4878,7 @@
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4965,6 +4979,7 @@
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5066,6 +5081,7 @@
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "vVPp6iICyk4Dsv2Y",
+              "responseId": "dqGYhzcIYcQgBlat.0",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5122,6 +5138,7 @@
               "activity": {
                 "response": "You picked beta.",
                 "responseTurn": "R89XN4O1WwEWPHOW",
+                "responseId": "bd9LyYxKUDpZCJnG.0",
                 "turnCount": 2
               },
               "class": "done"
@@ -5144,6 +5161,7 @@
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
               "turn": "R89XN4O1WwEWPHOW",
               "responseTurn": "R89XN4O1WwEWPHOW",
+              "responseId": "bd9LyYxKUDpZCJnG.0",
               "turnCount": 2,
               "compactions": 0
             },
