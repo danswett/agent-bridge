@@ -168,6 +168,34 @@ public class HistoryTests
         Assert.Equal(part.Text, source.Get(Id)!.Activity.Response);
     }
 
+    [Fact]
+    public async Task Claude_a_delayed_notice_cannot_give_composite_text_the_first_history_parts_identity()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        const string notice = "<task-notification><task-id>agent-fixture</task-id><status>completed</status></task-notification>";
+        var launched = JsonNode.Parse(Claude.ToolResult("task", 3))!.AsObject();
+        launched["toolUseResult"] = new JsonObject { ["status"] = "async_launched", ["agentId"] = "agent-fixture" };
+        var delivered = JsonNode.Parse(Claude.User(notice, 7))!.AsObject();
+        delivered["origin"] = new JsonObject { ["kind"] = "task-notification" };
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.Assistant(2, null, Claude.ToolUse("task", "Agent", new JsonObject())),
+            launched.ToJsonString(),
+            new JsonObject { ["type"] = "queue-operation", ["operation"] = "enqueue", ["content"] = notice, ["timestamp"] = Copilot.At(4) }.ToJsonString(),
+            Claude.Assistant(5, null, Claude.ToolUse("wake", "SendMessage", new JsonObject { ["to"] = "agent-fixture" })),
+            Claude.AssistantMessage("message", 6, null, Claude.Text("One")),
+            delivered.ToJsonString(),
+            Claude.AssistantMessage("message", 8, null, Claude.Text("Two")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+        Assert.Equal(["One", "Two"], parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
+        Assert.Equal("One\n\nTwo", source.Get(Id)!.Activity.Response);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+    }
+
     [Theory]
     [InlineData("missing-message-id")]
     [InlineData("intervening-thinking")]
