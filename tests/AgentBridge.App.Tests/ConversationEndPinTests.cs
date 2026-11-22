@@ -363,8 +363,8 @@ public sealed class ConversationEndPinTests
         Assert.Equal([300.0], view.Scroller.Targets);
     }
 
-    [Theory, InlineData(false), InlineData(true)]
-    public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end(bool remeasured)
+    [Theory, InlineData(false, 150), InlineData(true, 299), InlineData(true, 100)]
+    public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end(bool remeasured, double retreat)
     {
         var view = new SessionView();
         if (remeasured)
@@ -378,7 +378,7 @@ public sealed class ConversationEndPinTests
         else { view.Moved(200); }
         view.ResetSessionForProbe();
         view.Follow();
-        view.Moved(remeasured ? 52005 : 50);
+        view.Moved((remeasured ? 52304 : 200) - retreat);
         view.Follow();
         Assert.False(view.Pinned);
         Assert.Empty(view.Scroller.Targets);
