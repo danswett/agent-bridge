@@ -29,6 +29,7 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
 - ID-first host selection ([#3607](https://github.com/danswett/agent-bridge/issues/3607)): `machine` is an exact present host device ID (32 hex digits; publishers use canonical lowercase and comparisons are exact). Names are display only; names, fragments and a name-reusing successor never retarget. Unknown or offline IDs refuse loudly with the ID, before signing or opening a channel; the host never retries or falls back to HA.
 - Sender boundary: this cut acquires no session roster. The pipe still takes the receiver's exact session node, and the receiver retains its existing full-ID/node resolution and final-effect fences below. No role IDs or claims are introduced.
 - Own machines and own agents only. A message from any other account is never accepted, whatever it carries.
+- Same machine means local delivery through the same signed receiver checks (owner-approved 14:34 PT Nov 21, 2026). A target device id equal to the sending host's own id routes locally, even without relay presence for itself. The host passes the signed envelope through the same receiver, replay/rate limits and reply-target gates, bound to its own device key and current signed-in account; it never opens a remote channel to itself. Unknown other host IDs refuse loudly as `noSuchMachine`. A busy local target is refused as `busy`, not `offline`; queueing is a separate change.
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
@@ -41,7 +42,7 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
 - The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
   The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
-- A device ID absent from presence fails at once as `refused: noSuchMachine`, naming the ID. Nothing is signed or queued, and identity refusals hold without HA fallback.
+- A remote-host device ID absent from presence fails at once as `refused: noSuchMachine`, naming the ID. Nothing is signed or queued, and identity refusals hold without HA fallback.
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account

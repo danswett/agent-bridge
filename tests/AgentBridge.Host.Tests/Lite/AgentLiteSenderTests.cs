@@ -95,11 +95,11 @@ public class AgentLiteSenderTests
     }
 
     // Answers as the real receiver does, so the sealed envelope is checked end to end rather than assumed.
-    static void Receiving(Rig r, LiteDelivery? result = null)
+    static void Receiving(Rig r, LiteDelivery? result = null, string? target = null)
     {
         r.Deliver = new Deliver(result ?? new LiteDelivery(true, null));
         var receiver = new LiteReceiver(new Mode(), r.Deliver);
-        var channel = new LiteChannel(Self, "host", OwnStatic, Other, Account, true);
+        var channel = new LiteChannel(Self, "host", OwnStatic, target ?? Other, Account, true);
         r.Link.Reply = (req, ct) => receiver.ReceiveAsync(channel, System.Text.Json.JsonSerializer.SerializeToElement(req), ct);
     }
 
@@ -242,7 +242,7 @@ public class AgentLiteSenderTests
     }
 
     [Fact]
-    public async Task Only_the_exact_present_host_other_than_this_one_is_a_target_despite_duplicate_names()
+    public async Task Only_the_exact_present_host_is_a_target_despite_duplicate_names()
     {
         using var r = new Rig();
         r.Link.Hosts = [new PresenceEntry(Other, "node-b", "phone", DateTimeOffset.UnixEpoch), new PresenceEntry(Self, "node-b", "host", DateTimeOffset.UnixEpoch)];
@@ -255,6 +255,23 @@ public class AgentLiteSenderTests
         Assert.Equal(Other, r.Deliver.Envelope!.Body.Target.Machine);
         r.Link.Account = "";
         Assert.Equal(LiteKind.Undeliverable, (await r.Send(machine: Other)).Kind);
+        Assert.Equal((1, 1), (r.Link.Opened, r.Signed));
+    }
+
+    [Fact]
+    public async Task The_own_host_device_id_resolves_locally_without_presence_and_names_never_route()
+    {
+        using var r = new Rig();
+        Receiving(r, target: Self);
+        r.Link.Present = false;
+        Assert.Equal(LiteKind.Delivered, (await r.Send(machine: Self)).Kind);
+        Assert.Equal(Self, r.Deliver.Envelope!.Body.Target.Machine);
+        r.Link.Present = true;
+        r.Link.Hosts = [new PresenceEntry(Self, "node-b", "host", DateTimeOffset.UnixEpoch)];
+        r.Link.Hosts.Add(new PresenceEntry(Other, "node-b", "host", DateTimeOffset.UnixEpoch));
+        var refused = await r.Send(machine: "node-b");
+        Assert.Equal(LiteKind.Refused, refused.Kind);
+        Assert.Contains("names never route", refused.Code);
         Assert.Equal((1, 1), (r.Link.Opened, r.Signed));
     }
 

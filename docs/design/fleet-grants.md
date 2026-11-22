@@ -10,6 +10,14 @@ and no eviction. Every generation requires its matching intact audit intent/term
 an incomplete transaction or replay refuses all use rather than repairing/resetting state.
 Issuance uses full G1 validation against the receiver's required known-options snapshot.
 Retired audit coverage refuses, including when the store is missing; it cannot reset tombstones.
+Adopted audit history fails closed for grants: any adopted stream refuses with AuditIncomplete.
+Bootstrap adopts existing files whenever no head exists, including after an attacker
+deletes a head over rolled-back store and audit files. Heads are never trusted to prove a
+legacy-only cutoff, and nothing else tamper-evident proves one, so no cutoff claim is accepted.
+No migration: grants are unshipped. A legacy profile's first Issue adopts it; that grant and all
+later grant use refuse. Native launch/stop gates and the launch preflight are unaffected.
+Residual (pre-existing): rolling back store, audit and heads together, or clearing a head's
+`adopted` flag, is undetectable without a keyed or external anchor.
 
 ## Authority and existing boundaries
 

@@ -55,7 +55,8 @@ public sealed class AgentLiteSender(
         // One account is read here and held through signing and the opened channel, so a sign-in meanwhile sends nothing.
         var account = link.Account;
         if (!Wire.IsDeviceId(input.Machine)) { return Out(LiteKind.Refused, MachineRefusal(input.Machine, BadMachine, "must be an exact device ID; names never route")); }
-        var ids = link.Presence.Where(p => p.Kind == "host" && p.Id != link.Self && p.Id == input.Machine).Select(p => p.Id).Distinct().ToList();
+        var ids = input.Machine == link.Self ? [link.Self]
+            : link.Presence.Where(p => p.Kind == "host" && p.Id == input.Machine).Select(p => p.Id).Distinct().ToList();
         if (string.IsNullOrEmpty(account)) { return Out(LiteKind.Undeliverable, OfflineText); }
         if (ids.Count == 0) { return Out(LiteKind.Refused, MachineRefusal(input.Machine, NoSuchMachine, "is unknown or offline; nothing was queued")); }
         var peerId = ids[0];
@@ -143,18 +144,28 @@ public sealed class AgentLiteSender(
 }
 
 // The link on the live relay connection, attached and detached as the host connects and disconnects.
-public sealed class RelayLiteLink : ILiteLink
+public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink
 {
     sealed record Current(RelayClient Relay, ChannelHub Hub);
     Current? now;
+    readonly byte[]? localStatic = localStatic?.ToArray();
+    readonly string localId = localStatic is null ? "" : Wire.DeviceId(localStatic);
 
     public void Attach(RelayClient? relay, ChannelHub? hub) => Volatile.Write(ref now, relay is null || hub is null ? null : new Current(relay, hub));
-    public string Self => now?.Relay.DeviceId ?? "";
-    public string Account => now?.Relay.AccountId ?? "";
+    public string Self => now?.Relay.DeviceId ?? localId;
+    public string Account => now?.Relay.AccountId ?? localAccount?.Invoke() ?? "";
     public IReadOnlyList<PresenceEntry> Presence => now?.Relay.Presence ?? [];
 
     public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct)
     {
+        if (localReceiver is not null && peerId == localId)
+        {
+            var currentAccount = localAccount?.Invoke() ?? "";
+            if (string.IsNullOrEmpty(currentAccount) || account != currentAccount || Self != localId) { throw new LitePeerOfflineException("local account changed"); }
+            ct.ThrowIfCancellationRequested();
+            return await localReceiver.ReceiveAsync(new LiteChannel(localId, "host", localStatic, localId, currentAccount, true),
+                JsonSerializer.SerializeToElement(request), ct);
+        }
         var l = Volatile.Read(ref now) ?? throw new LitePeerOfflineException("not connected to the relay");
         SecureChannel ch;
         try { ch = await l.Hub.OpenAsync(peerId, TimeSpan.FromSeconds(10)); }
