@@ -15,6 +15,8 @@ internal sealed record PriorityDecision(bool Accepted, string Priority, string? 
 public sealed partial class DeliveryJournal
 {
     readonly List<DeliveryJournalRecord> priorityRecords = [];
+    readonly HashSet<(string Principal, GrantAudience Receiver)> refusedPriority = [];
+    string priorityTail = "";
 
     // Only trusted ingress may supply the authenticated person and captured receiver binding.
     internal void IssuePriority(PriorityCapability capability, DeliverySender person, GrantAudience receiver,
@@ -23,6 +25,7 @@ public sealed partial class DeliveryJournal
         lock (gate)
         {
             if (!person.Owner || !current() || !ValidPriority(capability) || capability.Issuer.Account != person.Id ||
+                refusedPriority.Contains((capability.Principal, capability.Audience)) ||
                 capability.Audience != receiver || capability.Issuer.IssuedAt > now ||
                 now >= capability.ExpiresAt ||
                 priorityRecords.Any(r => r.Capability?.Id == capability.Id))
@@ -100,6 +103,7 @@ public sealed partial class DeliveryJournal
 
     bool ActivePriority(PriorityCapability cap, DateTimeOffset now)
     {
+        if (refusedPriority.Contains((cap.Principal, cap.Audience))) { return false; }
         if (priorityRecords.Any(r => r.Capability?.Id == cap.Id && r.Reason is "revoked" or "expired")) { return false; }
         if (now >= cap.ExpiresAt)
         {
@@ -128,13 +132,34 @@ public sealed partial class DeliveryJournal
     void ReplayPriority(DeliveryJournalRecord record)
     {
         if (!Matches(record, "") || record.RecordedAt == default ||
-            record.PriorityPrevious != (priorityRecords.LastOrDefault()?.Hmac ?? "") ||
-            record.Reason is not ("issued" or "revoked" or "expired" or "requested" or "granted" or "consumed" or
-                "no-capability" or "quota" or "demoted" or "missing-reason" or "invalid-priority" or "lane-full") ||
+            record.PriorityPrevious != priorityTail || !PriorityAction(record.Reason) ||
             record.Capability is { } cap && !ValidPriority(cap) ||
             priorityRecords.LastOrDefault() is { } previous && record.RecordedAt < previous.RecordedAt)
-        { throw new InvalidDataException("Priority journal evidence is invalid; no capability is usable."); }
+        {
+            if (RefusePriorityChain(record)) { return; }
+            throw new InvalidDataException("Priority journal evidence is invalid; no capability is usable.");
+        }
         priorityRecords.Add(record);
+        priorityTail = record.Hmac;
+    }
+
+    static bool PriorityAction(string? action) => action is "issued" or "revoked" or "expired" or "requested" or
+        "granted" or "consumed" or "no-capability" or "quota" or "demoted" or "missing-reason" or "invalid-priority" or "lane-full";
+
+    bool RefusePriorityChain(DeliveryJournalRecord record, bool legacy = false)
+    {
+        var cap = priorityRecords.LastOrDefault(r => r.Capability is { } c &&
+            (r.Header.Id == record.Header.Id || c.Id.ToString("D") == record.Header.Id || c.Id == record.Capability?.Id))?.Capability;
+        if (cap is null) { return false; }
+        if (legacy && cap.Id.ToString("D") != record.Header.Id && record.Capability is null &&
+            record.PriorityReason is null && record.PriorityPrevious is null && !PriorityAction(record.Reason) &&
+            (record.Header.N != 0 || record.Header.Seq is not null || Matches(record, "")))
+        { return false; }
+        refusedPriority.Add((cap.Principal, cap.Audience));
+        // Keep the hash cursor for later authenticated links, never the refused authority fact.
+        priorityTail = record.Hmac;
+        log("priority journal chain refused; no authority or quota renewal");
+        return true;
     }
 
     void PriorityRecord(Guid request, string target, DeliverySender sender, string action, DateTimeOffset now,
@@ -144,11 +169,12 @@ public sealed partial class DeliveryJournal
         { throw new InvalidOperationException("Priority journal uncertain or clock moved backwards; no authority granted."); }
         var header = DeliveryEnvelope.Prepare(new(sender.From, request.ToString("D"), null, now, "normal", 0), "").Header;
         var record = new DeliveryJournalRecord(target, header, "priority", now, "", Reason: action)
-            { Capability = capability, PriorityReason = reason, PriorityPrevious = priorityRecords.LastOrDefault()?.Hmac ?? "" };
+            { Capability = capability, PriorityReason = reason, PriorityPrevious = priorityTail };
         record = record with { Hmac = Convert.ToBase64String(Mac(record, "")) };
         try { append(JsonSerializer.SerializeToUtf8Bytes(record, ProtocolJson.Options)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         { Uncertain = true; log($"priority journal write failed ({e.GetType().Name}); no authority granted"); throw; }
         priorityRecords.Add(record);
+        priorityTail = record.Hmac;
     }
 }

@@ -159,8 +159,11 @@ internal trusted-person seams only; the compatible `GrantIssuer` is already auth
 The separate `PriorityCapability` lives in the existing node-bound DeliveryJournal, not the fleet
 GrantStore: it conveys no read/reply/answer/trust authority and is not a fleet launch/stop grant.
 Request, issue, grant, consumption, refusal, demotion and revocation are flushed/MACed journal facts.
-Any record carrying priority fields with a non-Priority state refuses replay before the legacy path;
-changing a final revocation, expiry or consumption state cannot bypass priority authentication.
+Priority facts require Priority state, MAC and previous-MAC verification. Relabeled or stripped policy
+facts refuse their verified principal/receiver chain: no current authority, replacement capability or quota refund.
+The refusal survives replay; other receiver chains and unrelated legacy handoffs still reopen.
+Ordinary legacy records retain node-bound Unconfirmed classification and body-MAC verification when body evidence exists;
+no missing-body guess, new replay-body resolver, UI, live adapter or migration is introduced.
 Policy facts link their previous MAC; whole-file rollback still requires the held
 [external/keyed anchor (#3720)](https://github.com/danswett/agent-bridge/issues/3720) before activation.
 Max three consumptions per principal/receiver rolling hour spans all its capabilities; stricter caps,

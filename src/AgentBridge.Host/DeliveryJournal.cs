@@ -42,9 +42,12 @@ public sealed partial class DeliveryJournal : IDisposable
         foreach (var r in reservations ?? [])
         {
             var state = Enum.Parse<DeliveryState>(r.State, true);
-            if (state != DeliveryState.Priority &&
-                (r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null))
-            { throw new InvalidDataException("Priority journal evidence cannot enter legacy replay."); }
+            if (state != DeliveryState.Priority)
+            {
+                if (RefusePriorityChain(r, legacy: true)) { continue; }
+                if (r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null)
+                { throw new InvalidDataException("Priority journal evidence cannot enter legacy replay."); }
+            }
             if (state == DeliveryState.Priority) { ReplayPriority(r); continue; }
             var id = (r.Session, r.Header.Id);
             latest[id] = r;
