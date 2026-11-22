@@ -18,6 +18,7 @@ public sealed class DeliveryLaneSchedulerTests
         public readonly DeliveryLaneScheduler Scheduler;
         public (bool? Idle, bool? Empty) Screen = (true, true);
         public Func<Task> Sending = () => Task.CompletedTask;
+        public Action? Noticing;
         public bool FailWrite;
         public Fake(IEnumerable<DeliveryJournalRecord>? reservations = null)
         {
@@ -33,7 +34,7 @@ public sealed class DeliveryLaneSchedulerTests
                     Journal.State("other", header.Id));
                 await Sending();
                 Sent.Add(header);
-            }, n => { Assert.Equal("system", n.From); Notices.Add((n.Item.Id, n.Reason)); }, Clock);
+            }, n => { Assert.Equal("system", n.From); Notices.Add((n.Item.Id, n.Reason)); Noticing?.Invoke(); }, Clock);
         }
         public bool Add(string id, DeliveryClass sender = DeliveryClass.Agent, string priority = "normal",
             string session = "target") => Scheduler.Enqueue(session,
@@ -161,6 +162,9 @@ public sealed class DeliveryLaneSchedulerTests
         using var f = new Fake();
         for (var i = 0; i < 50; i++) { f.Add("n" + i); }
         for (var i = 0; i < 10; i++) { f.Add("s" + i, DeliveryClass.System); }
+        f.Noticing = () => throw new IOException("notice failed");
+        Assert.Throws<IOException>(() => f.Add("owner", DeliveryClass.Owner));
+        f.Noticing = null;
         Assert.True(f.Add("owner", DeliveryClass.Owner));
         var dropped = Assert.Single(f.Records, r => r.State == "dropped");
         Assert.Equal("s9", dropped.Header.Id); Assert.Equal("overflow", dropped.Reason);

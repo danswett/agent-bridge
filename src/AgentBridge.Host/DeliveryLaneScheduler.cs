@@ -68,14 +68,15 @@ internal sealed class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGat
                 if (lanes.Queueable.Count == 50)
                 {
                     Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");
+                    lanes.Urgent.Remove(displaced);
                     notice(new(session, moved.Header, $"Target {session}: dropped overflow."));
                 }
                 else
                 {
+                    lanes.Urgent.Remove(displaced);
                     lanes.Queueable.Add(moved);
                     notice(new(session, moved.Header, $"Target {session}: demoted to queueable for owner."));
                 }
-                lanes.Urgent.Remove(displaced);
             }
             Record(session, header, body, DeliveryState.Enqueued);
             (urgent ? lanes.Urgent : lanes.Queueable).Add(new(header, body, sender));
