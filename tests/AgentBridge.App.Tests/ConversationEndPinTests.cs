@@ -67,6 +67,91 @@ public sealed class ConversationEndPinTests
         }
     }
 
+    [Fact]
+    public void Review_a_stale_pending_target_does_not_undo_a_small_reader_retreat_after_a_hold()
+    {
+        var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
+        view.Scroller.ScrollableHeight = 52459;
+        view.Moved(52304);
+        view.Follow();
+        view.FollowState.PointerOver(7);
+        view.Scroller.ScrollableHeight = 52304;
+        view.Follow();
+        view.Moved(52204);
+        view.Scroller.Targets.Clear();
+        view.FollowState.PointerLeft(7);
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory]
+    [InlineData(false, -155)]
+    [InlineData(true, -155)]
+    [InlineData(false, 155)]
+    [InlineData(true, 155)]
+    public void Review_a_small_reader_retreat_during_remeasurement_releases_the_pin(bool layoutFirst, double delta)
+    {
+        var view = new SessionView();
+        view.Scroller.ViewportHeight = 299;
+        view.Scroller.ScrollableHeight = 52304;
+        view.Moved(52304);
+        view.Scroller.ScrollableHeight = 52304 + delta;
+        if (layoutFirst) { view.Follow(); }
+        view.Moved(Math.Min(52304, view.Scroller.ScrollableHeight) - 100);
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Theory, InlineData(false, false), InlineData(true, false), InlineData(false, true), InlineData(true, true)]
+    public void A_stationary_shrink_keeps_its_signed_evidence_but_later_growth_cannot_excuse_a_reader_retreat(bool layoutFirst, bool laterGrowth)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 200);
+        view.Moved(200);
+        view.Scroller.ScrollableHeight = 300; view.Follow();
+        view.Scroller.ScrollableHeight = 200;
+        if (laterGrowth) { view.Follow(); view.Scroller.ScrollableHeight = 355; }
+        if (layoutFirst) { view.Follow(); }
+        view.Moved(100);
+        Assert.Equal(!laterGrowth, view.Pinned);
+        view.Scroller.Targets.Clear(); view.Follow();
+        if (laterGrowth) { Assert.Empty(view.Scroller.Targets); }
+        else { Assert.Equal(200, Assert.Single(view.Scroller.Targets)); }
+    }
+
+    [Theory, InlineData(0), InlineData(6)]
+    public void A_page_back_of_one_viewport_during_a_pending_correction_or_small_remeasure_releases_the_pin(double remeasure)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (299, 52449);
+        view.Moved(52449);
+        view.Scrolling(52449);
+        view.Scroller.ScrollableHeight = 52449 - remeasure;
+        view.Moved(52150);
+        view.StopScrolling();
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned, view.PinState());
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    [Fact]
+    public void Review_the_original_pending_correction_reader_retreat_releases_the_pin()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scroller.ScrollableHeight = 300;
+        view.Follow();
+        view.Moved(150);
+        view.Scroller.Targets.Clear();
+        view.Follow();
+        Assert.False(view.Pinned);
+        Assert.Empty(view.Scroller.Targets);
+    }
+
     [Theory]
     [InlineData("pan", false)]
     [InlineData("scroll", false)]
@@ -230,22 +315,24 @@ public sealed class ConversationEndPinTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_remeasured_extent_does_not_release_the_bottom_pin_when_the_list_adjusts_its_anchor(bool layoutFirst)
+    [InlineData(false, -155)]
+    [InlineData(true, -155)]
+    [InlineData(false, 155)]
+    [InlineData(true, 155)]
+    public void A_remeasured_extent_does_not_release_the_bottom_pin_when_the_list_adjusts_its_anchor(bool layoutFirst, double delta)
     {
         var view = new SessionView();
         view.Scroller.ViewportHeight = 299;
         view.Scroller.ScrollableHeight = 52304;
         view.Moved(52304);
-        view.Scroller.ScrollableHeight = 52149;
-        if (layoutFirst) { view.Follow(); }
-        view.Moved(51850);
+        var extent = view.Scroller.ScrollableHeight = 52304 + delta;
+        if (layoutFirst) { view.Follow(); view.Moved(52304, final: false); }
+        view.Moved(extent - 299);
         Assert.True(view.Pinned);
         view.Follow();
-        Assert.Equal(52149, view.Scroller.Targets.Last());
-        view.Moved(52149);
-        view.Moved(52049);
+        Assert.Equal(extent, view.Scroller.Targets.Last());
+        view.Moved(extent);
+        view.Moved(extent - 100);
         Assert.False(view.Pinned);
     }
 
@@ -276,14 +363,22 @@ public sealed class ConversationEndPinTests
         Assert.Equal([300.0], view.Scroller.Targets);
     }
 
-    [Fact]
-    public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end()
+    [Theory, InlineData(false, 150), InlineData(true, 299), InlineData(true, 100)]
+    public void Rewatching_the_same_session_still_releases_the_pin_on_the_first_move_back_from_the_end(bool remeasured, double retreat)
     {
         var view = new SessionView();
-        view.Moved(200);
+        if (remeasured)
+        {
+            view.Scroller.ViewportHeight = 299;
+            view.Scroller.ScrollableHeight = 52304; view.Moved(52304);
+            view.Scroller.ScrollableHeight = 52459; view.Follow();
+            view.Scroller.ScrollableHeight = 52304; view.Follow();
+            view.Scroller.Targets.Clear();
+        }
+        else { view.Moved(200); }
         view.ResetSessionForProbe();
         view.Follow();
-        view.Moved(50);
+        view.Moved((remeasured ? 52304 : 200) - retreat);
         view.Follow();
         Assert.False(view.Pinned);
         Assert.Empty(view.Scroller.Targets);
