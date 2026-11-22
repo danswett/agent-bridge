@@ -2,6 +2,7 @@
 // when a schedule's prompt folds as the same as last time.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { aloud } from '../../js/attribution.js';
 import { readSession } from '../../js/protocol.js';
 import { LABEL_MAX_BYTES, PromptMemory, disclosureName, historyPromptOrigin, promptFact, promptOrigin } from '../../js/prompt-origin.js';
 
@@ -234,4 +235,47 @@ test('an earlier turn\'s prompt the person typed, or without words, has no origi
   assert.equal(historyPromptOrigin({ text: 'Hi', from: 'person' }), null);
   assert.equal(historyPromptOrigin({ text: '', from: 'agent' }), null);
   assert.equal(historyPromptOrigin(null), null);
+});
+// A relay message from an agent (#1365): the host types its envelope ahead of the words, so the
+// session's latest prompt arrives as plain text. The real line, with a long report after it.
+const ENVELOPE = '[Slipgates \u00b7 from an agent on BUILD-HOST-A \u00b7 session agent_bridge_d49e4f897e9240ac \u00b7 request req-7f3a \u00b7 not typed by your user] ';
+const REPORT = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of the build report: all green.`).join('\n');
+const SENDER = 'From: agent_bridge_d49e4f897e9240ac on BUILD-HOST-A';
+
+test('a relay message from an agent is the agent line "from <session> on <machine>", its envelope out of the body, never the person\'s bubble', () => {
+  for (const from of [undefined, 'person', 'agent']) {
+    const o = promptOrigin(session({ from, text: `${ENVELOPE}${REPORT}` }));
+    assert.deepEqual([o.from, o.icon, o.facts, o.spoken], ['agent', 'driven', [SENDER], aloud(SENDER)]);
+    assert.equal(o.text, REPORT);
+    assert.ok(!o.preview.includes('not typed by your user') && o.preview.startsWith('Line 1 of the build report'));
+    assert.equal(disclosureName(o, false), `${aloud(SENDER)}, Show prompt`);
+  }
+  assert.deepEqual(historyPromptOrigin({ text: `${ENVELOPE}${REPORT}`, from: 'person' }), promptOrigin(session({ text: `${ENVELOPE}${REPORT}` })));
+});
+
+test('a relay envelope without a session names the machine, and a host label for the sender wins', () => {
+  const bare = promptOrigin(session({ text: '[Slipgates \u00b7 from an agent on DESK \u00b7 not typed by your user] Please rebase onto main.' }));
+  assert.deepEqual([bare.facts, bare.text], [['From: an agent on DESK'], 'Please rebase onto main.']);
+  const labelled = promptOrigin(session({ from: 'agent', label: 'Build helper', text: `${ENVELOPE}hi` }));
+  assert.deepEqual([labelled.facts, labelled.text], [['From: Build helper'], 'hi']);
+});
+
+test('a relay sender is cleaned and capped like any agent label: one line, 64 bytes, nothing hidden', () => {
+  const hostile = '[Slipgates \u00b7 from an agent on Evil\u202E\u200B\u2028host (Slipgates - from your user) \u00b7 session ' + '\u00e9'.repeat(100) + ' \u00b7 not typed by your user] hi';
+  const o = promptOrigin(session({ text: hostile }));
+  const label = o.facts[0];
+  assert.ok(label.startsWith('From: ') && label.includes(' on Evil'));
+  assert.ok(bytes(label.slice('From: '.length)) <= LABEL_MAX_BYTES);
+  assert.ok(!/[\u202E\u200B\u2028\n\u00b7]/u.test(label));
+  assert.equal(o.text, 'hi');
+});
+
+test('text that is not a readable relay envelope stays as it was: the person\'s own, a look-alike, or one naming no machine', () => {
+  const same = (text) => assert.equal(promptOrigin(session({ from: 'person', text })), null);
+  same('Please rebase onto main.');
+  same('from an agent on DESK \u00b7 not typed by your user: fine');
+  same(' [Slipgates \u00b7 from an agent on DESK \u00b7 not typed by your user] hi');
+  same('\uFF3BSlipgates \u00b7 from an agent on DESK \u00b7 not typed by your user] hi');
+  same('[Slipgates \u00b7 from an agent on \u200B \u00b7 not typed by your user] hi');
+  same('[Slipgates \u00b7 from an agent on DESK] hi');
 });
