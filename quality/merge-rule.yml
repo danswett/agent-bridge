@@ -32,6 +32,8 @@ hold_labels: [hold, do-not-merge]
 # a Quality machine, quality/post-receipt.ps1), named as GraphQL names it, without REST's "[bot]". It has its own
 # rate pool, so danswett's quota running out can't stop receipts. danswett stays as the fallback:
 # the App's key lives on one machine, and a receipt must still be postable when it is down.
+# danswett is also the identity reviewer readers post their own receipts as (owner decision
+# 2026-11-21, option A: through the approved per-command route; Quality only spot-checks).
 independent_review:
   context: independent-review
   posters: [danswett, agent-bridge-receipts]

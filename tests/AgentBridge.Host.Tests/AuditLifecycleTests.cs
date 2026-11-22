@@ -39,7 +39,7 @@ public sealed class AuditLifecycleTests : LaunchFlowFixture
     {
         Assert.True(Writer().Append(Ordinary()));
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
-        Assert.Null(AuditRotationTests.Rotate(Writer(), device, auditClock.GetUtcNow()));
+        Assert.Null(AuditRotationTests.Rotate(Writer(), device));
         Assert.Equal(LaunchOutcome.Started, (await Launch()).Outcome);
         Pair();
         Assert.True(Writer().Verify().Intact && Writer().Verify(launch: true).Intact);

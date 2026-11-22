@@ -193,14 +193,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly SemaphoreSlim starting = new(1, 1);
     readonly Lock pendingGate = new();
     // Sessions whose launch here was never seen ready, with whether the agent it started still runs
-    // (HeldForReply). Under pendingGate; dropped once that agent has gone, or once a person got past
-    // whatever its window asked: a prompt of theirs in its transcript after the launch (Copilot), or,
+    // (HeldForReply). Under pendingGate; dropped once that agent has gone, or its own transcript
+    // shows activity after its process started (Copilot), or,
     // for an agent that registers only once ready, its registration.
     readonly Dictionary<string, Unready> neverReady = new(StringComparer.OrdinalIgnoreCase);
 
     // Alive: the launcher's process, or, once that handed the session on and exited, the session's own
-    // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
-    sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
+    // (AgentHeld). Transcript: only this session's Copilot events.jsonl.
+    sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, CopilotInput? Transcript, DateTimeOffset StartedAt);
     readonly ILaunchCredentials? credentials;
     readonly ILaunchAccount? launchAccount;
     readonly List<Pending> pending = [];
@@ -1304,9 +1304,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
             // Last chance to withdraw: nothing has started yet.
             if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
-            // Where a prompt of the person's would show they got past its startup questions
-            // (HeldForReply): what the transcript holds now is from before this agent.
-            var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
             var launchId = Guid.NewGuid().ToString("N");
             Action<string>? auditRegistered = null;
             if (prepare is not null && plan.Resume is null && plan.Transfer is null)
@@ -1344,7 +1341,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-            { Transcript = transcriptFrom, AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
+            { Transcript = TranscriptOf(plan.Launcher, sessionId, started.StartedAt), AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1541,14 +1538,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             lock (pendingGate)
             {
                 pending.Remove(p);
-                if (unready is not null && alive is not null)
+                if (unready is not null && alive is not null && !p.RegisteredLate)
                 {
                     neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
-                        p.Transcript is { } tr && string.Equals(tr.Id, unready, StringComparison.OrdinalIgnoreCase) ? (tr.Path, tr.From) : null);
+                        string.Equals(p.SessionId, unready, StringComparison.OrdinalIgnoreCase) ? p.Transcript : null, p.Started.StartedAt);
                     holding = true;
                 }
             }
-            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait until a prompt is typed at the machine or it exits"); }
+            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait for its own transcript activity or it exits"); }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
@@ -1606,18 +1603,32 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public string? HeldForReply(string sessionId)
     {
         Unready? held;
+        Pending? p;
         lock (pendingGate)
         {
-            var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
+            p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
                 && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
-            if (p is not null) { return Waiting(p.Launcher.Label, p.Question); }
-            if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
+            neverReady.TryGetValue(sessionId, out held);
+            if (p is null && held is null) { return null; }
         }
         // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
-        // Not a turn count: a new CLI's session.resume ends a killed turn, which counts one, with
-        // nobody having typed anything.
-        var past = held.RegistersBeforeReady
-            ? held.Transcript is { } t && CopilotPrompts.Since(t.Path, t.From).Prompts.Count > 0
+        if (p is not null)
+        {
+            var active = p.Transcript?.Read().StartedSince(p.Started.StartedAt) == true;
+            lock (pendingGate)
+            {
+                if (!active || p.Question != StartupQuestion.None) { return Waiting(p.Launcher.Label, p.Question); }
+                if (!pending.Remove(p)) { return null; }
+                p.Ready = true;
+                p.RegisteredLate = true;
+                neverReady.Remove(sessionId);
+            }
+            Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = sessionId, Launched = p.Launched });
+            return null;
+        }
+        // session.resume alone is not activity, and an old resumed transcript is not this launch.
+        var past = held!.RegistersBeforeReady
+            ? held.Transcript?.Read().StartedSince(held.StartedAt) == true
             : source.Get(sessionId) is not null;
         var alive = held.Alive();
         lock (pendingGate)
@@ -1656,12 +1667,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return () => source.ProcessOf(sessionId)?.Id == owner.Id;
     }
 
-    (string Id, string Path, long From)? TranscriptFrom(Launcher launcher, string sessionId)
+    CopilotInput? TranscriptOf(Launcher launcher, string sessionId, DateTimeOffset startedAt)
     {
         if (launcher.Kind != AgentKind.Copilot || !Guid.TryParseExact(sessionId, "D", out _)) { return null; }
-        var path = Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl");
-        try { return (sessionId, path, File.Exists(path) ? new FileInfo(path).Length : 0); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        return new CopilotInput(Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl"), startedAt);
     }
 
     // Whether a launch has started an agent on this session that is still running.
@@ -1682,6 +1691,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Decide(Pending p, LaunchResult result)
     {
+        if (result.Outcome == LaunchOutcome.Started && Interlocked.Exchange(ref p.StartedDecided, 1) != 0) { return; }
         PublishStatus(p.Principal, p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
@@ -2062,12 +2072,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // window never seen ready, and whether its launcher exited, handing the session on.
         public volatile bool Ready;
         public DateTimeOffset? RegisteredAt { get; set; }
-        // Copilot's transcript of the session, and its length just before the agent was started: a
-        // prompt of the person's after it shows they got past the window's startup questions.
-        public (string Id, string Path, long From)? Transcript { get; set; }
+        public CopilotInput? Transcript { get; set; }
         public bool ReadyMissed { get; set; }
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }
+        public int StartedDecided;
         public string? Bound { get; set; }
     }
 
