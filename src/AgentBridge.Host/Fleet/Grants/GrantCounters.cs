@@ -7,7 +7,7 @@ public enum GrantProcessStatus { Unknown, Live, Exited }
 public sealed record GrantUsage(int Hourly, int Daily, int Live);
 public sealed record GrantReservation(Guid Request, Guid Grant, long Generation, GrantSubject Subject, string Binding,
     DateTimeOffset AdmittedAt, GrantReservationState State, StopTarget? Target = null, string? Reason = null,
-    DateTimeOffset? FinishedAt = null)
+    DateTimeOffset? FinishedAt = null, string? Permissions = null, GrantCaps? Caps = null)
 {
     [System.Text.Json.Serialization.JsonIgnore]
     public GrantLaunchOutcome Outcome => State switch
@@ -18,7 +18,7 @@ public sealed record GrantReservation(Guid Request, Guid Grant, long Generation,
         _ => GrantLaunchOutcome.Unconfirmed,
     };
 }
-public sealed record GrantReconciliation(StopTarget? Target, bool ProvenNotLaunched = false);
+public sealed record GrantReconciliation(StopTarget? Target, bool ProvenNotLaunched = false, string? Permissions = null);
 public sealed record GrantProcessObservation(GrantProcessStatus Status, ProcessInstance? Instance = null);
 public sealed record GrantCounterResult(GrantCounterProblem Problem, GrantStoreProblem StoreProblem = GrantStoreProblem.None,
     GrantReservation? Reservation = null, GrantUsage? Usage = null)
@@ -58,18 +58,29 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             : usage.Daily >= document.Caps.Daily ? GrantCounterProblem.Daily
             : usage.Live >= document.Caps.Live ? GrantCounterProblem.Live : GrantCounterProblem.None;
         if (problem != GrantCounterProblem.None) { return (state, new(problem, Usage: usage)); }
-        var reservation = new GrantReservation(request, grant, generation, subject, binding, now, GrantReservationState.Pending);
+        var reservation = new GrantReservation(request, grant, generation, subject, binding, now, GrantReservationState.Pending,
+            Caps: document.Caps);
         state = state with { Reservations = [.. state.Reservations, reservation] };
         return (state, new(GrantCounterProblem.None, Reservation: reservation, Usage: Count(state, grant, now)));
     }
 
     public GrantCounterResult Read(Guid grant, long generation) => Run(grant, generation, false,
         (state, _, now) => (state, new(GrantCounterProblem.None, Usage: Count(state, grant, now))));
-    public GrantCounterResult Commit(Guid request, StopTarget target) => Change(request, (reservation, _) =>
-        !GrantValidator.Target(target) || reservation.State is GrantReservationState.NotLaunched or GrantReservationState.Exited
+    public GrantCounterResult Lookup(Guid grant, Guid request, GrantSubject subject, string binding) => Run(Guid.Empty, 0, false,
+        (state, _, now) =>
+        {
+            var row = state.Reservations.SingleOrDefault(r => r.Request == request);
+            return (state, row is null ? new(GrantCounterProblem.NotFound)
+                : row.Grant == grant && row.Subject == subject && row.Binding == binding
+                    ? new(GrantCounterProblem.Duplicate, Reservation: row, Usage: Count(state, grant, now)) : new(GrantCounterProblem.Binding));
+        });
+    public GrantCounterResult Commit(Guid request, StopTarget target, string? permissions = null) => Change(request, (reservation, _) =>
+        !GrantValidator.Target(target) || permissions is not (null or "ask" or "allowAll")
+            || reservation.Permissions is { } used && permissions is { } mode && used != mode
+            || reservation.State is GrantReservationState.NotLaunched or GrantReservationState.Exited
             or GrantReservationState.Refused or GrantReservationState.Failed
             || reservation.Target is { } existing && existing != target ? null
-            : reservation with { State = GrantReservationState.Committed, Target = target });
+            : reservation with { State = GrantReservationState.Committed, Target = target, Permissions = permissions ?? reservation.Permissions });
     public GrantCounterResult Abandon(Guid request, bool provenNotLaunched) => Change(request, (reservation, now) =>
         reservation.Target is not null || reservation.State is GrantReservationState.Committed or GrantReservationState.Exited
             or GrantReservationState.Refused or GrantReservationState.Failed ? null
@@ -98,7 +109,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
         });
 
     public GrantCounterResult Reconcile(Guid grant, Func<GrantReservation, GrantReconciliation> lookup,
-        Func<int, GrantProcessObservation> inspect) => Run(Guid.Empty, 0, false, (state, _, now) =>
+        Func<int, GrantProcessObservation> inspect, Action<string>? ended = null) => Run(Guid.Empty, 0, false, (state, _, now) =>
         {
             if (grant == Guid.Empty) { return (state, new(GrantCounterProblem.Malformed)); }
             var reservations = new List<GrantReservation>();
@@ -109,6 +120,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
                 { reservations.Add(reservation); continue; }
                 var evidence = reservation.Target is null ? lookup(reservation) : new(reservation.Target);
                 if (evidence.ProvenNotLaunched && evidence.Target is not null
+                    || evidence.Permissions is not (null or "ask" or "allowAll")
                     || evidence.Target is not null && !GrantValidator.Target(evidence.Target))
                 { return (state, new(GrantCounterProblem.Malformed)); }
                 var next = reservation;
@@ -122,7 +134,8 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
                     { return (state, new(GrantCounterProblem.Malformed)); }
                     var exited = observed.Status == GrantProcessStatus.Exited || observed.Status == GrantProcessStatus.Live
                         && observed.Instance != target.ProcessInstance;
-                    next = reservation with { Target = target, FinishedAt = exited ? now : null, State = exited
+                    if (exited) { ended?.Invoke(target.Session); }
+                    next = reservation with { Target = target, Permissions = evidence.Permissions ?? reservation.Permissions, FinishedAt = exited ? now : null, State = exited
                         ? GrantReservationState.Exited : GrantReservationState.Committed };
                 }
                 reservations.Add(next);
@@ -176,6 +189,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
         && reservations.All(r => r is not null && r.Request != Guid.Empty && r.Grant != Guid.Empty && r.Generation > 0
             && GrantValidator.Subject(r.Subject) && r.Binding is { Length: 64 } && r.Binding.All(char.IsAsciiHexDigit)
             && r.AdmittedAt != default && r.AdmittedAt <= state.ObservedAt && Enum.IsDefined(r.State)
+            && r.Permissions is null or "ask" or "allowAll" && (r.Caps is null || GrantValidator.Positive(r.Caps))
             && (r.FinishedAt is null || r.FinishedAt >= r.AdmittedAt && r.FinishedAt <= state.ObservedAt
                 && r.State is GrantReservationState.NotLaunched or GrantReservationState.Exited or GrantReservationState.Refused or GrantReservationState.Failed)
             && (r.State is GrantReservationState.Refused or GrantReservationState.Failed
