@@ -42,7 +42,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         credentials.Accept(channel, credentials.Check(token,
             new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!);
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
-        var audit = new AgentAuditLog(folder);
+        var audit = new AgentAuditLog(folder) { DeviceKey = grantKey };
         var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
