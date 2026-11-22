@@ -45,7 +45,6 @@ public sealed class GrantStore
         folder = Path.GetFullPath(profileFolder); path = Path.Combine(folder, FileName);
         if (folder != Path.GetFullPath(audit.Profile)) { throw new ArgumentException("audit profile mismatch", nameof(audit)); }
         this.key = key; this.audit = audit; this.time = time ?? TimeProvider.System;
-        audit.DeviceKey ??= key;
         this.knownOptions = knownOptions;
         this.write = write ?? ((file, bytes) => DeviceMacFile.Write(file, bytes, message => throw new IOException(message)));
     }
@@ -166,7 +165,7 @@ public sealed class GrantStore
         if (rotation is null) { throw new StoreFault(body is null && retained == 0
             && !rows.Any(r => r.Action is "grant.issue" or "grant.revoke") ? GrantStoreProblem.RotationRequired : GrantStoreProblem.AuditIncomplete); }
         // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
-        if (!complete || adopted || retained > 0 || !audit.Verify(readOnly: readOnly).Intact || !audit.Verify(launch: true, readOnly: readOnly).Intact
+        if (!complete || adopted || retained > 0 || !audit.Verify(false, readOnly, key).Intact || !audit.Verify(true, readOnly, key).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update").ToArray();
