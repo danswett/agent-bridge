@@ -172,4 +172,17 @@ public sealed class GrantIssueTests
         Assert.Equal("unconfirmed", vm.Problem);
         Assert.False(vm.Active);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Preparation_transport_or_authentication_failure_is_unavailable_without_signing(bool authentication)
+    {
+        var receiver = Receiver();
+        receiver.PrepareError = authentication ? new CryptographicException() : new HttpRequestException();
+        var vm = new GrantIssueViewModel(receiver); await Prepare(vm);
+        Assert.Equal("unavailable", vm.Problem);
+        Assert.False(vm.CanConfirm);
+        Assert.Equal(0, receiver.Confirmations);
+    }
 }
