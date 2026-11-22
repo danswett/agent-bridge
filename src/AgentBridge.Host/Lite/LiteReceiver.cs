@@ -79,15 +79,21 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
         if (body.Target.Machine != channel.Self) { return Refuse(Target, body.Request); }
+        var query = deliver as ILiteReplayQuery;
+        var replay = false;
         switch (Replays.Add(channel.PeerId + "/" + body.Request))
         {
-            case ReplayStore.Result.Seen: return Refuse(Replay, body.Request);
+            case ReplayStore.Result.Seen:
+                if (query is null) { return Refuse(Replay, body.Request); }
+                replay = true; break;
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
-        LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
+        if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
-        return result.Typed
+        if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
+        { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
+        return result.Typed && result.Outcome is null or LiteKind.Delivered
             ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
             : Refuse(result.Code ?? DeliveryFailed, body.Request);
     }
