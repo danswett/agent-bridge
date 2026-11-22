@@ -338,8 +338,11 @@ request) is the caller-retained one, never one echoed by the reply.
 problem only after the signature and the exact body match; anything else throws
 `InvalidDataException`. First issuance may be enabled only when the verified value
 is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
-refusal never qualify. This contract has no producer: until the receiver seals it
-the value is unavailable, not None.
+refusal never qualify. `GrantReadProducer` is the only producer. It seals None only
+when `GrantStore.Snapshot()` read cleanly, RotationRequired only when the store refused with
+exactly that AND evidence held outside the profile folder proves never-issued (a missing or deleted
+folder after an issue looks identical to the store, so no proof, or no way to check, is Unavailable), Unavailable while the receiver is not ready (G4, PR2 or AcceptHostSign), and
+Other for every other refusal or a store read that threw. With no signer it answers nothing.
 
 ## Agent use and receiver order
 
