@@ -33,7 +33,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false, FleetPublisherTests.Source? source = null, TimeProvider? auditTime = null)
+        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false, FleetPublisherTests.Source? source = null, TimeProvider? auditTime = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -46,8 +46,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, time: auditTime, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
+        launcher.RequestRegistered += agentLaunch.Registered;
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, auditTime: auditTime, agentLaunch: legacy ? null : agentLaunch), channel, credentials, agentLaunch);
+            credentials: credentials, audit: audit, auditTime: auditTime, agentLaunch: legacy || grantOnly ? null : agentLaunch,
+            grantLaunch: grantOnly ? agentLaunch : null), channel, credentials, agentLaunch);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -133,10 +135,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
-    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null,
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null, bool grantOnly = false,
         FleetPublisherTests.Source? source = null, (LaunchRequestStore?, string?)? launchStore = null)
     {
-        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, source: source, store: launchStore);
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly, source: source, store: launchStore);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
         var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
@@ -152,6 +154,62 @@ public sealed class AgentPipeLaunchTests : IDisposable
             Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: prompt), ProtocolJson.Options);
     static async Task<FleetLaunchReceipt> GrantedLaunch(Pipe pipe, JsonElement body) =>
         Assert.IsType<FleetLaunchReceipt>(await pipe.Handle(pipe.Channel, LaunchProtocol.Launch, body));
+
+    [Fact]
+    public async Task Production_grant_only_wiring_keeps_ordinary_refusal_and_uses_the_existing_grant_pipe()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key, grantOnly: true);
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        Assert.Equal(0, launcher.Launches);
+        var result = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(1, launcher.Launches);
+        Assert.False(result.Registered);
+        Assert.Equal(LaunchOutcome.Unconfirmed, result.Result.Outcome);
+    }
+
+    [Fact]
+    public async Task An_unavailable_shared_request_store_does_not_change_the_ordinary_legacy_route()
+    {
+        var pipe = Open(store: (null, "not open"), grantOnly: true);
+        Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Grant_registration_requires_its_matching_durable_terminal(bool late, bool terminalSucceeds)
+    {
+        using var key = P256KeyPair.Generate();
+        var session = Guid.NewGuid().ToString("D");
+        var started = DateTimeOffset.UtcNow;
+        var discovery = new FleetPublisherTests.Source { Binding = id => id == session ? new(123, started) : null };
+        discovery.Sessions.Add(FleetPublisherTests.NewSession(4) with { Id = session });
+        launcher.RegisteredSession = session;
+        launcher.LateRegistration = late;
+        if (!terminalSucceeds)
+        {
+            launcher.TerminalFailure = () => new BlockedAuditFile(
+                Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single());
+        }
+        var (pipe, grant, _) = Granted(key, grantOnly: true, source: discovery);
+        var body = GrantBody(grant);
+        var first = await GrantedLaunch(pipe, body);
+        Assert.Equal(LaunchOutcome.Unconfirmed, first.Result.Outcome);
+        if (late) { launcher.RegisterPending!(); }
+        var retry = await GrantedLaunch(pipe, body);
+        Assert.Equal(terminalSucceeds ? LaunchOutcome.Started : LaunchOutcome.Unconfirmed, retry.Result.Outcome);
+        Assert.Equal(terminalSucceeds, retry.Registered);
+        Assert.Equal(new GrantUsage(1, 1, 1), retry.Usage);
+        Assert.Equal(1, launcher.Launches);
+        var (rows, complete) = GateAuditProjection.Load(folder);
+        Assert.True(complete);
+        Assert.Single(rows, row => row.Action == "session.launch" && row.Gate?.Phase == "intent");
+        Assert.Equal(terminalSucceeds ? 1 : 0,
+            rows.Count(row => row.Action == "session.launch" && row.Gate?.Phase == "terminal"));
+    }
 
     [Theory]
     [InlineData(false)]
@@ -242,6 +300,36 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task Reviewer_receiver_caps_are_retained_in_the_receipt()
+    {
+        using var key = P256KeyPair.Generate();
+        var path = Path.Combine(folder, HostSettings.FileName);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"liveAgentLaunched\":6", "\"liveAgentLaunched\":2"));
+        var (pipe, grant, _) = Granted(key, new(10, 10, 10));
+        var receipt = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(new GrantCaps(3, 10, 2), receipt.Caps);
+    }
+
+    [Fact]
+    public async Task Reviewer_existing_uncertain_reservations_obey_receiver_live_cap_after_restart()
+    {
+        using var key = P256KeyPair.Generate();
+        var path = Path.Combine(folder, HostSettings.FileName);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\"liveAgentLaunched\":6", "\"liveAgentLaunched\":2"));
+        var (pipe, grant, store) = Granted(key, new(10, 10, 10));
+        var counters = new GrantCounters(store);
+        foreach (var id in new[] { Guid.NewGuid(), Guid.NewGuid() })
+        {
+            Assert.True(counters.Reserve(grant.Id, 1, id, grant.Subjects[0], new('b', 64)).Accepted);
+            Assert.True(counters.Abandon(id, false).Accepted);
+        }
+        var receipt = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Refused, receipt.Result.Outcome);
+        Assert.Equal("grant-exhausted", receipt.Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
     public async Task Reviewer_recovery_does_not_bind_a_foreign_principals_status()
     {
         using var key = P256KeyPair.Generate();
@@ -263,6 +351,63 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
         Assert.Equal(GrantLaunchOutcome.Unconfirmed, replay.Reservation!.Outcome);
         Assert.Null(replay.Reservation.Target);
+    }
+
+    [Fact]
+    public async Task Reviewer_recovery_does_not_substitute_the_current_process_for_the_launched_process()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, store) = Granted(key, source: source);
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+        var principal = pipe.Credentials.PrincipalOf(pipe.Credentials.Of(pipe.Channel)!);
+        var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        var counters = new GrantCounters(store);
+        Assert.True(counters.Reserve(grant.Id, 1, input.Request, grant.Subjects[0], binding).Accepted);
+        Assert.True(counters.Abandon(input.Request, false).Accepted);
+        RegistrationEvidence(pipe, source);
+        var launch = new LaunchRequest { Request = AgentPipeLaunch.LaunchId(principal, request).ToString("D"),
+            Agent = input.Agent, Workspace = input.Workspace, FleetName = input.Name, Permissions = input.Permissions,
+            Model = input.Model, Effort = input.Effort, Context = input.Context, Prompt = input.Prompt };
+        var started = await GateLaunchAudit.LaunchAsync(launcher, launch, principal, new AgentAuditLog(folder) { DeviceKey = key },
+            new("local", "agent", principal, null, grant.Id.ToString("D")));
+        Assert.Equal(LaunchOutcome.Started, started.Outcome);
+        var launchedAt = source.ProcessOf(started.Session!)?.StartedAt ?? throw new InvalidOperationException("fixture lost the launched process");
+        source.Binding = id => id == started.Session ? new(int.MaxValue - 1, launchedAt.AddSeconds(1)) : null;
+        var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
+        var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
+        Assert.Equal(GrantLaunchOutcome.Unconfirmed, replay.Reservation!.Outcome);
+        Assert.Null(replay.Reservation.Target);
+        Assert.Equal(1, replay.Usage!.Live);
+    }
+
+    [Fact]
+    public async Task Recovery_preserves_the_audited_launched_generation_after_the_session_process_changes()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, store) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        var body = GrantBody(grant);
+        var input = body.Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+        var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        var receipt = await GrantedLaunch(pipe, body);
+        Assert.Equal(LaunchOutcome.Started, receipt.Result.Outcome);
+        var counters = new GrantCounters(store);
+        var launched = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding).Reservation!.Target!;
+        Assert.True(store.Transaction(state => (GrantStore.Next(state with { Counters = state.Counters! with
+            { Reservations = state.Counters.Reservations.Select(r => r.Request == input.Request
+                ? r with { State = GrantReservationState.Abandoned, Target = null, Permissions = null } : r).ToArray() } },
+            grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        source.Binding = id => id == launched.Session ? new(int.MaxValue - 1, launched.ProcessInstance.StartedAt.AddSeconds(1)) : null;
+        var service = new SessionService(source, new("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        var kernel = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, service, launcher);
+        await kernel.PrepareAsync(pipe.Credentials.Of(pipe.Channel)!, input with { Request = Guid.NewGuid() });
+        var replay = counters.Lookup(grant.Id, input.Request, grant.Subjects[0], binding);
+        Assert.Equal(GrantLaunchOutcome.Started, replay.Reservation!.Outcome);
+        Assert.Equal(launched, replay.Reservation.Target);
     }
 
     void RegistrationEvidence(Pipe pipe, FleetPublisherTests.Source source)
@@ -322,9 +467,76 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(1, launcher.Launches);
     }
 
+    [Fact]
+    public async Task A_missing_persisted_policy_snapshot_refuses_dispatch_and_duplicate_replay()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        launcher.BeforeDispatch = () => Assert.True(store.Transaction(state =>
+            (GrantStore.Next(state with { Counters = state.Counters! with
+                { Reservations = state.Counters.Reservations.Select(r => r with { Caps = null }).ToArray() } },
+                grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal("policy", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task Policy_narrowing_after_admission_refuses_at_the_execution_slot()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        Assert.True(new GrantCounters(store).Reserve(grant.Id, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64)).Accepted);
+        var path = Path.Combine(folder, HostSettings.FileName);
+        launcher.BeforeDispatch = () => File.WriteAllText(path,
+            File.ReadAllText(path).Replace("\"launchesPerOriginPerHour\":3", "\"launchesPerOriginPerHour\":1"));
+        Assert.Equal("grant-exhausted", (await GrantedLaunch(pipe, GrantBody(grant))).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(GrantLaunchOutcome.Unconfirmed, LaunchOutcome.Unconfirmed)]
+    [InlineData(GrantLaunchOutcome.Failed, LaunchOutcome.Failed)]
+    [InlineData(GrantLaunchOutcome.Refused, LaunchOutcome.Refused)]
+    public async Task Missing_snapshot_replay_preserves_uncertainty_and_definitive_failure(GrantLaunchOutcome terminal, LaunchOutcome expected)
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, store) = Granted(key);
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await GrantedLaunch(pipe, GrantBody(grant))).Result.Outcome);
+        if (terminal != GrantLaunchOutcome.Unconfirmed)
+        { Assert.True(new GrantCounters(store).Complete(Guid.Parse(request), terminal, "policy").Accepted); }
+        Assert.True(store.Transaction(state =>
+            (GrantStore.Next(state with { Counters = state.Counters! with
+                { Reservations = state.Counters.Reservations.Select(r => r with { Caps = null }).ToArray() } },
+                grant.Id, "grant.update"), new(GrantStoreProblem.None)), false).Usable);
+        var replay = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(expected, replay.Result.Outcome);
+        Assert.False(replay.Registered);
+        Assert.Equal(1, launcher.Launches);
+    }
+
     sealed class FrozenAuditClock : TimeProvider
     {
         public override long GetTimestamp() => 0;
+    }
+
+    // A directory blocks writes on Unix too, without relying on Windows file-sharing enforcement.
+    sealed class BlockedAuditFile : IDisposable
+    {
+        readonly string path;
+
+        public BlockedAuditFile(string path)
+        {
+            this.path = path;
+            File.Move(path, path + ".held");
+            Directory.CreateDirectory(path);
+        }
+
+        public void Dispose()
+        {
+            Directory.Delete(path);
+            File.Move(path + ".held", path);
+        }
     }
 
     sealed class FakeLauncher : ISessionLauncher
@@ -334,6 +546,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public LaunchConfig? FleetConfig { get; set; }
         public bool Available => true;
         public Action? BeforeDispatch;
+        public string? RegisteredSession;
+        public bool LateRegistration;
+        public Func<IDisposable>? TerminalFailure;
+        public Action? RegisterPending;
+        public event Action<Guid, string>? RequestRegistered;
         public List<LaunchStatus> Statuses { get; } = [];
         public IReadOnlyList<LaunchStatus> LaunchStatuses() => Statuses;
         public Action<LaunchRequest, string, string>? BeforeTerminal, AfterTerminal;
@@ -356,11 +573,24 @@ public sealed class AgentPipeLaunchTests : IDisposable
         {
             if (prepare(Guid.Parse(request.Request)) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "audit")); }
             var count = Interlocked.Increment(ref Launches);
-            var session = BeforeTerminal is null ? $"session-{count}" : Guid.NewGuid().ToString("D");
+            var session = RegisteredSession ?? (BeforeTerminal is null ? $"session-{count}" : Guid.NewGuid().ToString("D"));
             Peers.Add(peer);
-            BeforeTerminal?.Invoke(request, peer, session);
-            if (!SkipTerminal) { registered(session); }
-            AfterTerminal?.Invoke(request, peer, session);
+            void Register()
+            {
+                if (RegisteredSession is not null)
+                { Statuses.Add(new(request.Request!, "started", session, request.Permissions, true, DateTimeOffset.UtcNow) { Principal = peer }); }
+                BeforeTerminal?.Invoke(request, peer, session);
+                using var held = TerminalFailure?.Invoke();
+                if (!SkipTerminal) { registered(session); }
+                AfterTerminal?.Invoke(request, peer, session);
+                if (RegisteredSession is not null) { RequestRegistered?.Invoke(Guid.Parse(request.Request), session); }
+            }
+            if (LateRegistration)
+            {
+                RegisterPending = Register;
+                return Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed));
+            }
+            Register();
             return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
         }
     }

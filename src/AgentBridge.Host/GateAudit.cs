@@ -1,13 +1,18 @@
+using AgentBridge.Host.Fleet.Grants;
+
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
-    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null)
+    string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null,
+    ProcessInstance? LaunchProcess = null)
 {
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop" or "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
         && ActorKind is "person-client" or "agent" or "ha-component"
         && (LaunchBinding is null || action == "session.launch" && LaunchBinding.Length == 64 && LaunchBinding.All(char.IsAsciiHexDigit))
+        && (LaunchProcess is null || action == "session.launch" && Phase == "terminal" && outcome == "started"
+            && target is { } session && GrantValidator.Target(new(session, LaunchProcess)))
         && (GrantBinding is null ? action is not ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update")
             : action is ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && GrantBinding.Length == 64 && GrantBinding.All(char.IsAsciiHexDigit))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
@@ -81,7 +86,7 @@ internal static class GateAuditProjection
                 || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question
                 || other.LaunchBinding != gate.LaunchBinding)
                 || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
-                || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target)).Distinct().Count() > 1)
+                || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target, r.Gate.LaunchProcess)).Distinct().Count() > 1)
             { invalidated = true; continue; }
             if (gate.Phase == "terminal" && operation.All(r => r.Gate is { Phase: "terminal" }
                 && (first.Action == "session.answer" && r.Gate.ReasonCode == "refused" && r.Outcome == "refused"

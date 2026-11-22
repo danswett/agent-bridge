@@ -16,7 +16,8 @@ public sealed record FleetLaunchInput(int Version, Guid Request, Guid Grant, str
 public sealed record FleetLaunchReceipt(Guid Request, Guid Grant, long Generation, LaunchResult Result, string? Permissions,
     bool Registered, GrantUsage? Usage, GrantCaps? Caps, string? Reason = null);
 internal sealed record FleetLaunchContext(FleetLaunchInput Input, GrantSubject Subject, string Binding,
-    GrantDocument? Grant = null, LaunchRequest? Request = null, LaunchOptions? Offered = null, FleetLaunchReceipt? Replay = null)
+    GrantDocument? Grant = null, LaunchRequest? Request = null, LaunchOptions? Offered = null, FleetLaunchReceipt? Replay = null,
+    GrantCaps? Caps = null)
 {
     public bool Admitted, Starting;
 }
@@ -60,10 +61,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
             var known = launcher.LaunchStatuses().SingleOrDefault(s => s.Principal == principal && s.SourceRequest == sourceRequest
                 && Guid.TryParse(s.Request, out var request) && request == row.Request);
             return new(known?.Permissions is "ask" or "allowAll" && known.Session is { } id
-                && GateLaunchAudit.Started(folder, sourceRequest, principal, row.Grant.ToString("D"), id) ? sessions.GrantTarget(id) : null, Permissions: known?.Permissions);
+                ? GateLaunchAudit.Started(folder, sourceRequest, principal, row.Grant.ToString("D"), id) : null, Permissions: known?.Permissions);
         }, Observe, ended: session => credentials.LaunchGate.SessionEnded(session));
         if (!reconciled.Accepted) { throw new FleetLaunchDenied(CounterReason(reconciled)); }
-        return context with { Request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = input.Agent,
+        return context with { Caps = effective.Caps, Request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = input.Agent,
             Workspace = input.Workspace, FleetName = input.Name, Model = effective.Model, Effort = effective.Effort,
             Context = effective.Context, Profile = input.Agent == "agency" ? effective.Profile : null,
             Permissions = effective.Permission, Prompt = input.Prompt } };
@@ -101,6 +102,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         try
         {
             var effective = Evaluate(context with { Grant = latest.Grant }, caller);
+            var recorded = counters.Lookup(context.Input.Grant, context.Input.Request, context.Subject, context.Binding);
+            if (recorded.Reservation?.Caps is not { } snapshot || recorded.Usage is not { } usage) { return "policy"; }
+            var caps = snapshot.Intersect(effective.Caps);
+            if (usage.Hourly > caps.Hourly || usage.Daily > caps.Daily || usage.Live > caps.Live) { return "grant-exhausted"; }
             if (effective.Permission != context.Request!.Permissions || effective.Model != context.Request.Model
                 || effective.Effort != context.Request.Effort || effective.Context != context.Request.Context
                 || context.Input.Agent == "agency" && effective.Profile != context.Request.Profile) { return "scope"; }
@@ -111,7 +116,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     internal void Admit(FleetLaunchContext context)
     {
         var result = counters.Reserve(context.Input.Grant, context.Grant!.Generation, context.Input.Request,
-            context.Subject, context.Binding);
+            context.Subject, context.Binding, context.Caps ?? throw new FleetLaunchDenied("policy"));
         if (!result.Accepted) { throw new FleetLaunchDenied(CounterReason(result)); }
         context.Admitted = true;
     }
@@ -120,7 +125,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         if (context.Admitted)
         {
             GrantCounterResult moved;
-            if (result.Outcome == LaunchOutcome.Started && result.Session is { } id && sessions.GrantTarget(id) is { } target
+            var principal = credentials.SessionPrincipal(context.Subject.Session);
+            var sourceRequest = AgentPipeLaunch.LaunchId(principal, context.Input.Request.ToString("D")).ToString("D");
+            if (result.Outcome == LaunchOutcome.Started && result.Session is { } id
+                && GateLaunchAudit.Started(folder, sourceRequest, principal, context.Input.Grant.ToString("D"), id) is { } target
                 && (result.Launched?.Permissions ?? launcher.LaunchStatuses().FirstOrDefault(s => s.Session == id)?.Permissions) is { } used && used == context.Request!.Permissions)
             { moved = counters.Commit(context.Input.Request, target, used); }
             else if (result.Outcome is LaunchOutcome.Refused or LaunchOutcome.Failed or LaunchOutcome.Busy)
@@ -134,6 +142,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     FleetLaunchReceipt Recorded(FleetLaunchContext context, GrantCounterResult record)
     {
         var row = record.Reservation!;
+        if (row.Caps is null) { return new(context.Input.Request, row.Grant, row.Generation,
+            new(row.Outcome switch { GrantLaunchOutcome.Refused => LaunchOutcome.Refused,
+                GrantLaunchOutcome.Failed => LaunchOutcome.Failed, _ => LaunchOutcome.Unconfirmed }),
+            null, false, null, null, "policy"); }
         var outcome = row.Outcome switch { GrantLaunchOutcome.Started => LaunchOutcome.Started, GrantLaunchOutcome.Refused => LaunchOutcome.Refused,
             GrantLaunchOutcome.Failed => LaunchOutcome.Failed, _ => LaunchOutcome.Unconfirmed };
         return new(context.Input.Request, row.Grant, row.Generation, new(outcome) { Session = row.Target?.Session },
@@ -141,7 +153,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     }
     internal static FleetLaunchReceipt Receipt(FleetLaunchContext? context, LaunchResult result, FleetLaunchInput? input, string? reason) =>
         new((input ?? context?.Input)?.Request ?? Guid.Empty, (input ?? context?.Input)?.Grant ?? Guid.Empty, context?.Grant?.Generation ?? 0,
-            result, context?.Request?.Permissions, false, null, context?.Grant?.Caps, reason);
+            result, context?.Request?.Permissions, false, null, context?.Caps, reason);
     static string Reason(LaunchResult result) => result.Reason is "scope" or "policy" or "kill-switch" ? result.Reason
         : result.Reason is { } reason && reason.StartsWith("grant-", StringComparison.Ordinal) ? reason
         : result.Reason?.Contains("audit", StringComparison.OrdinalIgnoreCase) == true ? "audit-unavailable"
