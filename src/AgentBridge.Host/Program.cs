@@ -95,6 +95,7 @@ if (command == "stop")
 {
     return await StopCommands.RunWithProfileAsync(arguments, Identity.DefaultRoot, () => Refused("end a session"), Console.Out, Console.Error);
 }
+if (command == "grants") { return await GrantCommands.RunAsync(args, Identity.DefaultRoot, Console.Out, Console.Error); }
 if (command == "launches")
 {
     return await LaunchStatusCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error);

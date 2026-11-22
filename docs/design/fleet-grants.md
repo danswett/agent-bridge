@@ -18,6 +18,7 @@ No migration: grants are unshipped. A legacy profile's first Issue adopts it; th
 later grant use refuse. Native launch/stop gates and the launch preflight are unaffected.
 Residual (pre-existing): rolling back store, audit and heads together, or clearing a head's
 `adopted` flag, is undetectable without a keyed or external anchor.
+G4 adds the Windows person-only local CLI and read-only verified listing; no acting adapter or counters.
 
 ## Authority and existing boundaries
 
@@ -181,6 +182,26 @@ person confirmation, not direct file editing. Guard 67 plus complete caller
 classification refuse agent/script credentials or untraceable ancestry; refusal
 occurs before signing or mutation. A grant cannot invoke either command.
 Phone issuance/revocation is a later separately reviewed person-device slice.
+
+G4 CLI: `grants issue <document.json>`, `grants revoke <id> <generation>` and
+`grants list`, each with optional trailing `--profile <name>`. Issue consumes the
+strict G1 document with explicit subject tuples, scope, all three caps, times and
+expiry; it supplies no cap/lifetime defaults. The existing signed-in Windows
+identity is required; no key is provisioned. Issuer account/device and proof/digest
+are replaced by the verified local person path. The document's issued time must
+not be in the future or leave an expired grant. Its complete normalized summary
+is displayed; the person types the exact SHA-256 digest in an unredirected console.
+HostCli requires a direct desktop (`explorer.exe`) parent; shell-parent mutations,
+including revoke, deliberately refuse with exit 4. No script or bypass flag qualifies.
+The digest excludes only issuer proof/digest and includes `allowAllLaunch`, an
+explicit boolean defaulting false. The receipt repeats that digest and boolean.
+This field conveys no Allow-all authority until G5 validator/policy wiring lands.
+Current local policy admits only `ask`, isolated approved workspace labels and
+offered tuning choices common to all selected agents; no stop-target exceptions.
+Policy/ancestry are rechecked after confirmation. Revoke acknowledges only after
+the audited tombstone is installed. Listing uses existing read locks and verifies
+MAC/audit without creating files, repairing state or changing ACLs; unavailable
+state refuses. No counters are claimed by the list.
 
 The list/details screen shows issuer, subjects, actions/scope, expiry, spent
 hour/day counts, pending/live sessions, last caller/outcome, and remaining budget.
