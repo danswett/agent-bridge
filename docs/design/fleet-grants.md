@@ -17,7 +17,8 @@ superseding the person-signed command first proposed for #3566); no cutoff is in
   script ancestry and a wrong confirmation are refused before the store opens, so nothing rotates.
 - Rotate: grant history not proved absent (a store, a `grant.*` row as the audit reader parses it, an incomplete
   read, any retained boundary, or gated rows without heads) refuses, so budgets, revocations, tombstones and the
-  boundary are never reset. Each stream moves to `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first
+  boundary are never reset. A stream that does not fully verify with the host key (a broken chain with or without
+  heads, a genesis MACed by another key) also refuses. Each stream moves to `audit/retired/<stream>-<request>.jsonl`; its fresh stream's first
   record is a genesis: `previousSha256` = the retired tail plus `rotation` {retired name, length, SHA-256, record}.
   The record holds a UUID request, reason `automatic-first-grant`, the grant id, time, each stream's length,
   SHA-256 and `TailHash` tail, and an HMAC under this host's device key. The issue result prints one notice line.

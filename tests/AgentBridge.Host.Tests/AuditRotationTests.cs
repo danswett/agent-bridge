@@ -72,11 +72,26 @@ public sealed class AuditRotationTests : IDisposable
 
     // Anything but a clean pre-grant log, or a rotation whose journal and retired bytes still verify, stays RotationRequired.
     [Theory]
-    [InlineData("torn"), InlineData("mismatch"), InlineData("forged"), InlineData("other-key"), InlineData("invalid-grant")]
+    [InlineData("torn"), InlineData("mismatch"), InlineData("forged"), InlineData("other-key"), InlineData("invalid-grant"),
+        InlineData("headless-broken-chain"), InlineData("other-key-genesis")]
     public void A_torn_or_mismatched_legacy_log_or_unverifiable_rotation_refuses_the_first_issue(string fault)
     {
         Legacy();
         if (fault == "torn") { File.AppendAllText(Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single(), "{\"torn\""); }
+        // R4zq: a broken chain without heads is not retired as trusted history, and a completed genesis MACed by another
+        // key is neither trusted nor rotated a second time.
+        if (fault == "headless-broken-chain")
+        {
+            foreach (var head in Directory.GetFiles(AuditFolder, "*.head")) { File.Delete(head); }
+            var day = Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single();
+            var lines = File.ReadAllLines(day);
+            var last = JsonNode.Parse(lines[^1])!;
+            last["previousSha256"] = new string('0', 64);
+            lines[^1] = last.ToJsonString();
+            File.WriteAllText(day, string.Join('\n', lines) + "\n");
+            Assert.False(Log().Verify().Intact);
+        }
+        if (fault == "other-key-genesis") { using var other = P256KeyPair.Generate(); Assert.Null(Rotate(Log(), other)); }
         if (fault is "mismatch" or "forged") { Assert.NotNull(Rotate(Log(Crash(fault == "mismatch" ? 1 : 0)), device)); }
         if (fault == "other-key") { using var other = P256KeyPair.Generate(); Assert.NotNull(Rotate(Log(Crash(0)), other)); }
         if (fault == "mismatch") { File.AppendAllText(Directory.GetFiles(Retired, "agents-*").Single(), "\n"); }
@@ -135,6 +150,20 @@ public sealed class AuditRotationTests : IDisposable
         Assert.False(File.Exists(Journal));
         Assert.Equal(2, Directory.GetFiles(Retired).Length);
         Assert.Equal("this profile's audit was already rotated", Rotate(Log(), device));
+        Assert.True(Log().Verify().Intact && Log().Verify(launch: true).Intact);
+    }
+
+    [Fact]
+    public void A_torn_genesis_left_by_a_crash_is_rewritten_once_and_the_issue_then_succeeds()
+    {
+        Legacy();
+        var grant = Grant();
+        Assert.Equal(GrantStoreProblem.RotationRequired, Store(Crash(2)).Issue(grant).Problem);
+        File.WriteAllText(Path.Combine(AuditFolder, $"agents-{clock.GetUtcNow():yyyy-MM-dd}.jsonl"), "{\"v\":1,\"previousSha256\":\"");
+        var issued = new GrantStore(Folder, device, new AgentAuditLog(Folder, clock), Scope, clock).Issue(grant);
+        Assert.True(issued.Usable && issued.Rotated);
+        Assert.Equal(2, Directory.GetFiles(Retired).Length);
+        Assert.NotNull(AgentAuditLog.Rotation(Folder, device));
         Assert.True(Log().Verify().Intact && Log().Verify(launch: true).Intact);
     }
 

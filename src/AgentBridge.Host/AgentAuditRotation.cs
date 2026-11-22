@@ -41,6 +41,9 @@ public sealed partial class AgentAuditLog
                 var folder = AuditFolder();
                 using var held = Lock(folder);
                 if (File.Exists(JournalFile(folder))) { Resume(folder, key); return null; }
+                // Only a log that fully verifies with this host's key is retired as trusted history: a broken chain, or a
+                // genesis MACed by another key, refuses rather than being rotated (again).
+                if (Streams.Any(launch => !VerifyProfile(profile, launch, log, key: key).Intact)) { return "the audit does not verify with this host's key"; }
                 if (Streams.Any(launch => GenesisOf(folder, launch, key) is not null)) { return "this profile's audit was already rotated"; }
                 // Only provably grant-free history rotates (the reader's own parse, nothing retained away, no gated rows
                 // without heads): retiring grant history would orphan its tombstones and budgets and reset the boundary.
