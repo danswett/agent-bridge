@@ -133,7 +133,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // An exception from here leaves the record launching and the slot held: something may have started.
         if (fleet is not null) { fleet.Starting = true; }
         var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit,
-            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString());
+            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString(),
+            confirmed: fleet is null ? null : session => Registered(id, session, confirmed: true));
         sessions.PublishLaunchAlias(principal, request.Request, request with { Request = id.ToString("D") }, result);
         if (result is { Outcome: LaunchOutcome.Started, Session: { } session })
         {
@@ -156,9 +157,12 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     }
 
     // The launcher's word on a launch (ISessionLauncher's events), also after it answered unconfirmed.
-    public void Registered(Guid id, string session)
+    public void Registered(Guid id, string session) => Registered(id, session, confirmed: false);
+
+    // Grant starts are settled only by the matching successful GateLaunchAudit terminal callback.
+    void Registered(Guid id, string session, bool confirmed)
     {
-        if (Take(id) is not { } p) { return; }
+        if (Take(id, unverifiedRegistration: !confirmed) is not { } p) { return; }
         try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session); } catch (InvalidOperationException) { }
         Save(() => store!.Launched(p.Key, session));
         if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Started) { Session = session }); }
@@ -181,9 +185,14 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
 
     void Pending(Guid id, string principal, string request, string key, FleetLaunchContext? fleet) { lock (unconfirmed) { unconfirmed[id] = (principal, request, key, fleet); } }
 
-    (string Principal, string Request, string Key, FleetLaunchContext? Fleet)? Take(Guid id)
+    (string Principal, string Request, string Key, FleetLaunchContext? Fleet)? Take(Guid id, bool unverifiedRegistration = false)
     {
-        lock (unconfirmed) { return unconfirmed.Remove(id, out var p) ? p : null; }
+        lock (unconfirmed)
+        {
+            if (!unconfirmed.TryGetValue(id, out var p) || unverifiedRegistration && p.Fleet is not null) { return null; }
+            unconfirmed.Remove(id);
+            return p;
+        }
     }
 
     static LaunchResult Told(LaunchRequestRecord r) => r.State switch

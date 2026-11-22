@@ -10,7 +10,8 @@ internal sealed record GateLaunchIngress(string Path, string ActorKind, string P
 internal static class GateLaunchAudit
 {
     internal static async Task<LaunchResult> LaunchAsync(ISessionLauncher launcher, LaunchRequest request, string peer,
-        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null)
+        AgentAuditLog audit, GateLaunchIngress ingress, CancellationToken ct = default, bool fleet = false, Func<string?>? refusal = null,
+        Action<string>? confirmed = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var id)) { return Refused("request must be a UUID"); }
         if (!audit.Bootstrap()) { return Refused("the launch audit could not establish its existing evidence"); }
@@ -37,6 +38,8 @@ internal static class GateLaunchAudit
             if (launcher.ReplayAuditedAsync(request, peer) is { } remembered)
             {
                 var result = await remembered;
+                if (ingress.Grant is not null && terminal is null && result.Outcome == LaunchOutcome.Started)
+                { return new(LaunchOutcome.Unconfirmed, "audit-unavailable"); }
                 if (terminal is null || result.Outcome == LaunchOutcome.Started && result.Session == terminal.Target) { return result; }
             }
             return terminal is null
@@ -54,7 +57,11 @@ internal static class GateLaunchAudit
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = ingress.Grant ?? (fleet ? "fleet" : null) };
             if (!audit.Append(intent)) { return null; }
-            return session => { terminalWritten = audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } }); };
+            return session =>
+            {
+                terminalWritten = audit.Append(intent with { Target = session, Outcome = "started", Gate = gate with { Phase = "terminal" } });
+                if (terminalWritten == true) { confirmed?.Invoke(session); }
+            };
         }
         var outcome = fleet ? await launcher.LaunchFleetAsync(request, peer, Prepare, ct)
             : ingress.Grant is not null ? await launcher.LaunchAuditedAsync(request, peer, Prepare, () => refusal?.Invoke(), ct)

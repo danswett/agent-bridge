@@ -31,7 +31,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false)
+        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false, FleetPublisherTests.Source? discovery = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -41,9 +41,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
             new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!);
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder);
-        var service = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        var service = new SessionService(discovery ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
+        launcher.RequestRegistered += agentLaunch.Registered;
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
             credentials: credentials, audit: audit, agentLaunch: legacy || grantOnly ? null : agentLaunch, grantLaunch: grantOnly ? agentLaunch : null), channel, credentials);
     }
@@ -131,9 +132,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("{ damaged", File.ReadAllText(Path.Combine(folder, LaunchRequestStore.FileName)));
     }
 
-    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, bool grantOnly = false)
+    (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, bool grantOnly = false, FleetPublisherTests.Source? discovery = null)
     {
-        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly);
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: grantOnly, discovery: discovery);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
         var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
@@ -169,6 +170,42 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(store: (null, "not open"), grantOnly: true);
         Assert.Contains("for the person", await Refusal(pipe, LaunchProtocol.Launch, Body()));
         Assert.Equal(0, launcher.Launches);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Grant_registration_requires_its_matching_durable_terminal(bool late, bool terminalSucceeds)
+    {
+        using var key = P256KeyPair.Generate();
+        var session = Guid.NewGuid().ToString("D");
+        var started = DateTimeOffset.UtcNow;
+        var discovery = new FleetPublisherTests.Source { Binding = id => id == session ? new(123, started) : null };
+        discovery.Sessions.Add(FleetPublisherTests.NewSession(4) with { Id = session });
+        launcher.RegisteredSession = session;
+        launcher.LateRegistration = late;
+        if (!terminalSucceeds)
+        {
+            launcher.TerminalFailure = () => new FileStream(
+                Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single(),
+                FileMode.Open, FileAccess.Read, FileShare.Read);
+        }
+        var (pipe, grant, _) = Granted(key, grantOnly: true, discovery: discovery);
+        var body = GrantBody(grant);
+        var first = await GrantedLaunch(pipe, body);
+        Assert.Equal(LaunchOutcome.Unconfirmed, first.Result.Outcome);
+        if (late) { launcher.RegisterPending!(); }
+        var retry = await GrantedLaunch(pipe, body);
+        Assert.Equal(terminalSucceeds ? LaunchOutcome.Started : LaunchOutcome.Unconfirmed, retry.Result.Outcome);
+        Assert.Equal(terminalSucceeds, retry.Registered);
+        Assert.Equal(new GrantUsage(1, 1, 1), retry.Usage);
+        Assert.Equal(1, launcher.Launches);
+        var (rows, complete) = GateAuditProjection.Load(folder);
+        Assert.True(complete);
+        Assert.Single(rows, row => row.Action == "session.launch" && row.Gate?.Phase == "intent");
+        Assert.Equal(terminalSucceeds ? 1 : 0,
+            rows.Count(row => row.Action == "session.launch" && row.Gate?.Phase == "terminal"));
     }
 
     [Theory]
@@ -230,6 +267,13 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public LaunchConfig? FleetConfig { get; set; }
         public bool Available => true;
         public Action? BeforeDispatch;
+        public string? RegisteredSession;
+        public bool LateRegistration;
+        public Func<IDisposable>? TerminalFailure;
+        public Action? RegisterPending;
+        public event Action<Guid, string>? RequestRegistered;
+        readonly List<LaunchStatus> statuses = [];
+        public IReadOnlyList<LaunchStatus> LaunchStatuses() => statuses;
         public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => Task.FromResult(new LaunchOptions
         { Agents = [new() { Id = "claude", Label = "Claude", Kind = AgentKind.Claude, Models = ["small"], Efforts = ["medium"], Contexts = ["default"] }],
             Workspaces = [new() { Label = "App", Path = "unused", Isolate = true }], Defaults = new() { Permissions = "ask" } });
@@ -247,9 +291,23 @@ public sealed class AgentPipeLaunchTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             if (prepare(Guid.Parse(request.Request)) is not { } registered) { return Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "audit")); }
-            var session = $"session-{Interlocked.Increment(ref Launches)}";
+            var session = RegisteredSession ?? $"session-{Launches + 1}";
+            Interlocked.Increment(ref Launches);
             Peers.Add(peer);
-            registered(session);
+            void Register()
+            {
+                if (RegisteredSession is not null)
+                { statuses.Add(new(request.Request!, "started", session, request.Permissions, true, DateTimeOffset.UtcNow)); }
+                using var held = TerminalFailure?.Invoke();
+                registered(session);
+                if (RegisteredSession is not null) { RequestRegistered?.Invoke(Guid.Parse(request.Request), session); }
+            }
+            if (LateRegistration)
+            {
+                RegisterPending = Register;
+                return Task.FromResult(new LaunchResult(LaunchOutcome.Unconfirmed));
+            }
+            Register();
             return Task.FromResult(new LaunchResult(LaunchOutcome.Started) { Session = session });
         }
     }
