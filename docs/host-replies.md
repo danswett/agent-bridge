@@ -336,16 +336,24 @@ In order, for every reply:
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
    reply. The process is the live agent process, and not elevated. A session this host
-   launched, resumed or restored whose window has not been seen ready is `refused`: it may
+   launched, resumed or restored without readiness evidence is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
    #780). While following it says what the window shows: the folder-trust question (answered from
    a device where allowed, #947, else on that machine), another startup question (on that machine),
-   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
-   process it handed the session to), until a prompt of the person's is in its transcript after the
-   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
-   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
-   that registers only once ready, it registers. The attachments are staged (below).
+   or only "still starting, send it again in a moment" (#1018). Activity in **its own transcript
+   after launch began** releases the startup hold, even if following ended unready or the launch
+   is `unconfirmed`: any `user.message`, regardless of source, an `assistant.turn_start`,
+   tool execution or subagent activity recorded there counts. An unconfirmed launch no longer
+   pins an active session. `session.resume` alone, old transcript activity, another session's
+   activity or a turn count is not evidence. With no readable transcript or no such activity,
+   an unready launch stays refused; there is no timeout release. A window seen ready, or
+   registration by an agent that registers only once ready, remains readiness evidence.
+   Visible trust/startup questions and open transcript `ask_user`, `permission.requested` or
+   trust questions still refuse replies, even after activity; the checks below still apply.
+   Owner-approved change ([#3634](https://github.com/danswett/agent-bridge/issues/3634)):
+   owner `ask_user` answer "release on any transcript activity", relayed by Chief S10,
+   Nov 21, 2026, ~22:30 PT. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
@@ -481,7 +489,18 @@ reported apart.
 
 ## Messages from other own-agents (AP5-lite, #1353)
 
-`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. The target is the full session id or, as the roster and `fleet.find` publish it, the node id `agent_bridge_<16 lowercase hex>` (#3399); a node id is used only when exactly one live session maps to it and discovery is not held (`ISessionSource.Held`, read before and after the scan, and the node id re-resolved after the typing slot is taken and once more just before typing starts), and every later check (gates, allow-all list, rate, typing) uses that session's full id. Zero or several matches are refused as `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+**Current addressing (ID-first).** [Message delivery](message-delivery.md#overlap-and-dependencies-named-before-any-code),
+updated by [PR 3606](https://github.com/danswett/agent-bridge/pull/3606), owns the addressing
+contract: sends target a session ID or role ID; names are display only and never route.
+A stale or unknown ID fails loudly and holds, naming the target ID, with no name, substring
+or HA fallback. A role ID requires exactly one verified live holder; none or two refuses.
+Role-ID code, claims and succession remain paused under [role-ids.md](design/role-ids.md);
+this is not a claim of built role routing. [Issue 3607](https://github.com/danswett/agent-bridge/issues/3607)
+tracks legacy lookup reconciliation. The AP5-lite wire target forms and refusal codes remain
+defined by [agent-lite.md](protocol/agent-lite.md#the-plain-limits); that runbook's historical
+HA-fallback wording does not authorize a fallback for ID-first messaging.
+
+`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty`, `noSuchSession` or `notSameAccount` (the host's current account is no longer the one the envelope was signed for, checked on admission, after the typing slot is taken and just before typing starts). The target is the full session id or, as the roster and `fleet.find` publish it, the node id `agent_bridge_<16 lowercase hex>` (#3399); a node id is used only when exactly one live session maps to it and discovery is not held (`ISessionSource.Held`, read before and after the scan, and the node id re-resolved after the typing slot is taken and once more just before typing starts), and every later check (gates, allow-all list, rate, typing) uses that session's full id. Zero or several matches are refused as `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`; the refusal stays a failure, not permission to retry over HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
 
 Each evaluated gate also logs its name, decision and refusal reason with the target and request id,
 never message text. An allowed gate ends evaluation; otherwise every refusal is recorded.

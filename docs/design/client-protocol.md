@@ -5,6 +5,10 @@ frame for [#1396](https://github.com/danswett/agent-bridge/issues/1396), not a n
 API, permission grant, live parity result or cutover authorization. Public
 third-party API delivery remains parked in
 [#1398](https://github.com/danswett/agent-bridge/issues/1398).
+Later owner direction (Nov 21, 08:25 PT, fleet `docs/owner-decisions.md`): fleet
+messaging, lookup, launch and end become native Slipgates app and host CLI commands
+under [#3237](https://github.com/danswett/agent-bridge/issues/3237); this records the
+direction only, not implementation.
 
 The PWA is not special. PWA, Windows, Mac, iOS, Android and Linux when shipped must
 offer the same parity capabilities. An optional HA client and a future third-party
@@ -85,7 +89,7 @@ Unimplemented work is marked **proposed**, **planned** or **gated**.
 |---|---|---|---|
 | 1 | Whole-message reply and acknowledgement | `session.reply`; agents use scoped `agent.send`, preserving its narrower message limit/outcomes | All; Agent |
 | 2 | Machine presence | Relay `presence` and `known` roster, with freshness/offline state | All; Agent via host |
-| 3 | Fleet sessions, status and name lookup | `registry-get`; **planned** `registry-subscribe`/`registry-changed`; `fleet.list`/`fleet.find` agent projections; full detail via `session.get` | All; Agent |
+| 3 | Fleet sessions, status and session-ID lookup | `registry-get`; **planned** `registry-subscribe`/`registry-changed`; `fleet.list`/`fleet.find` agent projections; full detail via `session.get` | All; Agent |
 | 4 | End session | `session.stop`; host owns idle/confirmation policy and target-process checks | All; never Agent |
 | 5 | Questions and permission approvals | `session.answer`, question id and typed fields; approval uses the same op with the host's additional person checks | All; never Agent/service |
 | 6 | Launch, resume and tuning | `session.launch`; scoped agent launch is gated by #1404/#1413 and the owner-approved design | All; Agent only within its launch grant |
@@ -124,12 +128,15 @@ and unsupported agent input modes remain explicit implementation gaps, not
 silently successful answers. The host's answer-at-machine/escaped-approval rules
 cannot be weakened for a notification, HA card or third-party renderer.
 
-`fleet.find` is the canonical lookup: exact name, person-confirmed machine pin,
-fresh verified record and the documented result precedence. No static session
-addresses or machine rosters belong in clients or fleet configuration. A title in
-`workspace.yaml` is not a verified fleet name. Unverified, ambiguous, incomplete,
-offline or unpinned results never become routable success. Names are untrusted
-display content; typed agent projections do not echo them.
+`fleet.find` is the canonical ID-only live-roster lookup: explicit `sessionId`,
+person-confirmed exact device-ID pin and the
+[documented trust/completeness precedence](../protocol/agent-operations.md#fleetfind).
+Names are display only, never selectors; a title in `workspace.yaml` is not identity.
+Unknown, stale or offline IDs refuse loudly and hold, without name, fragment or HA
+fallback. Unverified, ambiguous, incomplete or unpinned results never become routable
+success; the documented own-account exception is messaging-only, not roster verification
+or a client action grant. No static session addresses or machine rosters belong in
+clients or fleet configuration; typed agent projections do not echo names.
 
 Detailed prompt, activity, history, model and path data stays on authorized
 encrypted host reads; it must not be added to relay registry metadata to fill a

@@ -34,7 +34,8 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
     const int MaxRequests = 4096;
     static readonly TimeSpan Retention = TimeSpan.FromDays(30);
     public GrantCounterResult Reserve(Guid grant, long generation, Guid request, GrantSubject subject, string binding, GrantCaps? caps = null) =>
-        Run(grant, generation, true, (state, document, now) => Admit(state, document, grant, generation, request, subject, binding, now, caps),
+        grant == Guid.Empty ? new(GrantCounterProblem.Malformed) : Run(grant, generation, true,
+            (state, document, now) => Admit(state, document, grant, generation, request, subject, binding, now, caps),
             duplicateRequest: request);
 
     internal static (GrantCounterState State, GrantCounterResult Result) Admit(GrantCounterState state, GrantDocument? document,
@@ -104,7 +105,7 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             var reservation = state.Reservations.SingleOrDefault(r => r.Request == request);
             if (reservation is null) { return (state, new(GrantCounterProblem.NotFound)); }
             var next = change(reservation, now);
-            return next is null ? (state, new(GrantCounterProblem.Binding))
+            return next is null ? (state, new(GrantCounterProblem.Binding, Reservation: reservation))
                 : (state with { Reservations = state.Reservations.Select(r => r.Request == request ? next : r).ToArray() },
                     new(GrantCounterProblem.None, Reservation: next));
         });
@@ -160,13 +161,15 @@ public sealed class GrantCounters(GrantStore store, TimeProvider? time = null)
             // A repeat reads its authenticated binding even after the issuing grant expires or is revoked; it never acts.
             var found = grant == Guid.Empty || counters.Reservations.Any(r => r.Request == duplicateRequest)
                 ? new GrantStoreResult(GrantStoreProblem.None)
-                : store.Find(state, grant, generation, checkTime: admission);
-            if (!found.Usable) { return (null, found); }
-            var (next, outcome) = change(counters, found.Grant, now);
+                : store.Find(state, grant, generation, checkTime: admission, observedAt: now);
+            if (!found.Usable && found.Problem != GrantStoreProblem.Expired) { return (null, found); }
+            var (next, outcome) = found.Usable ? change(counters, found.Grant, now)
+                : (counters, new GrantCounterResult(GrantCounterProblem.Store, found.Problem));
             result = outcome;
             if (outcome.Problem == GrantCounterProblem.Duplicate) { return (null, new(GrantStoreProblem.None)); }
             next = next with { ObservedAt = now };
-            if (state.Counters == next) { return (null, new(GrantStoreProblem.None)); }
+            if (state.Counters is { } current && current.ObservedAt == next.ObservedAt
+                && current.Reservations.SequenceEqual(next.Reservations)) { return (null, new(GrantStoreProblem.None)); }
             var id = grant != Guid.Empty ? grant : outcome.Reservation?.Grant ?? auditGrant;
             if (id == Guid.Empty) { return (null, new(GrantStoreProblem.None)); }
             return (GrantStore.Next(state with { Counters = next }, id, admission && outcome.Accepted ? "grant.reserve" : "grant.update"),

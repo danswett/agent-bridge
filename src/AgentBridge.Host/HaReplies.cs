@@ -23,7 +23,7 @@ public static class HaReplies
         {
             // HA payloads carry no authenticated delivery intent. Both adapters retain Unknown;
             // neither card attribution nor the adapter's peer label establishes person authority.
-            var request = new ReplyRequest { Id = reply.SessionId, Request = reply.Request, Text = reply.Text };
+            var request = new ReplyRequest { Id = reply.SessionId, Request = reply.Request, Text = reply.Text, Sender = reply.Sender };
             if (reply.Files.Count == 0)
             {
                 return await replies.ReplyAsync(request, Peer, ct);

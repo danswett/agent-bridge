@@ -16,8 +16,8 @@ public static class FirstReplyWords
         ? $"{label} is still starting, so it can't take a reply yet. If it asks whether to trust its folder, that shows in Needs you. Otherwise, send it again in a moment"
         : $"{label} is still starting, so it can't take a reply yet. Send it again in a moment";
 
-    // Followed until the bridge gave up, and never seen ready. Only a prompt typed there, or the
-    // agent exiting, releases it (LaunchService.HeldForReply), so sending again would not help.
+    // Followed until the bridge gave up, and never seen ready. Its own activity after launch,
+    // or the agent exiting, releases it (LaunchService.HeldForReply).
     public static string NotSeenReady(string label) => $"{label} never showed it was ready for a reply and may be asking something in its window. Answer it on that machine, or start a new session";
 
     // The folder-trust question is showing. Answered from the phone (#947) where the bridge allows

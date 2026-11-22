@@ -1,6 +1,7 @@
 # Stable role IDs and fenced session delivery
 
 Status: proposed design, not implementation, enrollment or rollout authority.
+Role-ID code is paused (owner, Nov 19, 17:58 PT, two-track plan); no role-ID code is on main.
 Canonical home: [existing lookup issue](https://github.com/danswett/agent-bridge/issues/1399),
 under [fleet parity](https://github.com/danswett/agent-bridge/issues/1396).
 Owner decisions, Nov 19, 2026 PT: GUID addressing, names display-only (12:10);
@@ -198,6 +199,75 @@ empty roster. Valid older signed epochs are historical, never competing live hol
 
 ## 7. Migration and ordered implementation slices
 
+### Presentation continuity (CHANGE C1-C2)
+
+**Proposed Nov 21, 2026, 22:26 PT; owner approval required; code remains paused.**
+[Seamless recycling](https://github.com/danswett/agent-bridge/issues/1504) consumes this
+identity authority; [session-order-roaming.md](session-order-roaming.md#11-stable-presentation-identity-change-c1)
+owns pins, positions, ALL user groups, migration, privacy and preference-only undo.
+Extend optional person enrollment to any personal continuity slot, not just fleet roles.
+Reuse ROLE GUIDs and this ledger; no extra lineage ID, name-to-role map or authority is added.
+
+Extend the exact person-signed successor assignment with `continuity`: the predecessor's
+`sessionId, hostAdd, holderEpoch, assignmentDigest`, opaque UUID `launchRequestId`,
+salted `launchIntentDigest`, and
+`presentation: inherit | separate`. Its successor is the existing assignment target tuple.
+The person sees both executions/hosts and the presentation effect before presence-gated
+approval. Sign these fields under section 2's assignment gates; an old approval lacking
+them, an agent request, prompt `PredNode`, grant, or host-only proof authorizes no inheritance.
+First adoption explicitly binds the current execution and legacy locator instead of claiming
+a predecessor. Only request ID and salted canonical-request commitment reach the authority/
+ledger/registry: never the plaintext request, prompt, workspace or path. Salt and plaintext
+stay on the person client and receiving host over E2E; the host proof binds tuple, ID and
+commitment. The committed link/receipt binds the person-approved assignment digest.
+
+An enrolled target host binds that request to the actual launched activation and proves
+possession; launch failure, uncertain result or a different activation cannot fulfill it.
+Publish the link through the existing signed registry/role projection only after section 3's
+CAS, drain and confirmed stop, not at spawn, rename or "ready" text. Clients verify both
+historical predecessor assignment and current successor proof; lower epochs cannot roll back.
+Negotiate validated continuity support before launch dispatch; unsupported receivers refuse
+an inheritance request rather than ignoring an optional field and returning ordinary success.
+These are proposed additive protocol semantics, not fields supported by current v1 launch.
+Approval/linkage cannot itself launch, end, rename, grant or silently retarget any session.
+Do not redefine [v1 Session.id](../protocol/v1-sessions.md#session): it remains the provider
+conversation identifier. A separately typed activation identity and proof/link reference
+need reader-before-writer negotiation in both session snapshots and the strict
+[relay registry](../protocol/roster.md#session-registry-each-machines-sessions).
+The registry's current allow-list/byte limits still apply; unsupported relay connections
+omit the proposed projection and cannot prove continuity. Capabilities never grant consent.
+[v1 launch](../protocol/v1-launch.md) and transfer keep their present provider-ID/fork
+semantics until those separately approved protocol slices land.
+
+Order the operation explicitly:
+1. Negotiate continuity support and prepare an opaque request ID/commitment; disclose the
+   intended inheritance. A separate existing launch authorization is still required.
+2. Launch the fresh activation as prepared, with no inherited role/presentation; the old
+   holder remains active. The host proves the actual tuple and request commitment.
+3. The person verifies that prepared tuple/hosts/effect and signs the exact successor
+   assignment with section 2's presence, nonce, replay, version and 60-second acceptance gates.
+4. Quiesce/drain/confirm old-holder stop under section 3; unknown outcome holds indefinitely.
+5. Recheck approval at commit. If it expired during drain/stop, obtain fresh person approval
+   with new command request/nonce and higher assignment version (same launch request ID).
+   Never auto-renew consent. Only then CAS/commit and publish the link/new occupant.
+
+For an independently started/manual-resumed activation, use the explicitly signed
+`continuity.kind: existingActivation` variant with null `launchRequestId` and
+`launchIntentDigest`; the launched variant is `kind: launched` and requires both.
+The enrolled host instead supplies fresh nonce-bound proof of that exact already-running
+activation/process and scoped successor tuple. The person chooses Approve continuation;
+verify live possession, then follow steps 3-5 above (no launch step, no invented receipt).
+Unsupported hosts or ambiguous process binding refuse; neither a provider ID nor a retained
+alias substitutes for proof. Both variants require the same per-successor person approval,
+predecessor-stop confirmation and CAS; neither adopts launch grants or pending-launch rights.
+
+Fleet's current `launch-lead -PredNode` puts a node in prompt text only; role-settings names
+are configuration/display labels. A future adapter must pass the structured request/link and
+await its committed receipt. It cannot sign person approval or borrow launch/stop grants.
+Preferences are client-owned; neither host nor role authority receives group names or order.
+
+### Identity migration and implementation
+
 Use additive, default-off negotiation, then explicit person enrollment of each
 role and existing session; do not infer assignments from matching labels.
 Rename/display-name changes update display only, preserving both GUIDs and the epoch.
@@ -210,7 +280,10 @@ Below are ordered WHOLE-line budgets including tests/docs, each strictly below 2
 split further before exceeding its budget. They extend the linked existing work,
 not new issues or grants. Q1-Q3 are decided; implementation still requires dependency completion and explicit rollout authority.
 Repos: Bridge = [agent-bridge](https://github.com/danswett/agent-bridge); Fleet = [slipgates-fleet](https://github.com/danswett/slipgates-fleet).
-Sensitive means credentials, auth, trust, protocol, approval rendering or activation identity: every Yes requires a `claude-opus-5.5` builder plus two independent, distinct-family readers.
+**CHANGE C6 (canonical reconciliation):** sensitive means credentials, auth, trust, protocol,
+approval rendering or activation identity. Models and independent-reader requirements follow
+the [current Fleet register](https://github.com/danswett/slipgates-fleet/blob/main/docs/pipeline-rules.md),
+not the historical Opus builder requirement. This is no implementation or rollout grant.
 Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 12 can run in parallel; after 8, 14 can run alongside 9-13.
 
 | Order | Repo | Slice and maximum WHOLE lines | Depends on | Sensitive | Acceptance test |

@@ -635,13 +635,13 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
-    var agentAudit = new AgentAuditLog(identity.Folder, log: Log);
+    var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit);
     launcher.SessionStarted += restore.Launched;
     launcher.StartScanning();
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
-    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, launcher, identity.Folder, identity.Key, Log);
+    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -982,7 +982,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    var liteLink = new AgentBridge.Host.Lite.RelayLiteLink();
+    var liteLink = new AgentBridge.Host.Lite.RelayLiteLink(service.LiteReceiver, identity.Key.Public, () => identity.Account?.AccountId ?? "");
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     var liteRegistry = new AgentBridge.Host.Fleet.RelayFleetRoster(accountGate: samePcPin.AccountGate);
     var liteFleetRoster = new AgentBridge.Host.Fleet.LiteFleetRoster(liteRegistry.CaptureMessagingConnection, liteKill, () => identity.Account?.AccountId, samePcPin.AccountGate);

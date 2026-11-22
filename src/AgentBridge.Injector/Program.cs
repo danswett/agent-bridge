@@ -1,18 +1,21 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Windows;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen | --widen <columns> <created> | --launch-size <columns> <created>]
+// agent-bridge-injector <pid> [--screen | --widen <columns> <created> | --launch-size <columns> <created> | --identity <created>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
 // agent-ha-bridge's ConsoleInjector.Send has long delivered with. It reports on stdout,
 // one line each, flushed:
 //
-//   writing <n>[ enter]   before every write to the console, so whoever started it knows
+//   writing <n>[ enter|queue] before every write, so whoever started it knows
 //                         a key may have landed whatever happens next
 //   wrote <n>             send n is complete
 //   ok                    every send is complete
@@ -40,7 +43,7 @@ namespace AgentBridge.Injector;
 // ends every process attached to a console when that console's window closes (spike S1).
 internal static unsafe partial class Program
 {
-    const string Header = "agent-bridge-keys 1";
+    const string Header = SubmitKeys.Protocol;
 
     static Stream output = Stream.Null;
 
@@ -50,7 +53,8 @@ internal static unsafe partial class Program
         output = Console.OpenStandardOutput();
         var columns = 0;
         long created = 0;
-        if (args.Length is not (1 or 2 or 4) || (args.Length == 2 && args[1] != "--screen")
+        if (args.Length is not (1 or 2 or 3 or 4) || (args.Length == 2 && args[1] != "--screen")
+            || (args.Length == 3 && (args[1] != "--identity" || !long.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || (args.Length == 4 && (args[1] is not ("--widen" or "--launch-size") || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue
                 || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
@@ -59,6 +63,7 @@ internal static unsafe partial class Program
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
+        if (args.Length == 3) { return Identity(pid, created); }
         if (args.Length == 4) { return Widen(pid, (short)columns, created, args[1] == "--launch-size"); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
@@ -79,7 +84,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
+    sealed record KeySend(string Text, SubmitKey Submit, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -93,7 +98,8 @@ internal static unsafe partial class Program
             var line = raw.TrimEnd('\r');
             if (line.Length == 0) { continue; }
             var parts = line.Split(' ');
-            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send") { return null; }
+            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send"
+                || !SubmitKeys.TryDecode(parts[2], out var submit)) { return null; }
             try
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
@@ -105,7 +111,7 @@ internal static unsafe partial class Program
                     if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '-' or '_' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
                     else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
-                sends.Add(new KeySend(text, parts[2] == "1",
+                sends.Add(new KeySend(text, submit,
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
                     int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect, checks));
             }
@@ -151,13 +157,13 @@ internal static unsafe partial class Program
                 Say($"writing {index}");
                 if (Write(input, send.Text) is { } failed) { return failed; }
             }
-            if (send.Enter)
+            if (send.Submit != SubmitKey.None)
             {
                 // A separate keystroke after a pause: a burst of characters is a paste, and
                 // an Enter inside it would not submit.
                 if (send.EnterDelayMs > 0) { Thread.Sleep(send.EnterDelayMs); }
-                Say($"writing {index} enter");
-                if (Write(input, "\r") is { } failed) { return failed; }
+                Say($"writing {index} {(send.Submit == SubmitKey.Queue ? "queue" : "enter")}");
+                if (Write(input, ConsoleKeyInput.Submit(send.Submit)) is { } failed) { return failed; }
             }
         }
         finally
@@ -168,6 +174,67 @@ internal static unsafe partial class Program
         Say($"wrote {index}");
         if (send.PauseAfterMs > 0) { Thread.Sleep(send.PauseAfterMs); }
         return null;
+    }
+
+    static int Identity(uint pid, long created)
+    {
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process == 0) { Say($"fail process {Marshal.GetLastPInvokeError()}"); return 3; }
+        try
+        {
+            bool Current() => GetExitCodeProcess(process, out var code) && code == StillActive
+                && GetProcessTimes(process, out var actual, out _, out _, out _) && actual == created;
+            if (!Current()) { Say("fail process 0"); return 3; }
+            char* image = stackalloc char[32768];
+            uint length = 32768;
+            if (!QueryFullProcessImageNameW(process, 0, image, ref length)) { Say($"fail identity {Marshal.GetLastPInvokeError()}"); return 3; }
+            var executable = new string(image, 0, (int)length);
+            FreeConsole();
+            if (!AttachConsole(pid)) { Say($"fail attach {Marshal.GetLastPInvokeError()}"); return 3; }
+            Ignore();
+            try
+            {
+                var input = CreateFile("CONIN$", GenericRead, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
+                if (input == -1) { Say($"fail input {Marshal.GetLastPInvokeError()}"); return 3; }
+                try
+                {
+                    if (!GetConsoleMode(input, out var mode)) { Say($"fail input {Marshal.GetLastPInvokeError()}"); return 3; }
+                    var console = (ulong)(nuint)GetConsoleWindow();
+                    GetWindowThreadProcessId((nint)(nuint)console, out var consolePid);
+                    var consoleProcess = OpenProcess(ProcessQueryLimitedInformation, false, consolePid);
+                    if (console == 0 || consoleProcess == 0) { Say("fail identity 0"); return 3; }
+                    try
+                    {
+                        if (!GetProcessTimes(consoleProcess, out var consoleStart, out _, out _, out _)) { Say("fail identity 0"); return 3; }
+                        var cli = Fingerprint(executable);
+                        var injector = Fingerprint(Environment.ProcessPath ?? throw new InvalidDataException("missing worker image"));
+                        GetWindowThreadProcessId((nint)(nuint)console, out var stillOwner);
+                        if (!Current() || GetConsoleWindow() != (nint)(nuint)console || stillOwner != consolePid
+                            || !GetConsoleMode(input, out var actualMode) || actualMode != mode
+                            || !GetExitCodeProcess(consoleProcess, out var code) || code != StillActive) { Say("fail identity 0"); return 3; }
+                        Say(string.Create(CultureInfo.InvariantCulture, $"identity {pid} {created} {console}:{consolePid}:{consoleStart} {mode} {cli} {injector} {B64(Header)}"));
+                    }
+                    finally { CloseHandle(consoleProcess); }
+                    Say("ok");
+                    return 0;
+                }
+                finally { CloseHandle(input); }
+            }
+            finally { FreeConsole(); }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        { Say("fail identity 0"); return 3; }
+        finally { CloseHandle(process); }
+    }
+
+    static string B64(string value) => Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+
+    static string Fingerprint(string path)
+    {
+        using var file = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var version = FileVersionInfo.GetVersionInfo(path).FileVersion;
+        if (string.IsNullOrWhiteSpace(version)) { throw new InvalidDataException("missing image version"); }
+        return $"{B64(path)} {B64(version)} {Convert.ToHexString(SHA256.HashData(file))}";
     }
 
     static int Screen(uint pid)
@@ -329,17 +396,11 @@ internal static unsafe partial class Program
     // outside the BMP is its surrogate pair, two key events. The records go to the API by
     // pointer, never marshalled, so nothing can pass UnicodeChar through a code page
     // (agent-ha-bridge's struct, declared without CharSet, did, and turned "–" and CJK into "?").
-    static string? Write(nint input, string text)
+    static string? Write(nint input, string text) => Write(input, ConsoleKeyInput.Text(text));
+
+    static string? Write(nint input, ConsoleKeyRecord[] records)
     {
-        var records = new InputRecord[text.Length * 2];
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            var vk = c == '\r' ? VkReturn : (ushort)0;
-            records[2 * i] = new InputRecord { EventType = KeyEvent, KeyDown = 1, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-            records[2 * i + 1] = new InputRecord { EventType = KeyEvent, KeyDown = 0, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-        }
-        fixed (InputRecord* first = records)
+        fixed (ConsoleKeyRecord* first = records)
         {
             if (!WriteConsoleInputW(input, first, (uint)records.Length, out var written)) { return $"fail write {Marshal.GetLastPInvokeError()}"; }
             if (written != records.Length) { return $"fail partial {written}"; }
@@ -370,19 +431,6 @@ internal static unsafe partial class Program
     [UnmanagedCallersOnly]
     static int Handled(uint type) => 1;
 
-    // INPUT_RECORD with its KEY_EVENT_RECORD laid out by hand, every field blittable.
-    [StructLayout(LayoutKind.Explicit, Size = 20)]
-    struct InputRecord
-    {
-        [FieldOffset(0)] public ushort EventType;
-        [FieldOffset(4)] public int KeyDown;
-        [FieldOffset(8)] public ushort RepeatCount;
-        [FieldOffset(10)] public ushort VirtualKeyCode;
-        [FieldOffset(12)] public ushort VirtualScanCode;
-        [FieldOffset(14)] public char UnicodeChar;
-        [FieldOffset(16)] public uint ControlKeyState;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
     struct Coord
     {
@@ -407,8 +455,6 @@ internal static unsafe partial class Program
         public short MaxY;
     }
 
-    const ushort KeyEvent = 1;
-    const ushort VkReturn = 0x0D;
     const uint GenericRead = 0x80000000;
     const uint GenericWrite = 0x40000000;
     const uint FileShareRead = 1;
@@ -442,6 +488,20 @@ internal static unsafe partial class Program
     const uint StillActive = 259;
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool QueryFullProcessImageNameW(nint process, uint flags, char* image, ref uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetConsoleMode(nint input, out uint mode);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint GetConsoleWindow();
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetWindowThreadProcessId(nint window, out uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
@@ -458,7 +518,7 @@ internal static unsafe partial class Program
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool WriteConsoleInputW(nint input, InputRecord* records, uint length, out uint written);
+    private static partial bool WriteConsoleInputW(nint input, ConsoleKeyRecord* records, uint length, out uint written);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

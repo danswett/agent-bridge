@@ -30,7 +30,7 @@ import { ago, localTime } from './time.js';
 import { copyText, renderMarkdown } from '../markdown.js';
 import { copyFeedback } from './copy-feedback.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
-import { awayWords, detailRows } from '../details-rows.js';
+import { awayWords, compactionText, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
@@ -49,7 +49,7 @@ import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
-import { HistoryView, liveMessageTimes } from './history-view.js';
+import { HistoryView, currentReply, liveMessageTimes } from './history-view.js';
 import { holdTimeFocus, setTime, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY, closedQuestionIds } from '../history.js';
@@ -70,8 +70,8 @@ export function cardStatusFacts(s, words, stale = false) {
     const index = s.id.split('').reduce((n, c) => (n + c.charCodeAt(0)) % SPINNER_VERBS.length, 0);
     facts[0] = SPINNER_VERBS[index];
   }
-  const n = s.activity.compactions;
-  if (n > 0) { facts.push(n === 1 ? 'compacted once' : `compacted ${n} times`); }
+  const compactions = compactionText(s.activity.compactions);
+  if (compactions) { facts.push(compactions); }
   return facts;
 }
 
@@ -955,8 +955,9 @@ export class SessionCard {
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
     const voice = liveVoice(displayed);
-    if (this.#changed('response', voice.response ?? '')) {
-      e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
+    const response = currentReply(this.historyStore?.get(this.hostId, displayed.id), displayed);
+    if (this.#changed('response', response)) {
+      e.response.replaceChildren(renderMarkdown(response));
     }
     e.response.hidden = !voice.response;
     e.truncated.hidden = !voice.responseTruncated;
@@ -1725,6 +1726,8 @@ export class SessionCard {
     const t = this.turns.latest;
     const focus = [e.userTime, e.promptAge, e.agentAge].map(holdTimeFocus);
     const voice = liveVoice(s);
+    const response = currentReply(this.historyStore?.get(this.hostId, s.id), s);
+    if (this.#changed('response', response)) { e.response.replaceChildren(renderMarkdown(response)); }
     const recorded = (kind) => t?.parts.filter((p) => p.kind === kind && p.text).at(-1)?.text;
     e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
     e.prompt.hidden = !!t || !promptOrigin(s);
