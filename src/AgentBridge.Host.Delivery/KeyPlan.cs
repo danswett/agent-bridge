@@ -4,7 +4,7 @@ using System.Text;
 namespace AgentBridge.Host.Delivery;
 
 // One attach-write-detach on the session's console: Text as one burst of key events,
-// then, if Enter, a pause and Enter as a keystroke of its own, then a pause before the
+// then, if submitted, a pause and its submit keystroke, then a pause before the
 // next send. This is exactly the shape agent-ha-bridge's ConsoleInjector.Send has
 // delivered with for a long time; a whole form inside one attach lost its arrow keys
 // and committed every field at its first option, so each send stays separate.
@@ -22,8 +22,15 @@ namespace AgentBridge.Host.Delivery;
 // them exactly, where the rest of them changes on its own. Copilot's footer under its input
 // box carries the box's mode (shell, vim normal) beside a spinner and hints that animate, and
 // after the words are typed the box's first row is theirs (#843 review).
-public sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null,
-    IReadOnlyList<ScreenRowCheck>? Checks = null);
+public sealed record KeySend(string Text, SubmitKey Submit, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null,
+    IReadOnlyList<ScreenRowCheck>? Checks = null)
+{
+    public KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, IReadOnlyList<ScreenRow>? Expect = null,
+        IReadOnlyList<ScreenRowCheck>? Checks = null)
+        : this(Text, Enter ? SubmitKey.Enter : SubmitKey.None, EnterDelayMs, PauseAfterMs, Expect, Checks) { }
+
+    public bool Enter { get => Submit == SubmitKey.Enter; init => Submit = value ? SubmitKey.Enter : SubmitKey.None; }
+}
 
 // A row of the console's visible window, counted from its top, and its text.
 public sealed record ScreenRow(int Row, string Text);
@@ -79,16 +86,18 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
 
     // What the worker reads on stdin: a header, then one line per send with the text as
     // base64 of its UTF-8, so nothing in it can be mistaken for the line format.
-    public const string Header = "agent-bridge-keys 1";
+    // Older workers must refuse Queue, not silently treat it as no submit.
+    public const string Header = SubmitKeys.Protocol;
 
     public string ToWorkerScript()
     {
         var script = new StringBuilder(Header).Append('\n');
         foreach (var send in Sends)
         {
+            if (!Enum.IsDefined(send.Submit)) { throw new ArgumentException("Unknown submit key; no keys are sent."); }
             script.Append("send ")
                 .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(send.Text)))
-                .Append(' ').Append(send.Enter ? '1' : '0')
+                .Append(' ').Append(((int)send.Submit).ToString(CultureInfo.InvariantCulture))
                 .Append(' ').Append(send.EnterDelayMs.ToString(CultureInfo.InvariantCulture))
                 .Append(' ').Append(send.PauseAfterMs.ToString(CultureInfo.InvariantCulture));
             foreach (var expect in send.Expect ?? [])
@@ -111,7 +120,7 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
     }
 
     // How long the worker will take, so the host can tell a hung worker from a slow plan.
-    public TimeSpan Duration => TimeSpan.FromMilliseconds(Sends.Sum(s => (s.Enter ? s.EnterDelayMs : 0) + s.PauseAfterMs));
+    public TimeSpan Duration => TimeSpan.FromMilliseconds(Sends.Sum(s => (s.Submit != SubmitKey.None ? s.EnterDelayMs : 0) + s.PauseAfterMs));
 
     // For the log: what is pressed, never the words typed.
     public string Describe() => string.Join(" | ", Sends.Select(s =>
@@ -125,7 +134,8 @@ public sealed record KeyPlan(IReadOnlyList<KeySend> Sends)
                 s.Text.EndsWith(' ') ? "space" : null,
             }.Where(k => k is not null))
             : $"{s.Text.Length} chars";
-        return $"{keys}{(s.Enter ? " enter" : "")}{(s.Expect is { Count: > 0 } || s.Checks is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
+        var submit = s.Submit switch { SubmitKey.Enter => " enter", SubmitKey.Queue => " queue", _ => "" };
+        return $"{keys}{submit}{(s.Expect is { Count: > 0 } || s.Checks is { Count: > 0 } ? " (if the screen still shows it)" : "")}".Trim();
     }));
 
     static int Count(string text, string what) => (text.Length - text.Replace(what, "").Length) / what.Length;

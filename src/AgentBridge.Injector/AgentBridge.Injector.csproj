@@ -17,6 +17,7 @@
     <AssemblyTitle>Slipgates typing helper</AssemblyTitle>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefineConstants>$(DefineConstants);INJECTOR</DefineConstants>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishAot>true</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>
@@ -24,6 +25,8 @@
 
   <ItemGroup>
     <Compile Include="..\AgentBridge.Host.Delivery\Windows\ConsoleLaunchSize.cs" Link="ConsoleLaunchSize.cs" />
+    <Compile Include="..\AgentBridge.Host.Delivery\SubmitKey.cs" Link="SubmitKey.cs" />
+    <Compile Include="..\AgentBridge.Host.Delivery\Windows\ConsoleKeyInput.cs" Link="ConsoleKeyInput.cs" />
   </ItemGroup>
 
 </Project>

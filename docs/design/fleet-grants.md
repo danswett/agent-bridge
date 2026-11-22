@@ -310,6 +310,145 @@ An offline receiver is **Revocation pending**, not revoked; no future-use
 guarantee exists there until its receipt or the maximum 24-hour expiry.
 The app never reissues the same id to repair missing state.
 
+### Sealed grant.prepareRevoke prepared value and person-confirm RPC
+
+`grant.prepareRevoke` consumes `FleetGrantCall` with the caller's complete Context
+and Args exactly `{id,generation}` (`FleetGrantPrepareRevokeRequest`); omit Command.
+`FleetGrantPrepareRevokeResult(Prepared,Proof)` replies as `{prepared:{challenge,preview},proof}`.
+Prepared reuses `FleetGrantPrepared`/`FleetGrantChallenge`; preview is exactly
+id/generation/receiver/account/profile/action/document/digest. All fields are required.
+Prepare Context action is grant.prepareRevoke; challenge/preview action is grant.confirmRevoke.
+Caller retains Context and requested id/generation, never substitutes reply fields as expectations.
+Challenge nonce is nonempty and distinct from the prepare RPC GUID; all selector/binding fields match.
+`FleetGrantPrepareRevokeProof.Seal/Verify` take an injected receiver/caller TimeProvider.
+Expiry must be after that clock's current instant, with no new skew grace; malformed/default expiry refuses.
+`Parse(raw)` checks 128 KiB before JSON, rejects missing/extra/duplicate/wrong-case/type/null recursively.
+Verify returns a snapshotted typed prepared value only after the trusted HostSign/body/context checks.
+Document is exact complete normalized G1 text, opaque to this contract rather than a new policy parser.
+Digest is lowercase SHA-256 of `Framing.F(Framing.Label("agent-bridge fleet revoke digest v1"),
+account, profile, receiver, action grant.confirmRevoke, challenge nonce, id, generation, expiry, document)`.
+Order is fixed; strings/document are exact UTF-8, GUIDs lowercase D, generation signed Int64 big-endian,
+expiry invariant round-trip O. No reserialization while hashing; invalid Unicode refuses.
+The digest excludes its own field and is not issuer.digest. `DigestBytes` exposes this exact preimage.
+Seal body is `Framing.F(Framing.Label("agent-bridge fleet prepare revoke v1"), digest preimage, raw digest)`.
+Matching preview/challenge fields bind transitively through that preimage; document counts once.
+The COMPLETE body is <=30 KiB; oversize refuses without truncation, including multibyte document text.
+Caller retains the verified, person-reviewed tuple plus document/expiry through confirmation.
+Cached verified DATA may supply reviewed content but never manufacture a challenge or its expiry.
+Immediately before confirm, BOTH caller and receiver use `ConfirmContext` with their injected clock,
+using the caller's retained verified preparation or receiver's stored preparation, never unverified reply data.
+It rechecks digest/binding/expiry/nonce and returns `FleetGrantRevokeContext` with the exact supplied Context;
+it does not verify person intent, sign, rewrite Context, or authorize mutation.
+`grant.confirmRevoke` consumes `FleetGrantCall{context,args:Confirmation,command:SignedCommand}`.
+RPC, person SignedCommand, outer proof and receipt.action are all grant.confirmRevoke, with exact signed args.
+It returns `{receipt,proof}` below; producer/dispatch/person/host gates are still separate and unavailable here.
+The standalone `{request,proof}` helper is NOT the RPC request or a person command.
+
+### Sealed grant.confirmRevoke request and receipt
+
+`FleetGrantRevokeProof.SealRequest/VerifyRequest` bind `FleetGrantConfirmation` (challenge, id, generation, digest) to caller-retained `FleetGrantRevokeContext`.
+GUIDs: nonempty lowercase D; generation: positive Int64; digest: 64 lowercase hex; approved tuple must match; challenge differs from fresh RPC GUID.
+Outer context is the caller's account/profile/receiver/action `grant.confirmRevoke`/request, never reply-supplied.
+Seals enable no producer, UI, dispatch, policy or authority; existing person/host/confirm gates remain. `SealReceipt/VerifyReceipt` return a sealed snapshot/typed `FleetGrantRevokeOutcome`.
+Success requires exactly id/generation/receiver/account/profile/action/digest/problem/finalState/tombstone/counters/inFlightRequests, with none/revoked/true; only success may use none.
+Counters use the complete DATA schema, nonnegative counts and required nullable lastCaller/lastOutcome.
+In-flight ids: explicit, canonical, unique, ordinal ascending; [] proves none; refusals require exactly the first nine fields, no counters/tombstone/in-flight data. Closed problem codes 0..8:
+none, unavailable, notFound, generation, auditIncomplete, writeFailed, personRequired, policy, other.
+Refused proves no mutation begun; unconfirmed/no receipt/offline stay **RevocationPending**, never revoked.
+Success means audited durable tombstone, not submission, undo or killed sessions.
+`ParseRequest/ParseReceipt` accept raw UTF-8 whole envelopes (request/receipt + proof);
+128 KiB is checked before JSON parsing; strict per-branch camelCase required fields reject
+unknown/duplicate/missing/wrong-case/type/null (except the two diagnostics). Framing domains:
+`agent-bridge fleet revoke request v1` and `agent-bridge fleet revoke receipt v1`.
+Request body: domain, challenge, id, generation, digest; receipt: domain, retained challenge, id, generation, receiver, account, profile,
+action, digest, problem byte, state byte (revoked=0/refused=1/unconfirmed=2), framed tail.
+Success tail: true byte, canonical typed DATA counters UTF-8 JSON, framed ordered ids; refusal tail empty. Framing.F, UTF-8 strings, signed Int64 big-endian; body <=30 KiB, no truncation.
+Verify returns only verified values or InvalidDataException.
+
+### Sealed grant.read problem
+
+A `grant.read` reply carries a REQUIRED closed `Problem` inside the seal:
+`FleetGrantReadProblem` = None 0, RotationRequired 1, Unavailable 2, Other 3.
+The reply JSON is exactly `{"problem":"<name>"}` with the exact, case-sensitive
+names `none`, `rotationRequired`, `unavailable`, `other`; a missing, null, number,
+unknown, extra, duplicate or differently cased name or value refuses. There is no default,
+and the diagnostic `GrantReadResult.Problem` string, an audit line or an unsigned
+flag never supplies it.
+
+`FleetGrantReadProof.Seal(reply, context, signer)` returns
+`FleetGrantReadResult(Reply, Proof)`. The binary body is
+`Framing.F("agent-bridge fleet read problem v1", problem byte)`. The outer
+`FleetGrantProof` context (account, profile, receiver, action `grant.read`, fresh
+request) is the caller-retained one, never one echoed by the reply.
+`FleetGrantReadProof.Verify(result, trustedHostSign, expected)` returns the typed
+problem only after the signature and the exact body match; anything else throws
+`InvalidDataException`. First issuance may be enabled only when the verified value
+is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
+refusal never qualify. This contract has no producer: until the receiver seals it
+the value is unavailable, not None.
+
+### Sealed paginated grant.read DATA
+
+`FleetGrantReadDataResult(Page, Proof)` and `FleetGrantReadDataProof.Seal/Verify/Parse`
+are DATA-only contracts, distinct from the required read-problem seal; neither
+substitutes for the other. Verify returns a typed, snapshotted `FleetGrantReadDataPage`
+or `InvalidDataException`. No producer, UI, dispatch, policy or authority is enabled.
+The required camelCase page fields are offset, requestedGeneration, generation,
+observedAt, grants, next, total. Rows are exactly document/counters/stale, reusing
+the normalized full G1 grant document and App counters: every constructor field
+is required, including explicit expiresAt/roles/stopTargets/allowAllLaunch.
+Only counters.lastCaller/lastOutcome permit explicit null; missing, unknown,
+duplicate, wrong-case, wrong-type and other null fields refuse recursively.
+
+Offsets and sealed total are 0..256; pages contain 0..16 complete id-ascending,
+nonduplicate rows and at most a 30 KiB framed body. Fewer rows may fit the byte cap;
+oversize refuses, never truncates. Let end=offset+rowCount: end<=total;
+next=-1 iff end==total, otherwise next=end>offset. Empty final pages are allowed,
+empty continuations and premature/missing end markers refuse.
+Caller retains `FleetGrantReadDataContext(Context, Offset, Generation, Total)`.
+Initial selectors are (0,0,-1), where -1 means the total is not yet known.
+Verified DATA generation must be >0. Continuations retain positive generation,
+positive offset and the same verified total; changed generation/total refuses.
+Outer Context is the caller's account/profile/receiver/action grant.read/fresh GUID.
+Document account/audience match it; a reply never supplies the expected context.
+
+Body: `Framing.F(Framing.Label("agent-bridge fleet read data v1"), offset,
+requestedGeneration, generation, observedAt, total, framed rows, next)`.
+Numbers are signed 64-bit big-endian and observedAt invariant round-trip `O` UTF-8.
+Each row frames canonical UTF-8 document JSON, canonical counters JSON, stale byte.
+Canonical JSON uses the normalized G1/App record property order, camelCase, strict
+typed values, explicit fields/nulls and ordered arrays, independent of input object
+property order. Producers must keep all rows/counters/total in a generation immutable;
+consumers retain verified selectors and do not automatically mix/restart snapshots.
+
+### Sealed grant.prepareIssue prepared value
+
+`FleetGrantPrepareIssueResult(Prepared, Proof)` carries `FleetGrantPrepared`
+(challenge and preview) with a `FleetGrantSignedPayload`.
+`FleetGrantPrepareIssueProof.Seal(prepared, context, signer)` snapshots it;
+`Verify(result, trustedHostSign, expected)` returns that typed snapshot only
+after checking the host signature and exact body, otherwise `InvalidDataException`.
+`Parse(reply)` accepts only camelCase JSON with every constructor field present;
+unknown, duplicate, null, wrong-case and wrong-type fields refuse at every level.
+The preview is exactly the App's nine fields: id, generation, receiver, profile,
+document, digest, allocation (hourly/daily/live), effectivePolicy, unavailableActions.
+Document is opaque exact text, not a grant-policy validator or an issuance decision.
+
+Body order under `Framing.F(Framing.Label("agent-bridge fleet prepare issue v1"), ...)`:
+challenge request/nonce, id, generation, account, profile, receiver, action, digest,
+expiry; then preview id, generation, receiver, profile, document, digest,
+hourly/daily/live, effectivePolicy, and a framed ordered unavailableActions list.
+GUIDs use `D`, numbers signed 64-bit big-endian, digests decoded lowercase hex,
+expiry the exact round-trip `O` representation, and other strings UTF-8.
+Challenge action must be `grant.confirmIssue`; outer context action must be
+`grant.prepareIssue`. Account/profile/receiver match the caller-retained context;
+preview id/generation/receiver/profile/digest match the challenge.
+The outer request is the caller's fresh RPC GUID; an equal challenge nonce refuses.
+Verify authenticates expiry but is not a clock/policy check: the consumer must
+refuse an expired challenge before signing or confirming it.
+Read and receipt domains cannot be substituted, even if re-signed for this context.
+This is contract-only: no producer, App/UI, dispatch, policy, or authority is enabled.
+
 ## Agent use and receiver order
 
 Proposed command forms (not commands implemented by this PR):
