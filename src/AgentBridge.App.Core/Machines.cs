@@ -123,6 +123,12 @@ public enum FleetState { Off, SignedOut, Connecting, Connected, Refused, Elsewhe
 // A host the relay says is online for the account.
 public sealed record FleetHost(string Id, string Name);
 
+public interface IGrantConfirmationSigner
+{
+    SignedCommand? SignGrantConfirmation(byte[] machinePublic, FleetGrantProofContext context,
+        FleetGrantConfirmation args, DateTimeOffset now);
+}
+
 // The app's way to the account's other machines: the relay's presence, and a channel to any
 // host in it. The relay in the app; a stand-in in tests and the demo.
 public interface IFleetLink : IAsyncDisposable
@@ -168,8 +174,6 @@ public interface IFleetLink : IAsyncDisposable
     // shown, and what the confirmation showed (accept, null on a quiet machine). uncheckedPolicy:
     // the person confirmed PolicyLine (#3307). Null when it cannot be signed now. None in a stand-in.
     SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request, bool uncheckedPolicy = false) => null;
-    SignedCommand? SignGrantConfirmation(byte[]? machinePublic, FleetGrantProofContext context,
-        FleetGrantConfirmation args, DateTimeOffset now) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -488,7 +492,7 @@ public sealed class LocalAccountWatch
 // machine's host signed in to: the host hands the app its account (host.relay.account, for the
 // app alone), and the app proves its own key, so it needs no second sign-in and never shares
 // the host's identity. It serves nothing; it only opens channels, as the PWA does.
-public sealed class RelayFleetLink : IFleetLink
+public sealed class RelayFleetLink : IFleetLink, IGrantConfirmationSigner
 {
     readonly Func<CancellationToken, Task<RelayAccount?>> account;
     readonly P256KeyPair key;

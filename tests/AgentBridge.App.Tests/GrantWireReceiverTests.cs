@@ -12,7 +12,7 @@ using Xunit;
 
 namespace AgentBridge.App.Tests;
 
-public sealed class GrantWireReceiverTests
+public sealed partial class GrantWireReceiverTests
 {
     [Theory]
     [InlineData("proof")]
@@ -21,6 +21,8 @@ public sealed class GrantWireReceiverTests
     [InlineData("binding")]
     [InlineData("binding-proof")]
     [InlineData("missing-rotated")]
+    [InlineData("rotated-type")]
+    [InlineData("receipt-proof")]
     [InlineData("rotated")]
     [InlineData("none")]
     public async Task Only_a_matching_verified_preparation_and_receipt_can_become_active(string change)
@@ -28,11 +30,8 @@ public sealed class GrantWireReceiverTests
         using var wire = new Dispatcher(change);
         using var app = P256KeyPair.Generate();
         var signed = 0;
-        var receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default", (context, args, receiverKey) =>
-        {
-            signed++;
-            return Transfers.SignGrantConfirmation(app, receiverKey, context, args, DateTimeOffset.UtcNow);
-        });
+        var person = new Signer(app, () => signed++);
+        var receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default", () => person);
         var model = new GrantIssueViewModel(receiver);
         await model.PrepareAsync(JsonSerializer.SerializeToElement(new { }));
         Assert.Equal(0, signed);
@@ -55,15 +54,14 @@ public sealed class GrantWireReceiverTests
             JsonSerializer.SerializeToElement(new { context = confirm.Context, args = confirm.Args }, ProtocolJson.Options)));
     }
 
-    [Fact]
-    public async Task A_changed_page_generation_is_refused_without_an_implicit_retry()
+    sealed class Signer(P256KeyPair key, Action signed) : IGrantConfirmationSigner
     {
-        using var wire = new Dispatcher("pages");
-        var receiver = new GrantWireReceiver(wire, wire.Binding.Receiver, "default", (_, _, _) => null);
-        var result = await receiver.ReadAsync();
-        Assert.NotNull(result.Problem);
-        Assert.Empty(result.Grants);
-        Assert.Equal(2, wire.Calls.Count);
+        public SignedCommand SignGrantConfirmation(byte[] receiverKey, FleetGrantProofContext context,
+            FleetGrantConfirmation args, DateTimeOffset now)
+        {
+            signed();
+            return Transfers.SignGrantConfirmation(key, receiverKey, context, args, now);
+        }
     }
 
     sealed class Dispatcher : IGrantWireDispatcher, IDisposable
@@ -103,10 +101,6 @@ public sealed class GrantWireReceiverTests
                     "default", Binding.Receiver, change == "challenge" ? "grant.revoke" : "grant.issue", digest,
                     DateTimeOffset.UtcNow.AddMinutes(1)), JsonSerializer.SerializeToElement(
                         new GrantIssuePreview(id, 1, Binding.Receiver, "default", document, digest, new(1, 2, 1), "ask", []), ProtocolJson.Options)),
-                "grant.read" => new FleetGrantReadPage(Calls.Count, DateTimeOffset.UtcNow,
-                    JsonSerializer.SerializeToElement(new[] { new GrantSnapshot(JsonSerializer.Deserialize<JsonElement>(document),
-                        new(0, 0, 0, 0, [], null, null, DateTimeOffset.UtcNow, [], []), false) }, ProtocolJson.Options),
-                    Calls.Count == 1 ? 1 : null),
                 _ => throw new InvalidOperationException("Unexpected test operation")
             };
             var proof = FleetGrantProof.Seal(JsonSerializer.SerializeToUtf8Bytes(payload, ProtocolJson.Options),
@@ -124,6 +118,9 @@ public sealed class GrantWireReceiverTests
                 call.Context, new EcdsaEnvelopeSigner(key));
             if (change == "missing-rotated") { result = result with { Receipt = JsonSerializer.SerializeToElement(new { id,
                 generation = 1, receiver = Binding.Receiver, digest }) }; }
+            if (change == "rotated-type") { result = result with { Receipt = JsonSerializer.SerializeToElement(new { id,
+                generation = 1, receiver = Binding.Receiver, digest, rotated = "false" }) }; }
+            if (change == "receipt-proof") { result = result with { Proof = result.Proof with { Body = "e30" } }; }
             return Task.FromResult(result);
         }
         public void Dispose() { key.Dispose(); target.Dispose(); }
