@@ -112,6 +112,7 @@ public sealed class AgentAuditLog
                 var launch = entry.Action == "session.launch";
                 var anchored = entry.Gate is not null || HasHeads(folder);
                 var expected = ReadHead(folder, launch);
+                var extendLegacy = entry.Gate is null && expected is { Adopted: true, AdoptedGatedRows: 0 } && AdoptionProofMatches(folder, launch, expected, out var adoptedCount) && adoptedCount == 0;
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
                 var file = Path.Combine(folder, FileFor(now, launch));
@@ -144,7 +145,7 @@ public sealed class AgentAuditLog
                 }
                 if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
                 else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
-                if (anchored) { WriteHead(folder, launch, expected, line.Gate?.Sequence ?? expected?.Sequence ?? 0, fault); }
+                if (anchored) { WriteHead(folder, launch, expected, line.Gate?.Sequence ?? expected?.Sequence ?? 0, fault, extendLegacy: extendLegacy); }
                 if (failing) { failing = false; log("agent audit log is writing again"); }
                 // The line is already written: a retention fault is its own problem, not a lost event.
                 try { if (!launch) { Retain(folder, now); retentionFailing = false; } }
@@ -194,6 +195,7 @@ public sealed class AgentAuditLog
             foreach (var launch in new[] { false, true })
             {
                 if (ReadHead(folder, launch) is not { Adopted: true } head) { continue; }
+                if (head.AdoptedGatedRows is null && head.AdoptedPrefix is null) { continue; }
                 if (!AdoptionProofMatches(folder, launch, head, out var count))
                 { throw new IOException("adoption proof contradicts audit evidence"); }
                 if (head.AdoptedPrefix?.Empty != true) { continue; }
@@ -459,7 +461,7 @@ public sealed class AgentAuditLog
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         { log($"agent audit continuity unavailable: {e.GetType().Name}"); return "audit-incomplete"; }
     }
-    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault, bool adopted = false)
+    static void WriteHead(string folder, bool launch, Head? previous, long sequence, string fault, bool adopted = false, bool extendLegacy = false)
     {
         var head = CaptureHead(folder, launch);
         // Advancing the head must not bless a suffix after its original root was lost.
@@ -467,10 +469,10 @@ public sealed class AgentAuditLog
             Sequence = sequence, Fault = fault, RetainedThrough = previous?.RetainedThrough ?? 0,
             RetiringRoot = previous?.RetiringRoot, Adopted = previous?.Adopted ?? adopted,
             AdoptedGatedRows = previous?.AdoptedGatedRows, AdoptedPrefix = previous?.AdoptedPrefix };
-        if (adopted && previous is null && fault == "none")
+        if ((adopted && previous is null || extendLegacy) && fault == "none")
         {
             var prefix = new AdoptionPrefix(head.Root, head.RootSha256, head.Tail, head.TailSha256, head.Length, sequence);
-            if (TryCountAdoptedRows(folder, launch, prefix, out var count))
+            if (TryCountAdoptedRows(folder, launch, prefix, out var count) && (!extendLegacy || count == 0))
             { head = head with { AdoptedPrefix = prefix, AdoptedGatedRows = count }; }
         }
         SaveHead(folder, launch, head);
@@ -665,7 +667,10 @@ public sealed class AgentAuditLog
             var size = info.Length;
             string? destination = null;
             var legacyProof = expected is { Adopted: true, AdoptedGatedRows: 0, AdoptedPrefix: { } prefix }
-                && prefix.Root == info.Name && prefix.Tail == info.Name && LastGateSequence(folder, false, info.FullName) == 0;
+                && (prefix.Root == info.Name && prefix.Tail == info.Name
+                    || expected.RetiringRoot == info.Name && prefix.Root == prefix.Tail
+                        && prefix.Length == Encoding.UTF8.GetByteCount(File.ReadLines(files.First(f => f.Day > day).Info.FullName).First()) + 1L)
+                && LastGateSequence(folder, false, info.FullName) == 0 && AdoptionProofMatches(folder, false, expected, out var adoptedCount) && adoptedCount == 0;
             if (archive || legacyProof)
             {
                 var archiveFolder = PrivateFolder.Ensure(Path.Combine(folder, "archive"), "the audit archive", "nothing is archived");
