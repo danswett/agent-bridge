@@ -28,6 +28,14 @@ public sealed class FleetGrantProofTests : IDisposable
         Assert.Equal(Body, FleetGrantProof.Verify(proof, Point, context));
     }
 
+    [Fact]
+    public void Binding_context_is_valid_for_a_fresh_sealed_receiver_reply()
+    {
+        var binding = context with { Action = "grant.binding" };
+        var proof = FleetGrantProof.Seal(Body, binding, new EcdsaEnvelopeSigner(key));
+        Assert.Equal(Body, FleetGrantProof.Verify(proof, Point, binding));
+    }
+
     [Theory]
     [InlineData("body")]
     [InlineData("signature")]
