@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
@@ -180,7 +181,7 @@ public sealed class PriorityCapabilityTests
     }
 
     [Fact]
-    public void A_refused_chain_keeps_unrelated_legacy_handoff_and_other_receiver_authority_on_restart()
+    public void Global_priority_quarantine_keeps_unrelated_legacy_handoff_on_restart()
     {
         using var f = new Fake(); var cap = f.Cap(); f.Issue(cap); f.Decide();
         f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow());
@@ -197,9 +198,128 @@ public sealed class PriorityCapabilityTests
         Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State("legacy", handoff.Id));
         Assert.True(replay.Journal.VerifyHandoff("legacy", handoff, "legacy body"));
         Assert.Equal("normal", replay.Decide().Priority);
-        Assert.True(replay.Journal.PriorityCurrent(otherId, "target", Agent, other, replay.Clock.GetUtcNow()));
+        Assert.False(replay.Journal.PriorityCurrent(otherId, "target", Agent, other, replay.Clock.GetUtcNow()));
         using var again = new Fake(records.Concat(replay.Records));
         Assert.Equal("normal", again.Decide().Priority);
         Assert.Throws<InvalidOperationException>(() => again.Issue(again.Cap()));
+    }
+
+    [Fact]
+    public void Linked_legacy_handoff_is_unconfirmed_but_refuses_capability_authority()
+    {
+        using var f = new Fake(); f.Issue(f.Cap()); var id = Guid.NewGuid(); f.Decide(id);
+        var header = DeliveryEnvelope.Prepare(new(Agent.From, id.ToString("D"), null, f.Clock.GetUtcNow(), "urgent", 0), "body").Header;
+        f.Journal.Write("target", header, "body", DeliveryState.Enqueued);
+        var handoff = f.Journal.ReserveHandoff("target", header, "body", 'u');
+        using var replay = new Fake(f.Records);
+        Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State("target", handoff.Id));
+        Assert.True(replay.Journal.VerifyHandoff("target", handoff, "body"));
+        Assert.False(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.Equal("normal", replay.Decide().Priority);
+    }
+
+    [Fact]
+    public void Empty_legacy_requires_its_MAC_and_nonempty_dropped_history_is_only_unconfirmed()
+    {
+        using var f = new Fake();
+        var header = new DeliveryHeader(Agent.From, Guid.NewGuid().ToString("D"), null, f.Clock.GetUtcNow(), "normal", 0);
+        f.Journal.Write("legacy", header, "", DeliveryState.Dropped);
+        using var valid = new Fake(f.Records);
+        Assert.Equal(DeliveryState.Dropped, valid.Journal.State("legacy", header.Id));
+        Assert.Throws<InvalidDataException>(() => new Fake(f.Records.Select(r => r with { Reason = "spoof" })));
+        f.Journal.Write("legacy", header, "body", DeliveryState.Dropped);
+        using var replay = new Fake(f.Records);
+        Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State("legacy", header.Id));
+        Assert.Equal("normal", replay.Decide().Priority);
+    }
+
+    [Theory]
+    [InlineData("revoked")]
+    [InlineData("expired")]
+    [InlineData("consumed")]
+    public void Every_strip_subset_and_legacy_spoof_is_inert_or_monotonically_spent(string action)
+    {
+        using var f = new Fake(); var cap = f.Cap(1); f.Issue(cap); var id = Guid.NewGuid();
+        var other = Receiver with { Profile = "other" };
+        var b = f.Cap() with { Principal = "other", Audience = other, ExpiresAt = cap.ExpiresAt.AddHours(1) };
+        f.Journal.IssuePriority(b, Person, other, () => true, f.Clock.GetUtcNow());
+        f.Decide(id);
+        if (action == "revoked") { f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow()); }
+        if (action == "expired") { f.Clock.Advance(TimeSpan.FromHours(2)); f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()); }
+        var records = f.Records; Assert.Equal(action, records[^1].Reason);
+        var bRequest = Guid.NewGuid(); f.Decide(bRequest, new("other"), other);
+        var suffix = f.Records.Skip(records.Length).ToArray();
+        for (var location = 0; location < (action == "consumed" ? 1 : 3); location++)
+        for (var changedId = 1; changedId >= 0; changedId--)
+        for (var withSuffix = 0; withSuffix < 2; withSuffix++)
+        for (var mask = 0; mask < 64; mask++)
+        foreach (var spoof in new[] { 1, 0, 2, 3 })
+        {
+            var node = JsonSerializer.SerializeToNode(records[^1], ProtocolJson.Options)!.AsObject();
+            var header = node["header"]!.AsObject();
+            if (spoof != 0)
+            {
+                node["state"] = spoof == 3 ? "handoff" : "dropped";
+                node["capability"] = null; node["priorityReason"] = null; node["priorityPrevious"] = null; node["reason"] = null;
+                header["seq"] = spoof == 2 ? null : JsonValue.Create("q1"); header["n"] = 1;
+            }
+            if ((mask & 1) != 0) { node.Remove("capability"); }
+            if ((mask & 2) != 0) { node.Remove("reason"); node.Remove("priorityReason"); }
+            if ((mask & 4) != 0) { node.Remove("priorityPrevious"); }
+            if ((mask & 8) != 0) { header.Remove("seq"); }
+            if ((mask & 16) != 0) { header.Remove("n"); }
+            if ((mask & 32) != 0) { node.Remove("state"); }
+            if (changedId != 0) { header["id"] = Guid.NewGuid().ToString("D"); }
+            var candidate = node.Deserialize<DeliveryJournalRecord>(ProtocolJson.Options)!;
+            var prefix = records[..^1];
+            var ordered = location == 0 ? prefix.Append(candidate) : location == 1 ? prefix.Prepend(candidate) :
+                prefix.Take(1).Append(candidate).Concat(prefix.Skip(1));
+            using var replay = new Fake(ordered.Concat(withSuffix == 0 ? [] : suffix));
+            replay.Clock.SetUtcNow(action == "expired" && withSuffix == 0 && (spoof != 0 || changedId != 0 || (mask & 39) != 0)
+                ? cap.NotBefore.AddHours(1) : f.Clock.GetUtcNow());
+            Assert.NotEqual("urgent", replay.Decide().Priority);
+            if (candidate != records[^1])
+            {
+                Assert.False(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+                Assert.NotEqual("urgent", replay.Decide(sender: new("other"), receiver: other).Priority);
+                Assert.False(replay.Journal.PriorityCurrent(bRequest, "target", new("other"), other, replay.Clock.GetUtcNow()));
+                Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State(candidate.Session, candidate.Header.Id));
+            }
+        }
+        if (action == "consumed")
+        {
+            using var replay = new Fake(records[..^1]);
+            Assert.Equal("quota", replay.Decide().Reason);
+            using var identity = new Fake(records.Select(r => r.Reason == "granted" ? r with
+                { Capability = b, Header = r.Header with { Id = Guid.NewGuid().ToString("D") } } : r).Concat(suffix));
+            Assert.Equal("normal", identity.Decide().Priority);
+            Assert.Throws<InvalidOperationException>(() => identity.Issue(identity.Cap() with { Principal = "fresh" }));
+            Assert.Equal("normal", identity.Decide(request: new("normal", "reason")).Priority);
+            Assert.Equal("urgent", identity.Decide(sender: Person).Priority);
+            foreach (var priority in new[] { "normal", "fyi", "urgent" })
+            {
+                using var ordinary = new Fake(); var uuid = Guid.NewGuid(); var sender = priority == "urgent" ? Person : Agent;
+                ordinary.Decide(uuid, sender, request: new(priority, "reason"));
+                var h = new DeliveryHeader(sender.From, uuid.ToString("D"), null, ordinary.Clock.GetUtcNow(), priority, 0);
+                ordinary.Journal.Write("target", h, "body", DeliveryState.Enqueued);
+                using var reopened = new Fake(ordinary.Records);
+                Assert.Equal(DeliveryState.Unconfirmed, reopened.Journal.State("target", h.Id));
+                var handoff = ordinary.Journal.ReserveHandoff("target", h, "body", priority == "urgent" ? 'u' : 'q');
+                using var handed = new Fake(ordinary.Records);
+                Assert.Equal(DeliveryState.Unconfirmed, handed.Journal.State("target", h.Id));
+                Assert.True(handed.Journal.VerifyHandoff("target", handoff, "body"));
+            }
+        }
+        if (action == "expired")
+        {
+            using var before = new Fake(); var h = new DeliveryHeader(Agent.From, Guid.NewGuid().ToString("D"), null,
+                before.Clock.GetUtcNow(), "normal", 0);
+            before.Journal.Write("legacy", h, "body", DeliveryState.Enqueued);
+            before.Issue(before.Cap());
+            using var reopened = new Fake(before.Records);
+            Assert.Equal(DeliveryState.Unconfirmed, reopened.Journal.State("legacy", h.Id));
+            Assert.Equal("normal", reopened.Decide().Priority);
+            Assert.Throws<InvalidOperationException>(() => reopened.Issue(reopened.Cap() with { Principal = "fresh" }));
+        }
     }
 }

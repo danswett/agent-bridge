@@ -15,7 +15,7 @@ internal sealed record PriorityDecision(bool Accepted, string Priority, string? 
 public sealed partial class DeliveryJournal
 {
     readonly List<DeliveryJournalRecord> priorityRecords = [];
-    readonly HashSet<(string Principal, GrantAudience Receiver)> refusedPriority = [];
+    bool priorityQuarantined;
     string priorityTail = "";
 
     // Only trusted ingress may supply the authenticated person and captured receiver binding.
@@ -25,11 +25,11 @@ public sealed partial class DeliveryJournal
         lock (gate)
         {
             if (!person.Owner || !current() || !ValidPriority(capability) || capability.Issuer.Account != person.Id ||
-                refusedPriority.Contains((capability.Principal, capability.Audience)) ||
+                priorityQuarantined ||
                 capability.Audience != receiver || capability.Issuer.IssuedAt > now ||
                 now >= capability.ExpiresAt ||
                 priorityRecords.Any(r => r.Capability?.Id == capability.Id))
-            { throw new InvalidOperationException("Priority issue requires current person authority and a fresh bounded capability."); }
+            { throw new InvalidOperationException("Priority issue requires current person authority, a fresh bounded capability and a non-quarantined journal."); }
             PriorityRecord(capability.Id, "", person, "issued", now, capability);
         }
     }
@@ -65,8 +65,9 @@ public sealed partial class DeliveryJournal
             if (sender.Owner) { return Admit("urgent"); }
             var cap = priorityRecords.Where(r => r.Reason == "issued").Select(r => r.Capability!).ToArray()
                 .FirstOrDefault(c => c.Principal == sender.Id && c.Audience == receiver && ActivePriority(c, now));
-            var spent = priorityRecords.Count(r => r.Reason == "consumed" && r.Capability?.Principal == sender.Id &&
-                r.Capability.Audience == receiver && now - r.RecordedAt < TimeSpan.FromHours(1));
+            var spent = priorityRecords.Where(r => r.Reason == "granted" && r.Capability?.Principal == sender.Id &&
+                r.Capability.Audience == receiver && now - r.RecordedAt < TimeSpan.FromHours(1))
+                .Select(r => r.Header.Id).Distinct().Count();
             var refusal = cap is null ? "no-capability" : spent >= Math.Min(3, cap.Hourly) ? "quota" : null;
             return Admit(refusal is null ? "urgent" : "normal", cap, refusal);
 
@@ -103,7 +104,7 @@ public sealed partial class DeliveryJournal
 
     bool ActivePriority(PriorityCapability cap, DateTimeOffset now)
     {
-        if (refusedPriority.Contains((cap.Principal, cap.Audience))) { return false; }
+        if (priorityQuarantined) { return false; }
         if (priorityRecords.Any(r => r.Capability?.Id == cap.Id && r.Reason is "revoked" or "expired")) { return false; }
         if (now >= cap.ExpiresAt)
         {
@@ -129,14 +130,14 @@ public sealed partial class DeliveryJournal
         c.Issuer.IssuedAt != default && c.NotBefore >= c.Issuer.IssuedAt &&
         c.ExpiresAt > c.NotBefore && c.ExpiresAt - c.Issuer.IssuedAt <= TimeSpan.FromHours(24);
 
-    void ReplayPriority(DeliveryJournalRecord record)
+    void ReplayPriority(DeliveryJournalRecord record, DeliveryJournalRecord[] facts)
     {
         if (!Matches(record, "") || record.RecordedAt == default ||
             record.PriorityPrevious != priorityTail || !PriorityAction(record.Reason) ||
             record.Capability is { } cap && !ValidPriority(cap) ||
             priorityRecords.LastOrDefault() is { } previous && record.RecordedAt < previous.RecordedAt)
         {
-            if (RefusePriorityChain(record)) { return; }
+            if (RefusePriorityChain(record, facts)) { UnconfirmedReplay(record); return; }
             throw new InvalidDataException("Priority journal evidence is invalid; no capability is usable.");
         }
         priorityRecords.Add(record);
@@ -146,20 +147,28 @@ public sealed partial class DeliveryJournal
     static bool PriorityAction(string? action) => action is "issued" or "revoked" or "expired" or "requested" or
         "granted" or "consumed" or "no-capability" or "quota" or "demoted" or "missing-reason" or "invalid-priority" or "lane-full";
 
-    bool RefusePriorityChain(DeliveryJournalRecord record, bool legacy = false)
+    bool RefusePriorityChain(DeliveryJournalRecord record, DeliveryJournalRecord[] facts)
     {
-        var cap = priorityRecords.LastOrDefault(r => r.Capability is { } c &&
-            (r.Header.Id == record.Header.Id || c.Id.ToString("D") == record.Header.Id || c.Id == record.Capability?.Id))?.Capability;
-        if (cap is null) { return false; }
-        if (legacy && cap.Id.ToString("D") != record.Header.Id && record.Capability is null &&
-            record.PriorityReason is null && record.PriorityPrevious is null && !PriorityAction(record.Reason) &&
-            (record.Header.N != 0 || record.Header.Seq is not null || Matches(record, "")))
-        { return false; }
-        refusedPriority.Add((cap.Principal, cap.Audience));
+        if (facts.Length == 0) { return false; }
+        var ordinary = record.State != "priority" && record.Capability is null && record.PriorityReason is null &&
+            record.PriorityPrevious is null && record.Header.N == 0 && Matches(record, "");
+        var linked = record.State == "priority" || record.Capability is not null || record.PriorityReason is not null ||
+            record.PriorityPrevious is not null || facts.Any(r => r.PriorityPrevious == record.Hmac || ordinary &&
+                r.Capability is { } c && (r.Header.Id == record.Header.Id || c.Id.ToString("D") == record.Header.Id));
+        if (!linked && ordinary) { return false; }
+        priorityQuarantined = true;
         // Keep the hash cursor for later authenticated links, never the refused authority fact.
-        priorityTail = record.Hmac;
-        log("priority journal chain refused; no authority or quota renewal");
+        if (record.State == "priority" || facts.Any(r => r.PriorityPrevious == record.Hmac)) { priorityTail = record.Hmac; }
+        log("priority journal globally quarantined; no authority or quota renewal");
         return true;
+    }
+
+    void UnconfirmedReplay(DeliveryJournalRecord record)
+    {
+        var id = (record.Session, record.Header.Id);
+        latest[id] = record;
+        replayed.Add(id);
+        unverified.Add(id);
     }
 
     void PriorityRecord(Guid request, string target, DeliverySender sender, string action, DateTimeOffset now,

@@ -26,6 +26,7 @@ public sealed partial class DeliveryJournal : IDisposable
     readonly Dictionary<(string, string), DeliveryJournalRecord> handoffs = [];
     readonly Dictionary<(string, char), long> reserved = [];
     readonly HashSet<(string, string)> replayed = [];
+    readonly HashSet<(string, string)> unverified = [];
     internal bool Uncertain { get; private set; }
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
@@ -39,20 +40,26 @@ public sealed partial class DeliveryJournal : IDisposable
         CryptographicOperations.ZeroMemory(key);
         this.append = append;
         this.log = log;
-        foreach (var r in reservations ?? [])
+        var records = (reservations ?? []).ToArray();
+        var facts = records.Where(r => r.State == "priority" && Matches(r, "")).ToArray();
+        foreach (var r in records)
         {
-            var state = Enum.Parse<DeliveryState>(r.State, true);
-            if (state != DeliveryState.Priority)
+            var validState = Enum.TryParse<DeliveryState>(r.State, true, out var state) && Enum.IsDefined(state);
+            if (validState && state == DeliveryState.Priority) { ReplayPriority(r, facts); continue; }
+            var refused = RefusePriorityChain(r, facts);
+            if (!validState || r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null ||
+                r.Header.N == 0 && !Matches(r, ""))
             {
-                if (RefusePriorityChain(r, legacy: true)) { continue; }
-                if (r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null)
-                { throw new InvalidDataException("Priority journal evidence cannot enter legacy replay."); }
+                if (refused) { UnconfirmedReplay(r); continue; }
+                throw new InvalidDataException("Delivery journal evidence cannot enter legacy replay.");
             }
-            if (state == DeliveryState.Priority) { ReplayPriority(r); continue; }
             var id = (r.Session, r.Header.Id);
+            if (r.Header.N != 0)
+            { unverified.Add(id); log("delivery journal body unavailable; replay is unconfirmed and inert for authority"); }
+            else { unverified.Remove(id); }
             latest[id] = r;
             replayed.Add(id);
-            if (r.State != "handoff") { continue; }
+            if (state != DeliveryState.Handoff || refused && r.Header.Seq is null) { continue; }
             _ = DeliveryEnvelope.Format(r.Header, "");
             handoffs.TryAdd(id, r);
             var seq = r.Header.Seq!;
@@ -85,7 +92,7 @@ public sealed partial class DeliveryJournal : IDisposable
         lock (gate)
         {
             var key = (session, id);
-            return replayed.Contains(key) ? handoffs.ContainsKey(key) ? DeliveryState.Unconfirmed : DeliveryState.Dropped :
+            return replayed.Contains(key) ? unverified.Contains(key) || handoffs.ContainsKey(key) ? DeliveryState.Unconfirmed : DeliveryState.Dropped :
                 latest.TryGetValue(key, out var r) ? Enum.Parse<DeliveryState>(r.State, true) : null;
         }
     }
@@ -138,6 +145,7 @@ public sealed partial class DeliveryJournal : IDisposable
             }
             latest[id] = record;
             replayed.Remove(id);
+            unverified.Remove(id);
             if (state == DeliveryState.Handoff)
             {
                 handoffs[id] = record;
@@ -170,6 +178,8 @@ public sealed partial class DeliveryJournal : IDisposable
             log("delivery journal verification refused (invalid UTF-16); no success acknowledgement");
             return false;
         }
+        catch (FormatException)
+        { log("delivery journal verification refused (invalid MAC); no success acknowledgement"); return false; }
     }
 
     byte[] Mac(DeliveryJournalRecord record, string body) =>

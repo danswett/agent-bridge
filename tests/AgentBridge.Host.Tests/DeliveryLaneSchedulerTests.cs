@@ -140,8 +140,7 @@ public sealed class DeliveryLaneSchedulerTests
         f.Scheduler.Offer(id, "target", sender, "body", () => true);
         if (handoff) { await f.Next(); Assert.Equal(DeliveryOfferState.Unconfirmed, f.Scheduler.Query(id, "target", sender).State); }
         using var restarted = new Fake(f.Records, dispatch: true);
-        var state = handoff ? DeliveryOfferState.Unconfirmed : DeliveryOfferState.Dropped;
-        Assert.Equal(state, restarted.Scheduler.Offer(id, "target", sender, "body", () => true).State);
+        Assert.Equal(DeliveryOfferState.Unconfirmed, restarted.Scheduler.Offer(id, "target", sender, "body", () => true).State);
         await restarted.Next(); Assert.Empty(restarted.Sent);
     }
 

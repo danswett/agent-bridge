@@ -161,12 +161,15 @@ GrantStore: it conveys no read/reply/answer/trust authority and is not a fleet l
 Request, issue, grant, consumption, refusal, demotion and revocation are flushed/MACed journal facts.
 Priority facts require Priority state, MAC and previous-MAC verification. Relabeled or stripped policy
 facts refuse their verified principal/receiver chain: no current authority, replacement capability or quota refund.
-The refusal survives replay; other receiver chains and unrelated legacy handoffs still reopen.
-Ordinary legacy records retain node-bound Unconfirmed classification and body-MAC verification when body evidence exists;
+Unauthenticated linked/ambiguous facts quarantine all priority bindings and replay Unconfirmed; only MAC-covered fields prove attribution.
+Zero-body legacy requires its MAC; unverifiable nonempty history is Unconfirmed/inert only when no priority record exists anywhere;
+otherwise all bindings are quarantined regardless of record position. Unrelated handoffs stay Unconfirmed and need body-MAC evidence.
+Known pre-activation limitation: genuine nonempty history in a journal with any priority record permanently quarantines on restart; whole-design review must resolve this with a body-free authenticated-history design ([#3720](https://github.com/danswett/agent-bridge/issues/3720)).
 no missing-body guess, new replay-body resolver, UI, live adapter or migration is introduced.
 Policy facts link their previous MAC; whole-file rollback still requires the held
 [external/keyed anchor (#3720)](https://github.com/danswett/agent-bridge/issues/3720) before activation.
-Max three consumptions per principal/receiver rolling hour spans all its capabilities; stricter caps,
+Every distinct authenticated grant spends quota; no unauthenticated fact refunds it. No refund writer exists in this slice.
+Max three grants per principal/receiver rolling hour spans all its capabilities; stricter caps,
 expiry, revocation and observed clock high-water survive replay. No capability/quota decides normal,
 waiting idle; owner urgent retains its existing path without a capability or quota.
 The decision's required admission predicate runs before consumption: known refusal journals
