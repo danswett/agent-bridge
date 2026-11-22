@@ -505,7 +505,7 @@ to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The work
 JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
 10.3%, of margin). Negotiated handles lower the unchanged workload further to **9,606 bytes**
 (549 saved, 4,486 above the goal), still 53 patches and no whole upserts. The budget is now
-**10,600 bytes**, 994 bytes (10.3%) of margin. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
+**10,600 bytes**, 994 bytes (10.3%) of margin. #3581's per-reply `responseId` then raised the measured total to 10,983..11,012 bytes, so the budget is now **11,400 bytes**. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
 
 #### Resuming without a snapshot
 
