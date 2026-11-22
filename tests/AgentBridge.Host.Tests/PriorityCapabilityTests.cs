@@ -306,6 +306,28 @@ public sealed class PriorityCapabilityTests
     }
 
     [Fact]
+    public void A_body_record_that_never_reached_handoff_still_quarantines_priority_bindings()
+    {
+        using var f = new Fake(); f.Issue(f.Cap()); f.Decide();
+        var header = DeliveryEnvelope.Prepare(new(Agent.From, Guid.NewGuid().ToString("D"), null, f.Clock.GetUtcNow(), "normal", 0), "body").Header;
+        f.Journal.Write("legacy", header, "body", DeliveryState.Enqueued);
+        using var replay = new Fake(f.Records);
+        Assert.Equal("normal", replay.Decide().Priority);
+        Assert.Throws<InvalidOperationException>(() => replay.Issue(replay.Cap()));
+    }
+
+    [Fact]
+    public void A_handed_off_body_record_reopens_as_unconfirmed()
+    {
+        using var f = new Fake();
+        var header = DeliveryEnvelope.Prepare(new(Agent.From, Guid.NewGuid().ToString("D"), null, f.Clock.GetUtcNow(), "normal", 0), "body").Header;
+        f.Journal.Write("legacy", header, "body", DeliveryState.Enqueued);
+        var handoff = f.Journal.ReserveHandoff("legacy", header, "body", 'q');
+        using var replay = new Fake(f.Records);
+        Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State("legacy", handoff.Id));
+    }
+
+    [Fact]
     public void Linked_legacy_handoff_is_unconfirmed_but_refuses_capability_authority()
     {
         using var f = new Fake(); f.Issue(f.Cap()); var id = Guid.NewGuid(); f.Decide(id);

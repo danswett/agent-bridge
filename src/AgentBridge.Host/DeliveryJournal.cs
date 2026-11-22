@@ -55,7 +55,7 @@ public sealed partial class DeliveryJournal : IDisposable
                 throw new InvalidDataException("Delivery journal evidence cannot enter legacy replay.");
             }
             var id = (r.Session, r.Header.Id);
-            if (r.Header.N != 0)
+            if (r.Header.N != 0 && (refused || state is not (DeliveryState.Enqueued or DeliveryState.Demoted)))
             { unverified.Add(id); log("delivery journal body unavailable; replay is unconfirmed and inert for authority"); }
             // A MAC-valid zero-body record linked to refused priority evidence is still inert history, never Dropped.
             else if (refused) { unverified.Add(id); }
