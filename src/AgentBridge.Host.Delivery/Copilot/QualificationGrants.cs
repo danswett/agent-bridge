@@ -89,8 +89,9 @@ internal sealed class QualificationGrants(IQualificationTrust? trust = null,
             var now = time.GetUtcNow();
             if (now < journal.ObserveTime(now)) { return QualificationGrantDecision.Refuse("qualification clock earlier than journal high-water"); }
             var old = journal.Find(id);
-            if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding || old.State == QualificationGrantState.Revoked)
-            { return QualificationGrantDecision.Refuse("qualification grant missing, foreign or already revoked"); }
+            if (id == Guid.Empty || old is null || old.Id != id || old.Binding != trust.Binding)
+            { return QualificationGrantDecision.Refuse("qualification grant missing or foreign"); }
+            if (old.State == QualificationGrantState.Revoked) { return new(old, null); }
             var next = old with { State = QualificationGrantState.Revoked };
             if (journal.TryAppend(old, next, now)) { return new(next, null); }
         }

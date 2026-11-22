@@ -43,6 +43,20 @@ journal adapter; revocation never erases history. Missing adapters refuse.
 This slice supplies only fake adapters in tests: no CLI verb, owner approval UI,
 Fleet store writer, qualification keys or live run is enabled.
 
+## Inactive qualification controller (A-ii-2b)
+`qualification.start` has a source-only core requiring the grant id and host-owned
+approved target/challenge; registration and trusted adapters remain absent, hence
+default refusal. Each consumed grant permits that nonce once and at most one minute
+of qualification/receipt validity, bounded by the grant. Final-effect fencing,
+raw queued correlation and current
+identity are mandatory; ambiguity stays Unknown. Explicit unsupported transport
+is a negative result, never permission to fall back. Receipt fields contain only
+the SHA, hashed bindings/nonce/snapshot, verdict, expiry and content hash, appended
+through the durable Fleet boundary. Revocation, expiry or identity change removes
+current capability; teardown/failure revokes. No host starts or live keys ran.
+Consumers must ask the controller for current capability; a stored receipt alone
+never authorizes delivery, and restart defaults to Unknown.
+
 ## Problem and cause
 Copilot CLI joins steers pending mid-turn with `\n\n` into one user turn (6 of 692 turns in one transcript). The host types bare text (`HaReplies.cs:26`) and only Lite and `RetryEpisode` set
 `RequireIdle` (`ReplyService.cs:422`), so replies land in a working session with no sender boundary
