@@ -147,6 +147,32 @@ public sealed class GrantListTests
         receiver.Online = true; receiver.ReadFailure = "transport"; await vm.RefreshAsync();
         Assert.False(vm.CanIssueFirst); Assert.False(vm.Available); Assert.False(row.CanRevoke); Safe(Visible(vm));
     }
+    [Theory]
+    [InlineData(FleetGrantReadProblem.None, false)] [InlineData(FleetGrantReadProblem.None, true)]
+    [InlineData(FleetGrantReadProblem.RotationRequired, false)] [InlineData(FleetGrantReadProblem.RotationRequired, true)]
+    public async Task Receiver_switches_disable_cached_gates_and_discard_in_flight_verified_reads(FleetGrantReadProblem problem, bool inFlight)
+    {
+        var receiver = new FakeReceiver { G7Ready = true }; var vm = new GrantListViewModel(receiver);
+        await vm.RefreshAsync(); var counts = Assert.Single(vm.Rows).Counters;
+        receiver.Code = problem;
+        if (inFlight) { receiver.ReadAck = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+        var refresh = vm.RefreshAsync();
+        if (!inFlight)
+        {
+            await refresh;
+            Assert.Equal(problem == FleetGrantReadProblem.None, vm.Available);
+            Assert.Equal(problem == FleetGrantReadProblem.RotationRequired, vm.CanIssueFirst);
+        }
+        receiver.Receiver = "receiver-2";
+        if (inFlight) { receiver.ReadAck!.SetResult(new([], null)); await refresh; }
+        Assert.False(vm.Available); Assert.False(vm.CanIssueFirst); Assert.Empty(vm.FirstIssueNotice);
+        Assert.Equal(counts, Assert.Single(vm.Rows).Counters); Assert.Equal(2, receiver.Reads);
+        if (inFlight)
+        {
+            receiver.Receiver = "receiver-1";
+            Assert.False(vm.Available); Assert.False(vm.CanIssueFirst);
+        }
+    }
     [Theory] [InlineData("missing")] [InlineData("unverified")] [InlineData("unknown")]
     public async Task A_missing_or_refused_verified_result_clears_first_issue_without_retrying(string failure)
     {
@@ -185,7 +211,7 @@ public sealed class GrantListTests
     }
     sealed class FakeReceiver : IGrantListReceiver, IVerifiedGrantReader
     {
-        public string Receiver => "receiver-1";
+        public string Receiver { get; set; } = "receiver-1";
         public bool Online { get; set; } = true;
         public string? Problem { get; set; } public string? ReadProblem;
         public FleetGrantReadProblem Code = FleetGrantReadProblem.None; public bool G7Ready;
@@ -193,8 +219,9 @@ public sealed class GrantListTests
         public GrantSnapshot Value = Snapshot(); public GrantRevokeReceipt Result = Receipt();
         public bool Lost, OfflineAfterSend, Empty; public int Reads, Prepares, Confirms; public string FailureKind = "io"; public string? ReadFailure;
         public TaskCompletionSource<GrantRevokeReceipt>? Ack;
+        public TaskCompletionSource<GrantReadResult>? ReadAck;
         public Task<GrantReadResult> ReadAsync(CancellationToken ct = default)
-        { Reads++; if (ReadFailure is { } failure) throw Failure(failure); return Task.FromResult(new GrantReadResult(ReadProblem is null && !Empty ? [Value] : [], ReadProblem ?? Problem)); }
+        { Reads++; if (ReadFailure is { } failure) throw Failure(failure); return ReadAck?.Task ?? Task.FromResult(new GrantReadResult(ReadProblem is null && !Empty ? [Value] : [], ReadProblem ?? Problem)); }
         async Task<VerifiedGrantRead> IVerifiedGrantReader.ReadAsync(CancellationToken ct)
         {
             var data = await ReadAsync(ct);

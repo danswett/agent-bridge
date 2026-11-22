@@ -333,6 +333,8 @@ uses the normal person prepare/confirm path. The notice describes first-issue ro
 not a completed rotation: only the verified receipt's `Rotated` confirms that. Without
 the adapter the reader returns Unavailable/G7Ready=false; production stays unavailable
 until G4 + PR2 land and AcceptHostSign is ON.
+Cached list/first-issue gates also require the receiver id captured for that read;
+a read completing after a receiver change is discarded, retaining only stale rows.
 
 ## Agent use and receiver order
 
