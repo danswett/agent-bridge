@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Windows;
 
 namespace AgentBridge.Injector;
@@ -14,7 +15,7 @@ namespace AgentBridge.Injector;
 // agent-ha-bridge's ConsoleInjector.Send has long delivered with. It reports on stdout,
 // one line each, flushed:
 //
-//   writing <n>[ enter]   before every write to the console, so whoever started it knows
+//   writing <n>[ enter|queue] before every write, so whoever started it knows
 //                         a key may have landed whatever happens next
 //   wrote <n>             send n is complete
 //   ok                    every send is complete
@@ -42,7 +43,7 @@ namespace AgentBridge.Injector;
 // ends every process attached to a console when that console's window closes (spike S1).
 internal static unsafe partial class Program
 {
-    const string Header = "agent-bridge-keys 1";
+    const string Header = SubmitKeys.Protocol;
 
     static Stream output = Stream.Null;
 
@@ -83,7 +84,7 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    sealed record KeySend(string Text, bool Enter, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
+    sealed record KeySend(string Text, SubmitKey Submit, int EnterDelayMs, int PauseAfterMs, List<(int Row, string Text)> Expect, List<(char Kind, int Row, string[] Values)> Checks);
 
     static List<KeySend>? Read(Stream input)
     {
@@ -97,7 +98,8 @@ internal static unsafe partial class Program
             var line = raw.TrimEnd('\r');
             if (line.Length == 0) { continue; }
             var parts = line.Split(' ');
-            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send") { return null; }
+            if (parts.Length < 5 || (parts.Length - 5) % 2 != 0 || parts[0] != "send"
+                || !SubmitKeys.TryDecode(parts[2], out var submit)) { return null; }
             try
             {
                 var text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
@@ -109,7 +111,7 @@ internal static unsafe partial class Program
                     if (parts[k].Length > 0 && parts[k][0] is '~' or '+' or '-' or '_' or '^') { checks.Add((parts[k][0], int.Parse(parts[k][1..], NumberStyles.None, CultureInfo.InvariantCulture), value.Split('\n'))); }
                     else { expect.Add((int.Parse(parts[k], NumberStyles.None, CultureInfo.InvariantCulture), value)); }
                 }
-                sends.Add(new KeySend(text, parts[2] == "1",
+                sends.Add(new KeySend(text, submit,
                     int.Parse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture),
                     int.Parse(parts[4], NumberStyles.None, CultureInfo.InvariantCulture), expect, checks));
             }
@@ -155,13 +157,13 @@ internal static unsafe partial class Program
                 Say($"writing {index}");
                 if (Write(input, send.Text) is { } failed) { return failed; }
             }
-            if (send.Enter)
+            if (send.Submit != SubmitKey.None)
             {
                 // A separate keystroke after a pause: a burst of characters is a paste, and
                 // an Enter inside it would not submit.
                 if (send.EnterDelayMs > 0) { Thread.Sleep(send.EnterDelayMs); }
-                Say($"writing {index} enter");
-                if (Write(input, "\r") is { } failed) { return failed; }
+                Say($"writing {index} {(send.Submit == SubmitKey.Queue ? "queue" : "enter")}");
+                if (Write(input, ConsoleKeyInput.Submit(send.Submit)) is { } failed) { return failed; }
             }
         }
         finally
@@ -394,17 +396,11 @@ internal static unsafe partial class Program
     // outside the BMP is its surrogate pair, two key events. The records go to the API by
     // pointer, never marshalled, so nothing can pass UnicodeChar through a code page
     // (agent-ha-bridge's struct, declared without CharSet, did, and turned "–" and CJK into "?").
-    static string? Write(nint input, string text)
+    static string? Write(nint input, string text) => Write(input, ConsoleKeyInput.Text(text));
+
+    static string? Write(nint input, ConsoleKeyRecord[] records)
     {
-        var records = new InputRecord[text.Length * 2];
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            var vk = c == '\r' ? VkReturn : (ushort)0;
-            records[2 * i] = new InputRecord { EventType = KeyEvent, KeyDown = 1, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-            records[2 * i + 1] = new InputRecord { EventType = KeyEvent, KeyDown = 0, RepeatCount = 1, VirtualKeyCode = vk, UnicodeChar = c };
-        }
-        fixed (InputRecord* first = records)
+        fixed (ConsoleKeyRecord* first = records)
         {
             if (!WriteConsoleInputW(input, first, (uint)records.Length, out var written)) { return $"fail write {Marshal.GetLastPInvokeError()}"; }
             if (written != records.Length) { return $"fail partial {written}"; }
@@ -435,19 +431,6 @@ internal static unsafe partial class Program
     [UnmanagedCallersOnly]
     static int Handled(uint type) => 1;
 
-    // INPUT_RECORD with its KEY_EVENT_RECORD laid out by hand, every field blittable.
-    [StructLayout(LayoutKind.Explicit, Size = 20)]
-    struct InputRecord
-    {
-        [FieldOffset(0)] public ushort EventType;
-        [FieldOffset(4)] public int KeyDown;
-        [FieldOffset(8)] public ushort RepeatCount;
-        [FieldOffset(10)] public ushort VirtualKeyCode;
-        [FieldOffset(12)] public ushort VirtualScanCode;
-        [FieldOffset(14)] public char UnicodeChar;
-        [FieldOffset(16)] public uint ControlKeyState;
-    }
-
     [StructLayout(LayoutKind.Sequential)]
     struct Coord
     {
@@ -472,8 +455,6 @@ internal static unsafe partial class Program
         public short MaxY;
     }
 
-    const ushort KeyEvent = 1;
-    const ushort VkReturn = 0x0D;
     const uint GenericRead = 0x80000000;
     const uint GenericWrite = 0x40000000;
     const uint FileShareRead = 1;
@@ -537,7 +518,7 @@ internal static unsafe partial class Program
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool WriteConsoleInputW(nint input, InputRecord* records, uint length, out uint written);
+    private static partial bool WriteConsoleInputW(nint input, ConsoleKeyRecord* records, uint length, out uint written);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
