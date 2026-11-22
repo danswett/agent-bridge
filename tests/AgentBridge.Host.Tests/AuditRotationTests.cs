@@ -1,44 +1,36 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Fleet.Grants;
-using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
-// One person-signed rotation makes a legacy profile usable for grants (design/fleet-grants.md).
+// The first person-confirmed grant issue rotates a pre-grant audit once (design/fleet-grants.md, owner Nov 21 21:41 PT).
 public sealed class AuditRotationTests : IDisposable
 {
     readonly string root = Directory.CreateTempSubdirectory("ab-rotate-").FullName;
-    readonly P256KeyPair device = P256KeyPair.Generate(), person = P256KeyPair.Generate();
+    readonly P256KeyPair device = P256KeyPair.Generate();
     readonly FakeTimeProvider clock = new(new(2026, 11, 21, 18, 0, 0, TimeSpan.Zero));
+    const string Device = "0123456789abcdef0123456789abcdef";
+    static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
     string AuditFolder => Path.Combine(Folder, "audit");
     string Retired => Path.Combine(AuditFolder, "retired");
+    string Journal => Path.Combine(AuditFolder, "rotation.pending");
     AgentAuditLog Log(Action<int>? step = null) => new(Folder, clock) { DeviceKey = device, RotationStep = step };
-    bool Pinned(string by) => by == BlobFormat.Base64Url(person.Public);
-    SignedCommand Signed(P256KeyPair? by = null, string kind = "user") => Sign(by ?? person, device, Log().Proposal(), clock.GetUtcNow(), kind);
-    GrantStoreProblem Grants() => new GrantStore(Folder, device, Log(), new([], [], [], [], [], [], [], []), clock).TryGetUsable(Guid.NewGuid(), 1).Problem;
-    Dictionary<string, string> Snapshot() => Directory.GetFiles(Folder, "*", SearchOption.AllDirectories).ToDictionary(f => f, f => Convert.ToHexString(File.ReadAllBytes(f)));
+    GrantStore Store(Action<int>? step = null) => new(Folder, device, Log(step), Scope, clock);
+    GrantStoreProblem Grants() => Store().TryGetUsable(Guid.NewGuid(), 1).Problem;
+    GrantDocument Grant() => new(1, Guid.NewGuid(), "123", new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
+        [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))], ["launch", "stop"], Scope,
+        new(3, 10, 6), clock.GetUtcNow(), 1, Roles: [], StopTargets: []);
+    Dictionary<string, string> Snapshot() => Directory.GetFiles(Folder, "*", SearchOption.AllDirectories).Where(f => !f.EndsWith(".lock", StringComparison.Ordinal))
+        .ToDictionary(f => f, f => Convert.ToHexString(File.ReadAllBytes(f)));
+    static Action<int> Crash(int step) => s => { if (s == step) { throw new IOException("crash"); } };
     static readonly AgentAuditEntry Ordinary = new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent");
-    public void Dispose() { device.Dispose(); person.Dispose(); Directory.Delete(root, true); }
+    public void Dispose() { device.Dispose(); Directory.Delete(root, true); }
 
-    internal static SignedCommand Sign(P256KeyPair signer, P256KeyPair device, object seal, DateTimeOffset now, string kind = "user", string? request = null)
-    {
-        var machine = Wire.DeviceId(device.Public);
-        return SignedCommands.Sign(signer, device.Public, new CommandBody { V = 1, Action = AgentAuditLog.RotateAction,
-            Request = request ?? Guid.NewGuid().ToString(), Principal = new CommandPrincipal { Kind = kind, Device = Wire.DeviceId(signer.Public) },
-            Target = new CommandTarget { Machine = machine }, To = machine, IssuedAt = now.ToUnixTimeSeconds(),
-            ExpiresAt = now.AddMinutes(5).ToUnixTimeSeconds(), Args = JsonSerializer.SerializeToElement(seal, JsonSerializerOptions.Web) });
-    }
-
-    // Tests of other features start from a profile a person has rotated.
-    internal static string? Rotate(AgentAuditLog log, P256KeyPair device, DateTimeOffset now)
-    {
-        using var someone = P256KeyPair.Generate();
-        return log.Rotate(Sign(someone, device, log.Proposal(), now), _ => true);
-    }
+    // Tests of other features start from a profile whose first grant issue rotated it.
+    internal static string? Rotate(AgentAuditLog log, P256KeyPair device) => log.RotateForFirstGrant(device, Guid.NewGuid());
 
     void Legacy() => Assert.True(Log().Append(Ordinary) && Log().Append(new("local", "fixture", "person:local", [], "session.launch", "fixture", "started")));
 
@@ -51,65 +43,71 @@ public sealed class AuditRotationTests : IDisposable
     }
 
     [Fact]
-    public void A_legacy_profile_becomes_usable_for_grants_through_one_rotation_and_native_gates_work_throughout()
+    public void The_first_issue_rotates_a_legacy_profile_once_and_native_gates_work_throughout()
     {
         Legacy();
         Pair();
         Assert.True(Log().Verify().Intact && Log().Verify(launch: true).Intact && AgentAuditLog.Adopted(AuditFolder));
         Assert.Equal(GrantStoreProblem.RotationRequired, Grants());
-        var command = Signed();
-        Assert.Null(Log().Rotate(command, Pinned));
-        Assert.Equal(GrantStoreProblem.Missing, Grants());
+        var legacy = new FileInfo(Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single()).Length;
+        var first = Grant();
+        var issued = Store().Issue(first);
+        Assert.True(issued.Usable && issued.Rotated);
         Assert.False(AgentAuditLog.Adopted(AuditFolder));
         Assert.Equal(2, Directory.GetFiles(Retired).Length);
-        Assert.Null(Log().Rotate(command, Pinned));
-        Assert.Equal("this profile's audit was already rotated", Log().Rotate(Signed(), Pinned));
+        var genesis = JsonNode.Parse(File.ReadLines(Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single()).First())!["rotation"]!;
+        Assert.Equal(legacy, (long)genesis["length"]!);
+        Assert.Equal(AgentAuditLog.FirstGrantReason, (string)genesis["record"]!["reason"]!);
+        Assert.Equal(first.Id.ToString(), (string)genesis["record"]!["grant"]!);
+        var second = Store().Issue(Grant());
+        Assert.True(second.Usable && !second.Rotated);
+        Assert.Equal(2, Directory.GetFiles(Retired).Length);
+        Assert.Equal("this profile's audit was already rotated", Rotate(Log(), device));
         Pair();
         Assert.True(Log().Bootstrap() && Log().Verify().Intact && Log().Verify(launch: true).Intact);
-        Assert.Equal(GrantStoreProblem.Missing, Grants());
+        Assert.True(Store().TryGetUsable(first.Id, 1).Usable);
         // Without the device key nothing can check the genesis, so the stream is not trusted.
         Assert.False(new AgentAuditLog(Folder, clock).Verify().Intact);
     }
 
+    // Anything but a clean pre-grant log, or a rotation whose journal and retired bytes still verify, stays RotationRequired.
     [Theory]
-    [InlineData("agent"), InlineData("machine"), InlineData("unpinned"), InlineData("forged"), InlineData("expired"), InlineData("changed"), InlineData("history")]
-    public void Only_a_pinned_persons_signature_over_the_current_pre_grant_audit_rotates_and_a_refusal_changes_nothing(string caller)
+    [InlineData("torn"), InlineData("mismatch"), InlineData("forged"), InlineData("other-key"), InlineData("invalid-grant")]
+    public void A_torn_or_mismatched_legacy_log_or_unverifiable_rotation_refuses_the_first_issue(string fault)
     {
         Legacy();
-        using var other = P256KeyPair.Generate();
-        var command = caller switch { "agent" => Signed(kind: "agent"), "machine" => Signed(device), "unpinned" => Signed(other), _ => Signed() };
-        if (caller == "forged") { command = new SignedCommand { Body = command.Body, By = command.By, Mac = Signed().Mac }; }
-        if (caller == "expired") { clock.Advance(TimeSpan.FromMinutes(6)); }
-        if (caller == "changed") { Assert.True(Log().Append(Ordinary)); }
-        // Rotating away grant history would reset its tombstones and budgets.
-        if (caller == "history") { File.WriteAllBytes(Path.Combine(Folder, GrantStore.FileName), [1]); }
+        if (fault == "torn") { File.AppendAllText(Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single(), "{\"torn\""); }
+        if (fault is "mismatch" or "forged") { Assert.NotNull(Rotate(Log(Crash(fault == "mismatch" ? 1 : 0)), device)); }
+        if (fault == "other-key") { using var other = P256KeyPair.Generate(); Assert.NotNull(Rotate(Log(Crash(0)), other)); }
+        if (fault == "mismatch") { File.AppendAllText(Directory.GetFiles(Retired, "agents-*").Single(), "\n"); }
+        if (fault == "forged") { File.WriteAllText(Journal, File.ReadAllText(Journal).Replace("\"mac\":\"", "\"mac\":\"0")); }
         var before = Snapshot();
-        Assert.NotNull(Log().Rotate(command, caller == "machine" ? _ => true : Pinned));
+        var grant = fault == "invalid-grant" ? Grant() with { Caps = new(0, 0, 0) } : Grant();
+        Assert.Equal(fault == "invalid-grant" ? GrantStoreProblem.Malformed : GrantStoreProblem.RotationRequired, Store().Issue(grant).Problem);
         Assert.Equal(before, Snapshot());
         Assert.Null(AgentAuditLog.Rotation(Folder, device));
+        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)));
     }
 
     [Theory]
-    [InlineData("none"), InlineData("genesis-length"), InlineData("genesis-by-machine"), InlineData("genesis-later"), InlineData("genesis-null"), InlineData("command-null"),
-        InlineData("retired-edited"), InlineData("retired-missing"), InlineData("active-rollback")]
-    public void Grants_trust_only_a_stream_whose_signed_genesis_and_any_retired_file_still_match(string fault)
+    [InlineData("none"), InlineData("genesis-length"), InlineData("genesis-reason"), InlineData("genesis-later"), InlineData("genesis-null"), InlineData("record-null"),
+        InlineData("genesis-torn"), InlineData("retired-edited"), InlineData("retired-missing"), InlineData("active-rollback")]
+    public void Grants_trust_only_a_stream_whose_genesis_and_any_retired_file_still_match(string fault)
     {
         Legacy();
         var legacy = Snapshot();
-        var (seal, request) = (Log().Proposal(), Guid.NewGuid().ToString());
-        Assert.Null(Log().Rotate(Sign(person, device, seal, clock.GetUtcNow(), request: request), Pinned));
-        Assert.True(Log().Append(Ordinary));
+        Assert.Null(Rotate(Log(), device));
+        if (fault != "genesis-torn") { Assert.True(Log().Append(Ordinary)); }
         var day = Directory.GetFiles(AuditFolder, "agents-*.jsonl").Single();
         var retired = Directory.GetFiles(Retired, "agents-*").Single();
         var lines = File.ReadAllLines(day);
         var genesis = JsonNode.Parse(lines[0])!;
         if (fault == "genesis-length") { genesis["rotation"]!["length"] = (long)genesis["rotation"]!["length"]! + 1; }
-        if (fault == "genesis-by-machine")
-        { genesis["rotation"]!["command"] = JsonSerializer.SerializeToNode(Sign(device, device, seal, clock.GetUtcNow(), request: request), JsonSerializerOptions.Web); }
-        if (fault is "genesis-null" or "command-null") { genesis["rotation"]!["command"] = null; if (fault == "genesis-null") { genesis["rotation"] = null; } }
-        if (fault.StartsWith("genesis-", StringComparison.Ordinal) || fault == "command-null") { lines[0] = genesis.ToJsonString(); }
+        if (fault == "genesis-reason") { genesis["rotation"]!["record"]!["reason"] = "person"; }
+        if (fault is "genesis-null" or "record-null") { genesis["rotation"]!["record"] = null; if (fault == "genesis-null") { genesis["rotation"] = null; } }
+        if (fault.StartsWith("genesis-", StringComparison.Ordinal) || fault == "record-null") { lines[0] = genesis.ToJsonString(); }
         if (fault == "genesis-later") { lines = [lines[0], lines[0], .. lines[1..]]; }
-        File.WriteAllText(day, string.Join('\n', lines) + "\n");
+        File.WriteAllText(day, string.Join('\n', lines) + (fault == "genesis-torn" ? "" : "\n"));
         if (fault == "retired-edited") { File.AppendAllText(retired, "\n"); }
         if (fault == "retired-missing") { File.Delete(retired); }
         if (fault == "active-rollback") { foreach (var (file, hex) in legacy.Where(f => f.Key.Contains("agents-"))) { File.WriteAllBytes(file, Convert.FromHexString(hex)); } }
@@ -118,29 +116,32 @@ public sealed class AuditRotationTests : IDisposable
         Assert.Equal(trusted, Log().Verify().Intact);
     }
 
+    // A crash anywhere in the rotate-then-issue sequence leaves the journal; the next write or issue finishes that rotation
+    // once, and a refused issue retried later succeeds without a second rotation.
     [Theory]
     [InlineData(0), InlineData(1), InlineData(2), InlineData(3), InlineData(4), InlineData(5), InlineData(6)]
-    public void A_crash_between_rotation_steps_finishes_that_rotation_once_at_the_next_write(int step)
+    public void A_crash_between_rotation_steps_is_finished_once_by_the_next_write_or_issue(int step)
     {
         Legacy();
-        var command = Signed();
-        Assert.NotNull(Log(s => { if (s == step) { throw new IOException("crash"); } }).Rotate(command, Pinned));
-        Assert.True(File.Exists(Path.Combine(AuditFolder, "rotation.pending")));
+        var grant = Grant();
+        Assert.Equal(GrantStoreProblem.RotationRequired, Store(Crash(step)).Issue(grant).Problem);
+        Assert.True(File.Exists(Journal));
         // A host that cannot verify the pending rotation refuses to write rather than skip it.
         Assert.False(new AgentAuditLog(Folder, clock).Append(Ordinary) || new AgentAuditLog(Folder, clock).Bootstrap());
-        Assert.True(step % 2 == 0 ? Log().Append(Ordinary) : Log().Bootstrap());
-        Assert.False(File.Exists(Path.Combine(AuditFolder, "rotation.pending")));
+        if (step % 2 == 0) { Assert.True(Log().Append(Ordinary)); }
+        var issued = Store().Issue(grant);
+        Assert.True(issued.Usable);
+        Assert.Equal(step % 2 == 1, issued.Rotated);
+        Assert.False(File.Exists(Journal));
         Assert.Equal(2, Directory.GetFiles(Retired).Length);
-        Assert.Null(Log().Rotate(command, Pinned));
-        Assert.Equal("this profile's audit was already rotated", Log().Rotate(Signed(), Pinned));
-        Assert.Equal(GrantStoreProblem.Missing, Grants());
+        Assert.Equal("this profile's audit was already rotated", Rotate(Log(), device));
         Assert.True(Log().Verify().Intact && Log().Verify(launch: true).Intact);
     }
 
-    // A revocation retention moved away still binds: with no store and no row left to see, rotating must not let grants
-    // start over (a fresh store could reissue the revoked id). Only provably absent history rotates.
+    // A revocation retention moved away still binds: with no store and no row left to see, the first issue must not rotate
+    // and start grants over (it could reissue the revoked id). Only provably absent history rotates.
     [Fact]
-    public void Rotation_refuses_retained_grant_history_even_when_the_store_and_old_rows_are_missing()
+    public void Retained_grant_history_is_never_rotated_away_so_a_revoked_id_cannot_be_reissued()
     {
         Legacy();
         var (revoked, op) = (Guid.NewGuid(), Guid.NewGuid());
@@ -153,9 +154,10 @@ public sealed class AuditRotationTests : IDisposable
         Assert.Equal(1, Log().Archive(clock.GetUtcNow()));
         Assert.Equal(GrantStoreProblem.AuditIncomplete, Grants());
         var before = Snapshot();
-        Assert.NotNull(Log().Rotate(Signed(), Pinned));
+        Assert.NotNull(Rotate(Log(), device));
         Assert.Equal(before, Snapshot());
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, new GrantStore(Folder, device, Log(), new([], [], [], [], [], [], [], []), clock).TryGetUsable(revoked, 1).Problem);
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Store().Issue(Grant() with { Id = revoked }).Problem);
+        Assert.Null(AgentAuditLog.Rotation(Folder, device));
     }
 
     [Fact]
@@ -166,7 +168,7 @@ public sealed class AuditRotationTests : IDisposable
         clock.Advance(TimeSpan.FromDays(AgentAuditLog.KeepDays + 1));
         Assert.True(Log().Append(Ordinary));
         clock.Advance(TimeSpan.FromDays(1));
-        Assert.NotNull(Log(s => { if (s == 0) { throw new IOException("crash"); } }).Rotate(Signed(), Pinned));
+        Assert.NotNull(Rotate(Log(Crash(0)), device));
         Log().Archive(clock.GetUtcNow());
         Assert.True(Log().Append(Ordinary));
         Assert.NotNull(AgentAuditLog.Rotation(Folder, device));

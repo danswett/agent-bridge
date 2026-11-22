@@ -48,7 +48,12 @@ public sealed class GrantCommandsTests : IDisposable
         var grant = Grant();
         var json = JsonSerializer.Serialize(grant, ProtocolJson.Options);
         Assert.Equal(4, Run(["grants", "issue", "document.json"], json, refused: () => true));
-        Assert.Equal(0, Run(["grants", "issue", "document.json"], json));
+        Assert.False(Directory.Exists(Path.Combine(Folder, "audit", "retired")));
+        var (first, second) = (new StringWriter(), new StringWriter());
+        Assert.Equal(0, Run(["grants", "issue", "document.json"], json, output: first));
+        Assert.Single(first.ToString().Split('\n'), l => l.StartsWith("notice:", StringComparison.Ordinal) && l.Contains(AgentAuditLog.FirstGrantReason));
+        Assert.Equal(0, Run(["grants", "issue", "document.json"], JsonSerializer.Serialize(Grant(), ProtocolJson.Options), output: second));
+        Assert.DoesNotContain("notice:", second.ToString());
         Assert.Equal(0, Run(["grants", "revoke", grant.Id.ToString(), "1"], ""));
     }
 
@@ -122,7 +127,7 @@ public sealed class GrantCommandsTests : IDisposable
                 Audit, () => throw new Exception("store opened"), () => throw new Exception("policy read"),
                 _ => throw new Exception("input read"), _ => throw new Exception("confirmed"), key, new StringWriter(), new StringWriter(), clock));
         }
-        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)));
+        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)) || Directory.Exists(Path.Combine(Folder, "audit", "retired")));
         Assert.Equal(2, GateAuditProjection.Load(Folder).Rows.Count(r => r.Outcome == "refused"));
     }
 
@@ -182,7 +187,7 @@ public sealed class GrantCommandsTests : IDisposable
         if (fault == "subject") { json["subjects"]![0]!["session"] = "SG Builder"; }
         if (fault == "lifetime") { json["expiresAt"] = clock.GetUtcNow().AddHours(25); }
         Assert.NotEqual(0, Run(["grants", "issue", "document.json"], json.ToJsonString(), confirm: d => fault == "digest" ? new('b', 64) : d));
-        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)));
+        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)) || Directory.Exists(Path.Combine(Folder, "audit", "retired")));
     }
 
     [Theory]

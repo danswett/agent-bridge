@@ -168,9 +168,9 @@ public sealed partial class AgentAuditLog
         }
     }
 
-    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false)
+    public (bool Intact, bool LegacyPrefix) Verify(bool launch = false, bool readOnly = false, P256KeyPair? key = null)
     {
-        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: !readOnly, key: DeviceKey); }
+        lock (gate) { return VerifyProfile(profile, launch, log, synchronize: !readOnly, key: key ?? DeviceKey); }
     }
 
     internal bool Bootstrap()
