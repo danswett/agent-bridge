@@ -3,51 +3,48 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentBridge.Host.Delivery.Staging;
-using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// One person-signed rotation per profile (design/fleet-grants.md): both active streams move byte for byte to retired
-// files and each fresh stream starts with a genesis carrying the signed command. No cutoff is inferred, heads prove
-// nothing, and grants read only streams whose genesis verifies, never the retired history.
+// One automatic rotation per profile, inside its first person-confirmed grant issue (design/fleet-grants.md, owner
+// Nov 21 21:41 PT): both active streams move byte for byte to retired files and each fresh stream starts with a genesis
+// carrying the host-MACed record. No cutoff is inferred, heads prove nothing, and grants never read retired history.
 public sealed partial class AgentAuditLog
 {
-    public const string RotateAction = "audit.rotate";
+    public const string FirstGrantReason = "automatic-first-grant";
     internal sealed record RetiredStream([property: JsonRequired] long Length, [property: JsonRequired] string Sha256, [property: JsonRequired] string Tail);
     internal sealed record RotationSeal([property: JsonRequired] RetiredStream Agents, [property: JsonRequired] RetiredStream Launches);
+    // What the host MACs: the exact bytes it retires, why, and the grant whose confirmed issuance retired them.
+    internal sealed record RotationRecord([property: JsonRequired] string Request, [property: JsonRequired] string Reason,
+        [property: JsonRequired] string Grant, [property: JsonRequired] long At, [property: JsonRequired] RotationSeal Seal, [property: JsonRequired] string Mac);
     sealed record GenesisRotation([property: JsonRequired] string Retired, [property: JsonRequired] long Length,
-        [property: JsonRequired] string Sha256, [property: JsonRequired] SignedCommand Command);
+        [property: JsonRequired] string Sha256, [property: JsonRequired] RotationRecord Record);
     static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web)
     { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true, RespectNullableAnnotations = true };
     static readonly bool[] Streams = [false, true];
-    // Verifies genesis signatures; without it a rotated stream never fully verifies and nothing rotates.
+    // Verifies genesis MACs; without it a rotated stream never fully verifies.
     public P256KeyPair? DeviceKey { get; init; }
     // Tests only: called after each durable rotation step, to stand in for a crash there.
     internal Action<int>? RotationStep { get; init; }
     static string JournalFile(string folder) => Path.Combine(folder, "rotation.pending");
     static string RetiredName(bool launch, string request) => $"retired/{(launch ? "launches" : "agents")}-{request}.jsonl";
     string AuditFolder() => PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
-    // What a person signs: the exact bytes in each stream now, so any later append refuses the rotation.
-    internal RotationSeal Proposal() { lock (gate) { var folder = AuditFolder(); using var held = Lock(folder); return Seal(folder); } }
-    // Null once rotated, including a retry of the same command. Only a user principal whose device is pinned here as a
-    // person's, never this machine's own key, rotates: a relay's device kind proves nothing.
-    internal string? Rotate(SignedCommand command, Func<string, bool> pinnedPerson)
+    // Only GrantStore.Issue calls this, inside the person-confirmed issuance it is part of. Null when this call rotated or
+    // finished a journaled rotation; a profile already rotated, or not provably free of grant history, refuses unchanged.
+    internal string? RotateForFirstGrant(P256KeyPair key, Guid grant)
     {
-        if (DeviceKey is not { } key) { return "this host has no device key to verify a rotation"; }
-        var (c, problem) = SignedCommands.Verify(key, command, RotateAction, time.GetUtcNow());
-        if (c is null) { return problem; }
-        if (Signed(key, command) is null || !pinnedPerson(command.By)) { return "only an independently pinned person's device may rotate the audit"; }
-        if (Sealed(c) is not { } seal) { return "the rotation does not say what it retires"; }
         try
         {
             lock (gate)
             {
                 var folder = AuditFolder();
                 using var held = Lock(folder);
-                Resume(folder);
-                var bound = Streams.Select(launch => GenesisOf(folder, launch, key)).ToArray();
-                if (bound.Any(b => b is not null)) { return bound.All(b => b == c.Request) ? null : "this profile's audit was already rotated"; }
+                if (File.Exists(JournalFile(folder))) { Resume(folder, key); return null; }
+                // Only a log that fully verifies with this host's key is retired as trusted history: a broken chain, or a
+                // genesis MACed by another key, refuses rather than being rotated (again).
+                if (Streams.Any(launch => !VerifyProfile(profile, launch, log, key: key).Intact)) { return "the audit does not verify with this host's key"; }
+                if (Streams.Any(launch => GenesisOf(folder, launch, key) is not null)) { return "this profile's audit was already rotated"; }
                 // Only provably grant-free history rotates (the reader's own parse, nothing retained away, no gated rows
                 // without heads): retiring grant history would orphan its tombstones and budgets and reset the boundary.
                 long retained = 0;
@@ -55,32 +52,34 @@ public sealed partial class AgentAuditLog
                 if (File.Exists(Path.Combine(profile, Fleet.Grants.GrantStore.FileName)) || !complete || retained > 0
                     || rows.Any(r => r.Action.StartsWith("grant.", StringComparison.OrdinalIgnoreCase)) || !HasHeads(folder) && rows.Any(r => r.Gate is not null))
                 { return "grant history cannot be proved absent; rotating could hide it"; }
-                if (Seal(folder) != seal) { return "the audit changed after the rotation was signed; press again"; }
-                Durable(JournalFile(folder), s => s.Write(JsonSerializer.SerializeToUtf8Bytes(command, Strict)));
+                var record = Sign(key, new(Guid.NewGuid().ToString(), FirstGrantReason, grant.ToString(), time.GetUtcNow().ToUnixTimeSeconds(), Seal(folder), ""));
+                Durable(JournalFile(folder), s => s.Write(JsonSerializer.SerializeToUtf8Bytes(record, Strict)));
                 RotationStep?.Invoke(0);
-                Complete(folder, c, command, seal);
+                Complete(folder, record, key);
             }
             return null;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or CryptographicException)
         { log($"agent audit rotation refused: {e.GetType().Name}"); return "the audit could not be rotated; see the host log"; }
     }
     // A crash mid-rotation leaves the journal: every later write finishes that rotation first, never a second one.
-    void Resume(string folder)
+    internal bool FinishRotation(P256KeyPair key) { try { lock (gate) { var folder = AuditFolder(); using var held = Lock(folder);
+        if (!File.Exists(JournalFile(folder))) { return false; } Resume(folder, key); return true; } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or CryptographicException) { return false; } }
+    void Resume(string folder, P256KeyPair? key = null)
     {
         if (!File.Exists(JournalFile(folder))) { return; }
-        var command = JsonSerializer.Deserialize<SignedCommand>(File.ReadAllBytes(JournalFile(folder)), Strict);
-        if (command is null || DeviceKey is not { } key || Signed(key, command) is not { } c || Sealed(c) is not { } seal)
-        { throw new IOException("a pending audit rotation cannot be verified"); }
-        Complete(folder, c, command, seal);
+        var record = JsonSerializer.Deserialize<RotationRecord>(File.ReadAllBytes(JournalFile(folder)), Strict);
+        if ((key ?? DeviceKey) is not { } k || Verified(k, record) is not { } r) { throw new IOException("a pending audit rotation cannot be verified"); }
+        Complete(folder, r, k);
     }
     // Each step is durable before the next; a retry skips a finished stream and reuses a retired file that matches.
-    void Complete(string folder, CommandBody c, SignedCommand command, RotationSeal seal)
+    void Complete(string folder, RotationRecord r, P256KeyPair key)
     {
         foreach (var launch in Streams)
         {
-            if (GenesisOf(folder, launch, DeviceKey!) == c.Request) { continue; }
-            var (mine, name) = (launch ? seal.Launches : seal.Agents, RetiredName(launch, c.Request));
+            if (GenesisOf(folder, launch, key) == r.Request) { continue; }
+            var (mine, name) = (launch ? r.Seal.Launches : r.Seal.Agents, RetiredName(launch, r.Request));
             var retired = Path.Combine(folder, name);
             if (mine.Length > 0 && !File.Exists(retired))
             {
@@ -88,11 +87,11 @@ public sealed partial class AgentAuditLog
                 Durable(retired, output => { foreach (var file in Files(folder, launch)) { using var input = File.OpenRead(file); input.CopyTo(output); } });
                 RotationStep?.Invoke(launch ? 4 : 1);
             }
-            if (mine.Length > 0 && !Matches(retired, mine)) { throw new IOException("the retired audit does not match its signed rotation"); }
+            if (mine.Length > 0 && !Matches(retired, mine)) { throw new IOException("the retired audit does not match its rotation record"); }
             // The journal blocks appends, so what remains is the retired content or a torn genesis.
             foreach (var file in Files(folder, launch).Append(HeadFile(folder, launch)).ToArray()) { File.Delete(file); }
             RotationStep?.Invoke(launch ? 5 : 2);
-            var genesis = JsonSerializer.Serialize(new { v = 1, previousSha256 = mine.Tail, rotation = new GenesisRotation(name, mine.Length, mine.Sha256, command) }, Json);
+            var genesis = JsonSerializer.Serialize(new { v = 1, previousSha256 = mine.Tail, rotation = new GenesisRotation(name, mine.Length, mine.Sha256, r) }, Json);
             var day = Path.Combine(folder, FileFor(time.GetUtcNow(), launch));
             using (var stream = PrivateFolder.CreateNew(day)) { stream.Write(Encoding.UTF8.GetBytes(genesis + "\n")); stream.Flush(flushToDisk: true); }
             if (OperatingSystem.IsWindows()) { NarrowFileWindows(day); }
@@ -105,36 +104,38 @@ public sealed partial class AgentAuditLog
     internal static string? Rotation(string profile, P256KeyPair key) => GenesisOf(Path.Combine(profile, FolderName), false, key, retired: true) is { } agents
         && GenesisOf(Path.Combine(profile, FolderName), true, key, retired: true) == agents ? agents : null;
 
-    // A missing retired file is accepted: the signed genesis still says what it was, and nothing reads that history.
+    // A missing retired file is accepted: the MACed genesis still says what it was, and nothing reads that history.
     static string? GenesisOf(string folder, bool launch, P256KeyPair key, bool retired = false)
     {
         try
         {
-            if (Files(folder, launch).FirstOrDefault() is not { } first) { return null; }
-            using var doc = JsonDocument.Parse(File.ReadLines(first).First());
+            // A genesis without its newline is torn, never trusted.
+            if (Files(folder, launch).FirstOrDefault() is not { } first || FirstLine(first) is not { } line) { return null; }
+            using var doc = JsonDocument.Parse(line);
             if (!doc.RootElement.TryGetProperty("rotation", out var element)) { return null; }
-            if (element.Deserialize<GenesisRotation>(Strict) is not { } rotation || Signed(key, rotation.Command) is not { } c || Sealed(c) is not { } seal) { return null; }
-            var mine = launch ? seal.Launches : seal.Agents;
+            if (element.Deserialize<GenesisRotation>(Strict) is not { } rotation || Verified(key, rotation.Record) is not { } r) { return null; }
+            var mine = launch ? r.Seal.Launches : r.Seal.Agents;
             var path = Path.Combine(folder, rotation.Retired);
-            return rotation.Retired == RetiredName(launch, c.Request) && rotation.Length == mine.Length && rotation.Sha256 == mine.Sha256
+            return rotation.Retired == RetiredName(launch, r.Request) && rotation.Length == mine.Length && rotation.Sha256 == mine.Sha256
                 && doc.RootElement.GetProperty("previousSha256").GetString() == mine.Tail
-                && (!retired || !File.Exists(path) || Matches(path, mine)) ? c.Request : null;
+                && (!retired || !File.Exists(path) || Matches(path, mine)) ? r.Request : null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException
-            or KeyNotFoundException or ArgumentException) { return null; }
+            or KeyNotFoundException or ArgumentException or CryptographicException) { return null; }
     }
-    // A genesis outlives its command's lifetime: check the signature and fields as of when it was signed.
-    static CommandBody? Signed(P256KeyPair key, SignedCommand command)
+    static string? FirstLine(string file)
     {
-        try
-        {
-            var issued = JsonSerializer.Deserialize<CommandBody>(BlobFormat.FromBase64Url(command.Body) ?? [], ProtocolJson.Options)?.IssuedAt ?? 0;
-            var (c, _) = SignedCommands.Verify(key, command, RotateAction, DateTimeOffset.FromUnixTimeSeconds(Math.Clamp(issued, 0, 253402300799)));
-            return c is not null && c.Principal.Device != Wire.DeviceId(key.Public) && c.To == c.Target.Machine ? c : null;
-        }
-        catch (JsonException) { return null; }
+        using var input = File.OpenRead(file);
+        var buffer = new byte[16384];
+        var n = input.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
+        var end = Array.IndexOf(buffer, (byte)'\n', 0, n);
+        return end < 0 ? null : Encoding.UTF8.GetString(buffer, 0, end);
     }
-    static RotationSeal? Sealed(CommandBody c) { try { return c.Args?.Deserialize<RotationSeal>(Strict); } catch (JsonException) { return null; } }
+    // Only this host's key MACs a rotation, and only for the first-grant reason.
+    static RotationRecord Sign(P256KeyPair key, RotationRecord r) => r with { Mac = Convert.ToHexString(DeviceMacFile.Mac(
+        JsonSerializer.SerializeToUtf8Bytes(r with { Mac = "" }, Strict), key, "agent-bridge audit rotation v1"u8)) };
+    static RotationRecord? Verified(P256KeyPair key, RotationRecord? r) => r is { Reason: FirstGrantReason, Seal: not null }
+        && CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(Sign(key, r).Mac), Encoding.ASCII.GetBytes(r.Mac)) ? r : null;
     static RotationSeal Seal(string folder) => new(Measure(Files(folder, false).ToArray()), Measure(Files(folder, true).ToArray()));
     static bool Matches(string path, RetiredStream mine) => Measure([path], tail: false) is var m && m.Length == mine.Length && m.Sha256 == mine.Sha256;
     static RetiredStream Measure(string[] files, bool tail = true)
