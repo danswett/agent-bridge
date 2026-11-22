@@ -186,6 +186,9 @@ A key that cannot be read is never replaced; a post-handoff write failure retain
    between envelopes stays one entry; half-typed box text waits; a missing reason is refused; the 4th
    urgent in an hour is demoted; supersede keeps the newest; an expired item notifies.
 ## Slices (one builder, sequential, each at most 250 changed lines, all sensitive)
+Slice 2b2a fixes [#3681](https://github.com/danswett/agent-bridge/issues/3681): `SubmitWritten`
+records Queue submission uncertainty without pretending Enter was written; text/submit splitting
+uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing it requires `Submit=None`.
 | Slice | Content | Estimate | Due (PT) |
 |---|---|---|---|
 | 1 | `DeliveryEnvelope`, `n`, `at`, escape, authenticated `from` end to end, journal writer (**moved earlier**: every later drop needs it) | ~180 | after acceptance, #2574 |

@@ -5,6 +5,14 @@ using Xunit;
 public sealed class SubmitKeyTests
 {
     [Fact]
+    public void Compat_false_does_not_discard_Queue_and_explicit_None_removes_it()
+    {
+        var send = new KeySend("hello", SubmitKey.Queue, 0, 0);
+        Assert.Equal(SubmitKey.Queue, (send with { Enter = false }).Submit);
+        Assert.Equal(SubmitKey.None, (send with { Submit = SubmitKey.None }).Submit);
+    }
+
+    [Fact]
     public void Queue_is_a_distinct_submit_with_its_own_delay_and_never_Enter()
     {
         var plan = new KeyPlan([new("hello", SubmitKey.Queue, 300, 20)]);

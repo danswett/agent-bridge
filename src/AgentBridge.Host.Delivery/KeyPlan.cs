@@ -29,7 +29,7 @@ public sealed record KeySend(string Text, SubmitKey Submit, int EnterDelayMs, in
         IReadOnlyList<ScreenRowCheck>? Checks = null)
         : this(Text, Enter ? SubmitKey.Enter : SubmitKey.None, EnterDelayMs, PauseAfterMs, Expect, Checks) { }
 
-    public bool Enter { get => Submit == SubmitKey.Enter; init => Submit = value ? SubmitKey.Enter : SubmitKey.None; }
+    public bool Enter { get => Submit == SubmitKey.Enter; init => Submit = value ? SubmitKey.Enter : Submit == SubmitKey.Queue ? SubmitKey.Queue : SubmitKey.None; }
 }
 
 // A row of the console's visible window, counted from its top, and its text.
