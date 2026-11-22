@@ -702,6 +702,9 @@ internal sealed class CodexHistory : HistoryDialect
     {
         switch (Json.Str(p, "type"))
         {
+            case "task_started":
+                turn.ReplyScope(false);
+                break;
             case "agent_message" when Text.NonBlank(Json.Str(p, "message")) is { } text:
                 turn.Said(HistoryPartKind.Response, text, at);
                 break;

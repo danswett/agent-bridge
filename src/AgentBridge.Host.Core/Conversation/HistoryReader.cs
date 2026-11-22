@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Microsoft.Win32.SafeHandles;
 
@@ -85,6 +86,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At)
     {
         public long From { get; set; } = End;
+        public CodexReplyKey Reply { get; init; }
         public bool Unknown { get; set; }
         public bool Queued { get; set; }
     }
@@ -483,10 +485,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             ReadAt(line, start);
             using var doc = Parse(line);
             HistoryPrompt? prompt = null;
+            CodexReplyKey reply = default;
             DateTimeOffset? at = null;
             if (doc is null || !Decoding(() =>
             {
                 prompt = dialect.Start(doc.RootElement);
+                if (prompt is not null && dialect is CodexHistory) { reply = CodexReplyIds.Read(doc.RootElement); }
                 at = prompt is null ? null : Json.Time(doc.RootElement, "timestamp");
             }))
             {
@@ -509,7 +513,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             }
             if (prompt is not null)
             {
-                if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at)); }
+                if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at) { Reply = reply }); }
                 else { skipped = true; }
             }
             return true;
@@ -595,7 +599,9 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             // The send's display-only label stays with its prompt, never a later driver.
             var prompt = s.Prompt is { From: null or UserMessageFrom.Agent } p && agentTurns.TryGetValue(id, out var label)
                 ? p with { From = UserMessageFrom.Agent, Label = label } : s.Prompt;
-            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
+            var turn = new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
+            if (dialect is CodexHistory) { turn.ReplyScope(s.Prompt is not null && !s.Unknown && !s.Reply.Ambiguous, s.Reply.Turn); }
+            return turn;
         }
 
         IEnumerable<long> Gaps(long from, long to) => cycleGaps.GetViewBetween(from, Math.Max(from, to));
