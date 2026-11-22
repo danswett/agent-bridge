@@ -16,6 +16,7 @@ public sealed record InjectionResult(InjectionStatus Status, string Detail)
     public int? TextWritten { get; init; }
     public string? TextFingerprint { get; init; }
     public bool? EnterWritten { get; init; }
+    public bool? SubmitWritten { get; init; }
 
     internal static string Fingerprint(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
 }

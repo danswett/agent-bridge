@@ -12,22 +12,14 @@ public sealed class GrantCountersTests : IDisposable
     const string Device = "0123456789abcdef0123456789abcdef";
     static readonly GrantScope Scope = new([Device], ["repo"], ["copilot"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
     string Folder => Path.Combine(root, "default");
-    bool rotated;
-    // Grants need a genesis-bound audit (PR1), so the profile is rotated once, as a person would before the first issue.
-    GrantStore Store(Action<string, byte[]>? write = null)
-    {
-        var audit = new AgentAuditLog(Folder, clock) { DeviceKey = key };
-        if (!rotated) { rotated = true; Assert.Null(AuditRotationTests.Rotate(audit, key, clock.GetUtcNow())); }
-        return new(Folder, key, audit, Scope, clock, write);
-    }
+    GrantStore Store(Action<string, byte[]>? write = null) => new(Folder, key, new(Folder, clock), Scope, clock, write);
     GrantCounters Open(Action<string, byte[]>? write = null) => new(Store(write), clock);
-    GrantDocument Grant(GrantCaps caps) => new(1, Guid.NewGuid(), "123",
-        new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
-        [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
-        ["launch"], Scope, caps, clock.GetUtcNow(), 1, clock.GetUtcNow().AddHours(24), [], []);
     GrantDocument Issue(GrantCaps caps)
     {
-        var grant = Grant(caps);
+        var grant = new GrantDocument(1, Guid.NewGuid(), "123",
+            new("123", Device, "AQ", clock.GetUtcNow(), new('a', 64)), new(Device, "default"),
+            [new("123", Device, Guid.NewGuid().ToString(), "AAAAAAAAAAAAAAAAAAAAAA", new(42, clock.GetUtcNow()))],
+            ["launch"], Scope, caps, clock.GetUtcNow(), 1, clock.GetUtcNow().AddHours(24), [], []);
         Assert.True(Store().Issue(grant).Usable);
         return grant;
     }
@@ -35,13 +27,6 @@ public sealed class GrantCountersTests : IDisposable
         counters.Reserve(grant.Id, 1, request ?? Guid.NewGuid(), grant.Subjects[0], binding ?? new('b', 64));
     StopTarget Target() => new(Guid.NewGuid().ToString(), new(99, clock.GetUtcNow()));
     public void Dispose() { key.Dispose(); Directory.Delete(root, true); }
-
-    [Fact]
-    public void An_unrotated_profile_still_refuses_the_issue_that_counters_would_need()
-    {
-        Assert.Equal(GrantStoreProblem.RotationRequired, new GrantStore(Folder, key, new(Folder, clock), Scope, clock).Issue(Grant(new(1, 2, 2))).Problem);
-        Assert.False(File.Exists(Path.Combine(Folder, GrantStore.FileName)));
-    }
 
     [Theory]
     [InlineData(1)]
@@ -387,7 +372,7 @@ public sealed class GrantCountersTests : IDisposable
         clock.AdjustTime(grant.NotBefore.AddHours(1));
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
-        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))) { DeviceKey = key }, Scope, clock);
+        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
         Assert.True(store.Revoke(grant.Id, 1).Usable);
     }
 
