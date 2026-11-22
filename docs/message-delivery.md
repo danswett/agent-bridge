@@ -159,6 +159,8 @@ internal trusted-person seams only; the compatible `GrantIssuer` is already auth
 The separate `PriorityCapability` lives in the existing node-bound DeliveryJournal, not the fleet
 GrantStore: it conveys no read/reply/answer/trust authority and is not a fleet launch/stop grant.
 Request, issue, grant, consumption, refusal, demotion and revocation are flushed/MACed journal facts.
+Any record carrying priority fields with a non-Priority state refuses replay before the legacy path;
+changing a final revocation, expiry or consumption state cannot bypass priority authentication.
 Policy facts link their previous MAC; whole-file rollback still requires the held
 [external/keyed anchor (#3720)](https://github.com/danswett/agent-bridge/issues/3720) before activation.
 Max three consumptions per principal/receiver rolling hour spans all its capabilities; stricter caps,

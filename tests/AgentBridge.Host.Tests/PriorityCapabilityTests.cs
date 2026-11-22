@@ -141,4 +141,31 @@ public sealed class PriorityCapabilityTests
         Assert.Throws<InvalidOperationException>(() => full.Decide());
         Assert.Empty(full.Records);
     }
+
+    [Theory]
+    [InlineData("revoked")]
+    [InlineData("expired")]
+    [InlineData("consumed")]
+    public void Final_priority_evidence_cannot_be_hidden_in_the_legacy_replay_path(string action)
+    {
+        using var f = new Fake(); var cap = f.Cap(); f.Issue(cap); var id = Guid.NewGuid(); f.Decide(id);
+        if (action == "revoked") { f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow()); }
+        if (action == "expired")
+        { f.Clock.Advance(TimeSpan.FromHours(2)); Assert.False(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow())); }
+        var records = f.Records; Assert.Equal(action, records[^1].Reason);
+        Assert.Throws<InvalidDataException>(() => new Fake(records[..^1].Append(records[^1] with { State = "dropped" })));
+    }
+
+    [Theory]
+    [InlineData("capability")]
+    [InlineData("reason")]
+    [InlineData("previous")]
+    public void Any_priority_field_refuses_a_non_priority_state_even_when_other_fields_are_absent(string field)
+    {
+        using var f = new Fake(); f.Issue(f.Cap());
+        var issued = Assert.Single(f.Records);
+        var disguised = issued with { State = "enqueued", Capability = field == "capability" ? issued.Capability : null,
+            PriorityReason = field == "reason" ? "reason" : null, PriorityPrevious = field == "previous" ? "" : null };
+        Assert.Throws<InvalidDataException>(() => new Fake([disguised]));
+    }
 }
