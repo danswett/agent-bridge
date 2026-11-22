@@ -139,6 +139,42 @@ public sealed class SessionHistoryRepliesTests
         finally { card.Detach(); }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Codex_delayed_pages_preserve_each_revised_item_even_when_the_last_item_is_unchanged(bool reviseSecond)
+    {
+        await using var host = Serving(() => 0);
+        host.Start();
+        await using var connection = host.Connect();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        Session Say(string id, string text, int seconds) => Snapshot("owner", "Question", text, "owner", seconds) with
+        { Agent = AgentKind.Codex, Activity = new Activity { Turn = "owner", ResponseTurn = "owner", ResponseId = id, Response = text } };
+        var card = Card(connection, Say("first", "First old", 0));
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var page = new HistoryResult { Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = [
+            new HistoryPart { Id = "first", Kind = HistoryPartKind.Response, At = T0, Text = "First old" },
+            new HistoryPart { Id = "second", Kind = HistoryPartKind.Response, At = T0, Text = "Second old" }] }] };
+        try
+        {
+            _ = card.Stored;
+            card.Update(Say("second", "Second old", 1));
+            host.On(HistoryProtocol.Op, _ => page);
+            await card.Stored!.LoadNewestAsync();
+            host.OnAsync(HistoryProtocol.Op, async _ => { captured.SetResult(); await release.Task; return page; });
+            var loading = card.Stored.LoadNewestAsync();
+            await captured.Task.WaitAsync(FakeHost.Patience);
+            card.Update(Say("first", "First new", 2));
+            card.Update(Say("second", reviseSecond ? "Second new" : "Second old", 3));
+            release.SetResult();
+            await loading;
+            Assert.Equal(["First new", reviseSecond ? "Second new" : "Second old"], card.Stored.Turns.Single().Parts.Select(p => p.Text));
+            Assert.Equal(["first", "second"], card.Stored.Turns.Single().Parts.Select(p => p.Id));
+        }
+        finally { release.TrySetResult(); card.Detach(); }
+    }
+
     [Fact]
     public async Task A_notification_turn_that_ran_before_the_owners_queued_answer_leaves_each_reply_under_its_own_prompt()
     {

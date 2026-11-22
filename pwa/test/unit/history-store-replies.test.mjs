@@ -103,6 +103,50 @@ test('Codex live revisions after history replace the same part without accepting
   assert.equal(currentReply(store.get('h', ID), session('Complete revised answer', 4)), 'Complete revised answer');
 });
 
+for (const reviseSecond of [false, true]) {
+  test(`Codex delayed pages preserve each revised item: second revised ${reviseSecond}`, async () => {
+    let pending = null;
+    const page = { id: 'owner', at: '2026-11-22T11:00:00Z', parts: ['first', 'second'].map((id) => ({
+      id, kind: 'response', at: '2026-11-22T11:00:00Z', text: id === 'first' ? 'First old' : 'Second old',
+    })) };
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [page] }); },
+    } }) });
+    await store.open('h', ID);
+    const say = (responseId, response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+      updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner', responseId, response } }));
+    say('first', 'First old', 0);
+    say('second', 'Second old', 1);
+    let release;
+    pending = new Promise((resolve) => { release = resolve; });
+    const loading = store.open('h', ID);
+    await new Promise(setImmediate);
+    say('first', 'First new', 2);
+    say('second', reviseSecond ? 'Second new' : 'Second old', 3);
+    release();
+    await loading;
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.text), ['First new', reviseSecond ? 'Second new' : 'Second old']);
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['first', 'second']);
+  });
+}
+
+for (const stale of [false, true]) {
+  test(`a rejected Codex reply still updates reasoning and tools: stale ${stale}`, async (t) => {
+    const { store } = await setup(t);
+    await store.open('h', ID);
+    const session = readSession({ id: ID, agent: 'codex', updatedAt: '2026-11-22T11:00:02Z',
+      activity: { turn: turn(6), responseTurn: turn(6), responseId: 'answer', response: 'Full answer', reasoning: 'Before' } });
+    store.live('h', session);
+    store.live('h', { ...session, updatedAt: stale ? '2026-11-22T11:00:01Z' : '2026-11-22T11:00:03Z',
+      activity: { ...session.activity, response: 'Cut', responseTruncated: !stale,
+        reasoning: 'After', currentTool: { id: 'tool', name: 'shell', status: 'running' } } });
+    const held = store.get('h', ID).turns.at(-1);
+    assert.equal(held.parts[0].text, 'Full answer');
+    assert.equal(held.live.reasoning, 'After');
+    assert.equal(held.live.currentTool.name, 'shell');
+  });
+}
+
 for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
   test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
     const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,
