@@ -31,6 +31,8 @@ public sealed class LiteDeliver(
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
     internal DeliveryLaneScheduler? Lane { get; init; }
+    // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
+    public SessionDrivers? Drivers { get; init; }
 
     public async Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct)
     {
@@ -113,7 +115,16 @@ public sealed class LiteDeliver(
         var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
             StillCurrent = byNode || stillAllowed is not null || account is not null
                 ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
-        var result = await replier.ReplyAsync(reply, null, ct);
+        // The prompt this types is the sender's: armed with the exact words typed and a label from the
+        // verified principal, never from the body, so userMessageFrom=agent is set by the host alone.
+        // An undelivered arm is put back, or a prompt the owner types in the same words would wear it.
+        var driver = Drivers?.For(id);
+        var before = driver?.Save();
+        driver?.ArmDriver(SessionDrivers.Agent, time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), reply.Text, label: SenderLabel(body.Principal));
+        ReplyResult result;
+        try { result = await replier.ReplyAsync(reply, null, ct); }
+        catch { if (driver is not null) { driver.Restore(before!.Value); } throw; }
+        if (driver is not null && result.Outcome is not (AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)) { driver.Restore(before!.Value); }
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
@@ -197,6 +208,14 @@ public sealed class LiteDeliver(
         }
         catch (Exception e) when (e is not OperationCanceledException) { return false; }
     }
+
+    // Both from the verified principal's own fields, one line, nothing hidden (Clean), and cut to the
+    // protocol's byte limits where they are shown. The sender's title and the body are not read.
+    static string Principal(AgentPrincipal from) =>
+        from.Kind == "script" ? $"script:{Clean(from.Machine)}/{Clean(from.SenderId)}" : $"agent:{Clean(from.Machine)}/{Clean(from.Session)}";
+
+    static string? SenderLabel(AgentPrincipal from) => Limits.KeepStart(
+        from.Kind == "script" ? $"script {Clean(from.SenderId)}" : $"{Clean(from.Session)} on {Clean(from.Machine)}", Limits.UserMessageLabel);
 
     // The provenance line: who sent it, from where, and that the user did not type it.
     static string Frame(AgentPrincipal from, string request, string escaped) =>

@@ -2083,6 +2083,17 @@ unchanged. Only the principal and its source change.
 * The receiving host sets `driver`, `driverFrom` and `userMessageFrom` from the **verified
   principal** (step 5) and its **own roster** (machine name). The envelope's free text and the
   reply's words can't set them.
+* **Relay delivery arms the prompt (AP6a, #3732).** `LiteDeliver` arms the session's driver with the
+  exact framed words it types and a `userMessageLabel` of `"<session> on <machine>"` (or
+    `"script <id>"`), built only from the verified envelope principal (the machine as its envelope
+    names it, until a roster name is wired in), cleaned of brackets, `·` and
+  hidden characters and cut to 64 bytes. The prompt is marked `userMessageFrom=agent` (live
+  `activity` and `session.history` `prompt.from`/`label`) only when the transcript's prompt is those
+  exact words inside the arm window. An arm whose delivery did not go is put back, so an owner who
+  types the same words later is still the owner. Nothing in the text sets or clears it, and the
+  prompt's text is kept as typed, header included. Missing provenance means no field, and clients
+  show the owner's text as typed. The mark is held in memory with the session's turns, as for Home
+  Assistant replies: after a host restart, earlier relayed prompts carry no mark and show as typed.
 * **Which display fields are trusted.** Only names from a verified source are shown as identity:
   * the machine name from the receiving host's own roster;
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the
