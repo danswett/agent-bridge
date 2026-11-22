@@ -62,7 +62,7 @@ internal static class StopAudit
         return result;
     }
 
-    static Guid Identity(Guid session, int pid, DateTimeOffset started) =>
+    internal static Guid Identity(Guid session, int pid, DateTimeOffset started) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture,
             $"stop/1/{session}/{pid}/{started.UtcTicks}"))).AsSpan(0, 16));
 

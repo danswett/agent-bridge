@@ -22,6 +22,9 @@ public interface ISessionLauncher
     Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
+    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Func<string?> dispatch, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot fence grant dispatch."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
@@ -786,7 +789,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         ArgumentNullException.ThrowIfNull(prepare);
         return LaunchOnceAsync(request, peer, prepare);
     }
-
     Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
