@@ -97,16 +97,45 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
 
     public void Reasoning(string text, DateTimeOffset at) => Add(Blank(HistoryPartKind.Reasoning, at) with { Text = text });
 
-    // A reply or reasoning an agent writes in two streams (Codex's events and its response items,
-    // and the final reply again at the turn's end): the same text already in the turn is not
-    // added twice.
-    public void Said(HistoryPartKind kind, string text, DateTimeOffset at)
+    // Explicit Codex ids update only their own part. Text dedup remains solely the legacy fallback.
+    public void Said(HistoryPartKind kind, string text, DateTimeOffset at, CodexReplyKey reply = default)
     {
-        if (!_said.Add((kind, text))) { return; }
+        if (Truncated) { _replyIds.Reset(false); }
+        var part = kind == HistoryPartKind.Response ? _replyIds.Match(reply, _record, _index) : null;
+        if (part is not null)
+        {
+            if (_replyParts.TryGetValue(part, out var i))
+            {
+                var prior = (kind, _parts[i].Text);
+                if (--_said[prior] == 0) { _said.Remove(prior); }
+                _parts[i] = _parts[i] with { Text = text };
+            }
+            else
+            {
+                Add(Blank(kind, at) with { Text = text });
+                _replyParts[part] = _parts.Count - 1;
+            }
+            _said[(kind, text)] = _said.GetValueOrDefault((kind, text)) + 1;
+            return;
+        }
+        if (!_said.TryAdd((kind, text), 1)) { return; }
         Add(Blank(kind, at) with { Text = text });
     }
 
-    readonly HashSet<(HistoryPartKind, string)> _said = [];
+    public void ValidateReplyScope(CodexReplyKey reply)
+    {
+        if (!_replyIds.Validate(reply)) { _replyParts.Clear(); }
+    }
+
+    public void ReplyScope(bool known, string? nativeTurn = null)
+    {
+        _replyIds.Reset(known, nativeTurn);
+        _replyParts.Clear();
+    }
+
+    readonly CodexReplyIds _replyIds = new();
+    readonly Dictionary<string, int> _replyParts = new(StringComparer.Ordinal);
+    readonly Dictionary<(HistoryPartKind, string?), int> _said = [];
 
     public void ToolStarted(string callId, string name, string? summary, DateTimeOffset at)
     {

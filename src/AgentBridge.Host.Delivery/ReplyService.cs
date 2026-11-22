@@ -519,8 +519,8 @@ public sealed partial class ReplyService : ISessionReplier
             ];
             keys = new KeyPlan(
             [
-                line with { Enter = false, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
-                new KeySend("", true, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
+                line with { Submit = SubmitKey.None, EnterDelayMs = 0, PauseAfterMs = line.EnterDelayMs, Expect = box.Rows, Checks = mode },
+                new KeySend("", line.Submit, 0, line.PauseAfterMs, [box.Rows[^1]], [.. mode, new(box.Rows[1].Row, ScreenCheck.NotStartingWith, CopilotInputBoxReader.Bang)]),
             ]);
             if (stillCurrent is not null)
             {
@@ -584,7 +584,7 @@ public sealed partial class ReplyService : ISessionReplier
 
     async Task ClearCopilotAsync(Session session, AgentProcess process, string transcript, long from, JsonlMark boundary, string words, InjectionResult write)
     {
-        if (process.StartedAt is null || write.EnterWritten != false
+        if (process.StartedAt is null || (write.SubmitWritten ?? write.EnterWritten) != false
             || write.TextWritten is not { } length || length <= 0 || length > words.Length) return;
         var owned = words[..length];
         if (write.TextFingerprint != InjectionResult.Fingerprint(owned)) return;
