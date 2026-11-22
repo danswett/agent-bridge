@@ -226,6 +226,9 @@ public class HistoryTests
     [InlineData("task_started")]
     [InlineData("conflicting-prompt")]
     [InlineData("duplicate-prompt")]
+    [InlineData("unmarked-unreadable")]
+    [InlineData("unmarked-json")]
+    [InlineData("non-object")]
     public async Task Codex_history_never_updates_an_earlier_reply_after_identity_becomes_unknown(string shape)
     {
         using var f = new Fixture();
@@ -236,6 +239,10 @@ public class HistoryTests
         if (shape == "duplicate-prompt") { prompt = prompt.Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
         Fixture.Append(transcript, prompt, CodexReply("same", "Original answer", 2));
         if (shape == "task_started") { Fixture.Append(transcript, Codex.Event(new { type = "task_started" }, 3)); }
+        if (shape is "unmarked-unreadable" or "unmarked-json" or "non-object")
+        {
+            Fixture.Append(transcript, shape switch { "unmarked-unreadable" => "not json", "unmarked-json" => "{\"invalid\":}", _ => "[]" });
+        }
         Fixture.Append(transcript, CodexReply("same", "Later answer", 4, true));
         await using var source = f.Source();
         await source.RefreshAsync();
@@ -249,6 +256,23 @@ public class HistoryTests
         var fresh = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
         Assert.Equal("Fresh answer updated", fresh.Text);
         Assert.Equal(fresh.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Fact]
+    public void Codex_history_never_updates_an_earlier_reply_after_a_dropped_record()
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
+            CodexReply("same", "Original answer", 2),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 600) }.ToJsonString(),
+            CodexReply("same", "Later answer", 4, true));
+        var seed = new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>());
+        var result = new HistoryReader(new HistoryBudgets { MaxLineBytes = 512 }, new byte[32])
+            .Read(Id, AgentKind.Codex, transcript, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false);
+        var turn = result.Turns!.Single();
+        Assert.Equal(["Original answer", "Later answer"], turn.Parts.Select(p => p.Text));
+        Assert.True(turn.Truncated);
     }
 
     [Fact]
