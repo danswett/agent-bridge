@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -49,6 +50,18 @@ public static class Transfers
         var machine = Wire.DeviceId(machinePublic);
         var args = JsonSerializer.SerializeToElement(new UpdateNowArgs { Now = true, Release = release, Accept = accept, Unchecked = uncheckedPolicy ? true : null }, ProtocolJson.Options);
         return SignBody(key, machinePublic, UpdateProtocol.NowAction, null, machine, now, request, ManageProtocol.MaxLifetime, args: args);
+    }
+
+    public static SignedCommand SignGrantConfirmation(P256KeyPair key, byte[] machinePublic,
+        FleetGrantProofContext context, FleetGrantConfirmation args, DateTimeOffset now)
+    {
+        if (context.Action is not ("grant.confirmIssue" or "grant.confirmRevoke") || context.Request == Guid.Empty
+            || context.Request == args.Challenge || context.Receiver != Wire.DeviceId(machinePublic)
+            || args.Challenge == Guid.Empty || args.Id == Guid.Empty || args.Generation <= 0)
+        { throw new ArgumentException("An exact grant confirmation and fresh receiver-bound request are required."); }
+        return SignBody(key, machinePublic, context.Action, null, context.Receiver, now,
+            context.Request.ToString("D"), CommandLifetime,
+            args: JsonSerializer.SerializeToElement(new { context, args }, ProtocolJson.Options));
     }
 
     static SignedCommand SignBody(P256KeyPair key, byte[] machinePublic, string action, string? session, string to, DateTimeOffset now, string request,

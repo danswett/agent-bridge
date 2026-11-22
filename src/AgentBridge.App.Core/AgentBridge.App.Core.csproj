@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.App.Tests" />
+    <InternalsVisibleTo Include="AgentBridge.App" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,11 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\AgentBridge.AgentEnvelope\AgentBridge.AgentEnvelope.csproj" />
     <ProjectReference Include="..\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
     <ProjectReference Include="..\AgentBridge.Local\AgentBridge.Local.csproj" />
     <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
     <ProjectReference Include="..\AgentBridge.FeedbackEnvelope\AgentBridge.FeedbackEnvelope.csproj" />
     <ProjectReference Include="..\AgentBridge.Roster\AgentBridge.Roster.csproj" />
+    <ProjectReference Include="..\AgentBridge.AgentEnvelope\AgentBridge.AgentEnvelope.csproj" />
   </ItemGroup>
 
 </Project>

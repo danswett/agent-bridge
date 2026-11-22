@@ -1,3 +1,4 @@
+using AgentBridge.AgentEnvelope;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -121,6 +122,12 @@ public enum FleetState { Off, SignedOut, Connecting, Connected, Refused, Elsewhe
 
 // A host the relay says is online for the account.
 public sealed record FleetHost(string Id, string Name);
+
+public interface IGrantConfirmationSigner
+{
+    SignedCommand? SignGrantConfirmation(byte[] machinePublic, FleetGrantProofContext context,
+        FleetGrantConfirmation args, DateTimeOffset now);
+}
 
 // The app's way to the account's other machines: the relay's presence, and a channel to any
 // host in it. The relay in the app; a stand-in in tests and the demo.
@@ -485,7 +492,7 @@ public sealed class LocalAccountWatch
 // machine's host signed in to: the host hands the app its account (host.relay.account, for the
 // app alone), and the app proves its own key, so it needs no second sign-in and never shares
 // the host's identity. It serves nothing; it only opens channels, as the PWA does.
-public sealed class RelayFleetLink : IFleetLink
+public sealed class RelayFleetLink : IFleetLink, IGrantConfirmationSigner
 {
     readonly Func<CancellationToken, Task<RelayAccount?>> account;
     readonly P256KeyPair key;
@@ -778,6 +785,12 @@ public sealed class RelayFleetLink : IFleetLink
     public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request, bool uncheckedPolicy = false) =>
         machinePublic is { } k && Wire.DeviceId(k) == machine
             ? Transfers.SignUpdateNow(key, k, release, accept, DateTimeOffset.UtcNow, request, uncheckedPolicy)
+            : null;
+
+    public SignedCommand? SignGrantConfirmation(byte[]? machinePublic, FleetGrantProofContext context,
+        FleetGrantConfirmation args, DateTimeOffset now) =>
+        machinePublic is { } publicKey && Wire.DeviceId(publicKey) == context.Receiver
+            ? Transfers.SignGrantConfirmation(key, publicKey, context, args, now)
             : null;
 
     public async ValueTask DisposeAsync()
