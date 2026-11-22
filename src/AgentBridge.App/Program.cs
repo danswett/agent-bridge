@@ -45,6 +45,7 @@ public static class Program
             .Run();
 
         var options = AppOptions.Parse(args);
+        if (options.HistoryScrollPreserve) { Paths.DiagnosticRoot = Path.Combine(Path.GetDirectoryName(options.SelfTest!)!, "scroll-preserve-logs"); }
         if (options.LiveListReplay) { Paths.DiagnosticRoot = Path.Combine(Path.GetDirectoryName(options.SelfTest!)!, "live-list-logs"); }
         if (options.SelfTest is not null) { SelfTestTrace.Start(); }
 

@@ -15,6 +15,7 @@ public sealed partial class SessionView
     // From opening a session until the person scrolls: whatever grows the conversation keeps it at its end.
     bool pinEnd;
     int pinReleases;
+    readonly Queue<string> pinReleased = new(), pinRequests = new();
     string? shownHistory;
     string? rowsOf;
     int historyVisible = 1;
@@ -191,11 +192,11 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
-        if (navigationPending is not null || scrollbarPointers.Count > 0) { return; }
+        if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null) { return; }
         var (session, releases) = (shownHistory, pinReleases);
         void Restore()
         {
-            if (session != shownHistory || releases != pinReleases || restoreReading is not null || scrollbarPointers.Count > 0 || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
+            if (session != shownHistory || releases != pinReleases || restoreReading is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null || !opening && follow.Held && (atEnd || pinEnd) || ConversationScroll is not { } scroll) { return; }
             HistoryColumn.UpdateLayout();
             var target = atEnd || pinEnd ? scroll.ScrollableHeight : Math.Min(offset + (earlierExtent is { } extent ? scroll.ScrollableHeight - extent : 0), scroll.ScrollableHeight);
             if (!atEnd && !pinEnd && reading is { } kept)

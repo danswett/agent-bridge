@@ -130,8 +130,10 @@ public sealed class GrantCountersTests : IDisposable
         clock.Advance(TimeSpan.FromMinutes(30));
         Assert.True(Open().Read(grant.Id, 1).Accepted);
         clock.AdjustTime(clock.GetUtcNow().AddMinutes(-20));
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
         Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
         clock.Advance(TimeSpan.FromMinutes(20));
+        Assert.True(Store().TryGetUsable(grant.Id, 1).Usable);
         Assert.Equal(GrantCounterProblem.Hourly, Reserve(Open(), grant).Problem);
     }
 
@@ -336,5 +338,89 @@ public sealed class GrantCountersTests : IDisposable
         Assert.Equal(GrantLaunchOutcome.Failed, duplicate.Reservation!.Outcome);
         Assert.Equal("policy", duplicate.Reservation.Reason);
         Assert.Equal(before, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Expiry_before_any_reservation_is_durable_even_if_install_fails(bool failWrite)
+    {
+        var grant = Issue(new(3, 3, 3));
+        clock.Advance(TimeSpan.FromHours(25));
+        var counters = failWrite ? Open((_, _) => throw new IOException("fixture")) : Open();
+        Assert.Equal(failWrite ? GrantStoreProblem.WriteFailed : GrantStoreProblem.Expired,
+            Reserve(counters, grant).StoreProblem);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        var retried = Reserve(Open(), grant);
+        if (failWrite) { Assert.Equal(GrantStoreProblem.AuditIncomplete, retried.StoreProblem); }
+        else { Assert.Equal(GrantCounterProblem.Clock, retried.Problem); }
+    }
+
+    [Fact]
+    public void Expiry_and_watermark_use_the_same_transaction_clock_snapshot()
+    {
+        var grant = Issue(new(3, 3, 3));
+        clock.Advance(TimeSpan.FromHours(23));
+        clock.AutoAdvanceAmount = TimeSpan.FromHours(2);
+        Assert.True(Reserve(Open(), grant).Accepted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Expiry_refusal_prevents_timed_lookup_after_restart_and_clock_rollback(bool priorReservation)
+    {
+        var grant = Issue(new(3, 3, 3));
+        if (priorReservation) { Assert.True(Reserve(Open(), grant).Accepted); }
+        clock.Advance(TimeSpan.FromHours(25));
+        Assert.Equal(GrantStoreProblem.Expired, Reserve(Open(), grant).StoreProblem);
+        Assert.True(Open().Read(grant.Id, 1).Accepted);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
+        Assert.False(Store().TryGetUsable(grant.Id, 1).Usable);
+        var store = new GrantStore(Folder, key, new(Folder, new FakeTimeProvider(grant.NotBefore.AddHours(25))), Scope, clock);
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void R4rl_rejected_reservation_change_preserves_the_observed_clock(bool abandon)
+    {
+        var grant = Issue(new(3, 3, 3));
+        var reservation = Reserve(Open(), grant).Reservation!;
+        Assert.True(Open().Commit(reservation.Request, Target()).Accepted);
+        clock.Advance(TimeSpan.FromHours(2));
+        var refused = abandon ? Open().Abandon(reservation.Request, true)
+            : Open().Commit(reservation.Request, Target());
+        Assert.Equal(GrantCounterProblem.Binding, refused.Problem);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void R4rl_unchanged_commit_or_reconcile_does_not_add_a_durable_intent(bool reconcile)
+    {
+        var grant = Issue(new(3, 3, 3));
+        var reservation = Reserve(Open(), grant).Reservation!;
+        var target = Target();
+        Assert.True(Open().Commit(reservation.Request, target).Accepted);
+        var before = GateAuditProjection.Load(Folder).Rows.Count;
+        var result = reconcile
+            ? Open().Reconcile(grant.Id, _ => throw new Exception("already bound"),
+                _ => new(GrantProcessStatus.Live, target.ProcessInstance))
+            : Open().Commit(reservation.Request, target);
+        Assert.True(result.Accepted);
+        Assert.Equal(before, GateAuditProjection.Load(Folder).Rows.Count);
+    }
+
+    [Fact]
+    public void R4rl_empty_grant_id_returns_a_typed_refusal()
+    {
+        var grant = Issue(new(3, 3, 3));
+        Assert.Equal(GrantCounterProblem.Malformed,
+            Open().Reserve(Guid.Empty, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64)).Problem);
     }
 }
