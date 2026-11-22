@@ -61,16 +61,30 @@ public sealed partial class SessionView
         blocksOf = card;
         blocksFrom = from;
         IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
-        if (reset || !ConversationBlocks.Update(blocks, next))
+        var atEnd = !reset && HistoryAtEnd();
+        var offset = ConversationScroll?.VerticalOffset ?? 0;
+        var reading = reset || atEnd ? null : ReadingHistory();
+        if (atEnd) { pinEnd = true; }
+        if (reset)
         {
             blocks = new ConversationItems(next.Select(b => new ConversationBlock(b)));
+            ConversationList.ItemsSource = blocks;
+        }
+        else if (!ConversationBlocks.Update(blocks, next))
+        {
+            // Replacing ItemsSource also resets the history header's viewport and realised rows.
+            var common = Math.Min(blocks.Count, next.Count);
+            for (var i = 0; i < common; i++) { blocks[i] = new ConversationBlock(next[i]); }
+            while (blocks.Count > next.Count) { blocks.RemoveAt(blocks.Count - 1); }
+            for (var i = common; i < next.Count; i++) { blocks.Add(new ConversationBlock(next[i])); }
             ConversationList.ItemsSource = blocks;
         }
         // Indexes have moved: the anchor taken again once the list has laid them out.
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
         // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.
-        if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
+        if (!reset) { KeepPlace(atEnd, offset, reading); }
+        else if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
         // The response's empty view held 8 under its label, as its first block does.
         FooterLead.Height = card is { HasVoice: true } && blocks.Count == 0 ? 8 : 0;
     }
@@ -120,7 +134,7 @@ public sealed partial class SessionView
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
-        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
+        if (Math.Abs(to - from) >= 0.5 && ChangeConversationView(scroll, to, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
     }
 
     // What had focus when a key reached the conversation, from it up to the list: a text input, a

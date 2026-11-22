@@ -21,7 +21,7 @@ public sealed record GrantScope(ImmutableArray<string> Machines, ImmutableArray<
 public sealed record GrantDocument(int Version, Guid Id, string Account, GrantIssuer Issuer, GrantAudience Audience,
     ImmutableArray<GrantSubject> Subjects, ImmutableArray<string> Actions, GrantScope Scope, GrantCaps Caps,
     DateTimeOffset NotBefore, long Generation, DateTimeOffset? ExpiresAt = null,
-    ImmutableArray<GrantRole> Roles = default, ImmutableArray<StopTarget> StopTargets = default);
+    ImmutableArray<GrantRole> Roles = default, ImmutableArray<StopTarget> StopTargets = default, bool AllowAllLaunch = false);
 
 // Inputs are authenticated, receiver-owned snapshots; this pure layer does not verify person proof or inspect processes.
 public sealed record HostPolicySnapshot(string Account, GrantAudience Audience, GrantSubject AuthenticatedCaller,

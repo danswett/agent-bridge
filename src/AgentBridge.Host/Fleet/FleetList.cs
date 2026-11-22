@@ -272,29 +272,23 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         return await ListAsync(withNames, caller, ct);
     }
 
-    // fleet.find (#1399, design "Names and lookup"): a filter over the same roster. The name is
-    // normalized, exact and active-only, and never echoed back. An own-account lite match is
+    // fleet.find: exact live session IDs only. An own-account lite match is
     // routing metadata, never roster verification; its distinct trust is for messaging only.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
         var caller = Authorize(channel, FindOp);
-        var name = FleetSessionMatch.Normalize(data.ValueKind == JsonValueKind.Object && data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null);
-        if (name.Length is 0 or > 64) { throw new InvalidOperationException("refused: fleet.find needs a \"name\" of 1 to 64 characters"); }
+        var sessionId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("sessionId", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+        var target = JsonSerializer.Serialize(sessionId is { Length: > 64 } ? sessionId[..(char.IsHighSurrogate(sessionId[63]) ? 63 : 64)] + "..." : sessionId ?? "<missing>");
+        if (sessionId is null || !FleetSessionMatch.IsId(sessionId) || data.TryGetProperty("name", out _) || data.TryGetProperty("machineName", out _))
+        { throw new InvalidOperationException($"refused: fleet.find sessionId {target} needs an exclusive session ID; names never route"); }
         string? machine = null;
         if (data.TryGetProperty("machine", out var m) && m.ValueKind != JsonValueKind.Null)
         {
             machine = m.ValueKind == JsonValueKind.String ? m.GetString() : null;
-            if (machine is null || machine.Length is 0 or > 64 || !machine.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-'))
+            if (machine is null || !Wire.IsDeviceId(machine))
             {
-                throw new InvalidOperationException("refused: fleet.find \"machine\" must be 1 to 64 of letters, digits, '.', '_', '-'");
+                throw new InvalidOperationException($"refused: fleet.find sessionId {target}: machine must be an exact device ID");
             }
-        }
-        string? machineName = null;
-        if (data.TryGetProperty("machineName", out var label) && label.ValueKind != JsonValueKind.Null)
-        {
-            machineName = label.ValueKind == JsonValueKind.String ? label.GetString() : null;
-            if (machineName is null || machineName.Length is 0 or > 64 || machineName.Any(char.IsControl))
-            { throw new InvalidOperationException("refused: fleet.find \"machineName\" needs an exact machine name or id of 1 to 64 characters"); }
         }
         LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
@@ -306,30 +300,31 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         { throw new InvalidOperationException($"fleet.find registry-get: {e.Message}", e); }
         var fleetScope = snapshot.FleetScope;
         if (string.IsNullOrWhiteSpace(fleetScope)) { throw new InvalidOperationException("refused: fleet.find has no authenticated account scope"); }
-        return snapshot.CompleteRead(() => Complete(caller, Find(snapshot, name, machine, machineName)));
+        var result = snapshot.CompleteRead(() => Complete(caller, Find(snapshot, sessionId, machine)));
+        return result is FindRefusal refused ? throw new InvalidOperationException(refused.Reason) : result;
     }
 
-    static object Find(FleetRosterSnapshot snapshot, string name, string? machine, string? machineName)
+    static object Find(FleetRosterSnapshot snapshot, string sessionId, string? machine)
     {
         var fleetScope = snapshot.FleetScope;
-        var scope = snapshot.Machines.Where(x => (machine is null || x.Id == machine)
-            && (machineName is null || x.Name == machineName || x.Id == machineName)).ToList();
+        var scope = snapshot.Machines.Where(x => machine is null || x.Id == machine).ToList();
         var incomplete = scope.Where(x => x.Online && x.Truncated).Select(x => x.Id).ToList();
         if (incomplete.Count > 0) { return new { result = "incomplete", fleetScope, machines = incomplete }; }
-        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => FleetSessionMatch.Matches(s, name)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
+        var hits = scope.Select(x => (Machine: x, Sessions: x.Sessions.Where(s => FleetSessionMatch.Matches(s, sessionId)).ToList())).Where(h => h.Sessions.Count > 0).ToList();
         var live = hits.Where(h => h.Machine.Online).ToList();
-        var stale = hits.Where(h => !h.Machine.Online).ToList();
         if (live.Any(h => !h.Machine.Verified && h.Machine.MessagingTrust != LiteFleetRoster.Trust)) { return new { result = "unverified", fleetScope, machines = live.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name, Online: true)) }; }
-        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, Trust: h.Machine.MessagingTrust))).ToList();
+        var cands = live.SelectMany(h => h.Sessions.Select(s => new FindSession(s.Id ?? s.Node, s.Node, h.Machine.Id, s.State, s.Since, true, h.Machine.Name, s.Model, SessionId: FleetSessionId.ForNode(s.SessionId, s.Node), Trust: h.Machine.MessagingTrust))).ToList();
         if (cands.Count >= 2) { return new { result = "ambiguous", fleetScope, candidates = cands }; }
         if (cands.Count == 0)
         {
-            if (stale.Count > 0) { return new { result = "offline", fleetScope, machines = stale.Select(h => new FindMachine(h.Machine.Id, h.Machine.Name)).ToList() }; }
-            return new { result = "notFound", fleetScope };
+            // Finish the scoped read and credential-rotation fence before surfacing a refusal.
+            return new FindRefusal($"refused: fleet.find sessionId {JsonSerializer.Serialize(sessionId)} is unknown, stale or offline");
         }
         // One live routing match; messaging trust never authorizes another operation.
-        return new { result = "found", fleetScope, session = cands[0] with { SessionId = FleetSessionId.ForNode(live[0].Sessions[0].SessionId, cands[0].Node) } };
+        return new { result = "found", fleetScope, session = cands[0] };
     }
+
+    sealed record FindRefusal(string Reason);
 
     sealed record FindMachine(string Machine,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MachineName,

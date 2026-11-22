@@ -47,6 +47,10 @@ public interface IConsoleInjector
     // one, so it may be asked again.
     Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ConsoleWidth(null, "this host cannot widen a session's console", false));
+
+    // Launch-only sizing: grow the visible window too, to at least 30 rows, never shrink it.
+    Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ConsoleWidth(null, "this host cannot size a launched session's console", false));
 }
 
 // The width a console was left at, or why it is not known.

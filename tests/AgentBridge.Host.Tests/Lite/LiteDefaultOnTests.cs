@@ -59,7 +59,7 @@ public sealed class LiteDefaultOnTests : IDisposable
         return (sender, link, deliver);
     }
 
-    static Task<LiteOutcome> Send(AgentLiteSender sender, string text = "hello") => sender.SendAsync(Caller, new LiteSendInput("node-b", "agent-b2", text), default);
+    static Task<LiteOutcome> Send(AgentLiteSender sender, string text = "hello") => sender.SendAsync(Caller, new LiteSendInput(B, "agent-b2", text), default);
 
     static (LiteKind, string?) Kinded(LiteOutcome o) => (o.Kind, o.Code);
 
