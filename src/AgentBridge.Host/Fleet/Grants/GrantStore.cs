@@ -7,7 +7,7 @@ using AgentBridge.Transport;
 namespace AgentBridge.Host.Fleet.Grants;
 
 public enum GrantStoreProblem { None, Missing, Unreadable, Oversize, BadMac, Version, Malformed, AuditIncomplete, Generation, WriteFailed, NotFound, Revoked, NotYetValid, Expired, RotationRequired }
-public sealed record GrantStoreResult(GrantStoreProblem Problem, GrantDocument? Grant = null)
+public sealed record GrantStoreResult(GrantStoreProblem Problem, GrantDocument? Grant = null, bool Rotated = false)
 {
     public bool Usable => Problem == GrantStoreProblem.None;
 }
@@ -59,7 +59,7 @@ public sealed class GrantStore
         grant = grant with { ExpiresAt = GrantValidator.Expiry(grant), Roles = grant.Roles.IsDefault ? [] : grant.Roles,
             StopTargets = grant.StopTargets.IsDefault ? [] : grant.StopTargets };
         return (Next(state with { Grants = [.. state.Grants, grant] }, grant.Id, "grant.issue"), new(GrantStoreProblem.None, grant));
-    });
+    }, firstGrant: acceptedGrant.Id);
 
     public GrantStoreResult Revoke(Guid id, long generation) => Transaction(state =>
     {
@@ -95,7 +95,7 @@ public sealed class GrantStore
             : checkTime && now >= GrantValidator.Expiry(grant) ? new(GrantStoreProblem.Expired) : new(GrantStoreProblem.None, grant);
     }
 
-    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true, bool readOnly = false)
+    internal GrantStoreResult Transaction(Func<State, (State? Next, GrantStoreResult Result)> change, bool allowNew = true, bool readOnly = false, Guid? firstGrant = null)
     {
         if (failure != GrantStoreProblem.None) { return new(failure); }
         try
@@ -104,8 +104,20 @@ public sealed class GrantStore
             using var held = AgentAuditLog.Lock(path, read: readOnly);
             using var auditHeld = readOnly ? AgentAuditLog.Lock(Path.Combine(folder, "audit"), read: true) : null;
             if (failure != GrantStoreProblem.None) { return new(failure); }
-            var state = Load(allowNew, readOnly);
+            State state;
+            var rotated = !readOnly && audit.FinishRotation(key) && firstGrant is not null;
+            try { state = Load(allowNew, readOnly); }
+            catch (StoreFault e) when (e.Problem == GrantStoreProblem.RotationRequired && firstGrant is { } id)
+            {
+                // Only a person-confirmed issue retires a pre-grant audit, as part of this issuance and only once it
+                // would succeed: with no grant history, the store after rotation is exactly this empty state.
+                var trial = change(new(1, 0, [], [], []));
+                if (trial.Next is null) { return trial.Result; }
+                if (audit.RotateForFirstGrant(key, id) is not null) { return new(GrantStoreProblem.RotationRequired); }
+                (state, rotated) = (Load(allowNew, readOnly), true);
+            }
             var (next, result) = change(state);
+            result = result with { Rotated = rotated };
             if (next is null) { return result; }
             var body = JsonSerializer.SerializeToUtf8Bytes(next, Json);
             // Revoke must never be refused by the lifetime cap; each needs a live grant, so Load's 512 bounds them.
@@ -159,12 +171,12 @@ public sealed class GrantStore
         string? rotation = null;
         // Rotation is read under the same audit lock as the rows, so a concurrent write never makes it look absent.
         var (rows, complete) = GateAuditProjection.Load(folder, alreadyLocked: readOnly, boundary: (floor, unproven) => { retained = floor; adopted = unproven; rotation = AgentAuditLog.Rotation(folder, key); });
-        // Heads never prove a cutoff: grants need both streams to start with one verified person-signed genesis. Only a
+        // Heads never prove a cutoff: grants need both streams to start with one verified rotation genesis. Only a
         // profile with no grant history can still rotate; for any other, a lost genesis is lost evidence.
         if (rotation is null) { throw new StoreFault(body is null && retained == 0
             && !rows.Any(r => r.Action is "grant.issue" or "grant.revoke") ? GrantStoreProblem.RotationRequired : GrantStoreProblem.AuditIncomplete); }
         // Adopted history is unproven, and per-stream chains cannot see a rollback of one stream: require one global gated sequence.
-        if (!complete || adopted || retained > 0 || !audit.Verify(false, readOnly, key).Intact || !audit.Verify(true, readOnly, key).Intact
+        if (!complete || adopted || retained > 0 || !audit.Verify(readOnly: readOnly, key: key).Intact || !audit.Verify(launch: true, readOnly: readOnly, key: key).Intact
             || rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().Where((s, i) => s != i + 1L).Any())
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         var history = rows.Where(r => r.Action is "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update").ToArray();
@@ -175,17 +187,18 @@ public sealed class GrantStore
             || g.First().Gate!.GrantBinding != g.Last().Gate!.GrantBinding))
         { throw new StoreFault(GrantStoreProblem.AuditIncomplete); }
         if (body is null && operations.Length > 0) { throw new StoreFault(GrantStoreProblem.Missing); }
-        if (operations.Length != state.Generation) { throw new StoreFault(GrantStoreProblem.Generation); }
+        var revisionProblem = adopted ? GrantStoreProblem.AuditIncomplete : GrantStoreProblem.Generation;
+        if (operations.Length != state.Generation) { throw new StoreFault(revisionProblem); }
         for (var i = 0; i < operations.Length; i++)
         {
             var intent = state.Intents[i];
             if (intent is null || intent.Generation != i + 1 || operations[i].Any(r => r.Gate!.Operation != intent.Operation
                 || r.Request != intent.Operation.ToString() || r.Target != intent.Grant.ToString() || r.Action != intent.Action
                 || r.Gate.Incarnation != intent.Grant || r.Principal != "person:local"))
-            { throw new StoreFault(GrantStoreProblem.Generation); }
+            { throw new StoreFault(revisionProblem); }
         }
         if (body is not null && operations[^1].First().Gate!.GrantBinding != Convert.ToHexString(SHA256.HashData(body)))
-        { throw new StoreFault(GrantStoreProblem.Generation); }
+        { throw new StoreFault(revisionProblem); }
         if (body is null && !allowNew) { throw new StoreFault(GrantStoreProblem.Missing); }
         return state;
     }
