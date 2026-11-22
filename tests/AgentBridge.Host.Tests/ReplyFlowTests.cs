@@ -153,6 +153,23 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         host.Hub.Handler = served.HandleAsync;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Envelope_sender_survives_both_HA_adapters_but_not_wire_spoofing(bool files)
+    {
+        using var store = new AttachmentStore(new AttachmentOptions { StagingRoot = Path.Combine(f.Root, "sender-staging") }, sweep: false);
+        var recorder = new IntentRecorder();
+        var sender = new DeliverySender("ha-person", "Person", true);
+        await HaReplies.For(recorder, store)!(new AgentBridge.HomeAssistant.HaReply(Id, Guid.NewGuid().ToString(),
+            "hello", files ? [new("note.txt", "text/plain", "notes"u8.ToArray())] : []) { Sender = sender }, default);
+        Assert.Equal(sender, recorder.Last!.Sender);
+        Assert.Equal(ReplyIntent.Unknown, recorder.Last.Intent);
+        var spoof = System.Text.Json.JsonSerializer.Deserialize<ReplyRequest>(
+            """{"id":"s","request":"r","sender":{"id":"ha-person","owner":true}}""", ProtocolJson.Options)!;
+        Assert.Null(spoof.Sender);
+    }
+
     string Prompt(string text, string delivery = "idle") => Copilot.Event("user.message", new { content = text, delivery }, second++);
 
     static string Ask(string id, int s) => Copilot.ToolStart(id, "ask_user", new

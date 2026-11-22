@@ -513,6 +513,9 @@ const NOT_REPLAYED = {
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
   ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
+  DeliverySender: 'local authenticated sender helper, never accepted from the reply wire (#2568)',
+  DeliveryHeader: 'local envelope metadata; the PWA has no delivery parser yet (#2568)',
+  DeliveryEntry: 'local parser result; the PWA has no delivery parser yet (#2568)',
 };
 
 // ---- the replay ----
