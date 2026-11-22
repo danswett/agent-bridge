@@ -22,6 +22,7 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
 {
     public const string FileName = "halt-policy-state.json";
     readonly TimeProvider time = time ?? TimeProvider.System;
+    readonly SemaphoreSlim gate = new(1, 1);
     // This process's newest state: newer than the file after a failed save, and all there is
     // while the lock can't be had, so known halts still refuse.
     State memory = State.Empty;
@@ -38,6 +39,13 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
     // read: a policy ReadAsync verified just now, or null when none was read (cached state only).
     public async Task<HaltPolicyVerdict> CheckAsync(HaltPolicyEnvelope? read, string? version, CancellationToken cancellationToken = default)
     {
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await CheckCoreAsync(read, version, cancellationToken).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
+
+    async Task<HaltPolicyVerdict> CheckCoreAsync(HaltPolicyEnvelope? read, string? version, CancellationToken cancellationToken)
+    {
         using var held = await LockAsync(cancellationToken).ConfigureAwait(false);
         // After the wait: the lock can take long enough for a policy to expire meanwhile.
         var now = time.GetUtcNow();
@@ -53,18 +61,27 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
             else if (read.Sequence < (state.Policy?.Sequence ?? 0)) { problem ??= "halt policy sequence went back"; }
             // An expired policy, however high, clears no halt.
             else if (read.ExpiresAt <= (state.Seen > now ? state.Seen : now)) { problem ??= "halt policy already expired"; }
-            else { state = Merge(state, new State(read, now, false, read.Releases.ToDictionary(Key, Run), read.Halted.ToHashSet(StringComparer.Ordinal))); }
+            else if (now >= state.Seen && (!state.Contradicted || read.Sequence > (state.Policy?.Sequence ?? 0)))
+            { state = Merge(state, new State(read, now, false, read.Releases.ToDictionary(Key, Run), read.Halted.ToHashSet(StringComparer.Ordinal))); }
         }
         memory = state = state with { Seen = state.Seen > now ? state.Seen : now };
         if (disk is not null && !Save(state)) { problem ??= "halt policy state not saved"; }
         var policy = state.Policy;
         // Again after the save, which can be slow; a verdict holds at most until now.
         var end = time.GetUtcNow();
-        if (policy is not null && state.Seen < policy.ExpiresAt && end >= policy.ExpiresAt)
+        if (end > state.Seen)
         {
             memory = state = state with { Seen = end };
             if (disk is not null && !Save(state)) { problem ??= "halt policy state not saved"; }
             end = time.GetUtcNow();
+        }
+        var finalExpiry = policy is not null && state.Seen < policy.ExpiresAt && end >= policy.ExpiresAt;
+        memory = state = state with { Seen = state.Seen > end ? state.Seen : end };
+        if (finalExpiry)
+        {
+            if (disk is not null && !Save(state)) { problem ??= "halt policy state not saved"; }
+            end = time.GetUtcNow();
+            memory = state = state with { Seen = state.Seen > end ? state.Seen : end };
         }
         problem ??= end < state.Seen ? "the clock went back"
             : policy is null ? "no verified halt policy" : state.Contradicted ? "halt policy contradicted at its sequence"

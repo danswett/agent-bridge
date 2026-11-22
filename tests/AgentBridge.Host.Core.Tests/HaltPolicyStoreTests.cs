@@ -99,7 +99,8 @@ public sealed class HaltPolicyStoreTests : IDisposable
     [Theory]
     [InlineData(-6)]
     [InlineData(2)]
-    public async Task Time_invalid_equivocation_persists_both_halts_and_contradiction_without_advancing_floors(int issuedHours)
+    [InlineData(0)]
+    public async Task Equivocation_persists_both_halts_and_contradiction_without_advancing_floors(int issuedHours)
     {
         var store = Store();
         await store.CheckAsync(Policy(42, halted: "\"0.1.7213\""), null);
@@ -113,8 +114,8 @@ public sealed class HaltPolicyStoreTests : IDisposable
             Assert.Equal(Unavailable, await Outcome(Policy(42, halted: "\"0.1.7213\""), "0.1.7300", cached));
             Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", cached));
         }
-        Assert.Equal(Unavailable, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(issuedHours)), "0.1.7300"));
-        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214"));
+        Assert.Equal(issuedHours == 0 ? Verified : Unavailable, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(issuedHours)), "0.1.7300"));
+        Assert.Equal(issuedHours == 0 ? Verified : KnownHalted, await Outcome(null, "0.1.7214"));
         Assert.Equal(Verified, await Outcome(Policy(43, halted: ""), "0.1.7214"));
     }
 
@@ -158,6 +159,72 @@ public sealed class HaltPolicyStoreTests : IDisposable
         var verdict = await store.CheckAsync(Policy(42), "0.1.7300");
         Assert.Equal(Unavailable, verdict.Outcome);
         Assert.Equal("the clock went back", verdict.Reason);
+    }
+
+    [Fact]
+    public async Task An_overlapping_lock_failure_cannot_lose_a_newer_halt_to_an_older_expiry_latch()
+    {
+        var at = new RewindClock(Issued.AddHours(1));
+        var store = Store(at);
+        store.LockWait = TimeSpan.Zero;
+        var replace = store.Replace;
+        using var release = new ManualResetEventSlim();
+        var saved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var saves = 0;
+        store.Replace = (path, bytes) =>
+        {
+            replace(path, bytes);
+            if (++saves == 1) { saved.SetResult(); Assert.True(release.Wait(TimeSpan.FromSeconds(10))); }
+        };
+        var first = Task.Run(() => store.CheckAsync(Policy(42, halted: ""), "0.1.7300"));
+        await saved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        at.Now = Issued.AddHours(6);
+        Task<HaltPolicyVerdict> second;
+        try { second = store.CheckAsync(Policy(43, issued: Issued.AddHours(6)), "0.1.7214"); }
+        finally { release.Set(); }
+        Assert.Equal(Unavailable, (await first).Outcome);
+        Assert.Equal(KnownHalted, (await second).Outcome);
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", store));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_higher_empty_policy_during_clock_rewind_preserves_halts_until_the_clock_recovers(bool restart)
+    {
+        var at = new RewindClock(Issued.AddHours(2));
+        var store = Store(at);
+        Assert.Equal(KnownHalted, await Outcome(Policy(42), "0.1.7214", store));
+        at.Now = Issued.AddHours(1);
+        var checkedStore = restart ? Store(at) : store;
+        Assert.Equal(KnownHalted, await Outcome(Policy(43, halted: ""), "0.1.7214", checkedStore));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", Store(at)));
+        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", checkedStore));
+        at.Now = Issued.AddHours(3);
+        Assert.Equal(Verified, await Outcome(Policy(43, halted: ""), "0.1.7214", checkedStore));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_post_save_clock_advance_is_preserved_against_later_rewind(bool restart, bool expireDuringLatch)
+    {
+        var at = new RewindClock(Issued.AddHours(1));
+        var store = Store(at);
+        var replace = store.Replace;
+        var saves = 0;
+        store.Replace = (path, bytes) =>
+        {
+            Assert.Throws<IOException>(() => { using var unlocked = new FileStream(Path.Combine(folder, "release-discovery.lock"), FileMode.Open, FileAccess.ReadWrite, FileShare.None); });
+            replace(path, bytes);
+            if (++saves == 1) { at.Now = Issued.AddHours(4); } else if (expireDuringLatch) { at.Now = Issued.AddHours(6); }
+        };
+        Assert.Equal(expireDuringLatch ? Unavailable : Verified, await Outcome(Policy(42), "0.1.7300", store));
+        at.Now = Issued.AddHours(expireDuringLatch ? 5 : 2);
+        var checkedStore = restart ? Store(at) : store;
+        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", checkedStore));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", checkedStore));
     }
 
     sealed class RewindClock(DateTimeOffset now) : TimeProvider
