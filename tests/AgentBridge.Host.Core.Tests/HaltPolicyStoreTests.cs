@@ -96,6 +96,76 @@ public sealed class HaltPolicyStoreTests : IDisposable
         Assert.Equal(KnownHalted, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(-6)), "0.1.7214"));
     }
 
+    [Theory]
+    [InlineData(-6)]
+    [InlineData(2)]
+    public async Task Time_invalid_equivocation_persists_both_halts_and_contradiction_without_advancing_floors(int issuedHours)
+    {
+        var store = Store();
+        await store.CheckAsync(Policy(42, halted: "\"0.1.7213\""), null);
+        var verdict = await store.CheckAsync(Policy(42, run: 7400, issued: Issued.AddHours(issuedHours)), "0.1.7214");
+        Assert.Equal(KnownHalted, verdict.Outcome);
+        Assert.Equal(7300, verdict.Floors["win/prerelease"]);
+        foreach (var cached in new[] { store, Store() })
+        {
+            Assert.Equal(KnownHalted, await Outcome(null, "0.1.7213", cached));
+            Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", cached));
+            Assert.Equal(Unavailable, await Outcome(Policy(42, halted: "\"0.1.7213\""), "0.1.7300", cached));
+            Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", cached));
+        }
+        Assert.Equal(Unavailable, await Outcome(Policy(43, halted: "", issued: Issued.AddHours(issuedHours)), "0.1.7300"));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214"));
+        Assert.Equal(Verified, await Outcome(Policy(43, halted: ""), "0.1.7214"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Expiry_first_seen_after_a_real_save_is_latched_and_a_failed_latch_stays_unavailable(bool failLatch)
+    {
+        var at = new RewindClock(Issued.AddHours(1));
+        var store = Store(at);
+        var replace = store.Replace;
+        var saves = 0;
+        store.Replace = (path, bytes) =>
+        {
+            Assert.Throws<IOException>(() => { using var unlocked = new FileStream(Path.Combine(folder, "release-discovery.lock"), FileMode.Open, FileAccess.ReadWrite, FileShare.None); });
+            if (++saves == 2 && failLatch) { throw new IOException("latch disk full"); }
+            replace(path, bytes);
+            if (saves == 1) { at.Now = Issued.AddHours(6); }
+        };
+        var verdict = await store.CheckAsync(Policy(42), "0.1.7300");
+        Assert.Equal(Unavailable, verdict.Outcome);
+        Assert.Equal(2, saves);
+        if (failLatch) { Assert.Equal("halt policy state not saved", verdict.Reason); }
+        at.Now = Issued.AddHours(2);
+        Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", store));
+        Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", store));
+        if (!failLatch)
+        {
+            Assert.Equal(Unavailable, await Outcome(null, "0.1.7300", Store(at)));
+            Assert.Equal(KnownHalted, await Outcome(null, "0.1.7214", Store(at)));
+        }
+    }
+
+    [Fact]
+    public async Task A_clock_rewind_during_save_cannot_return_verified()
+    {
+        var at = new RewindClock(Issued.AddHours(2));
+        var store = Store(at);
+        var replace = store.Replace;
+        store.Replace = (path, bytes) => { replace(path, bytes); at.Now = Issued.AddHours(1); };
+        var verdict = await store.CheckAsync(Policy(42), "0.1.7300");
+        Assert.Equal(Unavailable, verdict.Outcome);
+        Assert.Equal("the clock went back", verdict.Reason);
+    }
+
+    sealed class RewindClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     [Fact]
     public async Task Time_is_read_after_the_lock_wait_and_again_after_the_save()
     {

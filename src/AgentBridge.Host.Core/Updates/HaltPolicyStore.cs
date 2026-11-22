@@ -46,6 +46,9 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
         var problem = disk is null ? "halt policy state could not be locked or read" : now < state.Seen ? "the clock went back" : null;
         if (read is not null)
         {
+            // Signed equivocation retains both bodies' halts even when the new body is time-invalid.
+            if (state.Policy is { } previous && read.Sequence == previous.Sequence && read.BodyHash != previous.BodyHash)
+            { state = Merge(state, new State(read, now, false, new Dictionary<string, long>(), read.Halted.ToHashSet(StringComparer.Ordinal))); }
             if (read.IssuedAt > now) { problem ??= "halt policy issued in the future"; }
             else if (read.Sequence < (state.Policy?.Sequence ?? 0)) { problem ??= "halt policy sequence went back"; }
             // An expired policy, however high, clears no halt.
@@ -57,7 +60,14 @@ public sealed class HaltPolicyStore(string folder, TimeProvider? time = null)
         var policy = state.Policy;
         // Again after the save, which can be slow; a verdict holds at most until now.
         var end = time.GetUtcNow();
-        problem ??= policy is null ? "no verified halt policy" : state.Contradicted ? "halt policy contradicted at its sequence"
+        if (policy is not null && state.Seen < policy.ExpiresAt && end >= policy.ExpiresAt)
+        {
+            memory = state = state with { Seen = end };
+            if (disk is not null && !Save(state)) { problem ??= "halt policy state not saved"; }
+            end = time.GetUtcNow();
+        }
+        problem ??= end < state.Seen ? "the clock went back"
+            : policy is null ? "no verified halt policy" : state.Contradicted ? "halt policy contradicted at its sequence"
             : state.Seen >= policy.ExpiresAt || end >= policy.ExpiresAt ? "halt policy expired" : null;
         var outcome = version is not null && state.Halts.Contains(version) ? HaltPolicyOutcome.KnownHalted
             : problem is null ? HaltPolicyOutcome.Verified : HaltPolicyOutcome.Unavailable;
