@@ -204,4 +204,57 @@ public sealed class GrantCountersTests : IDisposable
         Assert.Equal(second.Id.ToString(), GateAuditProjection.Load(Folder).Rows.Last().Target);
         Assert.Equal(new GrantUsage(1, 1, 1), Open().Read(first.Id, 1).Usage);
     }
+
+    [Fact]
+    public void R4rl_expiry_refusal_prevents_admission_after_restart_and_clock_rollback()
+    {
+        var grant = Issue(new(3, 3, 3));
+        Assert.True(Reserve(Open(), grant).Accepted);
+        clock.Advance(TimeSpan.FromHours(25));
+        Assert.Equal(GrantStoreProblem.Expired, Reserve(Open(), grant).StoreProblem);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void R4rl_rejected_reservation_change_preserves_the_observed_clock(bool abandon)
+    {
+        var grant = Issue(new(3, 3, 3));
+        var reservation = Reserve(Open(), grant).Reservation!;
+        Assert.True(Open().Commit(reservation.Request, Target()).Accepted);
+        clock.Advance(TimeSpan.FromHours(2));
+        var refused = abandon ? Open().Abandon(reservation.Request, true)
+            : Open().Commit(reservation.Request, Target());
+        Assert.Equal(GrantCounterProblem.Binding, refused.Problem);
+        clock.AdjustTime(grant.NotBefore.AddHours(1));
+        Assert.Equal(GrantCounterProblem.Clock, Reserve(Open(), grant).Problem);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void R4rl_unchanged_commit_or_reconcile_does_not_add_a_durable_intent(bool reconcile)
+    {
+        var grant = Issue(new(3, 3, 3));
+        var reservation = Reserve(Open(), grant).Reservation!;
+        var target = Target();
+        Assert.True(Open().Commit(reservation.Request, target).Accepted);
+        var before = GateAuditProjection.Load(Folder).Rows.Count;
+        var result = reconcile
+            ? Open().Reconcile(grant.Id, _ => throw new Exception("already bound"),
+                _ => new(GrantProcessStatus.Live, target.ProcessInstance))
+            : Open().Commit(reservation.Request, target);
+        Assert.True(result.Accepted);
+        Assert.Equal(before, GateAuditProjection.Load(Folder).Rows.Count);
+    }
+
+    [Fact]
+    public void R4rl_empty_grant_id_returns_a_typed_refusal()
+    {
+        var grant = Issue(new(3, 3, 3));
+        Assert.Equal(GrantCounterProblem.Malformed,
+            Open().Reserve(Guid.Empty, 1, Guid.NewGuid(), grant.Subjects[0], new('b', 64)).Problem);
+    }
 }
