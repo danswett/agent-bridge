@@ -26,6 +26,7 @@ The signed roster does not gate own-account lite messaging or its local `fleet.f
 ## The plain limits
 
 - Own machines and own agents only. A message from any other account is never accepted, whatever it carries.
+- Same machine means local delivery through the same signed receiver checks (owner-approved 14:34 PT Nov 21, 2026). A target device id equal to the sending host's own id routes locally, even without relay presence for itself. The host passes the signed envelope through the same receiver, replay/rate limits and reply-target gates, bound to its own device key and current signed-in account; it never opens a remote channel to itself. Unknown other hosts remain offline. A busy local target is refused as `busy`, not `offline`; queueing is a separate change.
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
