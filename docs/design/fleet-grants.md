@@ -19,7 +19,7 @@ Every later row retains global sequence and issue/revoke checks; arbitrary prefi
 Legacy retention preserves only the last zero-gated legacy file needed for proof
 in `audit/archive/agents-legacy-adoption.jsonl`. Its intact chain must link to the
 next surviving file's header; a missing/broken archive refuses with AuditIncomplete.
-No migration for missing retired proof: grants fail closed; absent proof fields do not block other gates.
+Missing retired proof refuses grants; native launch/stop alone bypass stale non-Empty retired proof. Empty checks stay.
 
 ## Authority and existing boundaries
 

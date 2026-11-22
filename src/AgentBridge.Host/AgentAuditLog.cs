@@ -95,7 +95,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
-                if (entry.Gate is not null) { Bootstrap(folder); }
+                if (entry.Gate is not null) { Bootstrap(folder, nativeLaunchOrStop: entry.Action is "session.launch" or "session.stop"); }
                 if (entry.Gate is { } metadata)
                 {
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
@@ -180,7 +180,7 @@ public sealed class AgentAuditLog
             {
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var held = Lock(folder);
-                Bootstrap(folder);
+                Bootstrap(folder, nativeLaunchOrStop: true);
             }
             return true;
         }
@@ -188,7 +188,7 @@ public sealed class AgentAuditLog
         { log($"agent audit bootstrap refused: {e.GetType().Name}"); return false; }
     }
 
-    void Bootstrap(string folder)
+    void Bootstrap(string folder, bool nativeLaunchOrStop = false)
     {
         if (HasHeads(folder))
         {
@@ -196,6 +196,7 @@ public sealed class AgentAuditLog
             {
                 if (ReadHead(folder, launch) is not { Adopted: true } head) { continue; }
                 if (head.AdoptedGatedRows is null && head.AdoptedPrefix is null) { continue; }
+                if (nativeLaunchOrStop && head.RetainedThrough > 0 && head.AdoptedPrefix?.Empty != true) { continue; }
                 if (!AdoptionProofMatches(folder, launch, head, out var count))
                 { throw new IOException("adoption proof contradicts audit evidence"); }
                 if (head.AdoptedPrefix?.Empty != true) { continue; }

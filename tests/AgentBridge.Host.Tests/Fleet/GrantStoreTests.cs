@@ -130,10 +130,10 @@ public sealed class GrantStoreTests : IDisposable
         clock.Advance(TimeSpan.FromDays(1));
         Assert.True(Audit.Append(new("out", "fixture", "agent:fixture/session", [], "agent.send", "fixture", "sent")));
         Assert.Equal(!legacy, JsonNode.Parse(File.ReadAllText(head))!["adoptedGatedRows"]!.GetValue<long>() > 0);
-        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
         var op = Guid.NewGuid();
         Assert.True(Audit.Append(new("local", op.ToString(), "person:local", [], "session.stop", op.ToString(), "reserved", Gate: new(1, op, Guid.Empty, 0, "intent", "local", "person-client", op, "none"))));
         Assert.True(Audit.Bootstrap());
+        Assert.Equal(GrantStoreProblem.AuditIncomplete, Open().TryGetUsable(grant.Id, 1).Problem);
     }
 
     [Theory]
