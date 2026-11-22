@@ -81,6 +81,7 @@ public sealed class GrantIssueTests
         Assert.Contains("subjects: account: 123", vm.Summary);
         Assert.Contains("allowAllLaunch: false", vm.Summary);
         Assert.Equal(new(2, 8, 4), vm.Allocation);
+        await vm.ConfirmAsync("wrong"); Assert.False(vm.Active);
         await vm.ConfirmAsync(vm.Digest);
         Assert.Equal(vm.Digest, receiver.ConfirmedDigest);
         Assert.True(vm.Active);
@@ -114,7 +115,8 @@ public sealed class GrantIssueTests
             var receiver = Receiver(); var preview = receiver.Prepared.Preview!;
             receiver.Prepared = new(tampered ? preview with { Document = preview.Document + " " }
                 : preview with { UnavailableActions = ["stop"] }, null);
-            var vm = new GrantIssueViewModel(receiver); await Prepare(vm); await vm.ConfirmAsync(preview.Digest);
+            var vm = new GrantIssueViewModel(receiver); await Prepare(vm);
+            await vm.ConfirmAsync("wrong"); await vm.ConfirmAsync(preview.Digest);
             Assert.False(vm.Active);
             Assert.Equal(0, receiver.Confirmations);
             Assert.Equal(tampered ? "digest-mismatch" : "action-unavailable", vm.Problem);
@@ -153,6 +155,21 @@ public sealed class GrantIssueTests
         receiver.Online = false; await vm.ConfirmAsync(vm.Digest);
         Assert.Equal("target-offline", vm.Problem);
         Assert.Equal(0, receiver.Confirmations);
+        Assert.False(vm.Active);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Transport_and_receipt_authentication_failures_are_explicitly_Unconfirmed(bool authentication)
+    {
+        var receiver = Receiver(); receiver.Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new GrantIssueViewModel(receiver); await Prepare(vm);
+        var sending = vm.ConfirmAsync(vm.Digest);
+        receiver.Pending.SetException(authentication ? new CryptographicException() : new HttpRequestException());
+        await sending;
+        Assert.Equal("Unconfirmed", vm.State);
+        Assert.Equal("unconfirmed", vm.Problem);
         Assert.False(vm.Active);
     }
 }

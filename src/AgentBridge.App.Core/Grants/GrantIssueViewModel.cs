@@ -7,7 +7,7 @@ namespace AgentBridge.App.Core.Grants;
 
 public sealed class GrantIssueViewModel(IGrantIssueReceiver receiver) : Observable
 {
-    bool busy, submitted;
+    bool busy, submitted, ready;
     public GrantIssuePreview? Preview { get; private set; }
     public GrantReceipt? Receipt { get; private set; }
     public string State { get; private set; } = "New grant";
@@ -19,13 +19,13 @@ public sealed class GrantIssueViewModel(IGrantIssueReceiver receiver) : Observab
     public string EffectivePolicy => Preview?.EffectivePolicy ?? "";
     public ImmutableArray<string> UnavailableActions => Preview?.UnavailableActions ?? [];
     public bool Active => Receipt is not null && Problem is null;
-    public bool CanConfirm => Preview is not null && !busy && !submitted && receiver.Online
+    public bool CanConfirm => ready && Preview is not null && !busy && !submitted && receiver.Online
         && receiver.Problem is null && Problem is null or "person-required";
 
     public async Task PrepareAsync(JsonElement document, CancellationToken ct = default)
     {
         if (busy || submitted) { return; }
-        Preview = null; Receipt = null; Problem = null; Summary = "";
+        Preview = null; Receipt = null; Problem = null; Summary = ""; ready = false;
         busy = true; State = "Preparing"; RaiseAll();
         try
         {
@@ -42,20 +42,21 @@ public sealed class GrantIssueViewModel(IGrantIssueReceiver receiver) : Observab
                 .Select(field => $"{field.Name}: {Describe(field.Value)}"));
             if (preview.UnavailableActions.IsDefault || preview.UnavailableActions.Length > 0)
             { Refuse("action-unavailable"); return; }
-            State = "Awaiting person confirmation";
+            ready = true; State = "Awaiting person confirmation";
         }
         catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException
-            or JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+            or JsonException or KeyNotFoundException or InvalidOperationException or FormatException
+            or HttpRequestException or UnauthorizedAccessException or CryptographicException)
         { Refuse("unavailable"); }
-        finally { busy = false; RaiseAll(); }
+        finally { if (State == "Preparing") { Refuse("unavailable"); } busy = false; RaiseAll(); }
     }
 
     public async Task ConfirmAsync(string personDigest, CancellationToken ct = default)
     {
-        if (busy || submitted || Preview is not { } preview) { return; }
+        if (busy || submitted || !ready || Preview is not { } preview) { return; }
         if (!receiver.Online || receiver.Problem is not null)
         { Refuse(receiver.Problem ?? "target-offline"); RaiseAll(); return; }
-        if (personDigest != preview.Digest) { Refuse("person-required"); RaiseAll(); return; }
+        if (personDigest != preview.Digest) { Problem = "person-required"; RaiseAll(); return; }
         if (!CanConfirm) { RaiseAll(); return; }
         busy = true; submitted = true; Problem = null; State = "Issuing"; RaiseAll();
         try
@@ -67,14 +68,19 @@ public sealed class GrantIssueViewModel(IGrantIssueReceiver receiver) : Observab
             { Refuse("receipt-mismatch"); return; }
             Receipt = receipt; State = "Active";
         }
-        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException)
+        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException
+            or HttpRequestException or UnauthorizedAccessException or CryptographicException or JsonException)
         { Problem = "unconfirmed"; State = "Unconfirmed"; }
-        finally { busy = false; RaiseAll(); }
+        finally
+        {
+            if (State == "Issuing") { Problem = "unconfirmed"; State = "Unconfirmed"; }
+            busy = false; RaiseAll();
+        }
     }
 
     void Refuse(string problem)
     {
-        Problem = problem;
+        Problem = problem; ready = false;
         State = problem is "RotationRequired" or "rotation-required" ? "Rotation required" : "Not issued";
     }
 
@@ -88,7 +94,7 @@ public sealed class GrantIssueViewModel(IGrantIssueReceiver receiver) : Observab
 
     static bool MatchesDocument(GrantIssuePreview preview)
     {
-        if (preview.Document.Length > 64 * 1024 || preview.Id == Guid.Empty || preview.Generation <= 0
+        if (preview.Document is not { Length: > 0 and <= 64 * 1024 } || preview.Id == Guid.Empty || preview.Generation <= 0
             || preview.Allocation is not { Hourly: > 0 and <= 1000, Daily: > 0 and <= 5000, Live: > 0 and <= 100 }
             || preview.Allocation.Hourly > preview.Allocation.Daily
             || Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(preview.Document))) != preview.Digest)
