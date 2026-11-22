@@ -11,7 +11,7 @@ public sealed record DeliverySender(string Id, string? Display = null, bool Owne
             ? " (" + Display + ")" : "");
 }
 
-public sealed record DeliveryHeader(string From, string Id, string Seq, DateTimeOffset At, string Priority, int N);
+public sealed record DeliveryHeader(string From, string Id, string? Seq, DateTimeOffset At, string Priority, int N);
 public sealed record DeliveryEntry(string Text, DeliveryHeader? Header = null, bool LengthMismatch = false);
 
 public static class DeliveryEnvelope

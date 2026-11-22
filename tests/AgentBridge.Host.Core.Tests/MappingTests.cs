@@ -462,22 +462,22 @@ public class LimitsTests
         using var f = new Fixture();
         var events = f.CopilotSession(Id, 100);
         // Quotes, which JSON escapes: the reply and this reasoning do not both fit, so Fit drops the
-        // reasoning. Each message is dated as the last, so once updatedAt has moved to now (frozen),
-        // nothing a client is sent moves with the reasoning.
+        // reasoning. Later messages carry only reasoning, preserving the reply's identity. Each
+        // is dated as the last, so once updatedAt has moved to now (frozen), nothing a client is sent moves.
         string Reasoning(string end) => new string('"', 4090) + end;
         var reply = new string('"', 16 * 1024);
         Fixture.Append(events, Copilot.User("ask", 1), Copilot.Assistant(reply, 2, reasoning: Reasoning("first")));
         f.Processes.Run(AgentKind.Copilot, 100);
         await using var source = f.Source();
         await source.RefreshAsync();
-        Fixture.Append(events, Copilot.Assistant(reply, 2, reasoning: Reasoning("again")));
+        Fixture.Append(events, Copilot.Assistant("", 2, reasoning: Reasoning("again")));
         await source.RefreshAsync();
         var before = JsonSerializer.Serialize(source.Get(Id), ProtocolJson.Options);
         var revision = source.Revision;
         var told = new List<string>();
         source.UnbudgetedChanged += (_, id) => told.Add(id);
 
-        Fixture.Append(events, Copilot.Assistant(reply, 2, reasoning: Reasoning("other")));
+        Fixture.Append(events, Copilot.Assistant("", 2, reasoning: Reasoning("other")));
         await source.RefreshAsync();
 
         Assert.Equal(revision, source.Revision);

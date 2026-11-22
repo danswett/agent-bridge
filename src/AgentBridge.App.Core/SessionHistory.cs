@@ -19,6 +19,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     readonly object gate = new();
     readonly List<HistoryTurn> held = [];
     readonly Dictionary<string, long> live = [];
+    readonly HashSet<string> identified = [];
     long observed;
     // Pages read past turns already held after a stale cursor: the held turns are at most Kept, a page is
     // at least one turn, so this bounds a host that keeps answering with pages of the same turns.
@@ -86,6 +87,12 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         lock (gate) { return held.Find(t => t.Id == id)?.Parts.LastOrDefault(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text)); }
     }
 
+    internal string RepliesFor(string? id)
+    {
+        lock (gate) { return string.Join("\n\n", held.Find(t => t.Id == id)?.Parts
+            .Where(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text)).Select(p => p.Text) ?? []); }
+    }
+
     internal HistoryPrompt? PromptFor(string? id)
     {
         lock (gate) { return held.Find(t => t.Id == id)?.Prompt; }
@@ -132,18 +139,25 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             var voice = Attribution.MainVoiceOf(session);
             if (!string.IsNullOrEmpty(a.ResponseTurn) && !string.IsNullOrEmpty(voice.Response))
             {
+                if (!string.IsNullOrEmpty(a.ResponseId)) { identified.Add(a.ResponseTurn); }
                 var turn = Held(a.ResponseTurn);
                 var parts = turn.Parts.ToList();
-                var last = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
-                if (last < 0 || parts[last].Text != voice.Response || (parts[last].Truncated == true) != voice.ResponseTruncated)
+                var last = string.IsNullOrEmpty(a.ResponseId) ? parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response)
+                    : parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId);
+                var finished = !string.IsNullOrEmpty(a.ResponseId) && last >= 0 && parts[last].At != default && parts[last].Truncated != true;
+                if (!finished && (last < 0 || parts[last].Text != voice.Response || (parts[last].Truncated == true) != voice.ResponseTruncated))
                 {
                     var part = new HistoryPart
                     {
-                        Id = last < 0 ? $"{turn.Id}:live" : parts[last].Id,
-                        Kind = HistoryPartKind.Response, At = default,
+                        Id = a.ResponseId ?? (last < 0 ? $"{turn.Id}:live" : parts[last].Id),
+                        Kind = HistoryPartKind.Response, At = last < 0 ? default : parts[last].At,
                         Text = voice.Response, Truncated = voice.ResponseTruncated ? true : null,
                     };
                     if (last < 0) { parts.Add(part); } else { parts[last] = part; }
+                    while (parts.Count(p => p.Kind == HistoryPartKind.Response) > HistoryLimits.TextsPerTurn)
+                    {
+                        parts.RemoveAt(parts.FindIndex(p => p.Kind == HistoryPartKind.Response));
+                    }
                     Keep(turn with { Parts = parts }, before: true);
                 }
             }
@@ -186,7 +200,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     {
         var over = held.Count - HistoryLimits.Kept;
         if (over <= 0) { return; }
-        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); }
+        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); identified.Remove(turn.Id); }
         held.RemoveRange(0, over);
         before = null;
         OldestDropped = true;
@@ -273,7 +287,9 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                     held[at] = turn with
                     {
                         Prompt = turn.Prompt ?? prior.Prompt,
-                        Parts = keep ? [.. turn.Parts.Where(p => p.Kind != HistoryPartKind.Response), .. prior.Parts.Where(p => p.Kind == HistoryPartKind.Response)] : turn.Parts,
+                        Parts = identified.Contains(turn.Id) && turn.Truncated != true && prior.Truncated != true
+                            && turn.PartsMore is not > 0 && prior.PartsMore is not > 0 ? MergeReplies(prior.Parts, turn.Parts, keep)
+                            : keep ? [.. turn.Parts.Where(p => p.Kind != HistoryPartKind.Response), .. prior.Parts.Where(p => p.Kind == HistoryPartKind.Response)] : turn.Parts,
                     };
                 }
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
@@ -312,12 +328,34 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var over = held.Count - HistoryLimits.Kept;
                 if (over > 0)
                 {
-                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); }
+                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); identified.Remove(turn.Id); }
                     held.RemoveRange(held.Count - over, over);
                     NewestDropped = true;
                 }
             }
         }
         return added;
+    }
+
+    static IReadOnlyList<HistoryPart> MergeReplies(IReadOnlyList<HistoryPart> held, IReadOnlyList<HistoryPart> page, bool keepLive)
+    {
+        var parts = held.Where(p => p.Kind == HistoryPartKind.Response && !string.IsNullOrEmpty(p.Text)).ToList();
+        var previous = -1;
+        for (var n = 0; n < page.Count; n++)
+        {
+            var part = page[n];
+            var at = parts.FindIndex(p => p.Id == part.Id);
+            if (at >= 0)
+            {
+                if (!keepLive || part.Text == parts[at].Text) { parts[at] = part; }
+                previous = at;
+                continue;
+            }
+            var next = page.Skip(n + 1).FirstOrDefault(p => parts.Any(h => h.Id == p.Id));
+            var later = next is null ? -1 : parts.FindIndex(p => p.Id == next.Id);
+            previous = previous >= 0 ? previous + 1 : later < 0 ? parts.Count : later;
+            parts.Insert(previous, part);
+        }
+        return parts;
     }
 }

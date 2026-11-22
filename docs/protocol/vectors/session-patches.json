@@ -571,6 +571,7 @@
               "activity": {
                 "response": "Started 2 background agents: run-suite and witness-logic.",
                 "responseTurn": "EgcIE-yd9yFdELDX",
+                "responseId": "WYTQIXk3WhhrGGB4.0",
                 "own": {
                   "at": "2026-10-28T04:00:08.962Z"
                 },
@@ -607,6 +608,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -683,6 +685,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -775,6 +778,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -862,6 +866,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -955,6 +960,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1071,6 +1077,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1189,6 +1196,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1302,6 +1310,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1425,6 +1434,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1535,6 +1545,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1639,6 +1650,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1747,6 +1759,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1842,6 +1855,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -1948,6 +1962,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2041,6 +2056,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2155,6 +2171,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2264,6 +2281,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2388,6 +2406,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "WYTQIXk3WhhrGGB4.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2464,6 +2483,7 @@
               "updatedAt": "2026-10-28T04:00:57.664Z",
               "activity": {
                 "response": "Asked run-suite to bisect; witness-logic is still reading.",
+                "responseId": "6xOeXPhwI28ZJ6ec.0",
                 "turnCount": 1,
                 "source": {
                   "response": null
@@ -2497,6 +2517,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2611,6 +2632,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2750,6 +2772,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2891,6 +2914,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2999,6 +3023,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3115,6 +3140,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3220,6 +3246,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3328,6 +3355,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "source": {
@@ -3428,6 +3456,7 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turn": "EgcIE-yd9yFdELDX",
               "responseTurn": "EgcIE-yd9yFdELDX",
+              "responseId": "6xOeXPhwI28ZJ6ec.0",
               "turnCount": 1,
               "compactions": 0,
               "source": {
