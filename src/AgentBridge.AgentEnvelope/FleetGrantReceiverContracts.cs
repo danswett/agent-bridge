@@ -7,6 +7,7 @@ public sealed record FleetGrantBinding(string Account, string Profile, string Re
     string RosterGeneration, string HostSign, string ReceiverKey);
 public sealed record FleetGrantBindingResult(FleetGrantBinding Binding, FleetGrantSignedPayload Proof);
 public sealed record FleetGrantIssueReceiptResult(JsonElement Receipt, FleetGrantSignedPayload Proof);
+public sealed record FleetGrantReadResult(JsonElement Reply, FleetGrantSignedPayload Proof);
 public sealed record FleetGrantCall(FleetGrantProofContext Context, JsonElement Args,
     JsonElement? Command = null);
 public sealed record FleetGrantReadRequest(int Offset = 0);
