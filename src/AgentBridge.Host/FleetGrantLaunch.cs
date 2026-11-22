@@ -57,8 +57,12 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         var effective = Evaluate(context, caller);
         var reconciled = counters.Reconcile(input.Grant, row =>
         {
-            var known = launcher.LaunchStatuses().SingleOrDefault(s => Guid.TryParse(s.Request, out var request) && request == row.Request);
-            return new(known?.Permissions is "ask" or "allowAll" && known.Session is { } id ? sessions.GrantTarget(id) : null, Permissions: known?.Permissions);
+            var principal = credentials.SessionPrincipal(row.Subject.Session);
+            var sourceRequest = AgentPipeLaunch.LaunchId(principal, row.Request.ToString("D")).ToString("D");
+            var known = launcher.LaunchStatuses().SingleOrDefault(s => s.Principal == principal && s.SourceRequest == sourceRequest
+                && Guid.TryParse(s.Request, out var request) && request == row.Request);
+            return new(known?.Permissions is "ask" or "allowAll" && known.Session is { } id
+                && GateLaunchAudit.Started(folder, sourceRequest, principal, row.Grant.ToString("D"), id) ? sessions.GrantTarget(id) : null, Permissions: known?.Permissions);
         }, Observe, ended: session => credentials.LaunchGate.SessionEnded(session));
         if (!reconciled.Accepted) { throw new FleetLaunchDenied(CounterReason(reconciled)); }
         return context with { Request = new LaunchRequest { Request = input.Request.ToString("D"), Agent = input.Agent,

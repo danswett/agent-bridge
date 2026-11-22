@@ -118,8 +118,7 @@ public sealed class SessionService
     // service, with the attributed agent principal as provenance and peer.
     internal Fleet.Grants.StopTarget? GrantTarget(string session) => source.Get(session) is not null
         && source.ProcessOf(session) is { Id: > 0, StartedAt: { } started } process ? new(session, new(process.Id, started)) : null;
-    internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized,
-        string? grant = null, Action<string>? confirmed = null)
+    internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized, string? grant = null, Action<string>? confirmed = null)
     {
         if (launcher is null) { return new(LaunchOutcome.Refused, "the launch service is unavailable"); }
         if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
@@ -129,8 +128,7 @@ public sealed class SessionService
             : running.Agent(request.Agent ?? "").ExtraArgs.Count > 0 ? "extraArgs: this agent starts with extra arguments on this machine; agents may not launch it"
             : running.Workspaces.Any(w => w.Isolate && w.Label == request.Workspace) ? null : "the workspace is not an isolated launch workspace on this machine");
         if (Dispatch() is { } problem) { return new(LaunchOutcome.Refused, problem); }
-        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null, grant),
-            refusal: Dispatch, confirmed: confirmed);
+        var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null, grant), refusal: Dispatch, confirmed: confirmed);
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
