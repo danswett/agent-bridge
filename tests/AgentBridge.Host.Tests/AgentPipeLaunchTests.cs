@@ -33,7 +33,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false, FleetPublisherTests.Source? source = null)
+        P256KeyPair? grantKey = null, bool legacy = false, FleetPublisherTests.Source? source = null, TimeProvider? auditTime = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -44,10 +44,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder) { DeviceKey = grantKey };
         var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
-        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, fleetGrants: grantKey is null ? null
+        var agentLaunch = new AgentPipeLaunch(folder, credentials, service, audit, requests, problem, time: auditTime, fleetGrants: grantKey is null ? null
             : new FleetGrantLaunch(folder, grantKey, () => "123", new('a', 32), credentials, service, launcher));
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
-            credentials: credentials, audit: audit, agentLaunch: legacy ? null : agentLaunch), channel, credentials, agentLaunch);
+            credentials: credentials, audit: audit, auditTime: auditTime, agentLaunch: legacy ? null : agentLaunch), channel, credentials, agentLaunch);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -134,9 +134,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     (Pipe Pipe, GrantDocument Grant, GrantStore Store) Granted(P256KeyPair key, GrantCaps? caps = null,
-        FleetPublisherTests.Source? source = null)
+        FleetPublisherTests.Source? source = null, (LaunchRequestStore?, string?)? launchStore = null)
     {
-        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, source: source);
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, source: source, store: launchStore);
         var caller = pipe.Credentials.Of(pipe.Channel)!;
         var now = DateTimeOffset.UtcNow;
         var scope = new GrantScope([new('a', 32)], ["App"], ["claude"], ["small"], ["default"], ["medium"], ["default"], ["ask"]);
@@ -152,6 +152,37 @@ public sealed class AgentPipeLaunchTests : IDisposable
             Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: prompt), ProtocolJson.Options);
     static async Task<FleetLaunchReceipt> GrantedLaunch(Pipe pipe, JsonElement body) =>
         Assert.IsType<FleetLaunchReceipt>(await pipe.Handle(pipe.Channel, LaunchProtocol.Launch, body));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Grant_refusals_share_the_legacy_per_principal_audit_limit(bool wired)
+    {
+        using var key = P256KeyPair.Generate();
+        var pipe = Open(grantKey: wired ? key : null, auditTime: new FrozenAuditClock());
+        var malformed = JsonSerializer.SerializeToElement(new { grant = "x" });
+        var missing = JsonSerializer.SerializeToElement(new FleetLaunchInput(1, Guid.Parse(request), Guid.NewGuid(),
+            "SG Builder 266", "App", "claude", Model: "small", Effort: "medium", Context: "default",
+            Permissions: "ask", Prompt: "hello"), ProtocolJson.Options);
+        for (var i = 0; i < 150; i++)
+        {
+            Assert.Equal(LaunchOutcome.Refused, (await GrantedLaunch(pipe, i % 2 == 0 ? malformed : missing)).Result.Outcome);
+        }
+        Assert.Equal(60, AuditRows().Length);
+        await Refusal(pipe, LaunchProtocol.Launch, JsonSerializer.SerializeToElement(new { }));
+        Assert.Equal(60, AuditRows().Length);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_grant_refusal_with_an_unavailable_launch_record_is_audited_only_once()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key, launchStore: (null, "fixture"));
+        Assert.Equal(LaunchOutcome.Refused, (await GrantedLaunch(pipe, GrantBody(grant))).Result.Outcome);
+        Assert.Single(AuditRows());
+        Assert.Equal(0, launcher.Launches);
+    }
 
     [Theory]
     [InlineData(false)]
@@ -185,10 +216,15 @@ public sealed class AgentPipeLaunchTests : IDisposable
     public async Task Exact_grant_duplicates_replay_after_revocation_but_changed_payloads_refuse()
     {
         using var key = P256KeyPair.Generate();
-        var (pipe, grant, store) = Granted(key);
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, store) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
         var first = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Started, first.Result.Outcome);
+        Assert.Equal("ask", first.Permissions);
         Assert.True(store.Revoke(grant.Id, 1).Usable);
         var duplicate = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(first.Result.Session, duplicate.Result.Session);
         Assert.Equal(first.Permissions, duplicate.Permissions);
         Assert.Equal(first.Result.Outcome, duplicate.Result.Outcome);
         Assert.Equal(1, launcher.Launches);
@@ -284,6 +320,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("ask", duplicate.Permissions);
         Assert.Equal(LaunchOutcome.Started, duplicate.Result.Outcome);
         Assert.Equal(1, launcher.Launches);
+    }
+
+    sealed class FrozenAuditClock : TimeProvider
+    {
+        public override long GetTimestamp() => 0;
     }
 
     sealed class FakeLauncher : ISessionLauncher

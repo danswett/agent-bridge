@@ -56,28 +56,30 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         {
             if (context?.Starting == true) { return fleetGrants!.Finish(context, new(LaunchOutcome.Unconfirmed)); }
             var reason = e is FleetLaunchDenied ? e.Message : e is JsonException ? "bad-argument" : "policy";
-            if (!audit.Append(new("local", input?.Request.ToString() ?? "", credentials.PrincipalOf(caller), caller.Chain,
-                "session.launch", input?.Request.ToString() ?? "", "refused", reason) { Grant = input?.Grant.ToString() }))
-            { reason = "audit-unavailable"; }
+            try { LocalApi.AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, LaunchProtocol.Launch, data, audit, reason, refusals); }
+            catch (InvalidOperationException) { reason = "audit-unavailable"; }
             return context?.Admitted == true ? fleetGrants!.Finish(context, new(LaunchOutcome.Refused, reason))
                 : FleetGrantLaunch.Receipt(context, new(LaunchOutcome.Refused), input, reason);
         }
     }
     async Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data, FleetLaunchContext? fleet)
     {
+        // Grant refusals are audited once by the outer catch, using the same limiter as legacy launches.
+        InvalidOperationException Refusal(string why) =>
+            fleet is null ? Refused(caller, data, why) : new($"refused: {why}");
         var principal = credentials.PrincipalOf(caller);
-        if (store is null) { throw Refused(caller, data, $"the launch request record can't be used ({storeProblem ?? "not open"}); no request with an id is launched"); }
+        if (store is null) { throw Refusal($"the launch request record can't be used ({storeProblem ?? "not open"}); no request with an id is launched"); }
         LaunchRequest? request = null;
         try { request = data.ValueKind == JsonValueKind.Object ? data.Deserialize<LaunchRequest>(ProtocolJson.Options) : null; }
         catch (JsonException) { }
         if (request is null || !Guid.TryParseExact(request.Request, "D", out var asked))
-        { throw Refused(caller, data, "a launch needs its own request id, a UUID"); }
+        { throw Refusal("a launch needs its own request id, a UUID"); }
         request = request with { Request = asked.ToString("D") };
         var (settings, settingsProblem) = HostSettings.Load(folder);
         var (policy, policyProblem) = HostSettings.CurrentAgents(folder);
-        if (settingsProblem is not null || policyProblem is not null) { throw Refused(caller, data, "the launch settings cannot be read safely"); }
+        if (settingsProblem is not null || policyProblem is not null) { throw Refusal("the launch settings cannot be read safely"); }
         if (AgentLaunchRequestCheck.Check(data, request.Agent is { } named ? settings.Launch.Agent(named).ExtraArgs : [], fleet is not null) is { } invalid)
-        { throw Refused(caller, data, invalid); }
+        { throw Refusal(invalid); }
         var grant = policy.Enabled ? policy.InboundLocal.Launch : null;
         var approved = settings.Launch.Workspaces.Where(w => w.Isolate && grant is not null
             && (grant.Workspaces.Contains("approved", StringComparer.Ordinal) || grant.Workspaces.Contains(w.Label, StringComparer.Ordinal)))
@@ -85,20 +87,20 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         if (callers.Check(caller, principal, request.Request, request.Workspace, approved) is { Allowed: false } denied)
         { throw new InvalidOperationException($"refused: {denied.Reason}"); }
         if (grant is null || request.Agent is null || !grant.Agents.Contains(request.Agent, StringComparer.Ordinal))
-        { throw Refused(caller, data, "the launch must name an agent this machine lets agents start (agents.inbound.local.launch.agents)"); }
+        { throw Refusal("the launch must name an agent this machine lets agents start (agents.inbound.local.launch.agents)"); }
 
         var key = Key(principal, request.Request);
         var gate = credentials.LaunchGate;
-        if (gate.CheckPolicy() is { Allowed: false } off) { throw Refused(caller, data, off.Reason ?? "agent launch is off on this machine"); }
+        if (gate.CheckPolicy() is { Allowed: false } off) { throw Refusal(off.Reason ?? "agent launch is off on this machine"); }
         var binding = fleet?.Binding ?? LaunchService.RequestBinding(request);
         EnqueueResult held;
         try { held = store.Enqueue(key, binding); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        { throw Refused(caller, data, "the launch request record could not be written; nothing was launched"); }
+        { throw Refusal("the launch request record could not be written; nothing was launched"); }
         if (held.Status == EnqueueStatus.Existing) { return Told(held.Record!); }
         if (held.Status != EnqueueStatus.Added)
         {
-            throw Refused(caller, data, held.Status switch
+            throw Refusal(held.Status switch
             {
                 EnqueueStatus.Conflict => "requestReused: this request id was used already for a different launch; nothing was launched",
                 EnqueueStatus.Used => "requestUsed: this request id was used already and its outcome is no longer kept; it is not launched again",
@@ -113,7 +115,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
             // The gate audits its own rate and live-limit refusals.
             if (verdict.Reason is AgentLimitVerdict.RateLimited || verdict.Reason?.StartsWith(AgentLimitVerdict.LiveLimited, StringComparison.Ordinal) == true)
             { throw new InvalidOperationException($"refused: {why}"); }
-            throw Refused(caller, data, why ?? "agent launch is refused");
+            throw Refusal(why ?? "agent launch is refused");
         }
         // The launcher hears an id of this caller's own, so no other launch (HA's or another caller's)
         // shares its events or audit rows. Pending first: a registration may come before the launch returns.
@@ -130,7 +132,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             if (Take(id) is not null) { gate.LaunchFinished(principal, request.Request); }
-            throw Refused(caller, data, "the launch request record could not be written; nothing was launched");
+            throw Refusal("the launch request record could not be written; nothing was launched");
         }
         // An exception from here leaves the record launching and the slot held: something may have started.
         if (fleet is not null) { fleet.Starting = true; }
