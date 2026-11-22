@@ -158,23 +158,25 @@ public sealed class SessionHistoryRepliesTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task Codex_delayed_pages_preserve_each_revised_item_even_when_the_last_item_is_unchanged(bool reviseSecond, bool budget)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    public async Task Codex_delayed_pages_preserve_each_revised_item_even_when_the_last_item_is_unchanged(bool reviseSecond, bool budget, bool completeFirst)
     {
         await using var host = Serving(() => 0);
         host.Start();
         await using var connection = host.Connect();
         await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
         Session Say(string id, string text, int seconds) => Snapshot("owner", "Question", text, "owner", seconds) with
-        { Agent = AgentKind.Codex, Activity = new Activity { Turn = "owner", ResponseTurn = "owner", ResponseId = id, Response = text } };
+        { Agent = AgentKind.Codex, Activity = new Activity { Turn = "owner", ResponseTurn = "owner", ResponseId = id, Response = text,
+            ResponseTruncated = completeFirst && id == "first" && seconds < 2 } };
         var card = Card(connection, Say("first", "First old", 0));
         var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var page = new HistoryResult { Turns = [new HistoryTurn { Id = "owner", At = T0, Parts = [
-            new HistoryPart { Id = "first", Kind = HistoryPartKind.Response, At = T0, Text = "First old" },
+            new HistoryPart { Id = "first", Kind = HistoryPartKind.Response, At = T0, Text = "First old", Truncated = completeFirst ? true : null },
             new HistoryPart { Id = "second", Kind = HistoryPartKind.Response, At = T0, Text = "Second old" }] }] };
         try
         {
@@ -187,12 +189,13 @@ public sealed class SessionHistoryRepliesTests
             host.OnAsync(HistoryProtocol.Op, async _ => { captured.SetResult(); await release.Task; return delayed; });
             var loading = card.Stored.LoadNewestAsync();
             await captured.Task.WaitAsync(FakeHost.Patience);
-            card.Update(Say("first", "First new", 2));
+            card.Update(Say("first", completeFirst ? "First old" : "First new", 2));
             card.Update(Say("second", reviseSecond ? "Second new" : "Second old", 3));
             release.SetResult();
             await loading;
-            Assert.Equal(["First new", reviseSecond ? "Second new" : "Second old"], card.Stored.Turns.Single().Parts.Select(p => p.Text));
+            Assert.Equal([completeFirst ? "First old" : "First new", reviseSecond ? "Second new" : "Second old"], card.Stored.Turns.Single().Parts.Select(p => p.Text));
             Assert.Equal(["first", "second"], card.Stored.Turns.Single().Parts.Select(p => p.Id));
+            Assert.All(card.Stored.Turns.Single().Parts, p => Assert.False(p.Truncated == true));
         }
         finally { release.TrySetResult(); card.Detach(); }
     }
