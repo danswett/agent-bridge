@@ -1,0 +1,439 @@
+diff --git a/.github/actions/playwright-system-packages/test.sh b/.github/actions/playwright-system-packages/test.sh
+index a94d39fd..1f04da97 100644
+--- a/.github/actions/playwright-system-packages/test.sh
++++ b/.github/actions/playwright-system-packages/test.sh
+@@ -249,7 +249,7 @@ cache_ref_case() {
+     echo "ok: a comma-bearing ref is hashed before entering the cache key"
+   else echo "FAIL: a raw ref can break the cache key"; failures=$((failures + 1)); fi
+ }
+-# S2 then S4 share one runner (ci.yml spikes-linux), and apt trusts a size-matching archive unhashed.
++# S2 then S4 share one runner (ci.yml light's spike steps), and apt trusts a size-matching archive unhashed.
+ cache_copy_cases() {
+   reset "$canonical"; export DEBS_CACHE_HIT=true APT_VERIFY_URI='Reading package lists...'
+   check "a plan naming no archives copies no cached deb into apt's archives" 0 "$(printf 'update\n%s\n%s' "$verify" "$cached")" "$canonical"
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 76a9f418..8b82b11b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -79,7 +79,6 @@ jobs:
+       product: ${{ steps.select.outputs.product }}
+       ha-integration: ${{ steps.select.outputs.ha-integration }}
+       spikes: ${{ steps.select.outputs.spikes }}
+-      spikes-linux: ${{ steps.select.outputs.spikes-linux }}
+       app: ${{ steps.select.outputs.app }}
+       app-installer: ${{ steps.select.outputs.app-installer }}
+       light: ${{ steps.select.outputs.light }}
+@@ -238,7 +237,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
++          JOBS: product ha-integration spikes app app-installer light pwa-ui pwa-e2e
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -1215,99 +1214,6 @@ jobs:
+           subject-path: ${{ runner.temp }}/release/win-arm64/*
+           sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
+ 
+-  spikes-linux:
+-    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
+-    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
+-    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
+-    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
+-    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
+-    #    Chromium and WebKit through the same relay, then the container build.
+-    needs: plan
+-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
+-    runs-on: ubuntu-24.04
+-    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
+-    # minutes the download step gives a slow apt mirror and a full download from Canonical's
+-    # archive, on top of the checks.
+-    timeout-minutes: 35
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+-        with:
+-          dotnet-version: '10.0.x'
+-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+-        with:
+-          node-version: '22'
+-      - name: S2 builds and checks its vectors
+-        working-directory: spikes/s2-noise-interop
+-        run: |
+-          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
+-      - name: S2 fresh vectors from .NET, replayed in Node
+-        working-directory: spikes/s2-noise-interop
+-        run: |
+-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
+-          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
+-          node js/test-node.mjs
+-      - name: S4 builds and checks the relay against a fake GitHub
+-        working-directory: spikes/s4-relay
+-        run: |
+-          dotnet build src/S4.DevStack -c Release --nologo
+-          dotnet build src/S4.Host -c Release --nologo
+-          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+-          node js/test-sw.mjs
+-      - name: npm ci, for both
+-        run: |
+-          npm ci --prefix spikes/s2-noise-interop
+-          npm ci --prefix spikes/s4-relay
+-      - name: Which Playwright
+-        id: playwright
+-        working-directory: spikes/s4-relay
+-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
+-      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
+-      # on a miss and installs their system packages either way.
+-      - name: Playwright's browsers from main's cache
+-        id: browsers
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+-      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
+-      # download.sh says why). The second spike's finds them downloaded while the two agree.
+-      - name: Download Playwright's system packages, S2
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: chromium webkit
+-          working-directory: spikes/s2-noise-interop
+-      - name: Download Playwright's system packages, S4
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: chromium webkit
+-          working-directory: spikes/s4-relay
+-      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
+-      # the second is quick while they agree.
+-      - name: Playwright's browsers, for both
+-        run: |
+-          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
+-          (cd spikes/s4-relay && npx playwright install chromium webkit)
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+-      - name: S2 in Chromium and WebKit
+-        working-directory: spikes/s2-noise-interop
+-        run: node js/test-browsers.mjs
+-      - name: S4 the PWA through the relay
+-        working-directory: spikes/s4-relay
+-        run: node js/test-pwa.mjs
+-      - name: S4 container builds
+-        working-directory: spikes
+-        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
+-
+   light:
+     # The small Linux checks, on one runner instead of one each (#459): each step runs when its
+     # suite is selected, and every selected one runs even after another fails. When the whole
+@@ -1330,12 +1236,15 @@ jobs:
+     #    when it should (.github/actions/playwright-system-packages);
+     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
+     #    offline (lab-release-verify.yml);
+-    #  - docs-links: relative links and their #anchors in every Markdown file resolve.
++    #  - docs-links: relative links and their #anchors in every Markdown file resolve;
++    #  - spikes: S2's and S4's Linux checks, last (they were the spikes-linux job, #2454).
+     # Not in plan's own runner: a failing check there would skip every job that needs the plan.
+     needs: plan
+     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.light == 'true'
+     runs-on: ubuntu-latest
+-    timeout-minutes: 15
++    # 35, as every job that runs `playwright install --with-deps` gets (#689): the spike steps install
++    # Chromium's and WebKit's system packages.
++    timeout-minutes: 35
+     env:
+       SUITES: ${{ needs.plan.outputs.suites }}
+       WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
+@@ -1572,6 +1481,105 @@ jobs:
+           if [ "$rc" -ne 0 ]; then
+             echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
+           fi
++      # The spikes' Linux checks (they were the spikes-linux job, #2454): S2's .NET and WebCrypto Noise in Node,
++      # Chromium and WebKit; S4's relay against a fake GitHub, the PWA through it, and its container. They run when
++      # the spikes suite is selected, and each needs the one before it, as in a job of their own.
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        id: spikes-0
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'spikes')) }}
++        with:
++          dotnet-version: '10.0.x'
++      - name: S2 builds and checks its vectors
++        id: spikes-1
++        if: ${{ !cancelled() && steps.spikes-0.outcome == 'success' }}
++        working-directory: spikes/s2-noise-interop
++        run: |
++          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
++          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
++      - name: S2 fresh vectors from .NET, replayed in Node
++        id: spikes-2
++        if: ${{ !cancelled() && steps.spikes-1.outcome == 'success' }}
++        working-directory: spikes/s2-noise-interop
++        run: |
++          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
++          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
++          node js/test-node.mjs
++      - name: S4 builds and checks the relay against a fake GitHub
++        id: spikes-3
++        if: ${{ !cancelled() && steps.spikes-2.outcome == 'success' }}
++        working-directory: spikes/s4-relay
++        run: |
++          dotnet build src/S4.DevStack -c Release --nologo
++          dotnet build src/S4.Host -c Release --nologo
++          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
++          node js/test-sw.mjs
++      - name: npm ci, for both
++        id: spikes-4
++        if: ${{ !cancelled() && steps.spikes-3.outcome == 'success' }}
++        run: |
++          npm ci --prefix spikes/s2-noise-interop
++          npm ci --prefix spikes/s4-relay
++      - name: Which Playwright
++        id: spikes-playwright
++        if: ${{ !cancelled() && steps.spikes-4.outcome == 'success' }}
++        working-directory: spikes/s4-relay
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
++      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
++      # on a miss and installs their system packages either way.
++      - name: Playwright's browsers from main's cache
++        id: spikes-browsers
++        if: ${{ !cancelled() && steps.spikes-playwright.outcome == 'success' }}
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.spikes-playwright.outputs.version }}-chromium-webkit
++      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
++      # download.sh says why). The second spike's finds them downloaded while the two agree.
++      - name: Download Playwright's system packages, S2
++        id: spikes-7
++        if: ${{ !cancelled() && steps.spikes-browsers.outcome == 'success' }}
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: chromium webkit
++          working-directory: spikes/s2-noise-interop
++      - name: Download Playwright's system packages, S4
++        id: spikes-8
++        if: ${{ !cancelled() && steps.spikes-7.outcome == 'success' }}
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: chromium webkit
++          working-directory: spikes/s4-relay
++      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
++      # the second is quick while they agree.
++      - name: Playwright's browsers, for both
++        id: spikes-9
++        if: ${{ !cancelled() && steps.spikes-8.outcome == 'success' }}
++        run: |
++          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
++          (cd spikes/s4-relay && npx playwright install chromium webkit)
++      - name: Save Playwright's browsers to main's cache
++        id: spikes-10
++        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.spikes-browsers.outputs.cache-hit != 'true' && steps.spikes-9.outcome == 'success'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.spikes-browsers.outputs.cache-primary-key }}
++      - name: S2 in Chromium and WebKit
++        id: spikes-11
++        if: ${{ !cancelled() && steps.spikes-9.outcome == 'success' }}
++        working-directory: spikes/s2-noise-interop
++        run: node js/test-browsers.mjs
++      - name: S4 the PWA through the relay
++        id: spikes-12
++        if: ${{ !cancelled() && steps.spikes-11.outcome == 'success' }}
++        working-directory: spikes/s4-relay
++        run: node js/test-pwa.mjs
++      - name: S4 container builds
++        id: spikes-13
++        if: ${{ !cancelled() && steps.spikes-12.outcome == 'success' }}
++        working-directory: spikes
++        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
+ 
+   pwa-ui:
+     # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
+@@ -1621,7 +1629,7 @@ jobs:
+       - name: Which Playwright
+         id: playwright
+         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
++      # Playwright's browser from main's cache, as in light's spike steps, keyed by browser so each leg
+       # restores only the one it runs.
+       - name: Playwright's browsers from main's cache
+         id: browsers
+@@ -1787,7 +1795,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, ha-integration, spikes, app, app-installer, light, pwa-ui, pwa-e2e]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/quality/README.md b/quality/README.md
+index 4ff74cdf..c3acb1d7 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -428,7 +428,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
+      shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
+      together the seven run every spec. The one PWA job these replace took a median of 15
+-     minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
++     minutes. Each `pwa-ui` leg, `pwa-e2e` and `light`'s spike steps download and offline-installs
+      Playwright's system packages through `.github/actions/playwright-system-packages`.
+      Update attempts have a 60-second bound; downloads get 180 seconds on Azure and 600 on
+      Canonical per attempt, allowing cold WebKit/e2e downloads. An Azure timeout switches to the runner's Canonical fallback,
+@@ -485,7 +485,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      re-running the pull request's older run doesn't clear it: stop and report it, and recover
+      only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
+      off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
+-     `spikes-linux` download as before), says in its log that it was forced and not timed out,
++     spike steps' download as before), says in its log that it was forced and not timed out,
+      fails if apt still fetches a package from Azure, and counts the packages that came from
+      `https://archive.ubuntu.com`. The WebKit legs are the proof: one that counts none fails;
+      Chromium's, whose packages the runner may already have, only warns. Read each WebKit leg's
+@@ -494,11 +494,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      timeout, on any run, is the one above (#817 first proposed failing
+      that one on an Azure fetch too, and dropped it). A run by hand runs every
+      job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
+-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
+-     It runs only when `spikes/` changes, like `spikes` on Windows.
++   - S2's and S4's Linux checks are the last steps of `light` (they were the `spikes-linux` job until
++     #2454: one Linux runner fewer per run). They run only when `spikes/` changes, like `spikes` on Windows,
++     and each needs the one before it.
+    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
+      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
+-     tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
++     tool manifest; Playwright's browsers for `light`'s spike steps, `pwa-ui` (per browser) and
+      `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
+      restores main's, and the nearest older NuGet key when its projects differ. The archives-only
+      apt cache above is the exception, and a PR's entry cannot seed what main restores.
+@@ -603,7 +604,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      queued or in-progress named jobs pass the run over. A failed plan or a
+      classification-skipped product family also passes it over. A newer main head still running
+      does not block; the pull request's own running checks still do. The single
+-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
++     `main_green.jobs` list pins exact display names for ha-integration, spikes,
+      light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+      dynamic family: at least one entry must exist and every present instance must pass; runners
+      omitted by the plan are not required. Entirely absent families still hold.
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 20cf6d13..b16f0e5b 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1116,8 +1116,8 @@ suites:
+     platforms: [win-x64, linux-x64]
+     runner: hosted
+     triggers: [spikes/**]
+-    command: see ci.yml spikes, spikes-linux
+-    where: ci.yml spikes, spikes-linux
++    command: see ci.yml spikes, light (its spike steps)
++    where: ci.yml spikes, light
+     status: exists
+ 
+   # ---------------------------------------------------------------- live, on disposable machines
+diff --git a/quality/merge-rule.yml b/quality/merge-rule.yml
+index ac4c7cdf..c3cc5504 100644
+--- a/quality/merge-rule.yml
++++ b/quality/merge-rule.yml
+@@ -99,7 +99,6 @@ main_green:
+     - product
+     - ha-integration
+     - spikes
+-    - spikes-linux
+     - light
+     - pwa-ui (chromium 1/3)
+     - pwa-ui (chromium 2/3)
+@@ -134,6 +133,9 @@ main_green:
+       - Post Run actions/checkout@*
+       - Run actions/setup-node@*
+       - .NET for the installer input quality harness
++      - Run actions/setup-dotnet@*
++      - Playwright's browsers from main's cache
++      - Save Playwright's browsers to main's cache
+     pwa-ui: &browser_infra
+       - Set up job
+       - Complete job
+@@ -144,7 +146,6 @@ main_green:
+       - Playwright's browsers from main's cache
+       - Save Playwright's browsers to main's cache
+     pwa-e2e: *browser_infra
+-    spikes-linux: *browser_infra
+ 
+ # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
+ # never block a merge; the independent-review receipts are the gate. A pull request needs a success
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a4..521e8d35 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -561,7 +561,7 @@ public class CiPlanTests
+         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+-        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "app",
+             "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index 8dd2f93e..670a562f 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -87,7 +87,7 @@ public class HaValidationCoverageTests
+         var jobs = CiJobs();
+ 
+         Assert.Equal(
+-            new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++            new[] { "plan", "product", "ha-integration", "spikes", "app",
+                 "app-installer", "light", "pwa-ui", "pwa-e2e" },
+             Needs(jobs, "quality-gate"));
+         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 71948fc5..332242a0 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -2002,7 +2002,7 @@ public class MergeRuleTests
+         object Entry(string name, string conclusion) =>
+             new { id = 1, name, status = "completed", conclusion, run_attempt = 1 };
+         var jobs = required.Where(n => !n.StartsWith("pwa-ui (", StringComparison.Ordinal) && n.Split(" (", StringSplitOptions.None)[0] != "product")
+-            .Select(n => Entry(n, n is "ha-integration" or "spikes" or "spikes-linux" or "pwa-e2e" ? "skipped" : "success"))
++            .Select(n => Entry(n, n is "ha-integration" or "spikes" or "pwa-e2e" ? "skipped" : "success"))
+             .Concat(scenario == "absent" ? [] : [Entry(scenario == "family-skipped" ? "product" : "product (ubuntu-latest)",
+                 scenario is "skipped" or "family-skipped" ? "skipped" : scenario == "red" ? "failure" : "success")])
+             .Concat(scenario == "red" ? [Entry("product (windows-latest)", "success")] : [])
+@@ -2495,7 +2495,8 @@ public class MergeRuleTests
+         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
+         // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
+         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
+-            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
++            // A browser step failing in a job whose infra list has none (light runs the spikes' browsers since #2454).
++            : scenario == "wrong-job" ? "ha-integration" : "pwa-ui (chromium 3/3)";
+         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
+         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
+diff --git a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+index 2b00ff66..acf070fb 100644
+--- a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
++++ b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+@@ -105,7 +105,7 @@ public class PlanScriptTests
+                     platforms: [linux-x64, win-x64, win-arm64]
+                     runner: hosted
+                     command: see ci.yml
+-                    where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
++                    where: ci.yml product, ha-integration, spikes, light, pwa-ui, pwa-e2e
+                     status: exists
+                   - id: docs
+                     validation_plan: native
+@@ -230,7 +230,7 @@ public class PlanScriptTests
+             var expected = packages ? "true" : "false";
+             Assert.Equal($"app={expected}\napp-installer={expected}",
+                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
+-            foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
++            foreach (var job in new[] { "product", "ha-integration", "spikes", "pwa-ui", "pwa-e2e" })
+                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
+                     && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                     : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
