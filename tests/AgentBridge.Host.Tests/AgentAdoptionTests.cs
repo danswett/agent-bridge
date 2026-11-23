@@ -122,8 +122,11 @@ public sealed class AgentAdoptionTests : IDisposable
         foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
         {
             var handler = LocalApi.Handler(null!, null!, new FreshCaller(kind), credentials: store);
-            await using var server = LocalServer.Start(LocalEndpoint.For(root), handler);
-            await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(root));
+            // Its own endpoint per caller kind: a server started on the name the previous one just closed can still find
+            // an old pipe instance alive under load, and fail as EndpointInUse (#2558).
+            var endpoint = LocalEndpoint.For(Path.Combine(root, kind.ToString()));
+            await using var server = LocalServer.Start(endpoint, handler);
+            await using var channel = await LocalClient.ConnectAsync(endpoint);
             var error = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(op, new { session = "sess-1" }));
             Assert.Contains(OperatingSystem.IsWindows() ? "for the person at this machine" : "isn't available", error.Message);
         }
