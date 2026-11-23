@@ -211,6 +211,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         lock (devices)
         {
             full = !devices.TryGetValue(conn.DeviceId, out replaced) && devices.Count >= options.MaxDevicesPerAccount;
+            // Enforce: at most MaxPending unapproved devices at once per account (design §4.4); the next is told too-many-devices.
+            full |= conn.Pending && devices.Values.Count(d => d.Pending && d.DeviceId != conn.DeviceId) >= MaxPending;
             if (!full) { devices[conn.DeviceId] = conn; }
         }
         if (full)
@@ -597,6 +599,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
     // Roster requests one connection may have running at once; more get "unavailable" at once.
     const int MaxRosterInFlight = 2;
+    // Pending devices an account in enforce may have connected at once.
+    public const int MaxPending = 8;
 
     bool WithinRate(Connection c)
     {
