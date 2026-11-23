@@ -130,6 +130,7 @@ static class MergeRuleCommand
         """ + (checks ? ChecksFields : "") + """
 
           } } }
+        """ + (checks ? "  body\n" : "") + """
         }
         """;
 
@@ -166,7 +167,7 @@ static class MergeRuleCommand
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
-        public Dictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, (List<string> Files, bool Complete, int? Lines)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Main's CI, read once at the start of the run (ReadMain), so every verdict in it sees the same main.</summary>
         public MainFact Main { get; set; } = new("error", "main's CI wasn't read");
@@ -345,6 +346,8 @@ static class MergeRuleCommand
                 output.WriteLine($"#{pr.Number} {MergeRule.Short(pr.HeadSha)} {verdict.State}: {verdict.Description} ({action})");
                 foreach (var file in verdict.SensitiveFiles)
                     output.WriteLine($"    sensitive: {MergeRule.Printable(file)}");
+                foreach (var line in verdict.SourceBypassLog)
+                    output.WriteLine($"    source bypass {line}");
                 rows.Add($"| #{pr.Number} | `{MergeRule.Short(pr.HeadSha)}` | {verdict.State} | {MergeRule.Cell(verdict.Description)} | {MergeRule.Cell(action)} |");
             }
             if (judged.Count > 1)
@@ -460,7 +463,8 @@ static class MergeRuleCommand
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
+                // Pending, not failure: an unfinished main isn't a red one, and the source bypass waives only red (#3478).
+                return new("pending", $"no completed CI product evidence on {config.Base}: waiting for one");
             }
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
@@ -775,34 +779,48 @@ static class MergeRuleCommand
     static PullRequestFacts FetchFull(Session session, int number)
     {
         var facts = FetchOne(session, number, checks: true, history: true);
-        var (files, complete) = FilesOf(session, facts.HeadSha);
-        return facts with { Files = files, FilesComplete = complete };
+        var (files, complete, lines) = FilesOf(session, facts.HeadSha);
+        return facts with { Files = files, FilesComplete = complete, ChangedLines = lines };
     }
 
     /// <summary>
     /// What a commit changes since it left the base: compare base...sha, three dots, as a pull
     /// request's own diff does. GitHub lists at most 300 files there, so 300 means "maybe more",
     /// which counts as incomplete, as a missing list does. Renamed files' old paths count too.
+    /// Lines are additions plus deletions outside prose docs (ProseDoc), null when any file lacks them.
     /// </summary>
-    static (List<string> Files, bool Complete) FilesOf(Session session, string sha)
+    static (List<string> Files, bool Complete, int? Lines) FilesOf(Session session, string sha)
     {
         if (session.FilesBySha.TryGetValue(sha, out var known))
             return known;
         using var doc = session.Rest($"repos/{session.Slug}/compare/{Uri.EscapeDataString(session.Config.Base)}...{sha}");
         var files = new List<string>();
+        int? lines = 0;
         var complete = doc.RootElement.TryGetProperty("files", out var list) && list.ValueKind == JsonValueKind.Array;
         if (complete)
         {
             foreach (var file in list.EnumerateArray())
             {
-                files.Add(file.GetProperty("filename").GetString()!);
-                if (file.TryGetProperty("previous_filename", out var previous) && previous.GetString() is { } old)
+                var path = file.GetProperty("filename").GetString()!;
+                files.Add(path);
+                string? old = null;
+                if (file.TryGetProperty("previous_filename", out var previous) && (old = previous.GetString()) is not null)
                     files.Add(old);
+                // A rename leaves the count only when both ends are prose: src/Big.cs -> docs/Big.md still counts.
+                if (ProseDoc(path) && (old is null || ProseDoc(old)))
+                    continue;
+                lines = file.TryGetProperty("additions", out var added) && file.TryGetProperty("deletions", out var deleted)
+                    ? lines + added.GetInt32() + deleted.GetInt32() : null;
             }
             complete = list.GetArrayLength() < 300;
         }
-        return session.FilesBySha[sha] = (files, complete);
+        return session.FilesBySha[sha] = (files, complete, complete ? lines : null);
     }
+
+    /// <summary>Prose Markdown under docs/, outside docs/protocol/: the only lines a source fix's cap leaves out.</summary>
+    static bool ProseDoc(string path) =>
+        path.StartsWith("docs/", StringComparison.OrdinalIgnoreCase) && path.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("docs/protocol/", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The open list, light: no checks, files or receipt history (Assess reads them, where a read
@@ -947,6 +965,7 @@ static class MergeRuleCommand
             codeScanning)
         {
             Title = pr.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "",
+            Body = pr.TryGetProperty("body", out var prBody) && prBody.ValueKind == JsonValueKind.String ? prBody.GetString() ?? "" : "",
             Checks = checks,
             FullyRead = checksRead,
             LabelsComplete = !Truncated(pr.GetProperty("labels"), labels.Count),

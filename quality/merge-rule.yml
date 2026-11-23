@@ -85,10 +85,21 @@ arm64_waiver:
 # A pull request with one of these labels is the fix, and skips this check alone: every
 # other requirement, the independent review included, still applies. Adding a label takes triage
 # rights, so a pull request's author can't exempt their own from a fork: ask the merge coordinator.
+# The label alone lifts it for a tests-only change (exempt_paths). Owner decision Nov 20 14:16 PT
+# (#3471): with source_bypass on, it lifts it for a source fix too, only when the description has
+# a "fixes-main-test: <fully qualified test name>" line (Quality checks the name against main's
+# run when adding the label; the evaluator only checks its form), main's CI read as a failure (not
+# error or pending), additions plus deletions (all but prose docs/**/*.md outside docs/protocol/,
+# a rename only when both paths are prose) are at most source_bypass_max_lines (a positive whole
+# number, else refused), nothing under .github/, quality/ or
+# tools/AgentBridge.Quality/ changes, the file list is complete, and both receipts are success on
+# the head from different model families (quality/README.md §4.9). Off and 40 when absent.
 main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
   exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
+  source_bypass: true
+  source_bypass_max_lines: 40
   jobs:
     - product
     - ha-integration
