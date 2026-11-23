@@ -22,6 +22,12 @@ public static class FleetActionEnvelope
         "generation", "requestId", "nonce", "expiresAt", "payloadSha256"];
 
     public static string NewNonce() => Codec.Base64Url(RandomNumberGenerator.GetBytes(16));
+    // The envelope `subject`: a digest of the agent principal tuple the grant names. The receiver finds the tuple among
+    // the grant's subjects, so the process instance is attested by the source host and never travels or is rechecked here.
+    public static string SubjectDigest(string account, string sourceHost, string session, string credential, int pid, long startedUtcTicks) =>
+        Codec.Base64Url(SHA256.HashData(Framing.F(Framing.Label("agent-bridge fleet action subject v1"), Framing.Utf8(account),
+            Framing.Utf8(sourceHost), Framing.Utf8(session), Framing.Utf8(credential), Framing.Utf8(pid.ToString()),
+            Framing.Utf8(startedUtcTicks.ToString()))));
     public static string PayloadSha256(ReadOnlySpan<byte> canonicalRequest) => Codec.Base64Url(SHA256.HashData(canonicalRequest));
 
     public static FleetActionSigned Seal(FleetActionBody body, IEnvelopeSigner signer)

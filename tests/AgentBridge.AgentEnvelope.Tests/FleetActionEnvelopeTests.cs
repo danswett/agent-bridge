@@ -121,3 +121,18 @@ public sealed class FleetActionEnvelopeTests : IDisposable
         Assert.True(cache.TryAdd(Body(), Now.AddSeconds(91)));
     }
 }
+
+public sealed class FleetActionSubjectDigestTests
+{
+    [Fact]
+    public void The_subject_digest_is_stable_and_changes_with_every_tuple_field()
+    {
+        var same = FleetActionEnvelope.SubjectDigest("a", "h", "s", "c", 7, 99);
+        Assert.Equal(same, FleetActionEnvelope.SubjectDigest("a", "h", "s", "c", 7, 99));
+        foreach (var other in new[] { FleetActionEnvelope.SubjectDigest("b", "h", "s", "c", 7, 99),
+            FleetActionEnvelope.SubjectDigest("a", "i", "s", "c", 7, 99), FleetActionEnvelope.SubjectDigest("a", "h", "t", "c", 7, 99),
+            FleetActionEnvelope.SubjectDigest("a", "h", "s", "d", 7, 99), FleetActionEnvelope.SubjectDigest("a", "h", "s", "c", 8, 99),
+            FleetActionEnvelope.SubjectDigest("a", "h", "s", "c", 7, 100), FleetActionEnvelope.SubjectDigest("ah", "", "s", "c", 7, 99) })
+        { Assert.NotEqual(same, other); }
+    }
+}
