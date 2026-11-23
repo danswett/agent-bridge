@@ -632,6 +632,11 @@ public sealed class AgentLiteDeliveryTests
     [Theory]
     [InlineData("> half a thought")]
     [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
     public async Task With_the_flag_on_a_claude_box_holding_a_draft_or_an_unknown_suggestion_is_refused_composerNotEmpty_with_no_keys(string row)
     {
         var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], row, .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);

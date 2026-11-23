@@ -188,6 +188,11 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     [Theory]
     [InlineData("> half a thought")]
     [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
     public async Task A_Claude_reply_that_requires_an_empty_box_is_refused_for_a_draft_or_an_unknown_suggestion_with_no_keys(string row)
     {
         console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
