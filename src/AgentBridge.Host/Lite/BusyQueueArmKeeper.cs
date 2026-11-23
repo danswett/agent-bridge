@@ -17,7 +17,7 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
     {
         while (!ct.IsCancellationRequested)
         {
-            if (store.Get(request) is not { Held: true }) { return; }
+            if (store.Get(request, principal) is not { Held: true }) { return; }
             try { keep(); }
             catch (Exception e) when (e is not OutOfMemoryException) { }
             try { await Task.Delay(Every, time, ct); }

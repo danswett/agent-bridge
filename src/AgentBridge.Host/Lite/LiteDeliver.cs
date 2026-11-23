@@ -199,7 +199,7 @@ public sealed class LiteDeliver(
             if (store.Get(body.Request, peer) is { Held: true })
             {
                 _ = Watcher?.Start(body.Request, peer);
-                if (driver is not null && armed is { } arm) { _ = ArmKeeper?.Start(body.Request, () => driver.KeepArm(time.GetUtcNow(), arm.Generation)); }
+                if (driver is not null && armed is { } arm) { _ = ArmKeeper?.Start(body.Request, () => driver.KeepArm(time.GetUtcNow(), arm.Generation), principal: peer); }
             }
         }
         ReplyResult result;
