@@ -378,6 +378,33 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.NotNull(console.Plans[1].Plan.Proceed);
     }
 
+    // Claude Code drops the head of a burst it takes for a paste. The console here keeps only the last 300
+    // characters of any one send, as the live one did to a 4514-character reply, and records the prompt on Enter.
+    [Fact]
+    public async Task A_long_Claude_reply_arrives_whole_because_no_one_send_is_long_enough_to_be_taken_for_a_paste()
+    {
+        var words = string.Concat(Enumerable.Range(1, 90).Select(i => $"word{i:000} ")).Trim();
+        var typed = new System.Text.StringBuilder();
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            foreach (var send in plan.Sends)
+            {
+                typed.Append(send.Text.Length > 300 ? send.Text[^300..] : send.Text);
+                if (send.Enter) { Fixture.Append(claude, ClaudePrompt(typed.ToString())); }
+            }
+        };
+
+        var result = await ReplyAsync(ClaudeId, words);
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.True(console.Plans.Count > 1, "typed in one burst");
+        Assert.All(console.Plans, p => Assert.All(p.Plan.Sends, s => Assert.True(s.Text.Length <= 100)));
+        Assert.NotNull(console.Plans[0].Plan.Sends[0].Expect);
+        Assert.All(console.Plans.Skip(1), p => Assert.Null(p.Plan.Sends[0].Expect));
+        Assert.Equal(words, typed.ToString().Trim());
+    }
+
     [Fact]
     public async Task No_Enter_is_pressed_again_once_a_prompt_has_taken_the_input_box_and_the_reply_is_unconfirmed()
     {
