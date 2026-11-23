@@ -28,7 +28,9 @@ static partial class RunnerRouting
     public static IReadOnlyList<string> Violations(string yaml, string file)
     {
         var stream = new YamlStream();
-        stream.Load(new StringReader(yaml));
+        // A file this check can't read (a key given twice, say) fails it: unread is never safe.
+        try { stream.Load(new StringReader(yaml)); }
+        catch (Exception e) when (e is YamlDotNet.Core.YamlException or ArgumentException) { return [$"{file} isn't YAML this check can read: {e.Message}"]; }
         if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root) { return []; }
         if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode map) { return []; }
         var jobs = map.Children.Where(p => p.Key is YamlScalarNode && p.Value is YamlMappingNode)
@@ -39,11 +41,18 @@ static partial class RunnerRouting
         var problems = new List<string>();
         foreach (var (name, job) in jobs)
         {
-            if (!job.Children.TryGetValue(new YamlScalarNode("runs-on"), out var runsOn)) { continue; }
+            // Where a runner is chosen: the job's runs-on, and, for a reusable workflow's caller, each input that names the
+            // pool (the callee's runs-on reads it as inputs.*, which it must guard in its own file).
+            var routes = new List<YamlNode>();
+            if (job.Children.TryGetValue(new YamlScalarNode("runs-on"), out var runsOn)) { routes.Add(runsOn); }
+            if (job.Children.ContainsKey(new YamlScalarNode("uses")) && job.Children.TryGetValue(new YamlScalarNode("with"), out var with) && with is YamlMappingNode inputs)
+            {
+                routes.AddRange(inputs.Children.Values.Where(v => Label().IsMatch(Text(v))));
+            }
             var strategy = job.Children.TryGetValue(new YamlScalarNode("strategy"), out var s) ? Text(s) : "";
-            var why = Unguarded(runsOn, value => MaySelfHost(value, strategy, labelled, name));
-            if (why is null) { continue; }
-            if (why.Length > 0) { problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({Guard}) around it: {why}"); }
+            var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, strategy, labelled, name))).OfType<string>().ToList();
+            if (whys.Count == 0) { continue; }
+            if (whys.FirstOrDefault(w => w.Length > 0) is { } why) { problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({Guard}) around it: {why}"); }
             foreach (var trigger in privileged) { problems.Add($"{file} job {name} can take a self-hosted runner in a workflow that a {trigger} can run"); }
         }
         return problems;
@@ -73,7 +82,12 @@ static partial class RunnerRouting
         var reachable = Values(expr, []).Where(v => maySelfHost(v.Value)).ToList();
         if (reachable.Count == 0) { return null; }
         var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions));
-        return open.Value is null ? "" : $"{open.Value} is reached without it";
+        if (open.Value is not null) { return $"{open.Value} is reached without it"; }
+        // The whole shape: GUARD (with any narrowing && conditions) && <the one self-hosted value> || <one hosted fallback>.
+        // A second ||, a second self-hosted arm or no hosted fallback is a violation even when each piece is guarded.
+        var shaped = expr is Expr.Or { Arms: [Expr.And pool, var fallback] } && reachable.Count == 1
+            && ReferenceEquals(reachable[0].Value, pool.Arms[^1]) && fallback is not (Expr.Or or Expr.And) && !maySelfHost(fallback);
+        return shaped ? "" : $"{text.Trim()} isn't {Guard} && <self-hosted label> || <hosted label>";
     }
 
     // Every value an expression can resolve to, with the conjuncts that must all hold for it.

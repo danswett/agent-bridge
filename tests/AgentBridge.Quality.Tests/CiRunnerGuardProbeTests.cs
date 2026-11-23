@@ -67,6 +67,67 @@ public sealed class CiRunnerGuardProbeTests
         Assert.Contains("job product", one);
     }
 
+    [Theory]
+    // B216's shapes: the pool in both arms, the guard folded into format(), a second runner entry.
+    [InlineData("${{ " + Guard + " && 'ab-ci' || 'ab-ci' }}")]
+    [InlineData("${{ format('{0}', " + Guard + ") && 'ab-ci' || 'windows-latest' }}")]
+    [InlineData("${{ format('{0}', " + Guard + " && 'ab-ci') || 'windows-latest' }}")]
+    [InlineData("[\"${{ " + Guard + " && 'ab-ci' || 'windows-latest' }}\", self-hosted]")]
+    public void Shapes_that_carry_the_whole_guard_text_but_still_reach_the_pool_are_violations(string runsOn)
+        => Assert.NotEmpty(Check(Workflow(runsOn)));
+
+    [Theory]
+    // R8b: the whole runs-on is GUARD && <self-hosted> || <hosted>. Narrowing && conditions in front are allowed (the
+    // product line's matrix.os test); another ||, a second self-hosted arm, or no hosted fallback is not.
+    [InlineData("${{ " + Guard + " && 'ab-ci' || 'windows-latest' || 'ubuntu-latest' }}")]
+    [InlineData("${{ " + Guard + " && 'ab-ci' }}")]
+    [InlineData("${{ " + Guard + " && 'ab-ci' || " + Guard + " && 'self-hosted' || 'windows-latest' }}")]
+    [InlineData("${{ " + Guard + " && 'ab-ci' || " + Guard + " && 'windows-latest' || 'ubuntu-latest' }}")]
+    [InlineData("${{ 'windows-latest' || " + Guard + " && 'ab-ci' }}")]
+    public void Anything_but_one_guarded_pool_arm_then_one_hosted_fallback_is_a_violation(string runsOn)
+        => Assert.NotEmpty(Check(Workflow(runsOn)));
+
+    [Fact]
+    public void A_second_runs_on_key_is_a_violation_not_a_crash()
+    {
+        var yaml = Workflow("${{ " + Guard + " && 'ab-ci' || 'windows-latest' }}").Replace("    steps:", "    runs-on: ab-ci\n    steps:", StringComparison.Ordinal);
+
+        Assert.NotEmpty(Check(yaml));
+    }
+
+    static string Caller(string runner, string triggers = "on: [push, pull_request]") => $$"""
+        name: caller
+        {{triggers}}
+        jobs:
+          build:
+            uses: ./.github/workflows/build.yml
+            with:
+              runner: {{runner}}
+        """;
+
+    [Theory]
+    // A caller's other inputs (a sha, a version) aren't runners: only one naming the pool is held to the guard here. A
+    // runner handed over any other way (vars.RUNNER) reaches the callee as inputs.runner, which the callee must guard.
+    [InlineData("ab-ci")]
+    [InlineData("[self-hosted, windows]")]
+    [InlineData("${{ " + Guard + " && 'windows-latest' || 'ab-ci' }}")]
+    public void A_reusable_workflow_caller_that_hands_over_the_pool_unguarded_is_a_violation(string runner)
+        => Assert.Contains(Check(Caller(runner)), v => v.Contains("job build", StringComparison.Ordinal));
+
+    [Fact]
+    public void A_reusable_workflow_caller_and_callee_that_both_guard_are_allowed_unless_the_caller_is_privileged()
+    {
+        var guarded = "${{ " + Guard + " && 'ab-ci' || 'windows-latest' }}";
+        Assert.Empty(Check(Caller(guarded)));
+        Assert.Empty(Check(Caller("windows-latest")));
+        Assert.Contains(Check(Caller(guarded, "on: [pull_request_target]")), v => v.Contains("pull_request_target", StringComparison.Ordinal));
+
+        // The callee: its runner comes from an input, so it guards that too.
+        var callee = Workflow("${{ " + Guard + " && inputs.runner || 'windows-latest' }}", triggers: "on: { workflow_call: { inputs: { runner: { type: string } } } }");
+        Assert.Empty(Check(callee));
+        Assert.NotEmpty(Check(Workflow("${{ inputs.runner }}", triggers: "on: { workflow_call: {} }")));
+    }
+
     [Fact]
     public void A_matrix_that_lists_the_pool_is_held_to_the_guard_in_the_fallback_too()
     {
