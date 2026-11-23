@@ -24,27 +24,38 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
 
-    public async Task<FleetStopReceipt> HandleAsync(AgentCredential caller, JsonElement data)
+    public Task<FleetStopReceipt> HandleAsync(AgentCredential caller, JsonElement data) =>
+        HandleCoreAsync(new(credentials.PrincipalOf(caller), caller.Chain, "local", caller, null), data);
+    // G10 (docs/design/fleet-grants.md, "Remote targets"): a stop from another host of this account, with the subject the grant names. Same
+    // grant gate, counters, audit and stopper as a local stop; the credential-liveness check belongs to the source host, which attested it.
+    internal Task<FleetStopReceipt> HandleRemoteAsync(GrantSubject subject, JsonElement data) =>
+        HandleCoreAsync(new(AgentProtocol.Principal(subject.SourceHost, subject.Session), [], "relay", null, subject), data);
+    sealed record StopCaller(string Principal, string[] Chain, string Path, AgentCredential? Credential, GrantSubject? Remote);
+    GrantSubject RemoteSubject(GrantSubject s) => account() is { Length: > 0 } mine && s.Account == mine && s.SourceHost != device
+        && s.SourceHost.Length == 32 && s.SourceHost.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')
+        && !string.IsNullOrWhiteSpace(s.Session) && !string.IsNullOrWhiteSpace(s.Credential) && s.ProcessInstance.Pid > 0
+        ? s : throw new FleetLaunchDenied("policy");
+    async Task<FleetStopReceipt> HandleCoreAsync(StopCaller caller, JsonElement data)
     {
         await serial.WaitAsync();
         FleetStopInput? input = null;
         GrantDocument? grant = null;
         StopTarget? target = null;
         WorkspaceConfig? workspace = null;
-        string principal = credentials.PrincipalOf(caller);
+        string principal = caller.Principal;
         AgentAuditEntry? intent = null;
         FleetStopReceipt Receipt(string outcome, string? reason) =>
             new(input?.Request ?? Guid.Empty, input?.Grant ?? Guid.Empty, grant?.Generation ?? 0, outcome, reason, target?.Session);
         AgentAuditEntry Entry(string phase, string outcome, string reason) =>
-            new("local", input!.Request.ToString(), principal, caller.Chain, Ops.SessionStop,
+            new(caller.Path, input!.Request.ToString(), principal, caller.Chain, Ops.SessionStop,
                 target?.Session ?? input.Request.ToString(), outcome, Gate: new(1, Guid.NewGuid(), Guid.Empty, 0,
-                    phase, "local", "agent", target is null ? input.Grant
+                    phase, caller.Path, "agent", target is null ? input.Grant
                         : StopAudit.Identity(Guid.Parse(target.Session), target.ProcessInstance.Pid, target.ProcessInstance.StartedAt),
                     reason is "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused")) { Grant = input.Grant.ToString() };
         FleetStopReceipt Refused(string reason)
         {
             var entry = input is not null ? Entry("terminal", "refused", reason)
-                : new AgentAuditEntry("local", "", principal, caller.Chain, Ops.SessionStop, "", "refused", reason);
+                : new AgentAuditEntry(caller.Path, "", principal, caller.Chain, Ops.SessionStop, "", "refused", reason);
             return Receipt("refused", audit.Append(entry) ? reason : "audit-unavailable");
         }
         try
@@ -57,7 +68,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 || !(FleetSessionId.IsCanonical(input.Session) || input.Session is { Length: 16 }
                     && input.Session.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')))
             { input = null; return Refused("bad-argument"); }
-            var subject = FleetGrantLaunch.Subject(credentials, account() ?? "", device, caller);
+            var subject = caller.Remote is { } remote ? RemoteSubject(remote) : FleetGrantLaunch.Subject(credentials, account() ?? "", device, caller.Credential!);
             var (rows, complete) = GateAuditProjection.Load(folder);
             if (!complete) { return Refused("audit-unavailable"); }
             string? Check(GrantStore.State state)
@@ -76,7 +87,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 if (target != sessions.GrantTarget(target.Session) || source.Held is not null || input.Target is not null && input.Target != device)
                 { return "scope"; }
                 var (settings, problem) = HostSettings.Load(folder);
-                if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { return "policy"; }
+                if (problem is not null || settings.SectionProblems.Any() || caller.Credential is { } live && !credentials.IsLive(live)) { return "policy"; }
                 if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled) { return "kill-switch"; }
                 var observed = source.GetForStop(target.Session);
                 var agent = observed?.Agent.ToString().ToLowerInvariant();
@@ -85,7 +96,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 if (approved is null || agent is null || !LaunchProtocol.Agents.Contains(agent) || workspace is not null && workspace != approved
                     || settings.Agents.ExcludedWorkspaces.Contains(approved.Label)) { return "scope"; }
                 workspace = approved;
-                if (settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(target.Session)
+                if (settings.Agents.ExcludedSessions.Contains(subject.Session) || settings.Agents.ExcludedSessions.Contains(target.Session)
                     || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(target.Session) ?? ""))
                 { return "scope"; }
                 // Stop checks machine/workspace/agent; launch-only selections are inert.
@@ -114,7 +125,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 var terminal = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request && r.Gate is { Phase: "terminal" })
                     .Select(r => r.Outcome).Distinct().ToArray();
                 if (terminal is not ["ended"]) { return Receipt("unconfirmed", "duplicate-id"); }
-                return audit.Append(new("local", request, principal, caller.Chain, "fleet.end.replay",
+                return audit.Append(new(caller.Path, request, principal, caller.Chain, "fleet.end.replay",
                     target!.Session, "ended", "none") { Grant = input.Grant.ToString() })
                     ? Receipt("ended", null) : Receipt("unconfirmed", "audit-unavailable");
             }
@@ -142,7 +153,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
             var outcome = result.Outcome == StopOutcome.Ended ? "ended" : result.Outcome == StopOutcome.Failed ? "unconfirmed" : "refused";
             if (replayed)
             {
-                return audit.Append(new("local", input.Request.ToString(), principal, caller.Chain, "fleet.end.replay",
+                return audit.Append(new(caller.Path, input.Request.ToString(), principal, caller.Chain, "fleet.end.replay",
                     target.Session, outcome, reason) { Grant = input.Grant.ToString() })
                     ? Receipt(outcome, reason == "none" ? null : reason) : Receipt("unconfirmed", "audit-unavailable");
             }
