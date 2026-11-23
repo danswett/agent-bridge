@@ -254,6 +254,28 @@ public class CiPlanTests
         Assert.Equal([problem], Check(Wired.Replace(from, to)));
     }
 
+    // The waiver-adjusted app output (#2454): accepted only when the step it reads computes the app's own
+    // result from the waiver-adjusted needs, so it can't be pointed at something else.
+    const string AppStepProblem = "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app";
+
+    static string WithAppStep(string needs, string run) => Wired.Replace("      app: ${{ needs.app.result }}\n",
+        "      app: ${{ steps.app.outputs.result }}\n    steps:\n      - id: app\n        env:\n          NEEDS: " + needs + "\n        run: " + run + "\n");
+
+    [Fact]
+    public void The_waiver_adjusted_app_output_is_accepted_when_its_step_reads_the_apps_result_from_the_waiver_needs()
+    {
+        Assert.Empty(Check(WithAppStep("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"")));
+    }
+
+    [Theory]
+    [InlineData("${{ toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"")]
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=success\" >> \"$GITHUB_OUTPUT\"")]
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.light.result')\" >> \"$GITHUB_OUTPUT\"")]
+    public void The_waiver_adjusted_app_output_is_reported_when_its_step_does_not_compute_the_apps_result_from_the_waiver_needs(string needs, string run)
+    {
+        Assert.Equal([AppStepProblem], Check(WithAppStep(needs, run)));
+    }
+
     [Fact]
     public void A_publish_gate_if_that_mixes_text_and_an_expression_is_reported_since_any_such_string_is_true()
     {

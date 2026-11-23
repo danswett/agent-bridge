@@ -54,6 +54,7 @@ static partial class CiPlan
     const string AppResult = "${{ needs.app.result }}";
     // The waiver-adjusted form (#2454): the same result, read after the gate's waiver step, so a red Arm64 leg does not read as an unbuilt app.
     const string AppStepResult = "${{ steps.app.outputs.result }}";
+    const string AppStepNeeds = "${{ steps.waiver.outputs.needs || toJSON(needs) }}";
     const string ConcurrencyGroup =
         "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
@@ -260,7 +261,11 @@ static partial class CiPlan
             // What publish-gate reads to tell the app was built and checked in this run.
             var gateOutputs = Child(gate, "outputs") as YamlMappingNode;
             var appOutput = Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "");
-            if (appOutput != AppResult && !(appOutput == AppStepResult && Steps(gate).Any(s => Scalar(s, "id") == "app")))
+            // The step form is accepted only when its step reads the app's own result from the waiver-adjusted needs.
+            var appStep = Steps(gate).FirstOrDefault(s => Scalar(s, "id") == "app");
+            var stepReadsApp = appStep is not null && Child(appStep, "env") is YamlMappingNode appEnv && Normalize(Scalar(appEnv, "NEEDS") ?? "") == AppStepNeeds
+                && (Scalar(appStep, "run") ?? "").Contains(".app.result", StringComparison.Ordinal);
+            if (appOutput != AppResult && !(appOutput == AppStepResult && stepReadsApp))
                 Add($"ci.yml {Gate}'s output app isn't exactly {AppResult} (or {AppStepResult} with a step id app), so {PublishGate} can't tell this run built the app");
             // The jobs a pull request skips aren't selected there, or the gate would wait on them.
             var offs = Steps(gate).Select(s => Child(s, "env") as YamlMappingNode).OfType<YamlMappingNode>()

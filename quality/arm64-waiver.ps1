@@ -63,7 +63,7 @@ try {
 ConvertTo-Json -InputObject @($ids) -Compress | Set-Content -LiteralPath $OutFile
 if ($ids.Count -gt 0) {
     $lines += 'The waiver is permanent (owner, #2454); the Arm64 jobs still run and stay red.'
-    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line;" }
+    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line" }
 }
 $lines
 if ($SummaryFile) { Add-Content -LiteralPath $SummaryFile -Value (@('### quality-gate: win-arm64 waiver (#2564)') + ($lines | ForEach-Object { "- $_" })) }
