@@ -252,6 +252,16 @@ public sealed class RunMarkerTests : IDisposable
         Assert.Equal(RunMarker.DescribeCrash(error), description);
     }
 
+    [Fact]
+    public void Crash_descriptions_keep_each_exceptions_HResult_but_not_its_message()
+    {
+        var error = new InvalidOperationException("private text", new System.Runtime.InteropServices.COMException("private com text", unchecked((int)0x80040111)));
+        var description = RunMarker.DescribeCrash(error);
+        Assert.Contains("0x80040111", description);
+        Assert.Contains("0x80131509", description);
+        Assert.DoesNotContain("private", description);
+    }
+
     static void InnerCrash() => throw new ArgumentException("private inner conversation");
 
     [Fact]
