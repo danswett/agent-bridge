@@ -93,6 +93,7 @@ public sealed partial class SettingsViewModel : Observable
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true)
     {
         this.host = host;
+        ScriptCredentials = new ScriptCredentialsModel(host);
         this.manager = manager;
         this.updater = updater;
         this.appAtSignIn = appAtSignIn;
@@ -128,6 +129,9 @@ public sealed partial class SettingsViewModel : Observable
     }
     public string InstalledText => updater.InstalledVersion is { } v ? $"Installed version {v}" : "Not installed (a development copy): updates are off";
     HostStatus? Status => host.Status;
+
+    // Settings > Script credentials (see ScriptCredentialsModel); the page reads it, the host decides.
+    public ScriptCredentialsModel ScriptCredentials { get; private set; } = null!;
 
     public string HostState => host.State switch
     {

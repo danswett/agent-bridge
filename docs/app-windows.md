@@ -406,6 +406,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -439,7 +444,9 @@ without copying exception messages or inventing holder PID/path evidence.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they never skew.
+into one folder with one version. An app update is a host update, so they skew mostly when an
+update did not finish: the app restarted onto the new release while the host kept running the old one (or
+the reverse). That is said, not repaired by itself (the version-skew banner, under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -556,6 +563,15 @@ controls consume that same contract; this extraction does not disable or remove 
   held until GitHub's time as before. Which answered is kept with the list (`Source`, `cdn` or
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
+
+  **An old relay copy may offer a newer release but never says "up to date"** (`ReleaseDiscovery.CdnFreshFor`, 10 minutes, the check
+  interval). A copy up to an hour old (`CdnOldest`) is still used, but once it is older than `CdnFreshFor` it counts only if it names a
+  release newer than the one installed: an offer meets the halt and digest checks as any does. A copy that shows nothing newer is "unknown",
+  because it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed): it is refused like an over-age
+  copy, so the check fails with words, GitHub is asked or its backoff says when, and the next check tries again. The copy kept here is judged
+  the same way by its true age on every check, and the log says why (`its copy was N minutes old and names nothing newer ...`). The halt
+  rules, `CdnOldest` and the 72 hour cap are unchanged. The log's fallback line says GitHub is asked first and the relay is the fallback
+  if GitHub refuses, which is what happens.
 
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
@@ -684,6 +700,18 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only): the app and its host on different
+    releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+    (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
+    the person's press for this too. With no release ready it is words only, no button: "The bridge host
+    is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
+    older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
+    card keeps its own Restart advice. **A skew is only shown, never repaired by itself:** nothing is
+    installed or restarted because of it, in either mode, and the person's press is the only action,
+    Restart to update when a release is ready, or Settings' host Restart. What counts as skew is `VersionSkewHeal.Decide` (a version that
+    is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
+    screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
+    installed release and the connected host's.
   * **Every package is checked against its release** (`DownloadMark`, Engineering's
     second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
     folder under the release's file name for the release without checking its bytes, so one
@@ -1155,6 +1183,11 @@ starvation lasts until the train lands.
     publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
     reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.

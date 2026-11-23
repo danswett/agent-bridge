@@ -62,10 +62,11 @@ public sealed class LiteDeliver(
         var id = target;
         Session? session = null;
         var byNode = false;
+        var sawHold = false;
         void Resolve()
         {
             session = source.Get(target);
-            if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+            if (session is null && FromNodeId(target, out sawHold) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         }
         if (Lane is null) { Resolve(); }
         var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
@@ -87,7 +88,7 @@ public sealed class LiteDeliver(
             if (query) { return FromLane(prior); }
         }
         if (Lane is not null) { Resolve(); }
-        if (session is null) { return Refused(UnresolvedCode(target)); }
+        if (session is null) { return Refused(UnresolvedCode(target, sawHold)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
@@ -190,27 +191,42 @@ public sealed class LiteDeliver(
     // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
     // A node id that did not resolve while discovery is held may name a live session the pass did not list, so the
     // sender is told to retry, not that the session does not exist (#1396).
-    string UnresolvedCode(string target) =>
-        IsNodeId(target) && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
+    string UnresolvedCode(string target, bool sawHold) =>
+        IsNodeId(target) && (sawHold || source.Held is not null) ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
 
     static bool IsNodeId(string target) =>
         target.Length == "agent_bridge_".Length + 16 && target.StartsWith("agent_bridge_", StringComparison.Ordinal)
         && !target.AsSpan("agent_bridge_".Length).ContainsAnyExcept("0123456789abcdef");
 
-    string? FromNodeId(string target)
+    static bool SameHold(DiscoveryHeld? a, DiscoveryHeld? b) =>
+        a is null ? b is null : b is not null && string.Equals(a.Reason, b.Reason, StringComparison.Ordinal)
+            && a.Agents.OrderBy(x => x).SequenceEqual(b.Agents.OrderBy(x => x));
+
+    string? FromNodeId(string target) => FromNodeId(target, out _);
+
+    // sawHold: discovery was held at either read, so a refusal is "retry", even if the hold has ended since.
+    string? FromNodeId(string target, out bool sawHold)
     {
+        sawHold = false;
         const string prefix = "agent_bridge_";
         if (target.Length != prefix.Length + 16 || !target.StartsWith(prefix, StringComparison.Ordinal)
             || target.AsSpan(prefix.Length).ContainsAnyExcept("0123456789abcdef")) { return null; }
-        if (source.Held is not null) { return null; }
-        string? found = null;
+        // While discovery is held for some agents, a node id may still name a session of another agent (#3933 option b, owner
+        // decision Nov 23): only when exactly one listed session has it, its agent is not held, and the hold is the same
+        // before and after the scan. A held agent's unlisted session could share the id, so a held agent's never resolves.
+        var before = source.Held;
+        sawHold = before is not null;
+        Session? found = null;
         foreach (var s in source.Snapshot())
         {
             if (!string.Equals(HaContract.NodeId(s.Id), target, StringComparison.Ordinal)) { continue; }
-            if (found is not null && !string.Equals(found, s.Id, StringComparison.Ordinal)) { return null; }
-            found = s.Id;
+            if (found is not null && !string.Equals(found.Id, s.Id, StringComparison.Ordinal)) { return null; }
+            found = s;
         }
-        return source.Held is null ? found : null;
+        var after = source.Held;
+        sawHold |= after is not null;
+        if (!SameHold(before, after) || found is null) { return null; }
+        return before is not null && before.Agents.Contains(found.Agent) ? null : found.Id;
     }
 
     static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);

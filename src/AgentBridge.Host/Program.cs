@@ -788,6 +788,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
+        ClientOf = channel => PersonDevices.Client(personRoster, channel),
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,
@@ -1124,7 +1125,8 @@ async Task<int> ServeAsync(HostHandover handover)
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
             await liveRoster.ServeAsync(() => relay.GetRosterAsync(current.Token), () => fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
-                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability)));
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability),
+                relaySupportsEvidence: relay.Capabilities.Contains(SessionEvidence.RelayCapability)));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");

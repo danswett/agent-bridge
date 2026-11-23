@@ -15,11 +15,12 @@ $failures = 0
 function Check([string]$name, $actual, $expected) {
     if ($actual -ceq $expected) { Write-Host "PASS $name" } else { $script:failures++; Write-Host "FAIL ${name}: expected '$expected', got '$actual'" }
 }
-function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}) {
+function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}, [string]$relied = '') {
     $all = @{ 'quality-gate' = $gate; 'app (win-x64)' = $x64; 'app (win-arm64)' = $arm }
     foreach ($key in $more.Keys) { $all[$key] = $more[$key] }
     [pscustomobject]@{ Sha = $sha; Number = $number; Conclusion = $conclusion
-        Jobs = @{ 'quality-gate' = $gate; 'app-x64' = $x64; 'app-arm64' = $arm }; ArtifactsUnexpired = $fresh; AllJobs = $all }
+        Jobs = @{ 'quality-gate' = $gate; 'app-x64' = $x64; 'app-arm64' = $arm }; ArtifactsUnexpired = $fresh; AllJobs = $all
+        ReliedParent = $(if ($relied) { $relied } else { $null }) }
 }
 $out = [pscustomobject]@{ Tag = 'v0.1.100'; Commit = 'sha100' }
 $follows = { param($sha, $base) $sha -cne 'stray' }
@@ -51,6 +52,24 @@ Check 'a commit that does not follow the latest release is skipped' (Pick @((Run
 Check 'a run number not above every published version is skipped' (Pick @((Run 'sha099b' 99), (Run 'sha102' 102))) 'sha102'
 Check 'no release yet takes the newest passing run' (Pick @((Run 'sha001' 1)) $null) 'sha001'
 Check 'nothing selected says why' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -gate failure)) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*quality-gate') $true
+
+# A run that relied on an in-flight parent to test only its own change (item A, #2454) is publishable only if that parent, and what it
+# relied on, passed the same checks: the commit it names holds the parent's change, which that run never tested.
+Check 'a run that relied on a passing parent is picked' (Pick @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102))) 'sha103'
+Check 'a run that relied on a parent that failed is skipped for an older run that relied on nothing' (Pick @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -gate failure), (Run 'sha101' 101))) 'sha101'
+Check 'a failure further back the chain skips the run' (Pick @((Run 'sha104' 104 -relied 'sha103'), (Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -gate failure), (Run 'sha101' 101))) 'sha101'
+Check 'a run that relied on a cancelled parent is skipped: the parent never tested its change (the parent itself still counts as a superseded run)' (Pick @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -conclusion cancelled), (Run 'sha101' 101))) 'sha102'
+Check 'a run that relied on a parent still running is skipped' (Pick @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -conclusion ''), (Run 'sha101' 101))) 'sha101'
+Check 'a run whose relied-on parent is not among the runs is skipped' (Pick @((Run 'sha103' 103 -relied 'shaGone'), (Run 'sha102' 102))) 'sha102'
+Check 'a parent that passes, beside a green chain, is picked' (Pick @((Run 'sha104' 104 -relied 'sha103'), (Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102))) 'sha104'
+Check 'a later run that relies on nothing covers the failed one and is picked' (Pick @((Run 'sha104' 104), (Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -gate failure))) 'sha104'
+Check 'a reliance loop is not a pass' (Pick @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -relied 'sha103'))) $null
+Check 'a skipped relied-on run says why' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -relied 'sha102'), (Run 'sha102' 102 -gate failure)) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*relied on sha102') $true
+Check 'the plan-base record of a run that relied on nothing reads as none' ((ConvertFrom-PlanBase ('base=' + ('a' * 40) + ' relied-parent=none')) -eq $null) $true
+Check 'the plan-base record names the relied-on parent' (ConvertFrom-PlanBase ('base=' + ('a' * 40) + ' relied-parent=' + ('b' * 40))) ('b' * 40)
+function Reads([string]$m) { try { ConvertFrom-PlanBase $m | Out-Null; 'read' } catch { 'refused' } }
+Check 'a plan-base record not in the shape is an error, not a guess' (Reads 'base=x relied-parent=y') 'refused'
+Check 'no plan-base record at all relied on nothing' ((ConvertFrom-PlanBase $null) -eq $null) $true
 
 function Signed([string]$v) { try { Assert-TrainMayPublish $v; "published" } catch { "refused" } }
 function Stops { try { Select-ReleaseCommit -Runs @((Run "sha103" 103)) -Latest $out -IsDescendant { throw "gh failed" } | Out-Null; "went on" } catch { "stopped" } }
