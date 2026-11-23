@@ -26,14 +26,15 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     [Fact]
-    public async Task Repeated_policy_checks_share_a_realistic_100_release_window_and_one_GitHub_read()
+    public async Task Repeated_policy_checks_share_the_first_page_of_a_realistic_100_release_repository_and_one_GitHub_read()
     {
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var empty = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var handler = ByteReplies(uri =>
         {
             if (uri.Host != "api.github.com") { return uri.AbsolutePath.Contains("/v0.1.2349/") ? body : empty; }
-            var releases = Enumerable.Repeat(Metadata("1", empty), 99).Append(Metadata("2349", body))
+            // As GitHub lists them, newest first: the highest release, which carries halts.json, is on the first page of ten.
+            var releases = new[] { Metadata("2349", body) }.Concat(Enumerable.Repeat(Metadata("1", empty), 99))
                 .Select(json => Encoding.UTF8.GetString(json)[1..^1].PadRight(28_350));
             return Encoding.UTF8.GetBytes("[" + string.Join(",", uri.Query.Contains("per_page=100", StringComparison.Ordinal) ? releases : releases.Take(10)) + "]");
         });
@@ -370,13 +371,13 @@ public sealed class ReleaseEligibilityTests : IDisposable
 
     // A refused GitHub policy read renews from the relay's copy of the same list while the release
     // list's relay grace is open (halt policy below; the signed anchor stays the real fix).
-    ReplyHandler HeldGitHub(byte[] halts, Func<byte[]> relayList, Func<TimeSpan?> relayAge, Func<bool>? limited = null, string githubRun = "2349", (string Run, byte[] Body)? carrier = null) => new(request =>
+    ReplyHandler HeldGitHub(byte[] halts, Func<byte[]> relayList, Func<TimeSpan?> relayAge, Func<bool>? limited = null, string githubRun = "2349", (string Run, byte[] Body)? carrier = null, Func<HttpResponseMessage>? policyFailure = null) => new(request =>
     {
         var uri = request.RequestUri!.AbsoluteUri;
         if (uri == GitHubHaltListSource.Releases)
         {
-            return limited?.Invoke() == false ? new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata(githubRun, halts)) }
-                : new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromHours(1)) } };
+            if (limited?.Invoke() == false) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata(githubRun, halts)) }; }
+            return policyFailure is { } failure ? failure() : new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromHours(1)) } };
         }
         if (uri == ReleaseDiscovery.GitHubList) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata(githubRun, halts)) }; }
         if (uri == ReleaseDiscovery.CdnPolicyList)
@@ -409,6 +410,64 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Contains("0.1.2349", source.KnownHalts);
         Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(5), source.Snapshot.At);
         Assert.Equal(1, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
+    // halts.json is on the newest release, so the policy list is one small page: a hundred releases of a dozen assets each ran
+    // past the 4 MiB cap and the read failed outright, on every machine (VM2, v0.1.7522).
+    [Fact]
+    public void The_policy_list_is_the_first_ten_releases_on_GitHub_and_on_the_relay()
+    {
+        Assert.Equal("https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10", ReleaseDiscovery.HaltPolicyList);
+        Assert.Equal("https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10", ReleaseDiscovery.CdnPolicyList); // page defaults to 1 on the Worker, which keys its cache on both
+    }
+
+    [Theory]
+    [InlineData("500")]
+    [InlineData("502")]
+    [InlineData("404")]
+    [InlineData("401")]
+    [InlineData("timeout")]
+    [InlineData("oversize")]
+    [InlineData("notalist")]
+    public async Task A_policy_read_that_fails_in_any_way_renews_from_the_relay_list_while_the_grace_is_open(string failure)
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        HttpResponseMessage Failed() => failure switch
+        {
+            "timeout" => throw new HttpRequestException("timed out"),
+            "oversize" => new(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[4 * 1024 * 1024 + 1]) },
+            "notalist" => new(HttpStatusCode.OK) { Content = new StringContent("{}") },
+            _ => new((HttpStatusCode)int.Parse(failure)),
+        };
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.FromMinutes(5), policyFailure: Failed);
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var source = Policy(handler);
+
+        await source.ReadAsync(default);
+
+        Assert.True(source.Snapshot.Fresh);
+        Assert.Contains("0.1.2349", source.KnownHalts);
+        Assert.Equal(1, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
+    [Theory]
+    [InlineData("503", "GitHub answered HTTP 503")]
+    [InlineData("timeout", "GitHub gave no answer")]
+    public async Task An_unrenewed_policy_says_what_GitHub_actually_answered(string failure, string said)
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => null, policyFailure: () => failure == "timeout" ? throw new HttpRequestException("timed out") : new(HttpStatusCode.ServiceUnavailable));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var logged = new List<string>();
+        var http = new HttpClient(handler);
+        var discovery = new ReleaseDiscovery(folder, handler, time, random: () => 0, log: logged.Add);
+        clients.AddRange([http, discovery]);
+
+        await Assert.ThrowsAsync<IOException>(() => new GitHubHaltListSource(http, discovery).ReadAsync(default));
+
+        Assert.Contains(logged, line => line.Contains("stored policy was not renewed") && line.Contains(said));
     }
 
     [Theory]
@@ -508,6 +567,34 @@ public sealed class ReleaseEligibilityTests : IDisposable
         time.AdjustTime(graceEnd);
         Assert.False(source.Snapshot.Fresh);
         Assert.Contains("0.1.2349", source.KnownHalts);
+    }
+
+    // Not stale on arrival: a renewal is stamped graceEnd minus six hours, so one that arrives at any time inside the grace is
+    // fresh from then until the grace ends, including one arriving after the eighteenth hour.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(17)]
+    [InlineData(18)]
+    [InlineData(23)]
+    public async Task A_relay_renewal_arriving_inside_the_grace_is_fresh_until_the_grace_ends(int hoursAfterGitHubAnswered)
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
+        await GitHubAnswersTheReleaseList(handler);
+        var graceEnd = time.GetUtcNow() + ReleaseDiscovery.GithubRelayAtMost;
+        time.Advance(TimeSpan.FromHours(hoursAfterGitHubAnswered));
+        var source = Policy(handler);
+
+        var arrived = time.GetUtcNow();
+        await source.ReadAsync(default);
+
+        // Fresh for the six hours, or until the grace ends if that comes first: never stale on arrival.
+        var staleAt = arrived + ReleaseDiscovery.GithubRevalidateEvery < graceEnd ? arrived + ReleaseDiscovery.GithubRevalidateEvery : graceEnd;
+        Assert.True(source.Snapshot.Fresh);
+        time.AdjustTime(staleAt - TimeSpan.FromMinutes(1));
+        Assert.True(source.Snapshot.Fresh);
+        time.AdjustTime(staleAt);
+        Assert.False(source.Snapshot.Fresh);
     }
 
     [Fact]

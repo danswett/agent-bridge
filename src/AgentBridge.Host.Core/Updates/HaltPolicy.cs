@@ -10,9 +10,11 @@ public sealed record HaltPolicySnapshot(VerifiedHaltPolicy? Policy, DateTimeOffs
 public sealed partial class ReleaseDiscovery
 {
     public static readonly TimeSpan PolicyInterval = TimeSpan.FromHours(1);
-    public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=100";
-    // The relay's copy of the same list (the Worker serves per_page 1-100), read only while GitHub refuses and the relay grace is open.
-    public const string CdnPolicyList = "https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=100&page=1";
+    // The first ten releases: halts.json is on the newest, and a hundred releases of a dozen assets each ran past PolicyLargest, so
+    // the read failed on every machine (VM2, v0.1.7522). A newest release outside the first ten renews nothing (fail closed).
+    public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10";
+    // The relay's copy of the same list (the Worker serves per_page 1-100), read only while GitHub's policy read fails and the relay grace is open.
+    public const string CdnPolicyList = "https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10";
     const int PolicyLargest = 4 * 1024 * 1024;
     internal sealed record HaltPolicyCache(VerifiedHaltPolicy? Policy, DateTimeOffset? At, DateTimeOffset NotBefore, string? ETag,
         DateTimeOffset? AttemptedAt = null, long Attempt = 0, long Verified = 0);
@@ -67,11 +69,12 @@ public sealed partial class ReleaseDiscovery
                         state = BackedOff(state, answer, now, HaltPolicyList);
                         if (answer.Wait is { } wait && now + Clamp(wait) > policy.NotBefore) { policy = policy with { NotBefore = now + Clamp(wait) }; }
                     }
-                    // GitHub refused (a limit), the relay grace of the release list is open, and the relay's
-                    // copy of the same list is fresh: its halts.json carrier is still downloaded from
-                    // github.com and checked against the size and sha256 the list names, so a relay can
-                    // hide a new halt for at most the grace, never forge one. GitHub's own answer wins.
-                    if (answer.Status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests && RelayWindow(state, now)
+                    // GitHub's policy read failed (a limit, a 5xx or other refusal, no answer at all, a body past the cap or not a
+                    // release list), the relay grace of the release list is open, and the relay's copy of the same list is
+                    // fresh: its halts.json carrier is still downloaded from github.com and checked against the size and
+                    // sha256 the list names, so a relay can hide a new halt for at most the grace, never forge one.
+                    // GitHub's own answer wins.
+                    if (answer.Status != HttpStatusCode.NotModified && RelayWindow(state, now)
                         && await AskCdnPolicyAsync(cancellationToken) is { } relayed)
                     {
                         var verified = await verify(relayed.Body, cancellationToken);
@@ -85,11 +88,11 @@ public sealed partial class ReleaseDiscovery
                             // longer than the grace (the 6 hours of freshness never run past its end).
                             var graceEnd = (state.GitHubAnsweredAt ?? state.RelayBootstrapAt)!.Value + GithubRelayAtMost;
                             policy = policy with { Policy = verified, At = Earlier(now - relayed.Age, graceEnd - GithubRevalidateEvery), ETag = null, Verified = policy.Attempt };
-                            log?.Invoke($"update policy: renewed from the relay's list, its copy {Span(relayed.Age)} old; GitHub refused");
+                            log?.Invoke($"update policy: renewed from the relay's list, its copy {Span(relayed.Age)} old; {GitHubSaid(answer)}");
                         }
                         else { log?.Invoke("update policy: older relay policy ignored; known halts retained"); }
                     }
-                    else { log?.Invoke("update policy: GitHub policy unavailable; stored policy was not renewed"); }
+                    else { log?.Invoke($"update policy: GitHub policy unavailable ({GitHubSaid(answer)}); stored policy was not renewed"); }
                 }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or HttpRequestException or JsonException
@@ -140,6 +143,11 @@ public sealed partial class ReleaseDiscovery
     }
 
     static DateTimeOffset Earlier(DateTimeOffset a, DateTimeOffset b) => a < b ? a : b;
+
+    // What GitHub really did, for the log: the status it sent, or that nothing came back (a timeout, a broken connection or a body past the cap).
+    static string GitHubSaid(Answer answer) => answer.Status == 0 ? "GitHub gave no answer"
+        : answer.Status == HttpStatusCode.OK ? "GitHub answered HTTP 200 with something other than a release list"
+        : $"GitHub answered HTTP {(int)answer.Status}";
 
     static long NextAttempt(HaltPolicyCache policy) =>
         policy.Attempt >= policy.Verified && policy.Attempt is >= 0 and < long.MaxValue ? policy.Attempt + 1 : throw new IOException("update policy: cache generation unavailable");
