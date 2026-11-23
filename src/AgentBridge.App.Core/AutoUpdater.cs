@@ -331,7 +331,7 @@ public sealed class AutoUpdater
     public string? Ready => installing || updater.InstalledVersion is null || seenSource != updater.Source || updater.Ready != Pending ? null : Pending;
 
     // The release this app runs and the one its host reports, for the skew the banner says (#2869 G2,
-    // SkewNote): only said, never acted on. Null for what is not known: not installed by the updater,
+    // SkewNote): the banner only says it. Null for what is not known: not installed by the updater,
     // or a host not connected now.
     public (string? App, string? Host) Versions => (updater.InstalledVersion, host.State == LinkState.Connected ? host.Status?.Version : null);
 
