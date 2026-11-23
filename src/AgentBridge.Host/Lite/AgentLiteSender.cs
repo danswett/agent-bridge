@@ -147,7 +147,7 @@ public sealed class AgentLiteSender(
 }
 
 // The link on the live relay connection, attached and detached as the host connects and disconnects.
-public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink
+public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink, IFleetLaunchLink
 {
     sealed record Current(RelayClient Relay, ChannelHub Hub);
     Current? now;
@@ -158,6 +158,28 @@ public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? lo
     public string Self => now?.Relay.DeviceId ?? localId;
     public string Account => now?.Relay.AccountId ?? localAccount?.Invoke() ?? "";
     public IReadOnlyList<PresenceEntry> Presence => now?.Relay.Presence ?? [];
+
+    // G9c2: one request to a present host of this account on its own channel, judged by the same own-peer rule as a lite send.
+    // Nothing is sent to a peer the rule refuses; the channel is always closed; a failure after the send is the caller's to treat as unconfirmed.
+    public async Task<JsonElement> RequestAsync(string peerId, string account, string op, JsonElement request, CancellationToken ct)
+    {
+        var l = Volatile.Read(ref now) ?? throw new LitePeerOfflineException("not connected to the relay");
+        if (peerId == l.Relay.DeviceId) { throw new LitePeerOfflineException("not another host"); }
+        SecureChannel ch;
+        try { ch = await l.Hub.OpenAsync(peerId, TimeSpan.FromSeconds(10)); }
+        catch (IOException e) { throw new LitePeerOfflineException(e.Message); }
+        try
+        {
+            var c = LiteChannel.Of(ch);
+            if ((c.Account != account ? LiteReceiver.NotSameAccount : c.Untrusted) is { } why) { throw new LitePeerOfflineException($"not a present host of this account ({why})"); }
+            var response = await ch.RequestAsync(op, request, TimeSpan.FromSeconds(30), ct);
+            // The channel wraps a served reply as { ok, result }; the sender reads the bare result. Anything else is a lost answer.
+            if (!response.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True || !response.TryGetProperty("result", out var result))
+            { throw new IOException("the peer did not answer the launch"); }
+            return result.Clone();
+        }
+        finally { await l.Hub.CloseAsync(ch); }
+    }
 
     public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct)
     {

@@ -27,6 +27,10 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
     readonly TimeProvider time = clock ?? TimeProvider.System;
 
+    // True when the request names a host other than this one (by device id or node id): the local grant path never serves it.
+    public bool IsRemote(string? target) =>
+        target is not null && !(link.Self.Length >= 16 && (target == link.Self || target == "agent_bridge_" + link.Self[..16]));
+
     public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, CancellationToken ct)
     {
         FleetLaunchReceipt Refuse(string reason) => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);

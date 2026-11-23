@@ -994,8 +994,11 @@ async Task<int> ServeAsync(HostHandover handover)
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     AgentPipeLaunch? grantPipe = null;
     FleetStopCommands? fleetStop = null;
+    AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null;
     if (agentCredentials is { } grantCredentials)
     {
+        remoteLaunch = new AgentBridge.Host.Lite.FleetRemoteLaunchSender(liteLink, grantCredentials,
+            AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill));
         var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
             : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
@@ -1011,7 +1014,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 Wire.DeviceId(identity.Key.Public), grantCredentials, service, source, fleetStopper);
         }
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, remoteLaunch: remoteLaunch), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

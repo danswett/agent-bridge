@@ -35,7 +35,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     Pipe Open(string session = "parent", string scope = AgentProtocol.ScopeReadReplyLaunch, int depth = 0,
         string launch = "person-launch", AgentCredentials? credentials = null, (LaunchRequestStore?, string?)? store = null,
-        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false, FleetPublisherTests.Source? source = null, TimeProvider? auditTime = null)
+        P256KeyPair? grantKey = null, bool legacy = false, bool grantOnly = false, FleetPublisherTests.Source? source = null, TimeProvider? auditTime = null,
+        FleetRemoteLaunchSender? remoteLaunch = null)
     {
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
@@ -51,7 +52,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         launcher.RequestRegistered += agentLaunch.Registered;
         return new(LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
             credentials: credentials, audit: audit, auditTime: auditTime, agentLaunch: legacy || grantOnly ? null : agentLaunch,
-            grantLaunch: grantOnly ? agentLaunch : null), channel, credentials, agentLaunch);
+            grantLaunch: grantOnly ? agentLaunch : null, remoteLaunch: remoteLaunch), channel, credentials, agentLaunch);
     }
 
     JsonElement Body(string? id = null, string prompt = "hello", string workspace = "App", string? permissions = LaunchProtocol.Ask) =>
@@ -987,6 +988,35 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(1, launcher.Launches);
         Assert.Equal(LaunchOutcome.Unconfirmed, receipt.Result.Outcome);
         Assert.Equal(1, s.Link.Calls);
+    }
+
+    // G9c2: a granted launch that names another host's node id goes to the remote sender; nothing is started on this host.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_granted_launch_naming_another_host_is_sent_once_and_never_started_here(bool remote)
+    {
+        using var key = P256KeyPair.Generate();
+        var statik = RandomNumberGenerator.GetBytes(32);
+        var credentials = new AgentCredentials(folder, "machine");
+        var sign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var q = sign.ExportParameters(false).Q;
+        var link = new Link(Wire.DeviceId(statik), [new(new('b', 32), "Target", "host", DateTimeOffset.UtcNow)], data =>
+        {
+            var input = data.GetProperty("launch").Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+            return Task.FromResult(JsonSerializer.SerializeToElement(
+                FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "scope"), ProtocolJson.Options));
+        });
+        var sender = new FleetRemoteLaunchSender(link, credentials, () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]));
+        var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: true, credentials: credentials, remoteLaunch: sender);
+        var body = JsonSerializer.SerializeToElement(new FleetLaunchInput(1, Guid.Parse(request), Guid.NewGuid(), "SG Builder 266", "App", "claude",
+            Target: remote ? new string('b', 32) : null, Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello"), ProtocolJson.Options);
+
+        var receipt = await GrantedLaunch(pipe, body);
+
+        Assert.Equal(remote ? 1 : 0, link.Calls);
+        Assert.Equal(0, launcher.Launches);
+        if (remote) { Assert.Equal("scope", receipt.Reason); }
     }
 
     [Theory]
