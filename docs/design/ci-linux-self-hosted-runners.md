@@ -10,6 +10,7 @@ From the jobs API, 23 main runs after per-commit concurrency (#3855) landed, Nov
 
 - A main run uses **16 Linux jobs, 80 job-minutes**. The PWA's browser legs are **52** of them: WebKit 32.5 and Chromium 19.2.
 - Linux jobs wait **4.3 min median, 12.9 min p90** for a hosted runner. Before #3855 they waited 0.
+- For scale, the three Windows on Arm legs (`app (win-arm64)`, `app-installer (win-arm64)`, `product (windows-11-arm)`) use **~38 job-minutes a run** on hosted Arm runners. That pool is separate and this design does not change it.
 - Main starts up to ~12 runs an hour, with a median of 6 in flight at once. At 80 Linux job-minutes a run that is about 16 Linux runners busy on average, against the account's hosted concurrency cap, which Windows shares.
 
 Moving the browser legs takes ~52 job-minutes a run off the hosted pool. Hosted Linux falls to about 28 job-minutes a run. *Estimate:* with Windows x64 on `ab-ci` as well, the hosted queue should fall back towards 0 to 1 min. Measure after, as for Windows.
