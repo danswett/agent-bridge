@@ -606,15 +606,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
-    // The check and the write under one lock: a second press for the same script finds its generation already moved on and is refused.
+    // The confirmation is consumed under the store's lock (ConsumeScriptConfirmation is the one atomic winner); the audit attempt and the
+    // change then run with no store lock held. Holding it across the audit append would stall every other store call for as long as that
+    // call waits on the audit log's own lock, up to two seconds (#3883 receipt 7101860025). The write itself takes the lock it needs.
     internal T RunScriptPress<T>(string? token, string op, string name, IProtocolChannel channel, Func<T> act)
     {
-        lock (gate)
-        {
-            if (!ConsumeScriptConfirmation(token, op, name, channel))
-            { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within two minutes on the same connection; ask scripts.confirm again"); }
-            return act();
-        }
+        if (!ConsumeScriptConfirmation(token, op, name, channel))
+        { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within two minutes on the same connection; ask scripts.confirm again"); }
+        return act();
     }
 
     internal void SetFleetLaunch(string name, bool enabled)

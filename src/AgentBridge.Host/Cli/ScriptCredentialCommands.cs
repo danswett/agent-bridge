@@ -39,8 +39,8 @@ public static class ScriptCredentialCommands
         { throw new ArgumentException("scripts add or revoke needs a valid script name"); }
         if (op is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet"))
         { throw new ArgumentException("unknown script credential operation"); }
-        // The audit attempt and the change run as one step. An app press uses up its confirmation and does the step under the store's
-        // lock, so a second press for the same state (a double click) finds the state already changed and is refused.
+        // The audit attempt and the change run as one step after the press has used up its confirmation. Using it up is the atomic
+        // step (a double press finds it gone and is refused); no credential store lock is held while the audit log is written.
         object Change()
         {
             // Record admission before mutation: an unavailable audit must never allow an unrecorded credential write.

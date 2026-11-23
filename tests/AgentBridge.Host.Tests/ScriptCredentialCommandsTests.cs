@@ -416,6 +416,27 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         catch (InvalidOperationException) { return false; }
     }
 
+    // P1 finding (#3883 receipt 7101860025): the press must not hold the credential store's lock while it waits on the audit log's
+    // own lock, which can take up to two seconds; every other store call (Count, a hello, a list) would stall behind it.
+    [Fact]
+    public async Task A_press_waiting_on_the_audit_lock_does_not_block_the_credential_store()
+    {
+        var confirm = await Confirm("scripts.add");
+        var auditLock = Path.Combine(fixture.Root, AgentAuditLog.FolderName) + ".lock";
+        using var held = new FileStream(auditLock, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var press = Task.Run(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        await Task.Delay(400);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        _ = credentials.Count;
+        _ = credentials.ListScripts();
+        var waited = watch.ElapsedMilliseconds;
+        Assert.True(waited < 500, $"the store was blocked for {waited} ms behind a press waiting on the audit lock");
+        // The audit log never opened, so the press is refused and nothing was written.
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => press);
+        Assert.Contains("audit", error.Message);
+        Assert.Equal(0, credentials.Count);
+    }
+
     [Fact]
     public async Task A_press_that_fails_still_uses_up_its_confirmation()
     {

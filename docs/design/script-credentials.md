@@ -164,8 +164,8 @@ step for credentials) requires; a mint no longer has a PowerShell or terminal pa
   name the host keeps a **generation counter**, moved on by every press attempt (right or wrong) and by every mint,
   revoke, rotation, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
   generation, the operation and the connection it was issued to. The value is derived from a random per-process
-  salt and a fresh nonce, lives **two minutes**, and is checked and used up under the same lock as the audit
-  attempt and the change it allows. So a used, expired, replayed or guessed value, one presented on another
+  salt and a fresh nonce, lives **two minutes**, and is checked and used up in one atomic step under the
+  credential store's lock; the audit attempt and the change follow, with no store lock held while the audit log is written. So a used, expired, replayed or guessed value, one presented on another
   connection, one made for another action or script, and one whose script has since changed (even if it has
   since come back, as after a mint and a revoke) is refused and changes nothing; two presses at once with one
   confirmation make one credential, and two confirmations asked at once never make two. A wrong try also uses up
