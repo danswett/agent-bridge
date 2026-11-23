@@ -56,6 +56,14 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
   rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
   that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
+- **It survives the owner's Restart host: yes, and it is not a child of the host (from the code, `AgentStarter.cs` in `AgentBridge.Host.Delivery`).** The host
+  refuses to start any session while it is itself elevated (`WindowsAgentStarter.Unavailable`: an integrity level at or above 0x3000 returns "the host is running as
+  administrator ... start the host unelevated"), and the sessions it does start are unelevated. So an **elevated session cannot be one the host launched**: it is started
+  separately, by the owner's own approval, and is not in the host's process tree. Even for the unelevated sessions the host starts, it uses `CreateProcessW` with
+  `CREATE_NEW_CONSOLE`, closes its handles, and puts the process in **no job object**, so nothing ties the session's lifetime to the host process; the only place the
+  host terminates a session is the stop path (`ProcessControl` `TerminateProcess` for an end), not shutdown or restart. A host restart therefore does not end the
+  elevated session, and the dead-man scheduled task (a SYSTEM task) is independent of both. **This is read from the code, not tested on a host:** SRE confirms it in
+  the dry run by restarting a spare host and checking the elevated session is still there.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 
 #### The final command block (what the owner sees)
