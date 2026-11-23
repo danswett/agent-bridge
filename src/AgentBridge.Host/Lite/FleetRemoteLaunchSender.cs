@@ -95,9 +95,9 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
             var reply = await link.RequestAsync(device, account, FleetRemoteLaunch.Op, request, flight.Token);
             var receipt = reply.ValueKind == JsonValueKind.Object && reply.TryGetProperty("result", out _)
                 ? reply.Deserialize<FleetLaunchReceipt>(ProtocolJson.Options) : null;
-            // Only the fixed receipt codes are believed: a reply that names another reason is not a result this host can show.
-            return receipt is not null && receipt.Request == input.Request && receipt.Grant == input.Grant
-                && (receipt.Reason is null || FleetLaunchCommands.Reasons.Contains(receipt.Reason, StringComparer.Ordinal)) ? receipt : Unconfirmed();
+            // The peer's receipt is rebuilt from fixed fields only (outcome, canonical session id, permissions, counters, a fixed reason code): no free-text
+            // reason, no peer cwd or trust question is passed through. Anything that does not fit is not a result this host can show.
+            return Normalize(receipt, input) ?? Unconfirmed();
         }
         catch (LitePeerNotTrustedException) { return Refuse("peer-not-trusted"); }
         catch (LitePeerOfflineException) { return Refuse("target-offline"); }
@@ -105,6 +105,22 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
         finally { watching.Cancel(); await watcher; }
 
         FleetLaunchReceipt Unconfirmed() => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Unconfirmed), input, null);
+    }
+
+    static FleetLaunchReceipt? Normalize(FleetLaunchReceipt? r, FleetLaunchInput input)
+    {
+        if (r is null || r.Request != input.Request || r.Grant != input.Grant || r.Result is null || !Enum.IsDefined(r.Result.Outcome) || r.Generation < 0
+            || r.Permissions is not (null or "ask" or "allowAll") || r.Reason is { } reason && !FleetLaunchCommands.Reasons.Contains(reason, StringComparer.Ordinal)) { return null; }
+        string? session = null;
+        if (r.Result.Session is { } full)
+        {
+            if ((!Guid.TryParseExact(full, "D", out var id) && !Guid.TryParseExact(full, "N", out id)) || id == Guid.Empty) { return null; }
+            session = id.ToString("D");
+        }
+        if (r.Registered && (r.Result.Outcome != LaunchOutcome.Started || session is null || r.Permissions is null)) { return null; }
+        var caps = r.Caps is { } c && c.Hourly is > 0 and <= 1000 && c.Daily is > 0 and <= 5000 && c.Live is > 0 and <= 100 ? c : null;
+        var usage = r.Usage is { } u && u.Hourly >= 0 && u.Daily >= 0 && u.Live >= 0 ? u : null;
+        return new(input.Request, input.Grant, r.Generation, new(r.Result.Outcome) { Session = session }, r.Permissions, r.Registered, usage, caps, r.Reason);
     }
 
     // A 32-hex device id, or the 29-character node id (agent_bridge_ + first 16 hex) resolved against present hosts only.

@@ -504,7 +504,7 @@ Restart replay (owner-approved warm-up). The envelope replay cache is in memory.
 after a host start the receiver refuses all `fleet.launch` envelopes until 120 s plus the 30 s clock skew has passed
 (about 2.5 minutes); any envelope sealed before the restart has expired by then, so it cannot replay. Expect remote
 launches to be refused with `policy` for about 2.5 minutes after a host restart; senders get a refusal, not a queue, and
-retry with a fresh request. No store or new file is added. Noted alternative, not chosen: a durable (sourceDevice, nonce)
+retry with a fresh envelope and the SAME request id (never a new request id: that would be a new operation and could double-launch). No store or new file is added. Noted alternative, not chosen: a durable (sourceDevice, nonce)
 file that survives restart and removes the pause, at the cost of a private atomic store and its recovery rules.
 The sender's envelope `generation` is diagnostic only: the receiver fences on its own grant generation (as local launches do).
 

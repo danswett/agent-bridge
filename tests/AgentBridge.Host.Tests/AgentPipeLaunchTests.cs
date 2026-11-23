@@ -1126,6 +1126,29 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task A_peer_receipt_is_normalized_to_fixed_codes_with_no_free_text_cwd_or_trust_passed_through()
+    {
+        using var key = P256KeyPair.Generate();
+        var session = Guid.NewGuid();
+        var s = OpenSender(key, serve: data =>
+        {
+            var sent = data.GetProperty("launch").Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+            var peer = new FleetLaunchReceipt(sent.Request, sent.Grant, 1,
+                new(LaunchOutcome.Started, "free text from the peer") { Session = session.ToString("N"),
+                    Launched = new LaunchedWith { Agent = "claude", Cwd = @"C:\peer\secret", Permissions = "ask" } },
+                "ask", true, null, null, null);
+            return Task.FromResult(JsonSerializer.SerializeToElement(peer, ProtocolJson.Options));
+        });
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Started, true, "ask"), (receipt.Result.Outcome, receipt.Registered, receipt.Permissions));
+        Assert.Equal(session.ToString("D"), receipt.Result.Session);
+        Assert.Null(receipt.Result.Reason);
+        Assert.Null(receipt.Result.Launched);
+        Assert.Null(receipt.Result.Trust);
+        Assert.Null(receipt.Reason);
+    }
+
+    [Fact]
     public async Task A_peer_reply_with_a_reason_outside_the_fixed_codes_is_unconfirmed_not_trusted()
     {
         using var key = P256KeyPair.Generate();
