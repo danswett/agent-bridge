@@ -213,4 +213,85 @@ public sealed class GateVerdictTests : IDisposable
         Assert.DoesNotContain("unresolved-intent", report.IncompleteReasons);
         Assert.Empty(report.Totals);
     }
+
+    // Trim detection is per stream: launches live in launches-*.jsonl and everything else in agents-*.jsonl, each with
+    // its own retained floor. Mixing the streams let an old launch row hide a trim of the agents stream (review P1-A).
+    static readonly DateTimeOffset Start = DateTimeOffset.Parse("2026-11-10T00:00:00Z");
+
+    static AuditCommands.Row GateRow(string action, DateTimeOffset at, long sequence, bool gate = true)
+    {
+        var op = Guid.NewGuid();
+        return new(at, "person:phone-1", action, "reserved", Gate: gate ? new GateAuditMetadata(1, op, Guid.Empty, sequence, "intent", "relay", "person-client", op, "none") : null);
+    }
+
+    [Fact]
+    public void An_old_launch_row_cannot_hide_a_trim_of_the_agents_stream()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.launch", Start.AddDays(-10), 1), GateRow("session.answer", Start.AddDays(1), 5), GateRow("session.stop", Start.AddDays(2), 6)];
+        Assert.True(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 4, launchesRetained: 0, Start));
+    }
+
+    [Fact]
+    public void An_old_agents_row_cannot_hide_a_trim_of_the_launches_stream()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.answer", Start.AddDays(-10), 1), GateRow("session.launch", Start.AddDays(1), 5)];
+        Assert.True(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 0, launchesRetained: 4, Start));
+    }
+
+    [Fact]
+    public void A_trim_that_stops_before_the_window_start_is_not_a_coverage_break()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.answer", Start.AddDays(-2), 5), GateRow("session.launch", Start.AddDays(-1), 6)];
+        Assert.False(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 4, launchesRetained: 4, Start));
+    }
+
+    [Fact]
+    public void An_untrimmed_stream_is_never_a_break_even_when_its_rows_begin_after_the_start()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.answer", Start.AddDays(3), 1), GateRow("session.launch", Start.AddDays(3), 2)];
+        Assert.False(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 0, launchesRetained: 0, Start));
+    }
+
+    [Fact]
+    public void A_trimmed_agents_stream_with_no_retained_gate_rows_is_a_break()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.launch", Start.AddDays(-5), 1)];
+        Assert.True(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 3, launchesRetained: 0, Start));
+    }
+
+    [Fact]
+    public void Agents_rows_without_gate_metadata_do_not_bound_the_trim()
+    {
+        AuditCommands.Row[] rows = [GateRow("session.send", Start.AddDays(-5), 0, gate: false), GateRow("session.answer", Start.AddDays(1), 5)];
+        Assert.True(GateAuditProjection.TrimmedIntoWindow(rows, agentsRetained: 4, launchesRetained: 0, Start));
+    }
+
+    // grant.* rows (reserve, issue, revoke, update) are not launch, approval or stop credit. Two reserves of the same
+    // grant share an identity, so counting them tripped the duplicate-identity check and failed the window (review P2).
+    void GrantReserve(AgentAuditLog log, Guid target, Guid incarnation)
+    {
+        var op = Guid.NewGuid();
+        var binding = new string('a', 64);
+        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "relay", "person-client", incarnation, "none", GrantBinding: binding);
+        var intent = new AgentAuditEntry("in", op.ToString(), "person:phone-1", [], "grant.reserve", target.ToString(), "reserved", Gate: gate);
+        Assert.True(log.Append(intent));
+        Assert.True(log.Append(intent with { Outcome = "admitted", Gate = gate with { Phase = "terminal" } }));
+    }
+
+    [Fact]
+    public void Repeated_grant_reserves_in_the_window_do_not_invalidate_it()
+    {
+        Directory.CreateDirectory(Profile);
+        var since = Now.AddMinutes(-1);
+        var log = new AgentAuditLog(Profile, clock);
+        var target = Guid.NewGuid();
+        var incarnation = Guid.NewGuid();
+        GrantReserve(log, target, incarnation);
+        GrantReserve(log, target, incarnation);
+        Rows("relay", "person-client", "person:phone-1", "started", "none");
+        var report = GateAuditProjection.ReadWindow(Profile, since);
+        Assert.False(report.Invalidated);
+        Assert.DoesNotContain(report.Totals, t => t.Action.StartsWith("grant."));
+        Assert.Equal(1, report.Totals.Single(t => t is { Action: "session.launch", Path: "relay" }).Successes);
+    }
 }

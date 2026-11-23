@@ -58,8 +58,21 @@ internal static class GateAuditProjection
     }
 
     // The retirement counters over a time window (owner decision, Nov 22): every operation whose first row is at or
-    // after `since`, whatever its run. A restart is a new start date. Trimmed old evidence breaks coverage only when
-    // the retained log begins after the window start, because only then could in-window rows have been lost.
+    // after `since`, whatever its run. A restart is a new start date. Trimmed old evidence breaks coverage only when a
+    // stream's retained gate rows begin after the window start (TrimmedIntoWindow), because only then could rows in the
+    // window have been lost.
+    // Whether trimming could have removed evidence inside the window. Launches live in launches-*.jsonl and every other
+    // action in agents-*.jsonl, each with its own head and retained floor, so each stream is judged only from its own gate
+    // rows: a stream trimmed to a floor above zero whose oldest retained gate row begins after the window start (or that
+    // has none) may have lost rows from the window. An old row in the other stream proves nothing about this one.
+    internal static bool TrimmedIntoWindow(IReadOnlyList<AuditCommands.Row> rows, long agentsRetained, long launchesRetained, DateTimeOffset since)
+    {
+        static bool Stream(IEnumerable<AuditCommands.Row> gateRows, long retained, DateTimeOffset since) =>
+            retained > 0 && (!gateRows.Any() || gateRows.Min(r => r.At) > since);
+        var gate = rows.Where(r => r.Gate is not null).ToArray();
+        return Stream(gate.Where(r => r.Action != "session.launch"), agentsRetained, since)
+            || Stream(gate.Where(r => r.Action == "session.launch"), launchesRetained, since);
+    }
     internal static GateAuditReport ReadWindow(string profile, DateTimeOffset since)
     {
         var coverage = false;
@@ -67,7 +80,8 @@ internal static class GateAuditProjection
         long retained = 0;
         var (rows, complete) = Load(profile, fault => coverage |= fault == "coverage-break",
             boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
-        var trimmedIntoWindow = retained > 0 && (rows.Count == 0 || rows.Min(r => r.At) > since);
+        var launchesRetained = AgentAuditLog.RetainedThrough(Path.Combine(profile, AgentAuditLog.FolderName), launch: true);
+        var trimmedIntoWindow = TrimmedIntoWindow(rows, retained, launchesRetained, since);
         return Project(rows, complete && !adopted, Guid.Empty, coverage: coverage || trimmedIntoWindow, retainedThrough: retained, since: since);
     }
 
@@ -81,7 +95,8 @@ internal static class GateAuditProjection
         var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
         if (sequences.Distinct().Count() != sequences.Length
             || sequences.Where(s => s > retainedThrough).Where((s, i) => s != retainedThrough + i + 1L).Any()) { reasons.Add("sequence-break"); }
-        var pool = rows.Where(r => r.Gate is { } g && g.Phase != "control" && (since is not null || g.Run == run)
+        // The window counts launches, approvals and stops only: grant.* rows are not credit, and repeat reserves share an identity.
+        var pool = rows.Where(r => r.Gate is { } g && g.Phase != "control" && (since is not null ? !r.Action.StartsWith("grant.", StringComparison.Ordinal) : g.Run == run)
             && (onlyOperation is null || g.Operation == onlyOperation));
         if (since is { } start) { pool = pool.GroupBy(r => r.Gate!.Operation).Where(o => o.Min(r => r.At) >= start).SelectMany(o => o); }
         var selected = pool.OrderBy(r => r.Gate!.Sequence).ToArray();
