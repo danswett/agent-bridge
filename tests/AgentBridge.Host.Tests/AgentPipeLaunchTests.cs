@@ -803,7 +803,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public string Request = "";
     }
 
-    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "")
+    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "", bool warm = true)
     {
         var statik = RandomNumberGenerator.GetBytes(32);
         var peer = Wire.DeviceId(statik);
@@ -811,7 +811,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(grantKey: key, grantOnly: true);
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
-        return new(new FleetRemoteLaunch(pipe.Launch, store), channel, grant, subject, ECDsa.Create(ECCurve.NamedCurves.nistP256)) { Request = request };
+        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256)) { Request = request };
     }
 
     [Fact]
@@ -876,6 +877,30 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         launcher.BeforeDispatch = () => Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
         Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_freshly_started_receiver_refuses_every_envelope_until_the_replay_warm_up_has_passed()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key, warm: false);
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task An_envelope_whose_source_device_is_not_the_authenticated_peer_is_refused()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var forged = r.Data(body: new FleetActionBody("123", new string('d', 32), FleetActionEnvelope.SubjectDigest(r.Subject.Account,
+            r.Subject.SourceHost, r.Subject.Session, r.Subject.Credential, r.Subject.ProcessInstance.Pid, r.Subject.ProcessInstance.StartedAt.UtcTicks),
+            r.Channel.Self, "fleet.launch", r.Grant.Id.ToString("D"), 0, Guid.Parse(request), FleetActionEnvelope.NewNonce(),
+            DateTimeOffset.UtcNow.AddSeconds(60), FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(
+                new FleetLaunchInput(1, Guid.Parse(request), r.Grant.Id, "SG Builder 266", "App", "claude", Model: "small", Effort: "medium",
+                    Context: "default", Permissions: "ask", Prompt: "hello"), ProtocolJson.Options))));
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, forged)).Reason);
         Assert.Equal(0, launcher.Launches);
     }
 
