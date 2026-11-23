@@ -1031,10 +1031,10 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   its run. [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is
   one result in `needs`. Any API error, any other failed job (x64, `relay-image-sarif`, `pwa-e2e`,
   `product (ubuntu-latest)`, any), and a cancelled, timed-out or skipped Arm64 leg waive nothing, in the
-  merge rule and in `main_green` alike. The Arm64 jobs still run and stay red. Publishing still needs
-  both architectures' packages, and the release train
-  ([app-windows.md](../docs/app-windows.md#the-release-train-2225)) publishes a run that is red only for
-  Arm64. This is not proof of Arm64 runtime correctness or landing authorization.
+  merge rule and in `main_green` alike. The Arm64 jobs still run and stay red. This change does not touch
+  publishing: `publish-gate` still reads `app`'s raw result, so a red Arm64 leg still blocks a release
+  until the separate workflow change (#2454) lands, which makes it need both architectures' package
+  artifacts instead. This is not proof of Arm64 runtime correctness or landing authorization.
   **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
   whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
