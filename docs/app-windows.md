@@ -33,7 +33,11 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
 rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
 keeps exception types and frames, not messages or source paths, in `crash.log` and the
-existing diagnostics journal. Neither submits anything.
+existing diagnostics journal. Neither submits anything. Each exception's type is followed by its HResult
+(a number, never its message), because a native XAML failure carries no managed frames.
+A UI-thread exception is written there first; then, outside self-tests, the app keeps running (the
+exception is marked handled and `app.log` says so), unless more than three arrive within 10 seconds,
+when it ends as before. A handled exception still leaves its evidence in the run marker.
 The marker and `crash.log` include nested/aggregate exception types and frames,
 bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
 Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`

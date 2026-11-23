@@ -133,7 +133,7 @@ public sealed class RunMarker : IDisposable
         // Share the bound so a long outer stack cannot hide every inner exception.
         var entryLimit = (8192 - errors.Count + 1) / errors.Count;
         return string.Join("\n", errors.Select(item => Limit(
-            FeedbackRedactor.Redact(item.GetType().FullName ?? "Exception") + "\n" +
+            FeedbackRedactor.Redact(item.GetType().FullName ?? "Exception") + $" 0x{(uint)item.HResult:X8}\n" +
             FeedbackRedactor.Redact(new System.Diagnostics.StackTrace(item, fNeedFileInfo: false).ToString()), entryLimit)));
     }
 
