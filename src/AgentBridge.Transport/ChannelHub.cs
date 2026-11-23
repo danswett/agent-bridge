@@ -25,6 +25,12 @@ public sealed class ChannelHub
     public Action<string>? Log { get; set; }
     // Installed before relay callbacks become reachable; applies in both directions.
     public Func<SecureChannel, bool>? PeerAllowed { get; set; }
+    // #55 R3b: the signed device roster's gate, set only by a host that enforces it. Asked for every request a peer makes (and every
+    // early request in an IK first message) with the channel and the op: false answers NotApproved and no handler runs. Null, as in
+    // off and observe, is never consulted: the hub is what it was before the gate.
+    public Func<SecureChannel, string, bool>? RosterGate { get; set; }
+    // What a device the roster gate does not approve is told, for any op: it is not an unknown op, and it says what to do.
+    public const string NotApproved = "approve this machine";
     // A peer opened a channel to this device and the handshake completed. Raised on the
     // receive path: start long work elsewhere, or later frames wait for it.
     public event Action<SecureChannel>? Accepted;
@@ -103,6 +109,17 @@ public sealed class ChannelHub
         Forget(ch, new IOException("the peer is no longer authorized"));
         _ = CloseAsync(ch);
         throw new InvalidOperationException("the peer is not authorized");
+    }
+
+    // The roster gate (RosterGate), asked per op; refused, the handler never runs and the peer is told NotApproved.
+    void RequireApproved(SecureChannel ch, string op)
+    {
+        if (RosterGate is not { } gate) { return; }
+        // A gate that cannot answer is not an approval: any failure refuses, and the peer is told only NotApproved.
+        bool approved;
+        try { approved = gate(ch, op); }
+        catch (Exception e) when (e is not OutOfMemoryException) { approved = false; }
+        if (!approved) { throw new InvalidOperationException(NotApproved); }
     }
 
     public void RevalidatePeers()
@@ -388,6 +405,7 @@ public sealed class ChannelHub
         try
         {
             RequirePeer(ch);
+            RequireApproved(ch, op);
             result = await Handler(ch, op, asked.TryGetProperty("data", out var d) ? d : default);
         }
         catch (Exception e) when (e is not OutOfMemoryException)
@@ -436,6 +454,7 @@ public sealed class ChannelHub
         try
         {
             RequirePeer(ch);
+            RequireApproved(ch, op);
             var result = Handler is null ? null : await Handler(ch, op, data);
             if (result is ChannelReply r) { (result, then, runsIfUnsent) = (r.Result, r.Then, r.RunsIfUnsent); }
             reply = ch.Serialize(result is null ? new { re = id, ok = false, error = $"unknown op {op}" } : new { re = id, ok = true, result });
