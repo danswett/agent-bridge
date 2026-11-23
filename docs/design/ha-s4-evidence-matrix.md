@@ -62,7 +62,7 @@ The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but i
 This grid is read off the per-row tables below and uses the status words of the [parity legend](../parity.md) exactly. The tables govern if the two ever disagree. It adds no evidence and no new claim: no cell is `Verified`, because no cell has a current recorded live run.
 
 * `Implemented, untested live`: the grid's "Built" with no client-specific live receipt (tests and fixture runs are not a live run; live runs are tracked by [#39](https://github.com/danswett/agent-bridge/issues/39)).
-* `Verified (historical)`: only where the live column cites an earlier observation that covers the row's main behavior (it is not current all-platform proof). Anything narrower stays `Implemented, untested live`.
+* `Verified (historical)`: where the live column cites an earlier observation of the behavior the row is named for, on that client. A note that the full, current or all-platform run is still untested does not demote it, because the legend's word already says it is not current proof. An observation of something narrower than the row stays `Implemented, untested live` (row 16 on Windows: only the question toast, not the finished-turn notice; row 28 on Windows: only the toast buttons, not opening the question). The same rule is applied to every cell.
 * `Partial` and `Missing` follow the cell text: Partial names a missing behavior, Missing is explicit in the cited source. MCP cells follow M, the completed inventory.
 * Unknown is not a legend word. It marks a cell the sources do not establish (the host CLI entry points are not inventoried, [#2402](https://github.com/danswett/agent-bridge/issues/2402)); it never means the feature is absent.
 
@@ -78,7 +78,9 @@ This grid is read off the per-row tables below and uses the status words of the 
 | 28 push opens the question | `Verified (historical)` | `Implemented, untested live` | `Partial` | `Missing` | Unknown | `Missing` |
 | 29 images in replies | `Verified (historical)` | `Verified (historical)` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
 
-Rows 5 and 17 also have offline Home Assistant-off tests (a person approves, denies and is refused when stale or unpinned; one form of each field type). Those show the behavior is built and independent of Home Assistant; they do not change a status here, because the live runs, three per client and the row minimums below, are still open.
+Offline Home Assistant-off tests for rows 5 and 17 (approve, deny, stale and unpinned refusals; one form of each field type) are in the open pull requests [#4004](https://github.com/danswett/agent-bridge/pull/4004) and [#4010](https://github.com/danswett/agent-bridge/pull/4010) and are **not on main yet**; this grid does not rely on them. Once merged they show the behavior is built and independent of Home Assistant, but they would not change a status here, because the live runs, three per client and the row minimums below, are still open.
+
+Row 4: the PWA's historical stop predates the Product ruling for guarded-idle states; the host's one-press path there is a known gap tracked in [#2411](https://github.com/danswett/agent-bridge/issues/2411), so that cell is not a pass for the current rule.
 
 ## Row 4: stop, idle one press; non-idle confirmation
 
