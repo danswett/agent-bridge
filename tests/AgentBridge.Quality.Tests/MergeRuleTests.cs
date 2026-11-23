@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace AgentBridge.Quality.Tests;
 
-public class MergeRuleTests
+public partial class MergeRuleTests
 {
     const string Head = "abcdef0123456789abcdef0123456789abcdef01";
     const string Older = "0000000123456789abcdef0123456789abcdef01";
@@ -2949,9 +2949,20 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, string? pulls = null, string? marker = null, bool failMarker = false) : IGitHub
     {
         public List<string> Posted { get; } = [];
+
+        // The sweep marker statuses on main's head, newest first (the real API's order): the seeded one, then each posted.
+        public List<string> Markers { get; } = marker is null ? [] : [marker];
+
+        // Main's head as the ref read answers it; "" when the runs the fake was given can't say (a garbled body, none).
+        string MainSha(string? runs)
+        {
+            if (mainHead is not null) return mainHead;
+            try { return JsonDocument.Parse(runs ?? MainRuns((1, "completed", "success", 1))).RootElement.GetProperty("workflow_runs").EnumerateArray().FirstOrDefault().GetProperty("head_sha").GetString() ?? ""; }
+            catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return ""; }
+        }
 
         public List<string> RestPaths { get; } = [];
 
@@ -2986,6 +2997,13 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            if (path.Contains("/pulls?state=open", StringComparison.Ordinal))
+                return JsonDocument.Parse(pulls ?? throw new InvalidOperationException("gh: HTTP 404"));
+            if (MainSha(mainRuns) is { Length: > 0 } mainSha && path.Contains($"/commits/{mainSha}/statuses", StringComparison.Ordinal))
+            {
+                if (failMarker) throw new InvalidOperationException("gh: HTTP 502");
+                return JsonDocument.Parse(JsonSerializer.Serialize(Markers.Select(d => new { context = "merge-rule-sweep", state = "success", description = d })));
+            }
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
                 if (failMain) throw new InvalidOperationException("gh: HTTP 502");
@@ -3055,7 +3073,11 @@ public class MergeRuleTests
                 : files ?? """{"files": [{"filename": "docs/status.md"}, {"filename": "docs/new.md", "previous_filename": "docs/old.md"}]}""");
         }
 
-        public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl) =>
+        public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl)
+        {
+            if (context == "merge-rule-sweep")
+                Markers.Insert(0, description);
             Posted.Add($"{sha} {state} {context} {description} {targetUrl}");
+        }
     }
 }
