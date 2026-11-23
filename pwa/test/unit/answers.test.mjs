@@ -68,6 +68,36 @@ test('required fields must be answered and unknown fields are refused', () => {
   assert.match(checkAnswer(form(choice('x', { required: false })), fields({})), /the answer is empty/);
 });
 
+// HA retirement row 17: one native form carrying every field type, answered by name as one answer. The same
+// case as the host's A_form_with_one_field_of_each_of_the_five_types_is_answered_whole_by_name... in
+// tests/AgentBridge.Protocol.Tests/AnswerTests.cs.
+test('a form with one field of each of the five types is answered whole by name, and each field is checked on its own', () => {
+  const q = form(
+    { name: 'colour', type: 'choice', options: [{ value: 'red' }, { value: 'green' }], required: true },
+    { name: 'toppings', type: 'multi', options: [{ value: 'x' }, { value: 'y' }, { value: 'z' }], required: true },
+    { name: 'enabled', type: 'boolean', required: true },
+    { name: 'notes', type: 'text', required: true },
+    { name: 'count', type: 'number', required: true });
+  const five = (change = (f) => f) => fields(change({
+    colour: 'red', toppings: ['x', 'z'], enabled: true, notes: 'héllo – 日本語 ✓', count: 3,
+  }));
+  assert.equal(checkAnswer(q, five()), null);
+  for (const name of ['colour', 'toppings', 'enabled', 'notes', 'count']) {
+    const problem = checkAnswer(q, five((f) => { delete f[name]; return f; }));
+    assert.match(problem, new RegExp(`"${name}"`));
+    assert.match(problem, /needs an answer/);
+  }
+  const set = (key, value) => five((f) => ({ ...f, [key]: value }));
+  assert.match(checkAnswer(q, set('colour', 'blue')), /not one of the choices/);
+  assert.match(checkAnswer(q, set('colour', { other: 'c' })), /no other answer/);
+  assert.match(checkAnswer(q, set('toppings', 'x')), /expected a list/);
+  assert.match(checkAnswer(q, set('toppings', ['x', 'w'])), /not one of the choices/);
+  assert.match(checkAnswer(q, set('enabled', 'true')), /true or false/);
+  assert.match(checkAnswer(q, set('notes', 3)), /expected text/);
+  assert.match(checkAnswer(q, set('count', '3')), /a number/);
+  assert.match(checkAnswer(q, set('nope', 1)), /no field "nope"/);
+});
+
 test('a question without fields takes non-empty text, and one with fields takes no text', () => {
   const plain = form();
   assert.equal(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: 'ship it' }), null);

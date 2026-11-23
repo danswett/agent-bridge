@@ -146,6 +146,52 @@ public class AnswerTests
         Assert.Contains("no field \"nope\"", Answers.Check(q, Answer("""{"answer":"a","nope":1}""")));
     }
 
+    // HA retirement row 17: one native form carrying every field type, answered by name as one answer. The
+    // PWA mirrors this case in pwa/test/unit/answers.test.mjs, so the host and the app read it the same way.
+    static Question FiveTypes() => Form(
+        new Field { Name = "colour", Type = FieldType.Choice, Options = [new("red"), new("green")], Required = true },
+        new Field { Name = "toppings", Type = FieldType.Multi, Options = [new("x"), new("y"), new("z")], Required = true },
+        new Field { Name = "enabled", Type = FieldType.Boolean, Required = true },
+        new Field { Name = "notes", Type = FieldType.Text, Required = true },
+        new Field { Name = "count", Type = FieldType.Number, Required = true });
+
+    static AnswerRequest Five(Action<Dictionary<string, object?>>? change = null)
+    {
+        var fields = new Dictionary<string, object?>
+        {
+            ["colour"] = "red", ["toppings"] = new[] { "x", "z" }, ["enabled"] = true, ["notes"] = "héllo – 日本語 ✓", ["count"] = 3,
+        };
+        change?.Invoke(fields);
+        return Answer(JsonSerializer.Serialize(fields));
+    }
+
+    [Fact]
+    public void A_form_with_one_field_of_each_of_the_five_types_is_answered_whole_by_name_and_each_field_is_checked_on_its_own()
+    {
+        var q = FiveTypes();
+        Assert.Null(Answers.Check(q, Five()));
+
+        // Each field left out is named, and none is optional.
+        foreach (var name in new[] { "colour", "toppings", "enabled", "notes", "count" })
+        {
+            var problem = Answers.Check(q, Five(f => f.Remove(name)));
+            Assert.Contains($"\"{name}\"", problem);
+            Assert.Contains("needs an answer", problem);
+        }
+
+        // Each field refuses a value of another kind, and the problem names the field at fault.
+        Assert.Contains("not one of the choices", Answers.Check(q, Five(f => f["colour"] = "blue")));
+        Assert.Contains("no other answer", Answers.Check(q, Five(f => f["colour"] = new { other = "c" })));
+        Assert.Contains("expected a list", Answers.Check(q, Five(f => f["toppings"] = "x")));
+        Assert.Contains("not one of the choices", Answers.Check(q, Five(f => f["toppings"] = new[] { "x", "w" })));
+        Assert.Contains("true or false", Answers.Check(q, Five(f => f["enabled"] = "true")));
+        Assert.Contains("expected text", Answers.Check(q, Five(f => f["notes"] = 3)));
+        Assert.Contains("a number", Answers.Check(q, Five(f => f["count"] = "3")));
+
+        // A name the form does not have is refused, whatever else is right.
+        Assert.Contains("no field \"nope\"", Answers.Check(q, Five(f => f["nope"] = 1)));
+    }
+
     [Fact]
     public void A_question_without_fields_takes_non_empty_text_and_one_with_fields_takes_no_text()
     {
