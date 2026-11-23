@@ -411,9 +411,14 @@ static partial class SelfTest
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
                 var wheelTarget = PostedInputTarget(window).Detail;
-                wheelInput = away.BeginLatestNativeInput();
-                Wheel(window, list);
-                var wheeled = await Until(() => wheelReceivedCount is not null
+                // A real OS wheel moves the cursor and needs the foreground: only on a CI runner (#3982). Elsewhere the check is skipped, and says so.
+                var skipped = RealWheelSkip();
+                if (skipped is null)
+                {
+                    wheelInput = away.BeginLatestNativeInput();
+                    Wheel(window, list);
+                }
+                var wheeled = skipped is null && await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
                 const string tookMessage = "a native wheel takes the view away from the latest";
                 var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
@@ -439,7 +444,7 @@ static partial class SelfTest
                     : "wheel not received (issues 2471, 2476; quarantine requires missing canary before 2026-11-20T08:00:00Z)";
                 var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
                 const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
-                var quarantined = wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
+                var quarantined = skipped is null && wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
                 {
                     wheelReady, wheeled, drawn, kept, count500, belowEnd, receipt,
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
@@ -453,7 +458,7 @@ static partial class SelfTest
                     offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
                     target = wheelTarget,
                     // #3982: where the posted wheel was aimed and what took it, every run (diagnosis only).
-                    wheelDiagnosis = WheelDiagnosisNow(),
+                    wheelDiagnosis = WheelDiagnosisNow(wheelReceivedCount), skipped,
                 };
                 if (observerDiagnostics)
                 {
@@ -464,7 +469,12 @@ static partial class SelfTest
                             "real ViewChanged callbacks remain detached after normal and exceptional cleanup");
                     }
                 }
-                if (!quarantined)
+                if (skipped is not null)
+                {
+                    check(true, $"{tookMessage}: SKIPPED ({skipped})");
+                    check(true, $"{keptMessage}: SKIPPED ({skipped})");
+                }
+                else if (!quarantined)
                 {
                     CheckLatestNativeReceipt(away, wheelReceipt, check);
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
@@ -957,11 +967,10 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        // #3982: watch which window this thread takes the wheel for, and record what it was aimed at (diagnosis only).
+        // #3982: a real OS wheel at the list centre, as a person's goes (the posted ones never reached the app on Arm64); watched: which window
+        // this thread takes it for, and (WheelDiagnosisNow) whether the app heard it. The cursor goes back in StopWatchingWheel.
         WatchWheel();
-        // Aimed at the window a real wheel hits (the one at the point, if it is the app's), the focus window otherwise (#3982).
-        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff),
-            focus => wheelAimed = NativeWheelTarget.Choose(window.Handle, WindowFromPoint(mouse), focus, h => GetAncestor(h, 2)))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        SendRealWheel(window.Handle, mouse.X, mouse.Y);
         DiagnoseWheel(window.Handle, mouse.X, mouse.Y);
     }
 
