@@ -58,7 +58,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                     && input.Session.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')))
             { input = null; return Refused("bad-argument"); }
             var subject = FleetGrantLaunch.Subject(credentials, account() ?? "", device, caller);
-            var (_, complete) = GateAuditProjection.Load(folder);
+            var (rows, complete) = GateAuditProjection.Load(folder);
             if (!complete) { return Refused("audit-unavailable"); }
             string? Check(GrantStore.State state)
             {
@@ -101,6 +101,23 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
             string? denial = null;
             var prepared = store.Transaction(state => { denial = Check(state); return (null, new(GrantStoreProblem.None)); }, allowNew: false);
             if (!prepared.Usable || denial is not null) { return Refused(denial ?? FleetGrantLaunch.StoreReason(prepared.Problem)); }
+            // The request id is bound by its durable intent row, so a restart (an empty in-memory
+            // memory) never dispatches it again. A request refused before dispatch has no intent and
+            // may be sent again; one bound to another grant, caller or session refuses.
+            var request = input.Request.ToString();
+            var bound = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request
+                && r.Gate is { Phase: "intent" }).ToArray();
+            if (bound.Length != 0)
+            {
+                if (bound.Any(r => r.Grant != input.Grant.ToString() || r.Principal != principal || r.Target != target!.Session))
+                { return Refused("duplicate-id"); }
+                var terminal = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request && r.Gate is { Phase: "terminal" })
+                    .Select(r => r.Outcome).Distinct().ToArray();
+                if (terminal is not ["ended"]) { return Receipt("unconfirmed", "duplicate-id"); }
+                return audit.Append(new("local", request, principal, caller.Chain, "fleet.end.replay",
+                    target!.Session, "ended", "none") { Grant = input.Grant.ToString() })
+                    ? Receipt("ended", null) : Receipt("unconfirmed", "audit-unavailable");
+            }
             bool Dispatch(int pid, DateTimeOffset at)
             {
                 var authorized = store.Transaction(state =>

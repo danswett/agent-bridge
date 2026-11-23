@@ -404,6 +404,62 @@ public sealed class CardTests : IAsyncLifetime
             new Field { Name = "untouched", Type = FieldType.Multi, Options = [new Option("x")] }), answer));
     }
 
+    // HA retirement row 17: the same five-type form the host checks (Protocol.Tests, AnswerTests) and the PWA builds
+    // (pwa/test/unit/answers.test.mjs), built by the Windows form: every field by name, as one answer the host accepts.
+    static AgentBridge.Protocol.Question FiveTypes() => Make.Form(
+        new Field { Name = "colour", Title = "colour", Type = FieldType.Choice, Options = [new Option("red"), new Option("green")], Required = true },
+        new Field { Name = "toppings", Title = "toppings", Type = FieldType.Multi, Options = [new Option("x"), new Option("y"), new Option("z")], Required = true },
+        new Field { Name = "enabled", Title = "enabled", Type = FieldType.Boolean, Required = true },
+        new Field { Name = "notes", Title = "notes", Type = FieldType.Text, Required = true },
+        new Field { Name = "count", Title = "count", Type = FieldType.Number, Required = true });
+
+    const string Notes = "héllo – 日本語 ✓";
+
+    static void FillFive(QuestionViewModel q, string? skip = null)
+    {
+        if (skip != "colour") { q.Fields[0].Options[0].IsSelected = true; }
+        if (skip != "toppings") { q.Fields[1].Options[2].IsSelected = true; q.Fields[1].Options[0].IsSelected = true; }
+        if (skip != "enabled") { q.Fields[2].ToggleBool(true); }
+        if (skip != "notes") { q.Fields[3].Text = Notes; }
+        if (skip != "count") { q.Fields[4].Text = "3"; }
+    }
+
+    [Fact]
+    public void A_form_with_one_field_of_each_of_the_five_types_builds_one_answer_by_name_that_the_host_accepts()
+    {
+        var form = FiveTypes();
+        var q = Question(form);
+        FillFive(q);
+
+        var (answer, problem, _) = q.Build();
+
+        Assert.Null(problem);
+        Assert.Equal(["colour", "count", "enabled", "notes", "toppings"], answer.Fields!.Keys.Order());
+        Assert.Equal("red", answer.Fields["colour"].GetString());
+        Assert.Equal("""["x","z"]""", answer.Fields["toppings"].GetRawText());
+        Assert.True(answer.Fields["enabled"].GetBoolean());
+        Assert.Equal(Notes, answer.Fields["notes"].GetString());
+        Assert.Equal(3, answer.Fields["count"].GetDouble());
+        Assert.Null(Answers.Check(form, answer));
+    }
+
+    [Theory]
+    [InlineData("colour")]
+    [InlineData("enabled")]
+    [InlineData("notes")]
+    [InlineData("count")]
+    public void A_five_type_form_with_one_required_field_left_out_is_not_sent_and_names_it(string skip)
+    {
+        var q = Question(FiveTypes());
+        FillFive(q, skip);
+
+        q.Send();
+
+        Assert.NotNull(q.Error);
+        Assert.Contains($"\"{skip}\"", q.Error);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+    }
+
     [Fact]
     public void An_approval_offers_approve_once_and_deny_coloured_for_what_they_do()
     {

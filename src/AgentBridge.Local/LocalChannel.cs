@@ -72,7 +72,11 @@ public sealed class LocalChannel : IClientChannel
         try
         {
             ThrowIfClosed();
-            await SendAsync(Serialize(new { id, op, data }), ct);
+            try { await SendAsync(Serialize(new { id, op, data }), ct); }
+            // A host that answers and hangs up at once (Stop does) can have the client read the answer and the end of the stream, and close its
+            // stream, while its own write is still completing: that write then fails though the host served the request and its answer is in.
+            // The answer is the outcome; a failure with no answer in is the call's own, as ever.
+            catch (Exception e) when (e is IOException or ObjectDisposedException && tcs.Task.IsCompletedSuccessfully) { }
             return await tcs.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), ct);
         }
         finally

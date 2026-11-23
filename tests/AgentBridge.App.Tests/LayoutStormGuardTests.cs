@@ -126,4 +126,18 @@ public sealed class LayoutStormGuardTests
         Assert.True(guard.Allowed(out runs, out _));
         Assert.Equal(0, runs);
     }
+
+    // #3811: a dense burst keeps at most Limit stamps (the oldest decide when the window ends), not one per event.
+    [Fact]
+    public void A_dense_burst_retains_at_most_the_limit_and_the_decision_is_unchanged()
+    {
+        var time = new FakeTimeProvider(); var guard = new LayoutStormGuard(time);
+        for (var i = 0; i < 100_000; i++) { guard.Run(); }
+        Assert.Equal(LayoutStormGuard.Limit, guard.Retained);
+        Assert.False(guard.Allowed(out var runs, out _));
+        Assert.Equal(LayoutStormGuard.Limit, runs);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(guard.Allowed(out _, out _));
+        Assert.Equal(0, guard.Retained);
+    }
 }

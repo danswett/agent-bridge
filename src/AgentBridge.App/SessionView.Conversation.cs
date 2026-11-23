@@ -449,12 +449,28 @@ public sealed partial class SessionView
         if (!layoutStorm.Allowed(out var runs, out var first))
         {
             if (first) { AppLog.Write($"layout storm: {runs} layout corrections within {LayoutStormGuard.Window.TotalSeconds:0} s; corrections skipped"); }
+            // The skipped pass may have been the last one before the layout settles, with a saved reading position still
+            // waiting: try again once the window has passed (#3811).
+            if (restoreReading is not null) { RetryAfterStorm(); }
             return;
         }
         // The corrections set layout properties (the panel's scroll mode, the scroll offset): inside LayoutUpdated each
         // starts the next layout pass, and they can feed each other (#3782). They run once, at low priority, after it.
         laidOut.Request(work => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => work()), CorrectAfterLayout);
     }
+
+    readonly CoalescedRetry stormRetry = new();
+
+    void RetryAfterStorm() => stormRetry.Request(LayoutStormGuard.Window + TimeSpan.FromMilliseconds(50),
+        (delay, fire) =>
+        {
+            var timer = DispatcherQueue.CreateTimer();
+            timer.Interval = delay;
+            timer.IsRepeating = false;
+            timer.Tick += (_, _) => fire();
+            timer.Start();
+        },
+        () => { if (attached && restoreReading is not null) { OnConversationLaidOut(null, null!); } });
 
     void CorrectAfterLayout()
     {

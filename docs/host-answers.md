@@ -756,7 +756,11 @@ seen. Claude sessions are found from registrations too, or else from Claude Code
 `~/.claude/sessions/<pid>.json`; but Claude Code 2.1.312 writes an `AskUserQuestion`
 `tool_use` into its transcript only once the question has been answered, so a waiting
 question is seen only through agent-ha-bridge's `PreToolUse` hook (seen live: the question
-on screen, the transcript silent until it was answered at the terminal). Answering them
+on screen, the transcript silent until it was answered at the terminal; on 2.1.318 this
+happens when the question is followed by parallel `tool_use` blocks in the same message, and
+the host then showed no question and, after ten minutes, "Not responding"). Design (#3838,
+not built): the host's own `claude/ask` notice records the question from the hook, and it is
+shown `answerAtMachine` and never typed (step 5 below). Answering them
 therefore needs its Claude or Codex adapter installed (with its
 daemon stopped, or G5 refuses). Its Codex hook writes the approval marker only after
 reaching Home Assistant (`Enter-BridgeAdapterSession`); without that, an approval is seen
@@ -812,7 +816,11 @@ In order, for every answer:
    again before each later write (above) (for a permission prompt, the request as above, then
    the screen); for Claude, the `AskUserQuestion` `tool_use` is there, in the
    session's own entries, with no `tool_result` or interrupt after it; for Codex, the
-   approval marker as above (`stale` otherwise). Identity, never time.
+   approval marker as above (`stale` otherwise). Identity, never time. A Claude question
+   known only from the hook (#3838) has no `tool_use` entry, so it is never typed: it stays
+   `answerAtMachine` until the transcript writes the same `tool_use_id`, which replaces it
+   and is then checked here as any other. The hook event is not authenticated, so it never
+   drives keys.
 6. The prompt is claimed in the host's attempt ledger, `answer-attempts.json` in its
    profile folder, written through to disk. A prompt already claimed (by any request,
    before or after a restart; the same answer sent again gets the first outcome before it

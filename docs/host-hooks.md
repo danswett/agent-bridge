@@ -199,6 +199,14 @@ running. Migration re-points agent-ha-bridge's own registrations at this program
 (below). Rollback restores them byte for byte from the snapshot taken at migrate time
 ([migration.md](migration.md)).
 
+A migrated profile has no `agent-bridge-owner.json`: migration records what it re-pointed in
+`migration.json` instead. Settings reads that record. An agent it lists as re-pointed, while the
+record is `migrated` and intake is on, and whose re-pointed file is in the home Settings reads (so
+a fresh `--codex-home` does not count), reports `hookSetup: completed` with `hookMigrated: true`, so it is Not tested yet
+(`docs/design/ui.md` §6.11, #783) and never offers Set up or Remove. An agent it did not re-point, such as
+Codex when agent-ha-bridge never hooked it, stays `notSetUp`, so a Codex launch there is still
+refused with `codexHooksMissing` ([host-launch.md](host-launch.md)).
+
 The design's `agent-bridge-host hook --fallback` is this program's own fallback: with no fresh
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback
 <agent> <hook>` does the same unconditionally, for a registration that must never spool. It
@@ -375,7 +383,7 @@ give their fixed reply at once, rather than spooling to nobody until it goes sta
 |---|---|---|
 | `claude/register` | `Invoke-ClaudeRegisterHook` | The registration. `UserPromptSubmit` sets `HookStatus: working`; `SessionStart` sets no status |
 | `claude/stop` | `Invoke-ClaudeStopHook` | The registration, `HookStatus: idle` |
-| `claude/ask` | `Invoke-ClaudeAskHook` | The registration, for `AskUserQuestion` only. The daemon's pending-decision marker is not written: the host reads questions from transcripts |
+| `claude/ask` | `Invoke-ClaudeAskHook` | The registration, for `AskUserQuestion` only. The daemon's pending-decision marker is not written: the host reads questions from transcripts. Design (#3838, not built): the registration also records a pending-question marker from the event's `tool_use_id` and `tool_input`, so a question the transcript has not yet written is shown (see the open gap below) |
 | `claude/notification` | `Invoke-ClaudeNotificationHook` | The registration. `HookStatus: waiting` only for a notification Claude is blocked on (`notification_type`, or anything but the idle reminder's wording) |
 | `codex/hook` | `Invoke-CodexHook` | The registration's status and activity per event (`SessionStart` idle, `UserPromptSubmit` and `PreToolUse` working, `PermissionRequest` waiting, `Stop` idle with the reply's first line, `SessionEnd` ended). `SessionStart`, `PreToolUse`, `UserPromptSubmit`, `Stop` and `SessionEnd` remove a pending approval marker (`SessionStart` too, unlike the daemon: a Codex that died waiting never sent `SessionEnd`, and its resumed session must not offer the dead run's approval). **`PermissionRequest` writes the approval marker** |
 | `copilot/*` | `Invoke-Copilot*Hook` | Nothing. Copilot's sessions are read from its own folder; the event is passed on to subscribers |
@@ -571,4 +579,22 @@ connector's own guards. Discovery needs no notice: it watches the registration f
 * **A Claude `AskUserQuestion` waiting at the terminal.** Claude writes its `tool_use` to the
   transcript only once it is answered (#59), so the host cannot show the question from the
   transcript. The `claude/ask` notice carries it the moment it is asked, for the Claude/Codex
-  live slice to surface.
+  live slice to surface. Seen live (owner-reported, 2026-11-22): the question went unseen for about 35
+  minutes, the session read "Not responding", and remote replies were refused with "input box
+  is not on its screen". Design (#3838, Part of #1396 row 5):
+  * `claude/ask` records a pending-question marker on the registration from the event's
+    `tool_use_id` and `tool_input`, as the Codex approval marker is recorded; the tracker
+    turns it into the question through the same mapper as a transcript `tool_use`, with the
+    id `tool_use_id`, shown `answerAtMachine` (display reason `hook`), so a card, a push and
+    a connector notice appear within one intake pass.
+  * A question with the same id from the transcript replaces it, so there is no duplicate
+    and no second push; the matching `tool_result`, a Stop, an interrupt or a new prompt
+    retires it, as for any question.
+  * A session with a hook question pending, or a blocking Notification (`permission_prompt`,
+    `elicitation_dialog`, `agent_needs_input`) newer than its last transcript activity, is
+    never reported Not responding.
+  * The hook event comes through the spool, which is not authenticated (a local process
+    that can write the folder can write an event; on Windows the folder has no ACL). So a
+    hook-known question is never answered by typing: it is shown, and answered at the machine.
+    Accepted risk: a local process can inject a card (display only, no keys typed); hardening
+    the spool's authentication is tracked in #3847.

@@ -5,7 +5,7 @@ public class CiPlanTests
     // ci.yml's wiring to the plan as the repository has it, cut down to two gated jobs.
     const string Wired = """
         concurrency:
-          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
           cancel-in-progress: ${{ github.event_name == 'pull_request' }}
         jobs:
           plan:
@@ -60,22 +60,23 @@ public class CiPlanTests
 
     static IEnumerable<string> Check(string yaml) => CiPlan.Check(Fixture.Catalog(), yaml).Select(p => p.Message);
 
-    // Only main's first-attempt push runs share ci-main, never cancelled once running: a re-run
-    // there could take a waiting push run's place and leave its commit untested (#938's review).
+    // Each push to main has its own group (ci-main-<sha>), never cancelled once running, and a re-run has a run-id
+    // group: none takes another's place and leaves its commit untested (#938's review).
     [Theory]
     [InlineData(" && github.run_attempt == '1'", "", false)]
     [InlineData("github.run_attempt == '1'", "github.run_attempt != ''", false)]
-    [InlineData("'ci-main' ||", "'ci-main-' ||", false)]
+    [InlineData("format('ci-main-{0}', github.sha) ||", "format('ci-main-{0}', github.run_id) ||", false)]
+    [InlineData("format('ci-main-{0}', github.sha) ||", "'ci-main' ||", false)]
     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: true", false)]
     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: false", false)]
     [InlineData("concurrency:", "x-concurrency:", false)]
-    [InlineData("'1' && 'ci-main'", "'1'   &&  'ci-main'", true)]
+    [InlineData("'1' && format('ci-main-{0}', github.sha)", "'1'   &&  format('ci-main-{0}', github.sha)", true)]
     public void Ci_concurrency_keeps_reruns_out_of_ci_main_and_never_cancels_its_runs(string from, string to, bool fine)
     {
         Assert.Contains(from, Wired, StringComparison.Ordinal);
         var problems = Check(Wired.Replace(from, to, StringComparison.Ordinal));
         string[] expected = fine ? [] : [
-            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
+            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
             + " with cancel-in-progress ${{ github.event_name == 'pull_request' }}"];
 
         Assert.Equal(expected, problems);
@@ -352,14 +353,14 @@ public class CiPlanTests
 
     // By default the next publish to arrive replaces the one waiting, so a re-run of an old run
     // could leave a newer run's app unpublished (#938's review): publish keeps every waiting one.
-    // Elsewhere the newest is meant to replace the one waiting, as main's push runs do in ci-main.
+    // Elsewhere the newest is meant to replace the one waiting, as a pull request's run does.
     [Theory]
     [InlineData("queue: max", "queue: single", QueueProblem)]
     [InlineData("queue: max", "x-queue: max", QueueProblem)]
     [InlineData("cancel-in-progress: false", "cancel-in-progress: true", QueueProblem)]
     [InlineData("cancel-in-progress: false", "x-cancel-in-progress: false", QueueProblem)]
     [InlineData("group: publish-prerelease", "group: publish-prerelease-queued", QueueProblem)]
-    [InlineData(RootCancel, RootCancel + "\n  queue: max", "ci.yml's concurrency sets queue, but only publish's may: in ci-main the newest push run replaces the one waiting")]
+    [InlineData(RootCancel, RootCancel + "\n  queue: max", "ci.yml's concurrency sets queue, but only publish's may: a queue keeps every waiting run")]
     [InlineData(HaIf, HaIf + "\n    concurrency: { group: ha, queue: max }", "ci.yml job ha-integration's concurrency sets queue, but only publish's may")]
     [InlineData("group: publish-prerelease", "group: 'publish-prerelease'", null)]
     public void Only_publish_queues_and_it_keeps_every_waiting_publish(string from, string to, string? problem)

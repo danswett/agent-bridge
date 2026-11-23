@@ -44,7 +44,7 @@ feed's SHA256 (src/AgentBridge.App/Platform.cs:95-97, :166-170).
 
 **Halt list.** `ReleaseEligibility` and `GitHubHaltListSource` exist (src/AgentBridge.Host/ReleaseEligibility.cs:19-113)
 but nothing in `src/` constructs them. The source takes the newest release and its `halts.json` digest
-from GitHub's HTTPS API (`?per_page=100`, no ETag, :80) and checks the body's SHA256 against it (:103-108).
+from GitHub's HTTPS API (`?per_page=10`, no ETag, :80; was 100 until Nov 23, when it ran past the 4 MiB cap) and checks the body's SHA256 against it (:103-108).
 
 **Modes** (src/AgentBridge.App.Core/Stores.cs:80-106, per machine and profile): `AutoUpdate` (default
 on); `WhenUpdateReady` is `RestartToUpdate` (default, #516) or `InstallBetweenTurns` (#689, 6-hour

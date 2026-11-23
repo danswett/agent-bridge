@@ -68,6 +68,13 @@ arm64_waiver:
     - app-installer (win-arm64)
     - product (windows-11-arm)
 
+# Owner decision (#2454, Nov 22 15:25), while Codex is down: a second receipt (independent-review-2) whose description is exactly
+# this text stands in for the second model family, next to a successful first receipt that names a model family, and never for the
+# first. OFF unless the repository variable CODEX_WAIVER is exactly "on" (unset is off). Revert this block when Codex returns.
+codex_waiver:
+  switch: CODEX_WAIVER
+  description: "owner-waiver (Nov 22 15:25)"
+
 # Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
 # landing pull requests on a broken main, each making the breakage harder to untangle. So while
 # any named job below isn't completed successfully at its latest attempt in main's latest push

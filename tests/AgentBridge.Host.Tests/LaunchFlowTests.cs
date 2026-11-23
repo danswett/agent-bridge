@@ -77,8 +77,28 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
-        foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
+        ClearReadOnly(f.Root);
         f.Dispose();
+    }
+
+    // Every file normal, so the folder can be deleted. afterListed: what a test does between the listing and the clearing.
+    internal static void ClearReadOnly(string root, Action<string>? afterListed = null)
+    {
+        // Git may still be at work in a fixture's worktree and removes its own files (`locked`) from under this: a file or a folder
+        // that has gone is already as clear as it can be, so it is skipped, and a listing cut short by one is taken again.
+        var files = new List<string>();
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try { files = [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)]; break; }
+            catch (DirectoryNotFoundException) { files = []; }
+        }
+        foreach (var file in files)
+        {
+            afterListed?.Invoke(file);
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
     }
 
     private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
