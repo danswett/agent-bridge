@@ -59,11 +59,18 @@ core and CPU is under 50%. A reading above either limit before a phase means wai
 time box); a reading above either limit after a phase marks that phase's results INCONCLUSIVE and the phase repeats from its start. A load
 reading that cannot be taken is INCONCLUSIVE, never a pass.
 
+The numbers come from **each disposable VM's own counters**: CPU percent and run queue per core, sampled every **15 seconds**, never from the
+real Home Assistant or any other fleet host. The samples (not just the summary) are kept in the evidence folder with a sha256.
+
 ## Time box
 
 The whole run, S2 to S11, completes within **24 hours** of S2 starting, and no single step takes longer than the limit the frozen plan
 sets for it. Running over, on either limit, ends the run INCONCLUSIVE; a repeat is a new run from S0. The window floor (6 hours across at
 least 4 distinct hours) sits inside the time box.
+
+**If the owner is unreachable for an approval, the run pauses.** Every owner step (the grant at S1, a deploy restart at S-1, each induced
+restart or reconnect) waits for the owner. The wait counts against the time box. The run never proceeds without the approval and never skips the
+step; if the wait carries it past the time box, the run ends INCONCLUSIVE.
 
 ## Steps
 
@@ -83,8 +90,17 @@ sha256, and the load readings before and after.
 | **S7** | SRE | **Long prompts x5**, one near 60 KB | Receipts, and that the prompt text is not kept in any record |
 | **S8** | **OWNER** presses each restart; SRE drops and restores the relay link | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
 | **S9** | SRE | **Late second session:** after each launch, wait 5 minutes and confirm no second session for that request | The late reads |
-| **S10** | SRE | **End-by-list sweep:** end whatever the plan's names still show live, through the existing end path, never a raw kill; confirm none of the plan's names remains on any disposable host | The sweep results and the final session lists |
+| **S10** | SRE | **End-by-list sweep:** end whatever the plan's names still show live, by the ends rule below (two idle reads, name check, end only, worktrees stay), never a raw kill; confirm none of the plan's names remains on any disposable host | The sweep results and the final session lists |
 | **S11** | SRE, then Quality | Assemble the receipt (the frozen plan, actual counts and denominators per floor, every record with its sha256, the evidence path, failed and INCONCLUSIVE runs kept); Quality attests against the bars | The receipt |
+
+## Launching and ending the run's sessions
+
+- **Launches:** SRE launches **only the sessions the frozen plan names**, under the person-issued grant, and only with the **Chief's go** for
+  the run. No other launch, name or target is used.
+- **Ends use SRE's rule:** a session is ended only after **two idle reads**, with a **name check** that it is one of the plan's names, and the
+  **end only**: its worktree stays. Never a raw kill, never a name outside the plan. This applies to the batch ends in S3 and the sweep in S10.
+- **No prompt text in the evidence:** nothing from a host log that carries prompt text is kept; records keep ids, outcomes, counts, times and
+  sha256 values only.
 
 ## Stop conditions
 
