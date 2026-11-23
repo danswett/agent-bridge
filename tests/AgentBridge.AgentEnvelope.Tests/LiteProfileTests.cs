@@ -103,4 +103,30 @@ public class LiteProfileTests
         var real = Sample.Body();
         LiteProfile.RequireRoster(real, real.Generation, real.Heads);
     }
+
+    [Fact]
+    public void A_receipt_probe_seals_parses_and_passes_only_the_receipt_check_never_the_reply_check()
+    {
+        using var key = Sample.NewKey();
+        var env = Envelope.Parse(LiteProfile.SealReceipt(Sender, Target, Request, Now, new EcdsaEnvelopeSigner(key)));
+        Assert.Equal(LiteProfile.ReceiptAction, env.Body.Action);
+        Assert.Equal(Request, env.Body.Request);
+        Assert.True(LiteProfile.IsLite(env.Body));
+        LiteProfile.CheckReceipt(env, Sample.Point(key), Account, Now + 1);
+        // A probe is never a reply: the reply check refuses its action, whatever data it is given.
+        Assert.Equal(LiteRefusal.Action, Code(() => LiteProfile.Check(env, Sample.Point(key), Account, [], Now + 1)));
+        // And a reply is never a probe.
+        var reply = Envelope.Parse(Seal(key));
+        Assert.Equal(LiteRefusal.Action, Code(() => LiteProfile.CheckReceipt(reply, Sample.Point(key), Account, Now + 1)));
+    }
+
+    [Fact]
+    public void A_receipt_probe_keeps_every_lite_refusal_the_wrong_account_a_bad_signature_and_an_old_envelope()
+    {
+        using var key = Sample.NewKey(); using var other = Sample.NewKey();
+        var env = Envelope.Parse(LiteProfile.SealReceipt(Sender, Target, Request, Now, new EcdsaEnvelopeSigner(key)));
+        Assert.Equal(LiteRefusal.Account, Code(() => LiteProfile.CheckReceipt(env, Sample.Point(key), "87654321", Now + 1)));
+        Assert.NotNull(Record.Exception(() => LiteProfile.CheckReceipt(env, Sample.Point(other), Account, Now + 1)));
+        Assert.NotNull(Record.Exception(() => LiteProfile.CheckReceipt(env, Sample.Point(key), Account, Now + 121)));
+    }
 }

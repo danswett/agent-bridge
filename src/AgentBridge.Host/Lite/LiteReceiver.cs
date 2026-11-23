@@ -72,31 +72,46 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
         try { envelope = Envelope.Parse(bytes); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
-        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, signPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
+        var probe = envelope.Body.Action == LiteProfile.ReceiptAction;
+        if (probe && text.Length != 0) { return Refuse(Malformed, envelope.Body.Request); }
+        VerifiedEnvelope verified; try { verified = probe ? LiteProfile.CheckReceipt(envelope, signPoint, channel.Account, time.GetUtcNow().ToUnixTimeSeconds()) : LiteProfile.Check(envelope, signPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
         var body = verified.Body; // trusted now: must name this channel's peer and this machine
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
         if (body.Target.Machine != channel.Self) { return Refuse(Target, body.Request); }
+        var key = channel.PeerId + "/" + body.Request;
+        // A receipt lookup (#3875): what the first attempt of this id became, for the peer that made it. Never delivery, never added.
+        if (probe)
+        {
+            if (!Rates.Allow(channel.PeerId, "receipt>" + body.Request)) { return Refuse(Rate, body.Request); }
+            return Replays.Peek(key, body.Principal.SenderId) is { } o ? new LiteAck("receipt", o.Code is null ? o.State : o.State + ":" + o.Code, body.Request, mode.KillEpoch)
+                : new LiteAck("unknown", null, body.Request, mode.KillEpoch);
+        }
         var query = deliver as ILiteReplayQuery;
         var replay = false;
-        switch (Replays.Add(channel.PeerId + "/" + body.Request))
+        switch (Replays.Add(key, body.Principal.SenderId))
         {
             case ReplayStore.Result.Seen:
                 if (query is null) { return Refuse(Replay, body.Request); }
                 replay = true; break;
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Done(key, Refuse(Rate, body.Request)); }
         LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
-        catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
+        // Keys may have gone before it failed or was cancelled, so the journal says unconfirmed, never refused (#3875).
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { Replays.Record(key, "unconfirmed", "cancelled"); throw; }
+        catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { Replays.Record(key, "unconfirmed", DeliveryFailed); return Refuse(DeliveryFailed, body.Request); }
         if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
-        { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
-        return result.Typed && result.Outcome is null or LiteKind.Delivered
+        { return Done(key, new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch)); }
+        return Done(key, result.Typed && result.Outcome is null or LiteKind.Delivered
             ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
-            : Refuse(result.Code ?? DeliveryFailed, body.Request);
+            : Refuse(result.Code ?? DeliveryFailed, body.Request));
     }
+
+    // What this id's first attempt became, for a later receipt lookup.
+    LiteAck Done(string key, LiteAck ack) { Replays.Record(key, ack.Status, ack.Code); return ack; }
 
     LiteAck Refuse(string code, string request = "") => new("refused", code, request, mode.KillEpoch);
 
@@ -110,23 +125,39 @@ public sealed class ReplayStore(TimeProvider time)
     public const int Max = 4096;
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(150);
 
-    readonly Dictionary<string, DateTimeOffset> ids = new(StringComparer.Ordinal);
+    // What the first attempt became (docs/protocol/agent-lite.md "Receipt lookup", #3875): a state and nothing else, never the text.
+    public readonly record struct Outcome(string State, string? Code);
+    // The signed principal of the original request (a session, or a script's identity) keeps one sender from reading another's outcome on the same host.
+    readonly record struct Entry(DateTimeOffset Until, Outcome Outcome, string Principal);
+    readonly Dictionary<string, Entry> ids = new(StringComparer.Ordinal);
     readonly object gate = new();
     public int Count { get { lock (gate) { return ids.Count; } } }
-    public Result Add(string key)
+    public Result Add(string key, string principal = "")
     {
         lock (gate)
         {
             var now = time.GetUtcNow();
-            if (ids.TryGetValue(key, out var until) && until > now) { return Result.Seen; }
+            if (ids.TryGetValue(key, out var seen) && seen.Until > now) { return Result.Seen; }
             if (ids.Count >= Max)
             {
-                foreach (var k in ids.Where(p => p.Value <= now).Select(p => p.Key).ToList()) { ids.Remove(k); }
+                foreach (var k in ids.Where(p => p.Value.Until <= now).Select(p => p.Key).ToList()) { ids.Remove(k); }
                 if (ids.Count >= Max) { return Result.Full; }
             }
-            ids[key] = now + Lifetime;
+            ids[key] = new(now + Lifetime, new Outcome("in-flight", null), principal);
             return Result.Added;
         }
+    }
+
+    // The first attempt's outcome, kept for the id's own lifetime; a later state (a lane request moving on) replaces it.
+    public void Record(string key, string state, string? code)
+    {
+        lock (gate) { if (ids.TryGetValue(key, out var e) && e.Until > time.GetUtcNow()) { ids[key] = e with { Outcome = new(state, code) }; } }
+    }
+
+    // Looks an id up without adding it: null when it is unknown, expired, or was made by another principal.
+    public Outcome? Peek(string key, string principal = "")
+    {
+        lock (gate) { return ids.TryGetValue(key, out var e) && e.Until > time.GetUtcNow() && string.Equals(e.Principal, principal, StringComparison.Ordinal) ? e.Outcome : null; }
     }
 }
 
