@@ -1437,6 +1437,73 @@ public class MergeRuleTests
             File.Delete(config);
         }
     }
+    // Reading main's CI is the first thing a run does, and while newer runs are still going the
+    // newest completed evidence is several runs down. Once the newest run has not answered, the runs
+    // below it are read together, not one after another; a newest run that does answer is read alone
+    // (a quota point per read: nothing is read ahead of an answer).
+    [Fact]
+    public void Main_s_older_runs_are_read_together_once_the_newest_has_not_answered()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "in_progress", null, 1), (7, "in_progress", null, 1), (6, "in_progress", null, 1), (5, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, restDelayMs: 60);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.DoesNotContain(" failure merge-rule Main is red", github.Posted[0], StringComparison.Ordinal);
+            Assert.True(github.MaxConcurrentRest > 1, $"main's runs were read one at a time: {string.Join(" ", github.RestPaths)}");
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void Main_s_newest_run_is_read_alone_when_it_answers()
+    {
+        var runs = MainRuns((9, "completed", "success", 1), (8, "completed", "success", 1), (7, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.RestPaths, p => p.Contains("/actions/runs/", StringComparison.Ordinal) && p.Contains("/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Each head's facts and files are read apart from the others', so a sweep over several heads
+    // reads them together; what is printed and posted keeps the open list's order.
+    [Fact]
+    public void A_sweep_reads_each_heads_facts_together_and_posts_in_the_open_lists_order()
+    {
+        string[] heads = [Head, Older, "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"];
+        var prs = heads.Select((h, i) => GraphQLPullRequest(h, number: 40 + i)).ToArray();
+        var github = new FakeGitHub(prs[0], listed: prs, byNumber: prs.Select((p, i) => (n: 40 + i, p)).ToDictionary(x => x.n, x => x.p), restDelayMs: 60);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Equal(4, github.Posted.Count);
+            Assert.Equal(heads, github.Posted.Select(p => p.Split(' ')[0]).ToArray());
+            Assert.True(github.MaxConcurrentRest > 1, "the heads were read one after another");
+            Assert.Equal(heads.Length, github.RestPaths.Count(p => p.Contains("/compare/", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // latest push's named jobs, at each job's latest attempt.
     [Fact]
@@ -3059,7 +3126,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -3081,7 +3148,18 @@ public class MergeRuleTests
             return seen < times;
         }
 
+        /// <summary>The most REST reads that were in flight at once, and how many were made.</summary>
+        public int MaxConcurrentRest { get; private set; }
+
+        int inFlight;
+
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
+        {
+            lock (this)
+                return GraphQLCore(query, variables);
+        }
+
+        JsonDocument GraphQLCore(string query, IReadOnlyDictionary<string, object> variables)
         {
             Queries.Add(query);
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
@@ -3103,6 +3181,24 @@ public class MergeRuleTests
         }
 
         public JsonDocument Rest(string path)
+        {
+            var now = Interlocked.Increment(ref inFlight);
+            lock (this)
+                MaxConcurrentRest = Math.Max(MaxConcurrentRest, now);
+            try
+            {
+                if (restDelayMs > 0)
+                    Thread.Sleep(restDelayMs);
+                lock (this)
+                    return RestCore(path);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
+        }
+
+        JsonDocument RestCore(string path)
         {
             RestPaths.Add(path);
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
