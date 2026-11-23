@@ -1027,7 +1027,9 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly (no
   pattern), on main and PRs, and every other leg of that job succeeded. There is no switch and no
-  expiry: `ARM64_WAIVER` and the date are ignored. The warning and summary identify each waived job and
+  expiry: `ARM64_WAIVER` and the date are ignored. A leftover `until:` or `switch:`
+  in `merge-rule.yml`'s `arm64_waiver` block fails the config load (the block takes only `jobs`). The warning and
+  summary identify each waived job and
   its run. [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is
   one result in `needs`. Any API error, any other failed job (x64, `relay-image-sarif`, `pwa-e2e`,
   `product (ubuntu-latest)`, any), and a cancelled, timed-out or skipped Arm64 leg waive nothing, in the
