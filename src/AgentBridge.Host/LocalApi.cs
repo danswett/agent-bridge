@@ -116,6 +116,7 @@ public static class LocalApi
             return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
+            if (op == AgentBridge.Host.Lite.LiteAgentReceipt.Op) { return await AgentBridge.Host.Lite.LiteAgentReceipt.HandleAsync(credentials, lite as AgentBridge.Host.Lite.ILiteReceipts, channel, data, appendAttempt: audit is null ? null : audit.Append); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
             if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data, auditLog: audit); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
