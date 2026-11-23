@@ -145,6 +145,45 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(problem is not null, settings.RestoreKept);
     }
 
+    [Theory]
+    [InlineData(null, true, null)]
+    [InlineData("{ \"update\": {} }", true, null)]
+    [InlineData("{ \"update\": { \"startAppToInstall\": true } }", true, null)]
+    [InlineData("{ \"update\": { \"startAppToInstall\": false } }", false, null)]
+    [InlineData("{ \"update\": { \"startAppToInstall\": null } }", true, null)]
+    [InlineData("{ \"update\": { \"startAppToInstall\": \"no\" } }", false, "update.startAppToInstall is not true or false")]
+    [InlineData("{ \"update\": true }", false, "update is not an object")]
+    [InlineData("not json", false, "is not valid")]
+    public void Starting_the_app_to_install_an_update_is_on_unless_set_false_and_a_value_that_is_not_true_or_false_turns_it_off(string? text, bool on, string? problem)
+    {
+        var (settings, said) = With(text);
+
+        Assert.Equal(on, settings.StartAppToInstall);
+        if (problem is null) { Assert.Null(said); } else { Assert.Contains(problem, said); }
+    }
+
+    [Fact]
+    public void Starting_the_app_to_install_is_off_when_the_config_file_cannot_be_read()
+    {
+        Directory.CreateDirectory(Path.Combine(folder, HostSettings.FileName));
+
+        var (settings, problem) = HostSettings.Load(folder);
+
+        Assert.Contains("could not be read", problem);
+        Assert.False(settings.StartAppToInstall);
+    }
+
+    [Fact]
+    public void Starting_the_app_to_install_is_turned_off_at_the_machine_with_the_cli_and_only_with_true_or_false()
+    {
+        Assert.Equal(1, Run("config", "set", "update.startAppToInstall", "no"));
+        Assert.True(HostSettings.Load(folder).Settings.StartAppToInstall);
+        Assert.Equal(0, Run("config", "set", "update.startAppToInstall", "false"));
+        Assert.False(HostSettings.Load(folder).Settings.StartAppToInstall);
+        Assert.Equal(0, Run("config", "unset", "update.startAppToInstall"));
+        Assert.True(HostSettings.Load(folder).Settings.StartAppToInstall);
+    }
+
     [Fact]
     public void A_config_from_a_newer_schema_is_not_guessed_at()
     {
