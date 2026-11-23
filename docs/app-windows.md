@@ -1396,6 +1396,12 @@ finishes and fails checks makes the app exit normally with code 1: it leaves no 
 no event, and its cause is the failed checks the app wrote to `result.json`, which the
 wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
 capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
