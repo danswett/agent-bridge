@@ -1399,11 +1399,14 @@ capture error (win-arm64, main 62c35b0a).
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
-event message, or exit code 1 with its failed checks, and no capture errors. A missing evidence file is reported as a
-capture failure, not behavioral RED. A passing app is not RED either. The original
-self-test failure still fails the job even when cause evidence is complete.
-This diagnostic cut changes no app behavior and establishes no root cause or fix;
-only Quality-ordered hosted execution can establish actual RED.
+event message, or exit code 1 with its failed checks, and no capture errors. A missing
+evidence file is reported as a capture failure, not behavioral RED. A passing app is not
+RED either. The original self-test failure still fails the job even when cause evidence
+is complete. These diagnostics change no app behavior and establish no root cause; only
+Quality-ordered hosted execution can establish actual RED. The one self-test check that
+failed on win-arm64 (main 62c35b0a, the text box's clear button) now settles unrelated
+layout before the button appears and keeps its short look after it (`HoldProbe`), so a hold
+the button itself arms still fails; that is a fix for that check, not for the x64 failure.
 The reported x64 failure is intermittent: one green run is neither a reproduced
 failure nor proof that it is fixed. Cause capture must come from a failing run.
 
