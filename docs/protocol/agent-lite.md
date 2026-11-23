@@ -63,7 +63,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
-  uses, and text goes only into an idle session with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
+  uses, and text goes only into an idle session (a working Claude too, only with `agentMessaging.claudeBusyQueue`, proposed, off by default; see [message-delivery.md](../message-delivery.md#busy-sends-to-claude-let-claude-code-queue-part-of-2568-proposed-owner-decision-pending)) with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: with explicit `remote: "own-account"`, a session receives only if this host launched it in allow-all mode and either the existing `agentMessaging.allowAllTargets` plus exact `agentMessaging.allowAllTargetSessions` list grants it, or the owner has enabled `agentMessaging.allowAllLaunchedTargets` on this machine. The new boolean switch defaults false, invalid/non-boolean is false, and it is read afresh per message. It is independent of the unchanged list path; display names and wildcards never grant access.
 - Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it and session discovery is not held (a held pass may miss a second one); none or several is refused as `noSuchSession`, and a hold as `sessionResolutionIncomplete` (the session may be live but not listed yet: retry), never guessed. A full session id is not affected by a hold. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
@@ -76,7 +76,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-   could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
+   could message his sessions, and any message from a present own host is typed into a session there that is idle (or a working Claude with the proposed flag on), has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
 ## Turn it on (a person at each machine, in the agreed order)
 
@@ -136,8 +136,9 @@ resolve names. The ID-first refusal contract above takes precedence for identity
 | --- | --- |
 | `delivered` | success; the only success |
 | `refused` with `badMachine` or `noSuchMachine` | final identity failure naming the device ID; no name, fragment or HA fallback |
-| `off` (including the mode turned off while the signing key was made; nothing sent), `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
-| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant, once, only when nothing was typed (`NoKeysSent`); never after Accepted or Unconfirmed |
+| `off` (including the mode turned off while the signing key was made; nothing sent) or `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name) | falls back to Home Assistant once |
+| `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | no fallback over any transport: the first message may already have been typed, so a resend could deliver it twice. It is reported once from the host's durable status record, which the sender pulls by request id |
+| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant once; such a refusal means nothing was typed, which is its own proof (there is no separate `NoKeysSent` code). Never after a queued (Accepted) or `unconfirmed` result |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
 
@@ -148,7 +149,7 @@ Run on staging, then production, with two approved machines first and the other 
 - [ ] 12 ordered pairs of the four machines, 50 messages each: all delivered once and acknowledged within 30 seconds; fallbacks counted, and more than about 2 percent on a healthy relay fails.
 - [ ] Relay duplicates: the same message id sent twice over the relay inside 2 minutes is delivered once; 20 races from two machines at once lose nothing and duplicate nothing on the relay route. Not tested for once-only across relay and Home Assistant (known limit above).
 - [ ] Relay unreachable: messages arrive through Home Assistant. Target offline: a fast, clear failure.
-- [ ] Busy target and non-empty input box: refused, nothing typed. Other account, absent host and wrong static key: refused, nothing typed.
+- [ ] Busy target (a working Claude too, with the proposed flag off) and non-empty input box: refused, nothing typed. Other account, absent host and wrong static key: refused, nothing typed.
 - [ ] A fresh install has the mode on only when signed in with a present same-account peer; signed out it sends and receives nothing; after a kill it stays off across restarts; a malformed or unreadable setting is off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
 - [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message. A host restart keeps recorded forced-ask targets; a changed pid, reused pid with another start time, or corrupt launch file refuses them. Hand-started sessions are always `notReplyTarget`.

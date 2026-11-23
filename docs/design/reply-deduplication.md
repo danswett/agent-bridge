@@ -220,8 +220,9 @@ The Lite refusal/fallback table is part of the protocol contract:
 | Receiver result | Sender behavior |
 |---|---|
 | `status=delivered` (code null) | `LiteKind.Delivered`; success, no fallback. |
-| `status=unconfirmed` (`deliveryUnconfirmed`), or sender-side transport failure (`off`, `undeliverable`, `timeout`, `mode switched off`, `channel lost`) or unreadable acknowledgement | `LiteKind.Unconfirmed` or corresponding transport outcome; fall back once over HA with the exact same request ID. |
-| `refused: busy` or `refused: notReplyTarget`, only when disposition is `NoKeysSent` | Fall back once over HA with the same request ID. |
+| `status=unconfirmed` (`deliveryUnconfirmed`), or `timeout`, `mode switched off` while waiting, `channel lost` or an unreadable acknowledgement (keys may already have gone) | `LiteKind.Unconfirmed`; no HA fallback and no resend over any transport, since a resend could deliver it twice. Reported once from the host's durable status record, which the sender pulls by request id ([message-delivery.md](../message-delivery.md#busy-sends-to-claude-let-claude-code-queue-part-of-2568-proposed-owner-decision-pending)). |
+| `off` or `undeliverable` (nothing was sent) | Fall back once over HA with the exact same request ID. |
+| `refused: busy` or `refused: notReplyTarget` (nothing was typed; the refusal is the proof, there is no `NoKeysSent` code) | Fall back once over HA with the same request ID. Never after a queued or unconfirmed result. |
 | `refused: rate`, `requestReused`, `claimUnavailable`, `noSuchSession`, `ambiguousSession`, `sessionResolutionIncomplete`, `composerNotEmpty`, `deliveryFailed` with no keys, `notSameAccount`, `notPeer`, `lite-sender`, `lite-add`, `lite-target`, `replay`, `malformed`, local `badRequest`, `badMachine`, `badSession`, `badText`, `textTooLong`, `auditUnwritable`, `credential`, `no-sign-key`, or any `EnvelopeException.Code` | Final refusal; do not fall back. |
 
 Any other receiver refusal code, including `off` and `peerError`, is also final and
