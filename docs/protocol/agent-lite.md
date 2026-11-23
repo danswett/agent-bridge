@@ -95,7 +95,7 @@ first attempt became, and the sender keeps nothing about what it sent.
 * **(a) The journaled outcome of the first attempt.** Only an answered receipt (`status: "receipt"`) carries it, in `code`. If that code
   is `refused:<code>`, the first attempt really was refused and nothing was typed: this is the only case a sender may call "not delivered".
 * **(b) Anything that goes wrong with the lookup itself.** A `refused` acknowledgement to the probe (`off` or killed, `rate`,
-  `notPeer`, `notSameAccount`, `malformed`, `lite-action` from a host that does not know the probe, any envelope code), a timeout, a lost
+  `notPeer`, `notSameAccount`, `malformed`, `busy` (the replay memory is full), `peerError`, `lite-action` from a host that does not know the probe, any envelope code), a timeout, a lost
   channel, an offline host, an unreadable answer, or `status: "unknown"`. Nothing was learned and the text may have been typed: the send
   stays uncertain. A lookup result never feeds `reply-session`'s busy retry or the Home Assistant fallback, and never invites a resend.
 
