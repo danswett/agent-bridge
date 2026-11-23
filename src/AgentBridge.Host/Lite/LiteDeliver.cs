@@ -124,16 +124,17 @@ public sealed class LiteDeliver(
         // Busy-Claude queue (#3856): one relay message per session at a time. A held slot or a full store refuses before any key, with its own code
         // (never busy, which would allow the one HA fallback and so bypass the cap).
         var store = busyQueue ? BusyStore : null;
+        var peer = Principal(body.Principal);
         if (store is not null)
         {
-            switch (store.TryBegin(body.Request, Principal(body.Principal), id))
+            switch (store.TryBegin(body.Request, peer, id))
             {
                 case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
                 case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
         }
         // The slot is taken before the rate token is spent, so a held or full refusal never burns the window and so never turns into busy (receipt 7110190967 P1-1).
-        if (!WithinRate(id)) { store?.Release(body.Request); return Refused(LiteCodes.Busy); }
+        if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
@@ -157,7 +158,7 @@ public sealed class LiteDeliver(
                 }
                 // After arming: a failure above leaves keysWent false, so an exception that follows frees the slot instead of wedging it.
                 keysWent = true;
-                store?.KeysWent(body.Request);
+                store?.KeysWent(body.Request, peer);
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
@@ -167,14 +168,14 @@ public sealed class LiteDeliver(
             if (store is null) { return; }
             switch (r)
             {
-                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true); break;
-                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false); break;
-                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); break;
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); break;
                 default:
                     // KeysGoing runs before the injector's own fence, so it proves nothing by itself: a result carries the replier's word (NoKeysSent frees the slot);
                     // only a thrown exception, with no result, falls back to whether KeysGoing ran.
                     var mayHaveBeenSent = r is null ? keysWent : r.KeyDisposition != ReplyKeyDisposition.NoKeysSent;
-                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
+                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
                     break;
             }
         }
