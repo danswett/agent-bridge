@@ -10,14 +10,14 @@ index 2ab972d..b56a741 100644
 +      actions: read
 +      contents: read
      steps:
-+      - name: Both architectures' packages are in this run (an Arm64 leg may be red, but never unpackaged)
++      - name: Both architectures' packages and the Arm64 SBOM are in this run (an Arm64 leg may be red, but never unpackaged, and attest needs the SBOM)
 +        env:
 +          GH_TOKEN: ${{ github.token }}
 +          REPO: ${{ github.repository }}
 +          RUN_ID: ${{ github.run_id }}
 +        run: |
 +          names=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
-+          for want in "agent-bridge-windows-$APP_VERSION" "agent-bridge-windows-arm64-$APP_VERSION"; do
++          for want in "agent-bridge-windows-$APP_VERSION" "agent-bridge-windows-arm64-$APP_VERSION" "sbom-win-arm64-$APP_VERSION"; do
 +            echo "$names" | grep -Fxq "$want" || { echo "::error title=publish-gate::$want was not uploaded by this run, so nothing publishes"; exit 1; }
 +          done
        - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
