@@ -519,6 +519,7 @@ static class MergeRuleCommand
                 // GitHub doesn't expand a matrix when the selector skips the whole family.
                 return latest.Any(j => SkippedFamily(j.Key, family, j.Value));
             }
+            // Latent: only a green-plan run is usable, but "plan" would stay held[0] ahead of family entries.
             var held = planGreen ? config.MainGreen.Jobs.Where(name => !Passed(name)).ToList() : ["plan"];
             var families = config.MainGreen.LegFamilies;
             var legs = families.SelectMany(f => f).ToHashSet(StringComparer.Ordinal);
@@ -581,8 +582,15 @@ static class MergeRuleCommand
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
                     $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : session.PostMerge.Contains(j.Key) ? "post-merge" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
                 + string.Concat(alerts.Select(a => $"\n{a}"));
+            // A pinned name the " (" split can't read never matches a job, so it holds main; blame the
+            // config, not CI. Only the message changes: a malformed name never turns a hold into a pass.
+            var malformed = held.Count == 0 ? null : config.MainGreen.Jobs.Concat(legs).FirstOrDefault(n => !PinnedName.IsMatch(n));
+            if (malformed is not null)
+                log += $"\nMain: main_green job name '{malformed}' is malformed: use 'name' or 'name (variant)'.";
             var fact = held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
+                : malformed is not null
+                ? new MainFact("failure", $"{config.Base} is held (CI {MergeRule.Short(sha!)}): main_green job name '{malformed}' is malformed")
                 : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
             return fact with { Alerts = alerts };
         }
@@ -658,6 +666,9 @@ static class MergeRuleCommand
                 throw new InvalidOperationException("CI run history is incomplete (100-run window)");
         }
     }
+
+    // "name" or "name (variant)", trimmed, with no other parentheses: the shape every family split assumes.
+    static readonly Regex PinnedName = new(@"^[^\s()](?:[^()]*[^\s()])?(?: \([^\s()](?:[^()]*[^\s()])?\))?$", RegexOptions.CultureInvariant);
 
     // Network or runner evidence in a failed job's annotations; a step's name only locates the failure.
     static readonly Regex InfraEvidence = new(@"exit code 124\b|timed out|ETIMEDOUT|exceeded the maximum execution time"

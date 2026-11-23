@@ -2115,6 +2115,56 @@ public class MergeRuleTests
         finally { Directory.Delete(folder, recursive: true); }
     }
 
+    // A pinned name that isn't "name" or "name (variant)" never matches a job, so main stayed held
+    // but the status blamed CI ("named job app (win-arm64 is not green"); it now names the config.
+    [Theory]
+    [InlineData("app (win-arm64", "")]
+    [InlineData("app ()", "")]
+    [InlineData("'app (win-arm64) '", "")]
+    [InlineData("' (win-arm64)'", "")]
+    [InlineData("app (win-arm64)", ", leg_families: [[pwa-ui (chromium 1/3]]")]
+    public void A_malformed_pinned_job_name_still_holds_main_and_the_status_names_it(string pinned, string families)
+    {
+        var config = WriteConfig();
+        File.WriteAllText(config, File.ReadAllText(config).Replace("app (win-arm64), product]",
+            $"{pinned}, product]{families}", StringComparison.Ordinal));
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", "pwa-ui (chromium 1/3)" }
+            .Select((name, id) => new { id, name, status = "completed", conclusion = "success", run_attempt = 1 }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+            var name = families.Length > 0 ? "pwa-ui (chromium 1/3" : pinned.Trim('\'');
+            Assert.StartsWith($"{Head} failure merge-rule Main is held (CI c100000): main_green job name '{name}' is malformed",
+                Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
+    // Pins today's order: a partial family's present blocking failure is named before its missing
+    // member, so the status points at the real failure rather than the gap.
+    [Fact]
+    public void A_partial_leg_family_names_its_present_failure_before_its_missing_member()
+    {
+        var config = WriteConfig();
+        File.WriteAllText(config, File.ReadAllText(config).Replace("app (win-arm64), product]",
+            "app (win-arm64), product], leg_families: [[pwa-ui (chromium 1/3), pwa-ui (webkit 1/3), pwa-ui (webkit 2/3)]]",
+            StringComparison.Ordinal));
+        var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", "pwa-ui (webkit 1/3)", "pwa-ui (chromium 1/3)" }
+            .Select((name, id) => new { id, name, status = "completed", run_attempt = 1,
+                conclusion = name == "pwa-ui (chromium 1/3)" ? "failure" : "success" }).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+            Assert.StartsWith($"{Head} failure merge-rule Main is red (CI c100000): named job pwa-ui (chromium 1/3) is not green",
+                Assert.Single(github.Posted), StringComparison.Ordinal);
+            Assert.Contains("named jobs not green: pwa-ui (chromium 1/3), pwa-ui (webkit 2/3).", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+
     [Theory]
     [InlineData(true, "failure", "failure")]
     [InlineData(true, "skipped", "failure")]
