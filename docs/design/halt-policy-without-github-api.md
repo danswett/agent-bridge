@@ -122,6 +122,12 @@ when it ends, the relay is not asked and the policy goes stale, as before. A Git
 extensions resume (the shared refusal backoff must lapse first). A GitHub answer to the *policy* read renews the policy itself but does not
 restart these 72 hours, so the cap is measured against the same `gitHubAnsweredAt` the update check's relay rules use.
 
+**What `Age` is, and is not (Quality B307).** `Age` is the relay's plain HTTP response header. It is not inside any digested payload, so
+against a compromised relay it is a staleness hint (it keeps an honest, merely lagging relay from renewing with an old copy), not a
+security bound: a compromised relay can send `Age: 0` with any list. The real bounds are the digest check of `halts.json` against
+what GitHub's own release says (the carrier is downloaded from `github.com`), a release not older than the one known, no known halt
+omitted, and the 72-hour cap above. Every mention of `Age` as a limit in this section is the hint, not a bound.
+
 **Residual, recorded (Nov 23):** the verification is a digest check, not a signature (the signed anchor below is not built). A
 compromised or stale relay that keeps serving an older but still verified list (the same release as the one known, its `Age` within the
 hour) keeps the grace open, and a NEWER halt stays hidden from this machine, but **for at most 72 hours since GitHub last answered the
