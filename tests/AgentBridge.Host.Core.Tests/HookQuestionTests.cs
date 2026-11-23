@@ -23,7 +23,7 @@ public class HookQuestionTests
             Transcript = F.ClaudeTranscript(Id);
             F.ClaudeRegistration(Id, 900, Transcript, hookStatus, hookAt);
             F.Processes.Run(AgentKind.Claude, 900);
-            Source = F.Source();
+            Source = F.Source(stalledAfter: TimeSpan.FromMinutes(10));
         }
 
         public async Task<Session> After(params string[] lines)
