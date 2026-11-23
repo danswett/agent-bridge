@@ -26,6 +26,24 @@ public class ConformanceInventoryTests
             r => Assert.Equal(ConformanceVerdict.NotSupported, r.Verdict));
     }
 
+    // Slice 10 (docs/design/fleet-session-registry.md): the registry reader's shared vector, one capability per behavior.
+    // Swift and HA have no driver yet, so their rows stay Missing; nothing records them as passing.
+    [Theory]
+    [InlineData("registry-order-and-replay")]
+    [InlineData("registry-freshness")]
+    [InlineData("registry-removal-and-purge")]
+    [InlineData("registry-cache-expiry")]
+    public void Registry_reader_behaviors_are_required_for_every_selected_client_and_missing_until_evidence(string name)
+    {
+        foreach (var client in new[] { "PWA", "Windows", "Mac", "iOS", "HA" })
+        {
+            var capability = Assert.Single(ConformanceInventory.ForClient(client), c => c.Name == name);
+            Assert.True(capability.Live);
+            var run = new ConformanceRun(client, "1", 1, new string('a', 40), "registry-fixture");
+            Assert.Equal(ConformanceVerdict.Missing, Assert.Single(ClientConformance.Build([run], [capability], [])).Verdict);
+        }
+    }
+
     [Fact]
     public void Host_and_drop_dispositions_do_not_excuse_related_client_behaviors()
     {

@@ -1,0 +1,105 @@
+{
+  "note": "The registry reader's behavior (docs/design/fleet-session-registry.md, 'Freshness and replay'; #1407, slice 10). Not records and not signatures: frames and clock steps in, the snapshot a reader must then hold. `at` and `lastSeen` written \"@-20\" are that many seconds from the reader's clock at that step. Records here are unsigned, so `verified` is false everywhere until hostSign (#1776). C# replays it in FleetRegistryVectorTests.cs, the PWA in fleet-registry-reader-vectors.test.mjs; Swift and the HA component do not yet.",
+  "start": "2026-11-22T12:00:00Z",
+  "scenarios": [
+    {
+      "name": "a lower seq in an epoch is refused, an equal one accepted, a new epoch needs a later at",
+      "capability": "registry-order-and-replay",
+      "steps": [
+        { "get": [
+          { "t": "registry", "machine": "aaaaaaaaaaaaaaaa", "name": "box", "online": true, "lastSeen": "@0", "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 5, "at": "@0", "truncated": false, "sessions": [] } },
+          { "t": "registry", "known": [] } ] },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 4, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 5 } } ], "note": "seq 4 after 5 refused" },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 5, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 6, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 6 } } ], "note": "equal accepted, higher accepted" },
+        { "advanceSeconds": 10 },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "fedcba9876543210", "seq": 1, "at": "@-20", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 6 } } ], "note": "a new epoch with an earlier at is refused" },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "fedcba9876543210", "seq": 1, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 9, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "fedcba9876543210", "seq": 1 } } ], "note": "the new epoch holds; the old epoch's higher seq is a replay" }
+      ]
+    },
+    {
+      "name": "a record with a missing or malformed epoch, seq or at, or another machine's, is refused",
+      "capability": "registry-order-and-replay",
+      "steps": [
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 3, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "seq": 9, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 0, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 9, "at": "yesterday", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "bbbbbbbbbbbbbbbb", "epoch": "0123456789abcdef", "seq": 9, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 3 } } ] }
+      ]
+    },
+    {
+      "name": "a record more than sixty seconds from the clock is refused and a held one goes stale",
+      "capability": "registry-freshness",
+      "steps": [
+        { "get": [
+          { "t": "registry", "machine": "aaaaaaaaaaaaaaaa", "name": "box", "online": true, "lastSeen": "@0", "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@-61", "truncated": false, "sessions": [] } },
+          { "t": "registry", "known": [] } ] },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": false, "verified": false, "record": null } ], "note": "listed and online, no usable record: never live" },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@61", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": false, "verified": false, "record": null } ], "note": "sixty-one seconds ahead is refused too" },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 2, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 2 } } ] },
+        { "advanceSeconds": 61 },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": false, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 2 } } ], "note": "kept, stale" }
+      ]
+    },
+    {
+      "name": "an offline change keeps the last copy as stale and the relay online flag alone never makes it live",
+      "capability": "registry-freshness",
+      "steps": [
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": false, "record": null } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": false, "live": false, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 1 } } ] },
+        { "get": [
+          { "t": "registry", "machine": "aaaaaaaaaaaaaaaa", "name": "box", "online": false, "lastSeen": "@0", "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 2, "at": "@0", "truncated": false, "sessions": [] } },
+          { "t": "registry", "known": [] } ] },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": false, "live": false, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 1 } } ] }
+      ]
+    },
+    {
+      "name": "removed purges the machine and its history so a reconnecting machine is accepted at any epoch",
+      "capability": "registry-removal-and-purge",
+      "steps": [
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "fedcba9876543210", "seq": 50, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "removed": true } },
+        { "expect": [] },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@-5", "truncated": false, "sessions": [] } } },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 1 } } ] }
+      ]
+    },
+    {
+      "name": "a get drops machines it no longer lists and keeps a listed but silent machine offline without a record",
+      "capability": "registry-removal-and-purge",
+      "steps": [
+        { "changed": { "t": "registry-changed", "machine": "bbbbbbbbbbbbbbbb", "online": true, "record": { "v": 1, "machine": "bbbbbbbbbbbbbbbb", "epoch": "0123456789abcdef", "seq": 1, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "get": [
+          { "t": "registry", "machine": "aaaaaaaaaaaaaaaa", "name": "box", "online": true, "lastSeen": "@0", "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 2, "at": "@0", "truncated": false, "sessions": [] } },
+          { "t": "registry", "known": [ { "machine": "aaaaaaaaaaaaaaaa", "name": "k", "online": false } ] } ] },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": true, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 2 } } ], "note": "the machine the get omits is gone; a machine's own frame beats its known entry" },
+        { "get": [ { "t": "registry", "known": [ { "machine": "aaaaaaaaaaaaaaaa", "name": "k", "online": false }, { "machine": "cccccccccccccccc", "name": "k", "online": false } ] } ] },
+        { "expect": [
+          { "id": "aaaaaaaaaaaaaaaa", "online": false, "live": false, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 2 } },
+          { "id": "cccccccccccccccc", "online": false, "live": false, "verified": false, "record": null } ], "note": "a known-only machine is offline with no record" }
+      ]
+    },
+    {
+      "name": "a cached copy is deleted after twenty four hours on the monotonic clock",
+      "capability": "registry-cache-expiry",
+      "steps": [
+        { "changed": { "t": "registry-changed", "machine": "aaaaaaaaaaaaaaaa", "online": true, "record": { "v": 1, "machine": "aaaaaaaaaaaaaaaa", "epoch": "0123456789abcdef", "seq": 1, "at": "@0", "truncated": false, "sessions": [] } } },
+        { "advanceSeconds": 86399 },
+        { "expect": [ { "id": "aaaaaaaaaaaaaaaa", "online": true, "live": false, "verified": false, "record": { "epoch": "0123456789abcdef", "seq": 1 } } ] },
+        { "advanceSeconds": 1 },
+        { "expect": [] }
+      ]
+    }
+  ]
+}
