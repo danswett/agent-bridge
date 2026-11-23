@@ -374,6 +374,64 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Claude_AskUserQuestion_records_the_question_it_carries_beside_the_registration()
+    {
+        _f.Processes.Run(AgentKind.Claude, 30);
+        var transcript = _f.ClaudeTranscript("s1");
+        Spooled("0001", "claude", "ask", AskEvent(transcript, "toolu_1"), 10, 20, 30, 40);
+        Intake().Pass();
+
+        var marker = AskMarker("s1");
+        Assert.Equal(("s1", "toolu_1"), (marker.GetProperty("SessionId").GetString(), marker.GetProperty("ToolUseId").GetString()));
+        Assert.Equal("Ship it?", marker.GetProperty("Input").GetProperty("questions")[0].GetProperty("question").GetString());
+        Assert.NotEqual("", marker.GetProperty("Created").GetString());
+        // The registration keeps its own shape, and the marker is not read as a registration.
+        Assert.Equal(["SessionId", "ProcessId", "TranscriptPath", "WorkingDirectory", "Updated", "HookStatus", "HookStatusAt"],
+            Registration("agent-bridge-claude", "s1").EnumerateObject().Select(p => p.Name));
+        Assert.Equal("s1", Assert.Single(RegistrationDiscovery.Find(AgentKind.Claude, [_f.ClaudeRegistrations], _f.Processes.GetAgentProcesses(AgentKind.Claude), _ => null)).Id);
+    }
+
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("prompt")]
+    [InlineData("start")]
+    public void A_Claude_turn_end_or_a_new_prompt_or_session_start_retires_the_recorded_question(string event_)
+    {
+        _f.Processes.Run(AgentKind.Claude, 30);
+        Spooled("0001", "claude", "ask", AskEvent(_f.ClaudeTranscript("s1"), "toolu_1"), 30);
+        Spooled("0002", "claude", event_ == "stop" ? "stop" : "register",
+            new { session_id = "s1", hook_event_name = event_ switch { "stop" => "Stop", "prompt" => "UserPromptSubmit", _ => "SessionStart" } }, 30);
+        Intake().Pass();
+
+        Assert.False(File.Exists(AskMarkerPath("s1")));
+    }
+
+    [Fact]
+    public void A_Claude_AskUserQuestion_without_an_id_or_an_input_object_records_no_question()
+    {
+        _f.Processes.Run(AgentKind.Claude, 30);
+        Spooled("0001", "claude", "ask", new { session_id = "s1", tool_name = "AskUserQuestion", tool_input = new { questions = Array.Empty<object>() } }, 30);
+        Spooled("0002", "claude", "ask", new { session_id = "s1", tool_name = "AskUserQuestion", tool_use_id = "toolu_2", tool_input = "text" }, 30);
+        Intake().Pass();
+
+        Assert.False(File.Exists(AskMarkerPath("s1")));
+    }
+
+    static object AskEvent(string transcript, string toolUseId) => new
+    {
+        session_id = "s1", hook_event_name = "PreToolUse", tool_name = "AskUserQuestion", tool_use_id = toolUseId, transcript_path = transcript, cwd = "/work/repo",
+        tool_input = new { questions = new[] { new { question = "Ship it?", header = "Ship", multiSelect = false, options = new[] { new { label = "Yes", description = "go" }, new { label = "No", description = "stop" } } } } },
+    };
+
+    string AskMarkerPath(string id) => Path.Combine(_f.Runtime, "agent-bridge-claude", id + ".ask.json");
+
+    JsonElement AskMarker(string id)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(AskMarkerPath(id)));
+        return doc.RootElement.Clone();
+    }
+
+    [Fact]
     public void A_Claude_transcript_the_event_did_not_name_is_found_in_its_project_folder()
     {
         var transcript = _f.ClaudeTranscript("s1");

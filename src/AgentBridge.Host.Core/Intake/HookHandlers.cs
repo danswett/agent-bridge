@@ -72,6 +72,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         var cwd = Str(e, "cwd") ?? "";
         string? status;
         string? transcript;
+        JsonElement? ask = null;
         switch (spooled.Hook)
         {
             case "register":
@@ -89,6 +90,8 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
                 if (Str(e, "tool_name") != "AskUserQuestion") { return notice; }
                 transcript = ClaudeTranscript(sessionId, known);
                 status = null;
+                // The question itself (#3838): Claude Code may not write its tool_use to the transcript until it is answered.
+                if (Str(e, "tool_use_id") is { Length: > 0 } && e.TryGetProperty("tool_input", out var input) && input.ValueKind == JsonValueKind.Object) { ask = input; }
                 break;
             default:
                 transcript = ClaudeTranscript(sessionId, known);
@@ -99,7 +102,33 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         }
         var owner = ClaudeOwner(spooled.Ancestors);
         WriteClaudeRegistration(sessionId, transcript, cwd, owner, status, At(spooled));
+        // A turn end, a new prompt or a session start proves any recorded question is over; a notification does not.
+        if (spooled.Hook is "stop" or "register") { RemoveAskMarker(sessionId); }
+        if (ask is { } input2) { WriteAskMarker(sessionId, Str(e, "tool_use_id")!, input2, At(spooled)); }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status };
+    }
+
+    public string AskPath(string sessionId) => Path.Combine(ClaudeRoot, RegistrationDiscovery.SafeKey(sessionId) + ".ask.json");
+
+    // <id>.ask.json beside the registration: the tool_use_id and tool_input of an AskUserQuestion that may not be in the
+    // transcript yet. Refused past the size the reader takes, so an oversized input records nothing.
+    void WriteAskMarker(string sessionId, string toolUseId, JsonElement input, string at)
+    {
+        if (input.GetRawText().Length > 512 * 1024) { return; }
+        WriteJson(AskPath(sessionId), w =>
+        {
+            w.WriteString("SessionId", sessionId);
+            w.WriteString("ToolUseId", toolUseId);
+            w.WriteString("Created", at);
+            w.WritePropertyName("Input");
+            input.WriteTo(w);
+        });
+    }
+
+    void RemoveAskMarker(string sessionId)
+    {
+        // Left behind it is spent at the next event, and the transcript retires it by id once it knows the question.
+        try { File.Delete(AskPath(sessionId)); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     HookNotice Codex(SpoolEvent spooled, HookNotice notice)

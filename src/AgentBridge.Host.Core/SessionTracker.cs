@@ -206,6 +206,18 @@ internal sealed class SessionTracker
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    static Question? HookQuestion(AskMarker ask, DateTimeOffset fallback)
+    {
+        try
+        {
+            using var input = JsonDocument.Parse(ask.InputJson);
+            // Only a real AskUserQuestion input: a non-empty questions array.
+            if (!input.RootElement.TryGetProperty("questions", out var questions) || questions.ValueKind != JsonValueKind.Array || questions.GetArrayLength() == 0) { return null; }
+            return QuestionMapper.FromClaudeAskUserQuestion(ask.ToolUseId, input.RootElement, ask.Created ?? fallback) with { AnswerAtMachine = true, AnswerAtMachineReason = "hook" };
+        }
+        catch (JsonException) { return null; }
+    }
+
     Session Build()
     {
         var d = Discovered;
@@ -252,6 +264,16 @@ internal sealed class SessionTracker
             question = question with { AnswerAtMachine = true };
         }
         DateTimeOffset? hintAt = null;
+
+        // A Claude AskUserQuestion the transcript has not written yet (#3838): Claude Code writes it only once it is
+        // answered when parallel tool calls follow it, but the claude/ask hook recorded it when it fired. It is shown
+        // at the machine, never typed into (the spool is not authenticated), and the transcript's own copy, which
+        // takes its place by id, is what can be answered. A session that waits on a question is never not responding.
+        if (d.Agent == AgentKind.Claude && question is null && reg?.Ask is { } ask && !_state.Knows(ask.ToolUseId) && HookQuestion(ask, reg.Updated ?? now) is { } hookQuestion)
+        {
+            question = hookQuestion;
+            hintAt = question.AskedAt;
+        }
 
         if (d.Agent == AgentKind.Claude && reg?.HookStatusAt is { } hookAt && (_state.LastActivityAt is not { } last || hookAt > last))
         {

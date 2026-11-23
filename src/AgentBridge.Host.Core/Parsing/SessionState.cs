@@ -169,8 +169,19 @@ internal sealed class SessionState
         if (at is { } t && (LastActivityAt is null || t > LastActivityAt)) { LastActivityAt = t; }
     }
 
+    // The ids of the last questions the transcript asked, so a hook's record of one (#3838) is spent once the
+    // transcript knows it, answered or not.
+    readonly HashSet<string> askedIds = [];
+    readonly Queue<string> askedOrder = new();
+    public bool Knows(string id) => askedIds.Contains(id);
+
     public void Ask(Question question)
     {
+        if (askedIds.Add(question.Id))
+        {
+            askedOrder.Enqueue(question.Id);
+            if (askedOrder.Count > 64) { askedIds.Remove(askedOrder.Dequeue()); }
+        }
         if (askedFrom is { } from)
         {
             // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
