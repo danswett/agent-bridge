@@ -28,22 +28,26 @@ time. Anything else is out of bounds and stops the run.
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
 | **PENDING OWNER (who runs the elevated commands: the owner, or an owner-approved elevated session; not SRE until the owner says).** Drop a disposable host's relay connection, then restore it (S5, S8) | The commands need elevation. Exactly these two commands, run only after the owner approves that event, by whoever the owner names (see the first column). Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
-| Cut the response read to the disposable HA (S5) | SRE, the same two commands with the disposable HA's address, on the disposable HA's side | SRE; the disposable HA belongs to the run, so no fleet host changes |
+| Cut the response read to a disposable HA (S5) | **NOT COVERED: there is no disposable HA**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says NOT COVERED |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real
-Home Assistant (the comparison runs on a disposable HA only).
+Home Assistant (there is no disposable HA, so the HA comparison and the fallback checks are NOT COVERED).
 
 ## Preconditions (SRE checks, records each)
 
 1. The G9 stack is merged on main and every disposable host runs a build that contains it, deployed at S-1 (SRE-approved, never the owner). Record each host's build head.
-2. **PENDING OWNER (where the 3 hosts come from, and any draining or new VM).** **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3 from the fleet's existing idle VMs, and 3 source-target pairs,
-   each run in both directions. If fewer than 3 are idle, **the run waits**: draining another lead's sessions, or creating a new VM, needs the
-   owner's explicit approval first, and the lead who owns a host's sessions ends them (by list) before it counts as disposable. SRE verifies each
-   host shows no live session that is not the run's own. A host with any other live session is not disposable.
-3. **PENDING OWNER (whether a disposable HA exists).** A **disposable HA instance** exists for the comparison, provisioned by **SRE** from an existing disposable HA (or its existing image), with **no
-   new account and no new credential**. If none exists, the run waits and the owner is asked; nothing is improvised. The real one is never used.
+2. **Hosts (owner answer, about 09:00 PT).** **A disposable host is a fleet VM with no live sessions.** The run uses **three hosts the owner approved
+   draining**: two named by the owner and one more, drained **at a quiet hour at run time**. SRE proposes the hour and the owner confirms it through the Chief
+   on the day; draining stops live sessions, so nothing is drained before that confirmation. The lead who owns a host's sessions ends them (by list) first. The
+   host names are written only in the frozen plan, kept off the repository, never in this runbook or any record the receipt carries. The 3 source-target
+   pairs run in both directions. SRE verifies each host shows no live session that is not the run's own; a host with any other live session is not disposable.
+3. **No disposable HA (owner answer, about 09:00 PT): the HA-fallback checks are SKIPPED and are NOT COVERED.** Pass bar item 4, the HA fallback counter
+   reads in S0 to S11, and the stop condition on an HA fallback cannot be observed without one. The evidence and the receipt say **NOT COVERED** for each,
+   in those words, so the lead's approval of the flip reads it. Nothing is improvised and the real Home Assistant is never used. **Open for the lead:** the
+   HA twin comparison (the 100 pairs and the mismatch bar) also needs an HA to compare against; until the lead rules on it, the comparison is not claimed
+   and the receipt says so.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
 5. **The run plan is frozen before request 1** and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
    every coverage floor, the live-session cap, the unique launch names (from the fixed `SG Builder <n>` / `SG Worker <n>` list), the batch
@@ -80,12 +84,12 @@ sha256, and the load readings before and after.
 | Step | Who | What | Evidence recorded |
 |---|---|---|---|
 | **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
-| **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, the HA fallback counter, load | The plan, the baseline reads |
+| **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, load (the HA fallback counter is NOT COVERED: no disposable HA) | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
 | **S2** | SRE | **Smoke:** one Host launch and its HA twin on one pair. Stop if it does not start and register exactly once | Both receipts, the three double-launch counts |
 | **S3** | SRE | **Main pairs:** at least 100 compared pairs in batches no larger than the cap, each batch ended by list before the next; the 50 consecutive count is inside this | Per pair: both receipts and exit codes, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
-| **S5** | SRE (the owner only if a fault needs a restart) | **Lost response x3:** SRE drops the target's relay connection after the send on the Host side, and cuts the response read after the press on the HA side; each is resolved with `launches status` | The fault time, the receipt, the resolving read |
+| **S5** | SRE (the owner only if a fault needs a restart) | **Lost response x3:** SRE drops the target's relay connection after the send on the Host side (the HA-side twin is NOT COVERED: no disposable HA); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
 | **S6** | SRE | **Concurrent bursts x3** inside the cap | The invariants: sessions equal accepted requests, one session per request, counter rise equal, no double |
 | **S7** | SRE | **Long prompts x5**, one near 60 KB | Receipts, and that the prompt text is not kept in any record |
 | **S8** | **OWNER** presses each restart; SRE drops and restores the relay link | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
@@ -108,7 +112,7 @@ Any of these **stops the run at once**, fails or marks it INCONCLUSIVE as stated
 excused as load:
 
 - a double launch, or any new session on a target in a request's window that the request does not explain;
-- any HA fallback press on a Host-path request (the HA fallback counter must stay zero);
+- any HA fallback press on a Host-path request (NOT COVERED: no disposable HA, so this cannot be observed; the receipt says so);
 - any mismatch between a Host request and its HA twin;
 - a launch that lands on the wrong target;
 - a person-guard bypass (any action that needed a person and happened without one);
