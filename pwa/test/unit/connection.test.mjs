@@ -29,6 +29,8 @@ function connected({ busy = () => false, winExtra = {}, now = undefined, refuse 
       open: false,
       closed: null,
       onClose: null,
+      watched: 0,
+      watchRegistry() { this.watched++; },
       async connect() { const e = refuse(n); if (e) { throw e; } this.open = true; return this; },
       close(code, reason) { this.open = false; this.closed = { code, reason }; this.onClose?.({ code, reason }); },
     };
@@ -462,4 +464,23 @@ test('an answer on a socket given up for silence goes again once, with its same 
   assert.equal(sends[0].request, sends[1].request, 'the same request, which the machine carries out once');
   assert.equal(service.get('h', 's', 'q').outcome, 'delivered');
   conn.stop();
+});
+
+test('the registry is watched once per relay socket and its frames build one snapshot of the account', async () => {
+  const { conn, relays } = connected();
+  await conn.start();
+  assert.equal(relays[0].watched, 1);
+  const events = [];
+  conn.on('registry', () => events.push(1));
+  const machine = 'aaaaaaaaaaaaaaaa';
+  const at = new Date().toISOString();
+  const record = { v: 1, machine, epoch: '0123456789abcdef', seq: 1, at, truncated: false, sessions: [] };
+  // A get reply is applied whole, when its `known` frame arrives; a change is applied at once.
+  relays[0].onRegistry({ t: 'registry', machine, name: 'box', online: true, lastSeen: at, record });
+  assert.deepEqual(conn.registry.snapshot(), []);
+  relays[0].onRegistry({ t: 'registry', known: [] });
+  assert.equal(conn.registry.snapshot()[0].live, true);
+  relays[0].onRegistry({ t: 'registry-changed', machine, removed: true });
+  assert.deepEqual(conn.registry.snapshot(), []);
+  assert.equal(events.length, 2);
 });

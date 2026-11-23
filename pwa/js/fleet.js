@@ -75,6 +75,7 @@ export class FleetStatus {
     Object.assign(this, { connection, hosts, book, me, probeEveryMs, refreshEveryMs, fastMs, now, doc, makeClient });
     connection.on('presence', () => { this.probe(); this.#retime(); });
     connection.on('ready', () => this.probe());
+    connection.on('registry', () => this.#emit());
     hosts.onChange(() => this.#onHosts());
     hosts.sessions.onChange(() => { this.#watchHeld(); this.#emit(); });
     doc?.addEventListener?.('visibilitychange', () => {
@@ -207,13 +208,23 @@ export class FleetStatus {
     return m ? machineFacts(m) : null;
   }
 
+  // The relay registry's count for a machine (docs/design/fleet-session-registry.md, slice 6): { count, live }, or null.
+  #registered(id) {
+    const m = this.connection.registry?.snapshot().find((x) => x.id === id);
+    const r = m?.record;
+    return r ? { count: r.truncated && Number.isInteger(r.total) ? r.total : r.sessions.length, live: m.live } : null;
+  }
+
   #known(id) {
-    const m = this.#machines.get(id);
+    const m = this.#machines.get(id) ?? (this.#registered(id) ? { hostVersion: null, dev: false, sessions: null } : null);
     if (!m) { return null; }
     // A machine shown has its count live once its snapshot is in.
     const link = this.hosts.shows(id) ? this.hosts.link(id) : null;
     const live = link?.phase === 'open' && link.client?.synced;
-    return { ...m, sessions: live ? link.store.size : m.sessions, held: live && this.#heldLong(id) ? link.store.held?.reason : null };
+    // A machine shown has its channel's count; else a live registry copy (fresher than a probe); else the probe's; a stale copy last.
+    const reg = live ? null : this.#registered(id);
+    const from = reg && (reg.live || m.sessions === null) ? (reg.live ? 'live' : 'stale') : null;
+    return { ...m, sessions: live ? link.store.size : from ? reg.count : m.sessions, registry: from, held: live && this.#heldLong(id) ? link.store.held?.reason : null };
   }
 
   // Whether a machine's discovery hold has lasted HELD_ROW_MS (ui.md §6.6, #1064): a hold shorter

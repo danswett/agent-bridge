@@ -19,6 +19,7 @@
 import { CLOSE_CODES, Relay } from './relay.js';
 import { ChannelSet } from './channels.js';
 import { ReconnectBackoff } from './backoff.js';
+import { FleetRegistryView } from './fleet-registry-view.js';
 import { AppTimings } from './app-timings.js';
 
 // Long enough that switching to another app and back, to copy something, say, keeps everything
@@ -71,6 +72,9 @@ export class BridgeConnection {
   #timings = new AppTimings({ log: (line) => this.#emit('log', line) });
   relay = null;
   presence = [];
+  // Every machine's sessions as the relay's registry tells them; unsigned until hostSign (#1776).
+  registry = new FleetRegistryView();
+  #registryBatch = [];
   // The account's machines that are offline (relay.js); null while the relay keeps no roster.
   known = null;
   // 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'resting' | 'replaced' | 'signed-out' | 'stopped'
@@ -220,6 +224,17 @@ export class BridgeConnection {
     return this.relay.forget(machineId);
   }
 
+  // The account's sessions from one socket (docs/design/fleet-session-registry.md, slice 6). A get reply is
+  // one frame per machine then `known`; it is applied whole, on `known`. A change is applied at once.
+  #registryFrame(r, m) {
+    if (this.relay !== r && this.#connecting !== r) { return; }
+    if (m.t === 'registry-changed') { this.registry.applyChanged(m); } else if (Array.isArray(m.known)) {
+      this.registry.applyGet([...this.#registryBatch, m]);
+      this.#registryBatch = [];
+    } else if (typeof m.machine === 'string') { this.#registryBatch.push(m); return; } else { return; }
+    this.#emit('registry', this.registry);
+  }
+
   #connect() {
     if (['signed-out', 'replaced', 'stopped', 'resting'].includes(this.state)) { return Promise.resolve(); }
     if (this.#attempt) { return this.#attempt; }
@@ -235,6 +250,7 @@ export class BridgeConnection {
       this.known = known;
       this.#emit('presence', list);
     };
+    r.onRegistry = (m) => this.#registryFrame(r, m);
     r.onClose = (e) => this.#dropped(r, e);
     r.onReceive = () => { if (this.relay === r) { this.#unwatch(); } };
     this.#connecting = r;
@@ -245,6 +261,8 @@ export class BridgeConnection {
       this.relay = r;
       this.#backoff.reset();
       this.channels.attach(r);
+      this.#registryBatch = [];
+      r.watchRegistry?.();
       this.#setState('connected', r.login ?? '');
       this.#emit('ready', r);
     }, (e) => {

@@ -44,6 +44,7 @@ function fakeRelay({ early, feedback = 0 }) {
       if (typeof data !== 'string') { relay.frames.push(data); return; }
       flights.push('device');
       const m = JSON.parse(data);
+      (relay.sent ??= []).push(m.t);
       if (m.t === 'hello') {
         this.pub = unhex(m.pub);
         if (!(early && relay.url.endsWith('?admit=1'))) { this.#reply({ t: 'challenge', eph: hex(this.eph.public), nonce: hex(this.nonce), account: '1' }); }
@@ -127,4 +128,23 @@ test('a probe goes to this device itself, which the relay routes back, and its e
   assert.equal(await r.probe(10), false, 'nothing back within the deadline');
   await new Promise((resolve) => { setTimeout(resolve, 10); });
   assert.deepEqual(data, [], 'the echo is not handed on');
+});
+
+test('watching the registry subscribes first, then gets, and hands registry frames on in order', async (t) => {
+  const { relay, FakeSocket } = fakeRelay({ early: true });
+  const real = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket;
+  t.after(() => { globalThis.WebSocket = real; });
+  const key = await P256KeyPair.generate();
+  const r = await new Relay({ base: 'https://relay.example', key, deviceId: await deviceIdOf(key.public), name: 'Phone' }).connect('token');
+  const got = [];
+  r.onRegistry = (m) => got.push(m.t);
+
+  r.watchRegistry();
+  assert.deepEqual(relay.sent.slice(-2), ['registry-subscribe', 'registry-get']);
+  for (const m of [{ t: 'registry', known: [] }, { t: 'registry-changed', machine: 'a', removed: true }]) {
+    relay.socket.onmessage({ data: JSON.stringify(m) });
+  }
+  await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.deepEqual(got, ['registry', 'registry-changed']);
 });

@@ -272,6 +272,9 @@ in-memory cache, the purge of unlisted machines, and pinned-roster membership (#
 The relay's `registry-subscribe` and `registry-changed` (slice 2b) exist. `FleetRegistryReader` (slice RC)
 applies the 60 s `at` rule, `registry-changed` frames and `removed` purges the same way; it is not yet
 wired to `fleet.list`. Signature checks are still to come (#1776).
+The PWA (slice 6) mirrors it in `fleet-registry-view.js`: `relay.js` subscribes then gets, `connection.js` keeps one snapshot,
+and a machine row takes its count from the registry when no channel of its own is open (a live copy ahead of a probe, a
+stale copy last), labelled `stale` and `unverified` until `hostSign` lands.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
   (a session that ends is sent at once, never held for the debounce),
