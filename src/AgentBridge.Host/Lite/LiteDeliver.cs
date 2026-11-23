@@ -12,7 +12,7 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Lite;
 
 // L5 of the temporary AP5-lite mode (#1353): types a verified own-agent message into an idle
-// session, or offers it to the host-only lane adapter when supplied. No production lane is wired.
+// session, or offers it to the host-only lane adapter when supplied. The host lane is wired through LaneComposition (S4).
 // The caller (L4) has verified the signature; the text is re-bound to the envelope here
 // because this is the last step before keys go to a live agent.
 public sealed class LiteDeliver(
@@ -32,6 +32,10 @@ public sealed class LiteDeliver(
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
     internal DeliveryLaneScheduler? Lane { get; init; }
+    // The host's lane (S4): flag-gated, Copilot targets only. Unset or off, delivery is the legacy idle-typing path.
+    internal LaneComposition? Composition { get; init; }
+    // The pump that drains Composition; held so S6 can stop it. Nothing else reads it.
+    internal DeliveryDispatchPump? Pump { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -51,12 +55,9 @@ public sealed class LiteDeliver(
     async Task<LiteDelivery> DecideAsync(VerifiedEnvelope envelope, string text, string target, CancellationToken ct, bool query = false)
     {
         ct.ThrowIfCancellationRequested();
-        if (query && Lane is null) { return Refused(LiteReceiver.Replay); }
+        if (query && Lane is null && Composition?.Enabled() != true) { return Refused(LiteReceiver.Replay); }
         var body = envelope.Body;
-        string safe;
-        try { safe = Escape(Lane is null ? text : DeliveryEnvelope.NormalizeBody(text)); }
-        catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
-        if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
+        string safe;        if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
         var id = target;
         Session? session = null;
         var byNode = false;
@@ -66,6 +67,20 @@ public sealed class LiteDeliver(
             if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         }
         if (Lane is null) { Resolve(); }
+        // The host lane (S4) carries Copilot targets only, and only while the flag is on; a Claude send, or flag off, stays on the legacy idle-typing path.
+        // A refused journal fails closed here, never to legacy typing.
+        var lane = Lane;
+        if (lane is null && Composition is { } composition && (session is null || session.Agent == AgentKind.Copilot))
+        {
+            var resolved = composition.Resolve();
+            if (resolved.Status == LaneStatus.Refused) { return Refused(LiteCodes.Busy); }
+            lane = resolved.Scheduler;
+        }
+        // Through the composition, an accepted offer raises Offered, which wakes the pump; the switches ride every later fence.
+        DeliveryOfferStatus Offer(Guid offered, string to, DeliverySender from, string text, Func<bool> current, Func<bool>? revoked = null) =>
+            Lane is null && Composition is { } host ? host.Offer(offered, to, from, text, current, revoked) : lane!.Offer(offered, to, from, text, current, revoked);
+        try { safe = Escape(lane is null ? text : DeliveryEnvelope.NormalizeBody(text)); }
+        catch (ArgumentException) { return Refused(LiteCodes.NotReplyTarget); } // not valid Unicode
         var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
             $"{body.Principal.Machine}/{body.Principal.SenderId}");
         var request = Guid.Parse(body.Request);
@@ -75,23 +90,23 @@ public sealed class LiteDeliver(
         // switch (or no account) while the composer is read or the typing slot is awaited types nothing, here and at both replier fences.
         bool Signed() => account is null || account() == body.Account;
         if (!Signed()) { return Refused(LiteReceiver.NotSameAccount); }
-        if (Lane is { } history)
+        if (lane is { } history)
         {
             // A known UUID's authenticated target is history, not renewed node routing.
             if (history.BoundTarget(request, sender) is { } bound && HaContract.NodeId(bound) == target) { id = bound; }
             var prior = history.Query(request, id, sender);
             // A false fence forbids new admission while Offer verifies the existing body's HMAC.
-            if (prior.State != DeliveryOfferState.Refused) { return FromLane(history.Offer(request, id, sender, laneBody, () => false)); }
+            if (prior.State != DeliveryOfferState.Refused) { return FromLane(Offer(request, id, sender, laneBody, () => false)); }
             if (query) { return FromLane(prior); }
         }
-        if (Lane is not null) { Resolve(); }
+        if (lane is not null) { Resolve(); }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
-        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot)
+        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || lane is not null && session.Agent != AgentKind.Copilot)
         { return Refused(LiteCodes.NotReplyTarget); }
-        if (Lane is { } lane)
+        if (lane is not null)
         {
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
             if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
@@ -103,7 +118,7 @@ public sealed class LiteDeliver(
                 source.Get(id) is { Agent: AgentKind.Copilot, Question: null } live && live.ProcessId == pid &&
                 live.Status is SessionStatus.Idle or SessionStatus.Working;
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
-            return FromLane(lane.Offer(request, id, sender, laneBody, Current, Revoked));
+            return FromLane(Offer(request, id, sender, laneBody, Current, Revoked));
         }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(session.Agent, pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }

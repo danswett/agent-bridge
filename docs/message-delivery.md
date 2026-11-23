@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: slice 3a standalone priority journal core and Phase 1 S3 source-only dispatch pump; delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
+Status: slice 3a standalone priority journal core, Phase 1 S3 dispatch pump and S4 Lite wiring (default off); delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -143,6 +143,11 @@ pump exception) stops the whole pump. A second pump on one ISessionSource throws
 Removing a session cancels its timers and drops its pending state.
 BeginStop cancels retries and new wakes, never an admitted injector; S6 owns its shutdown wiring.
 The laneDelivery flag stays default off; this adds no agent urgent or cross-node queued acceptance.
+Phase 1 S4 wires LiteDeliver to the lane through LaneComposition. Only while laneDelivery is on, and only for
+Copilot targets: a Claude target, or the flag off, keeps the legacy idle-typing path unchanged (a Claude lane comes later).
+An offer goes through composition.Offer, whose Offered event wakes the pump; there is no separate Wake call. With the flag on and
+the journal refused, a send is refused busy and never falls back to legacy typing. The host builds one composition and one
+pump; S6 owns stopping the pump.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.

@@ -41,13 +41,21 @@ public interface ILiteLaunches
 // the routine never names a gate itself.
 public static class LiteComposition
 {
-    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, Func<string?> account, LaunchService launcher, string folder, P256KeyPair key, Action<string> log, SessionDrivers? drivers = null)
+    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, Func<string?> account, LaunchService launcher, string folder, P256KeyPair key, Action<string> log, SessionDrivers? drivers = null, DeliveryGate? gate = null)
     {
         var launches = new LiteLaunchLog(id => LiveProcess(source, id), folder, key, log);
         launcher.SessionStarted += launches.Launched;
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers };
+        // The lane (S4) exists only when the host supplies its delivery gate. It stays off until laneDelivery is on; the one pump
+        // wakes on the composition's Offered event, and S6 owns stopping it.
+        LaneComposition? lane = null; DeliveryDispatchPump? pump = null;
+        if (gate is not null)
+        {
+            lane = new LaneComposition(currentSettings, modeOn, gate, replier, LaneScreens.Create(source, injector, TimeProvider.System), folder, log);
+            pump = new DeliveryDispatchPump(lane, source, log);
+        }
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, Composition = lane, Pump = pump };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)
