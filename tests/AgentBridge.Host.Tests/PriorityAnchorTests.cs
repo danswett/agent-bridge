@@ -70,6 +70,37 @@ public sealed class PriorityAnchorTests
     }
 
     [Fact]
+    public void A_refused_rollback_is_not_laundered_by_later_appends_across_a_second_restart()
+    {
+        var anchor = new FakeAnchor(); using var n = new Node(anchor);
+        n.Issue(); var afterIssue = n.Records.Length; Assert.Equal("urgent", n.Decide().Priority);
+        var prefix = n.Records[..afterIssue];
+        using var first = new Node(anchor, prefix);
+        first.Clock.SetUtcNow(n.Clock.GetUtcNow());
+        Assert.NotEqual("urgent", first.Decide().Priority);
+        Assert.NotEmpty(first.Records);
+        using var second = new Node(anchor, prefix.Concat(first.Records));
+        second.Clock.SetUtcNow(n.Clock.GetUtcNow());
+        Assert.NotEqual("urgent", second.Decide().Priority);
+        Assert.Throws<InvalidOperationException>(() => second.Issue());
+    }
+
+    [Theory]
+    [InlineData("""{"n":99999999999,"tail":"x"}""")]
+    [InlineData("""{"n":-1,"tail":"x"}""")]
+    [InlineData("""{"n":2147483647,"tail":"x"}""")]
+    [InlineData("""{"n":1.5,"tail":"x"}""")]
+    [InlineData("""{"tail":"x"}""")]
+    public void An_out_of_range_or_malformed_head_count_quarantines_instead_of_throwing(string head)
+    {
+        var anchor = new FakeAnchor(); using var n = new Node(anchor); n.Issue();
+        anchor.Blob = System.Text.Encoding.UTF8.GetBytes(head);
+        using var replay = new Node(anchor, n.Records);
+        Assert.Throws<InvalidOperationException>(() => replay.Issue());
+        Assert.NotEqual("urgent", replay.Decide().Priority);
+    }
+
+    [Fact]
     public void A_journal_emptied_while_the_head_remains_refuses_priority()
     {
         var anchor = new FakeAnchor(); using var n = new Node(anchor); n.Issue();

@@ -10,7 +10,9 @@ public sealed partial class DeliveryJournal
     // between them leaves the journal ahead of the head, which is not a rollback and is accepted and resealed.
     void SealAnchor()
     {
-        if (anchor is null) { return; }
+        // Never seal while quarantined: appends on a refused (rolled-back) chain would move the head onto it, and the
+        // next restart would match it and reactivate the rolled-back capability. The old head keeps refusing.
+        if (anchor is null || priorityQuarantined) { return; }
         try { anchor.Store(JsonSerializer.SerializeToUtf8Bytes(new { n = priorityRecords.Count, tail = priorityTail })); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException)
         { Uncertain = true; log($"priority head seal failed ({e.GetType().Name}); no authority granted"); throw; }
@@ -29,9 +31,10 @@ public sealed partial class DeliveryJournal
                 return;
             }
             using var doc = JsonDocument.Parse(blob);
-            var n = doc.RootElement.GetProperty("n").GetInt32();
             var tail = doc.RootElement.GetProperty("tail").GetString();
-            if (n < 1 || priorityRecords.Count < n || priorityRecords[n - 1].Hmac != tail) { RefuseAnchor("stale or mismatching"); }
+            // An out-of-range or non-integer count is a damaged head: quarantine, never throw out of the constructor.
+            if (!doc.RootElement.GetProperty("n").TryGetInt32(out var n) || n < 1 || priorityRecords.Count < n ||
+                priorityRecords[n - 1].Hmac != tail) { RefuseAnchor("stale or mismatching"); }
             else if (priorityRecords.Count > n) { SealAnchor(); }
         }
         catch (Exception e) when (e is CryptographicException or JsonException or KeyNotFoundException or InvalidOperationException or
