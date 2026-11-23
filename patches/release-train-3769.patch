@@ -1,9 +1,9 @@
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..fb5073b
+index 0000000..82bdfb5
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,103 @@
 +name: Release train
 +
 +# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
@@ -24,17 +24,18 @@ index 0000000..fb5073b
 +  APP_SIGNING: ${{ vars.APP_SIGNING }}
 +
 +jobs:
-+  train:
++  pick:
++    # Reads only: it lists runs and releases and writes nothing.
 +    if: github.repository == 'danswett/agent-bridge' && github.ref == 'refs/heads/main'
 +    runs-on: windows-latest
-+    timeout-minutes: 30
++    timeout-minutes: 15
 +    permissions:
-+      contents: write
++      contents: read
 +      actions: read
-+    concurrency:
-+      group: publish-prerelease
-+      cancel-in-progress: false
-+      queue: max
++    outputs:
++      sha: ${{ steps.pick.outputs.sha }}
++      version: ${{ steps.pick.outputs.version }}
++      run: ${{ steps.pick.outputs.run }}
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
@@ -55,32 +56,54 @@ index 0000000..fb5073b
 +          $pick = Select-ReleaseCommit -Runs (Get-ReleaseRuns $repo) -Latest $release -IsDescendant { param($sha, $base) (gh api "repos/$repo/compare/$base...$sha" --jq '.status') -in 'ahead' }
 +          if (-not $pick) { Write-Host 'nothing new to publish'; exit 0 }
 +          "sha=$($pick.Sha)", "version=0.1.$($pick.Number)", "run=$($pick.Id)" | Add-Content $env:GITHUB_OUTPUT
-+      - if: steps.pick.outputs.sha != ''
-+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++
++  publish:
++    # contents: write is here only, and only for a pick that exists. APP_SIGNING true never gets
++    # here: the pick job fails first.
++    needs: [pick]
++    if: needs.pick.outputs.sha != ''
++    runs-on: windows-latest
++    timeout-minutes: 30
++    permissions:
++      contents: write
++      actions: read
++    concurrency:
++      group: publish-prerelease
++      cancel-in-progress: false
++      queue: max
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
 +        with:
 +          dotnet-version: '10.0.x'
-+      - if: steps.pick.outputs.sha != ''
-+        run: dotnet tool install -g vpk --version 1.2.161
-+      - if: steps.pick.outputs.sha != ''
-+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++      - run: dotnet tool install -g vpk --version 1.2.161
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
 +        with:
-+          name: agent-bridge-windows-${{ steps.pick.outputs.version }}
++          name: agent-bridge-windows-${{ needs.pick.outputs.version }}
 +          path: out/app/releases
-+          run-id: ${{ steps.pick.outputs.run }}
++          run-id: ${{ needs.pick.outputs.run }}
 +          github-token: ${{ github.token }}
-+      - if: steps.pick.outputs.sha != ''
-+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
 +        with:
-+          name: agent-bridge-windows-arm64-${{ steps.pick.outputs.version }}
++          name: agent-bridge-windows-arm64-${{ needs.pick.outputs.version }}
 +          path: out/app-arm64/releases
-+          run-id: ${{ steps.pick.outputs.run }}
++          run-id: ${{ needs.pick.outputs.run }}
 +          github-token: ${{ github.token }}
 +      - name: Publish the pre-release
-+        if: steps.pick.outputs.sha != ''
 +        shell: pwsh
 +        env:
 +          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          SHA: ${{ needs.pick.outputs.sha }}
 +        run: |
-+          # -MainHead is the chosen commit itself: the train publishes the newest passed commit,
-+          # so the stand-aside for a later app change (ci.yml publish's) does not apply.
-+          ./build/publish-prerelease.ps1 -Version '${{ steps.pick.outputs.version }}' -ReleasesDir out/app/releases, out/app-arm64/releases -Repository '${{ github.repository }}' -Commit '${{ steps.pick.outputs.sha }}' -MainHead '${{ steps.pick.outputs.sha }}' -MainRepo .
++          # -MainHead is the chosen commit and this checkout is a clone at it. The train publishes
++          # the newest passed commit, so ci.yml publish's stand-aside for a later app change does
++          # not apply (publish-prerelease.ps1 skips it when MainHead is the commit, and then reads
++          # nothing from -MainRepo); a duplicate, an older version or a commit behind the latest
++          # release is still refused.
++          ./build/publish-prerelease.ps1 -Version $env:VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository $env:REPOSITORY -Commit $env:SHA -MainHead $env:SHA -MainRepo .
