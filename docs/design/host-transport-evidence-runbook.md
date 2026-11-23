@@ -12,7 +12,7 @@ permission. No machine name appears here or in any record the run keeps.
 - **SRE** runs the evidence, presses every control the run needs that is not listed under OWNER, and keeps the raw records.
 - **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy. But the host app update installs
   through the app, and **the restart that finishes it is OWNER-only** (guard 67): the owner presses that restart on each disposable host.
-- **OWNER** is live for exactly these: **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus
+- **OWNER** is live for exactly these: **the dry run's elevated-session approval and Restart host press (S-2)**, **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus
   a restart if a lost-response fault needs one (S5). The owner types nothing and runs no terminal step: they use the host's own person
   surface (the app) when SRE asks.
 - **Quality** attests the receipt against the bars; **the lead** approves the flip from the attested receipt.
@@ -31,6 +31,9 @@ time. Anything else is out of bounds and stops the run.
 | Cut the response read to a disposable HA (S5) | **There is no disposable HA and the HA comparison is waived by the owner**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says "no HA comparison" |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
+| **Dry run, before the main run:** the elevated session on the **spare host** | The owner approves launching it, through the Chief, as its own approval; SRE uses it | The owner, once, before the dry run. It is ended when the dry run ends; the main run's elevated session is a separate approval |
+| **Dry run:** the owner's **Restart host** press on the spare host | OWNER, in the app, once per dry-run event | The owner, per event, before it happens |
+| **Dry run:** run `relay-drop-event.ps1` on the spare host (the block, the proofs, the restore, the disarm) | The elevated session on the spare host, started by SRE | The owner, per event; the commands are exactly the script below, nothing else |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real Home Assistant (there is no disposable HA: the HA-fallback checks are NOT COVERED and the HA comparison is waived by the owner).
 
@@ -62,8 +65,9 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
   separately, by the owner's own approval, and is not in the host's process tree. Even for the unelevated sessions the host starts, it uses `CreateProcessW` with
   `CREATE_NEW_CONSOLE`, closes its handles, and puts the process in **no job object**, so nothing ties the session's lifetime to the host process; the only place the
   host terminates a session is the stop path (`ProcessControl` `TerminateProcess` for an end), not shutdown or restart. A host restart therefore does not end the
-  elevated session, and the dead-man scheduled task (a SYSTEM task) is independent of both. **This is read from the code, not tested on a host:** SRE confirms it in
-  the dry run by restarting a spare host and checking the elevated session is still there.
+  elevated session, and the dead-man scheduled task (a SYSTEM task) is independent of both. **This is read from the code, not tested; to be confirmed in the dry run.**
+  **No dry run has happened yet**, and nothing here says it was confirmed. The dry run (a spare host, an owner-approved elevated session, an owner Restart host press) is its own
+  approval, in the Approvals table below, and comes before the main run.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 
 #### The final command block (what the owner sees)
@@ -90,7 +94,7 @@ nothing can be sent while the relay is down. SRE reads and reports it **only aft
 dies** (the session is lost, the process is killed), **the dead-man covers it**: its scheduled task deletes the `SG-relay-drop` group after 20 minutes, so the block
 cannot outlive an event, and the missing 4b line in the log marks the event void.
 
-**Fallback if the session does not survive the host restart.** The answer above is that it survives. If SRE's dry run shows otherwise (the session dies with the host),
+**Fallback if the session does not survive the host restart.** The answer above is read from the code and is not yet confirmed. If the dry run shows otherwise (the session dies with the host),
 the event is run by a **scheduled task the session registers before the block** instead: `Register-ScheduledTask -TaskName 'SG-relay-drop-event' -Action
 (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File <script path> -EventId <event id> -HostExe <host exe path> -HostPid <host pid> -Evidence <evidence folder>')
 -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10)) -User 'SYSTEM' -RunLevel Highest`, started by `Start-ScheduledTask`, and removed with
@@ -215,6 +219,7 @@ sha256, and the load readings before and after.
 
 | Step | Who | What | Evidence recorded |
 |---|---|---|---|
+| **S-2** | SRE; **OWNER presses the restart** | **Dry run** of `relay-drop-event.ps1` on a **spare host** (not a disposable host of the run), before anything else. It checks that the elevated session survives the host restart, the scope check, both proofs, the restore and the disarm, and that the profile defaults and the RDP rules are unchanged. **Not started until the three dry-run approvals in the table above are given; no dry run has happened.** A failure stops the run until it is fixed and the dry run is repeated | The dry run's log with its sha256, the process ids before and after, and the result |
 | **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, load (the HA fallback counter is NOT COVERED: no disposable HA) | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
