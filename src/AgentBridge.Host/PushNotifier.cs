@@ -68,6 +68,10 @@ public sealed record PushOptions
     // #913 rule 3: questions of other sessions notified this soon after one that went on its own join
     // one grouped notice instead of going one by one. Zero groups nothing.
     public TimeSpan BurstWindow { get; init; } = TimeSpan.FromSeconds(30);
+    // S2b: delivery failures of the machine's lane are counted for this long from the first, and go as one count at the
+    // window's end to devices that asked for them. A debounce, trailing: the next window opens with the next failure.
+    public TimeSpan FailuresWindow { get; init; } = TimeSpan.FromSeconds(60);
+    public TimeSpan FailuresTtl { get; init; } = TimeSpan.FromHours(6);
     // #1190: a device is in use while it says it is on screen (sessions.focus) with input this recent.
     public TimeSpan ActiveFor { get; init; } = TimeSpan.FromMinutes(2);
 }
@@ -135,6 +139,9 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     // The question each device was last notified of per session, while it is still on that
     // device: a resolved notice goes only where there is something to replace.
     readonly Dictionary<(string Device, string Session), string> shownOn = [];
+    // S2b: failures counted in the open window, and when it closes. In memory only: a count, never an id or text.
+    int failuresPending;
+    DateTimeOffset? failuresAt;
     // Who answered a question from a client: that device needs no notice that it was answered.
     readonly Dictionary<(string Session, string Question), string> answeredBy = [];
     // When each device was last sent a finished notice per session, for FinishedCollapse.
@@ -438,7 +445,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     lock (gate)
                     {
                         if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
-                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
+                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant, request.Notify));
                     }
                     log($"push subscription from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}, {new Uri(request.Endpoint).Host}); {store.Count} in all");
                     // A sign-in notice held back for want of any device to tell goes to this one now.
@@ -481,6 +488,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             return "keys must be base64url: p256dh a P-256 point, auth 16 bytes";
         }
         if (!WebUrl(r.App, 1024)) { return "app must be an https URL"; }
+        if (r.Notify is { } n)
+        {
+            if ((object?)n.PinnedSessions is null) { return "notify.pinnedSessions must be a list"; }
+            if (n.PinnedSessions.Count > PushNotify.MaxPinned) { return $"notify.pinnedSessions has at most {PushNotify.MaxPinned} ids"; }
+            if (n.PinnedSessions.Any(id => string.IsNullOrEmpty(id) || id.Length > PushNotify.MaxIdChars)) { return $"notify.pinnedSessions ids are 1 to {PushNotify.MaxIdChars} characters"; }
+        }
         return null;
     }
 
@@ -827,6 +840,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
         times.AddRange(sessions.Values.Where(t => t.RemindAt is not null).Select(t => t.RemindAt!.Value));
+        if (failuresAt is { } failuresDue) { times.Add(failuresDue); }
         // Not one already past with no device to tell (SignIns made nothing), which woke the loop at
         // once, again and again. But one that came due while a push was in flight (#945) is only
         // made by the next pump: dropped, that push left nothing else to wake it, so the machine
@@ -898,6 +912,18 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
                     }
                     Enqueue(s, NoticeKind.Finished, null, unseen, queued: due.Queued);
+                    // A device that filters this session's finished turns is sent none, so nothing replaces
+                    // the question it was told: one still waiting to go is stale, and one it shows is withdrawn
+                    // there, as a refused finished notice's would be (below).
+                    foreach (var d in unseen.Where(d => !d.Wants(NoticeKind.Finished, id)))
+                    {
+                        outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
+                        // Whatever question it shows, not only the one just answered: a later one may have been held back.
+                        if (shownOn.TryGetValue((d.Device, id), out var shown))
+                        {
+                            Enqueue(s, NoticeKind.Resolved, shown, [d], ended: t.Removed, queued: due.Queued);
+                        }
+                    }
                     break;
                 // Checked again as it goes: a question asked once more is not resolved.
                 case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
@@ -919,7 +945,63 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         Remind(now);
         if (groupChanged) { Regroup(now); }
         SignIns(now);
+        Failures(now);
     }
+
+    // The machine's delivery lane dropped or could not confirm a message (S2b). Counted, never described: the first
+    // failure opens a window of FailuresWindow, and its end sends the count (Failures).
+    public void NoteDeliveryFailure(int count = 1)
+    {
+        if (count < 1) { return; }
+        lock (gate)
+        {
+            failuresPending = (int)Math.Min(int.MaxValue, (long)failuresPending + count);
+            failuresAt ??= time.GetUtcNow() + options.FailuresWindow;
+        }
+        Signal();
+    }
+
+    // At the window's end: one count, to every device that turned delivery failures on (PushSubscriber.Wants: off unless
+    // asked for). A device in use is told all the same, and it replaces a count still waiting for it. A window nobody
+    // wants leaves nothing behind.
+    void Failures(DateTimeOffset now)
+    {
+        if (failuresAt is not { } at || at > now) { return; }
+        var count = failuresPending;
+        (failuresPending, failuresAt) = (0, null);
+        if (count < 1) { return; }
+        foreach (var sub in store.All.Where(d => MayNotify(d) && d.Wants(NoticeKind.Failures, "")))
+        {
+            outbox.RemoveAll(o => o.Device == sub.Device && o.Session == PushNotice.FailuresKey);
+            outbox.Add(new Outgoing
+            {
+                Device = sub.Device,
+                Session = PushNotice.FailuresKey,
+                Kind = NoticeKind.Failures,
+                Plain = PushNotice.Serialize(FailuresMessage(count, sub.App, now)),
+                Ttl = (int)options.FailuresTtl.TotalSeconds,
+                Urgency = "normal",
+                Topic = PushNotice.Topic(machine.Id, PushNotice.FailuresKey),
+                Created = now,
+                NotBefore = now,
+                Grant = sub.Grant,
+                Alerts = true,
+            });
+        }
+    }
+
+    // Always a visible notification (never silent), naming the machine and a count: no session, id or message text.
+    internal PushMessage FailuresMessage(int count, string app, DateTimeOffset now) => PushNotice.Fit(new PushMessage
+    {
+        Notification = new PushNotification
+        {
+            Title = PushFailuresWords.Title,
+            Body = PushFailuresWords.Body(count, machine.Name),
+            Navigate = PushNotice.NavigateMachine(app, machine.Id),
+            Tag = PushNotice.Tag(machine.Id, PushNotice.FailuresKey),
+            Data = new PushNoticeData { Kind = NoticeKind.Failures, Machine = machine.Id, Session = "", Failures = count, At = now },
+        },
+    });
 
     // #913 rule 3: whether a burst window is open. It closes early once nothing in it is pending: a
     // question then is the first of a new burst, and goes as itself.
@@ -978,7 +1060,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     {
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, GroupKey)) { continue; }
             var alerts = kind == NoticeKind.Group && (!silent || groupAlertOwed.Contains(sub.Device));
             if (alerts) { groupAlertOwed.Add(sub.Device); }
             outbox.Add(GroupOutgoing(sub, kind, count, alerts, now));
@@ -1191,7 +1273,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         var now = time.GetUtcNow();
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, s.Id)) { continue; }
             var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended, reminder));
             var ttl = kind == NoticeKind.Finished ? options.FinishedTtl : options.QuestionTtl;
             // The latest state of a session wins: a newer notice replaces one still waiting.
@@ -1403,6 +1485,13 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 // The grouped notice's words (#913 rule 3), in one place for Creative (6690989275). #913's example
 // names each machine ("3 sessions need you: Laptop (2), Desk (1)"); a host knows only its own, so
 // its group names it once. No agent text (#263), and nothing to answer from the notice (#253).
+static class PushFailuresWords
+{
+    public const string Title = "Messages not delivered";
+    // The machine first, after the same " · " as a single notice's first line.
+    public static string Body(int count, string machine) => count == 1 ? $"{machine} · 1 message not delivered" : $"{machine} · {count} messages not delivered";
+}
+
 static class PushGroupWords
 {
     // The same for the group, its silent changes and its withdrawal: a change never re-titles it.

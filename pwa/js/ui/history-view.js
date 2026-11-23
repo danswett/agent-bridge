@@ -36,10 +36,10 @@ function originView(origin, at = null) {
   const words = h('span', null, 'Show prompt');
   const toggle = h('button', { type: 'button', class: 'prompt-toggle', 'aria-expanded': 'false', 'aria-controls': full.id, 'aria-label': disclosureName(origin, false) },
     designIcon('chevron', { size: 16, cls: 'prompt-chevron' }), words);
-  const facts = h('span', { class: 'prompt-facts' });
+  const facts = h('span', { class: 'prompt-facts', title: origin.from === 'unverified' ? origin.spoken : '' });
   setFacts(facts, origin.facts);
   const root = h('div', { class: 'prompt-origin', dataset: { from: origin.from } },
-    h('p', { class: 'prompt-label' }, h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()), facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
+    h('p', { class: 'prompt-label' }, origin.icon ? h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()) : null, facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
     h('p', { class: 'prompt-preview' }, origin.preview), toggle, full);
   toggle.addEventListener('click', () => {
     const open = toggle.getAttribute('aria-expanded') !== 'true';

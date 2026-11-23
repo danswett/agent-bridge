@@ -395,6 +395,16 @@ is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
 
+The App adapter implements `IVerifiedGrantReader` and internally constructs the sealed,
+read-only `VerifiedGrantRead` from its verified problem, computed G7 readiness and list
+data. The VM handles no contexts, keys or proof verification. Its separate `CanIssueFirst`
+requires typed RotationRequired plus G7Ready; list/revoke remain unavailable, and New grant
+uses the normal person prepare/confirm path. The notice describes first-issue rotation,
+not a completed rotation: only the verified receipt's `Rotated` confirms that. Without
+the adapter the reader returns Unavailable/G7Ready=false; production stays unavailable
+until G4 + PR2 land and AcceptHostSign is ON. Cached list/first-issue gates also require
+the receiver id captured for that read; a changed-receiver reply is discarded, retaining only stale rows.
+
 ### Sealed paginated grant.read DATA
 
 `FleetGrantReadDataResult(Page, Proof)` and `FleetGrantReadDataProof.Seal/Verify/Parse`
@@ -579,7 +589,7 @@ exception. Assignments and rollout need separate briefs and review; this contrac
 | G8 | Windows app list/counters/revoke and pending/offline state; after G7 | Receiver counters, tombstone receipt, in-flight visibility and stale-state labeling |
 | G9 | Remote grant launch via signed FleetActionEnvelope v1; after G5 and existing own-peer messaging trust, no separate roster gate (Nov 21, 12:50 PT) | Wrong account/audience, envelope replay, stolen id, offline target and kill switch; receiver-side grant and same caps as local |
 | G10 | Remote grant stop and multi-receiver issuance partitions; after G6/G8/G9 | Generation/target fence, quota sums, no borrowing, partial issue/revoke receipts |
-| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation |
+| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension. Two slices: A launch-remote (after G9c2 and Host-transport evidence), B end wrappers (after G10); see [fleet-grants-cli.md](fleet-grants-cli.md) "G11 slices" | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation; no wrapper is removed (G12) |
 | G12 | Retire wrappers/tools sync after approved cutover evidence; phone grant UI remains later | No surviving launch/end HA submissions; preserve separately authorized messaging and all person guards |
 
 Retirement targets are Fleet `launch-remote.ps1` launch-submit/MQTT/HA presses,

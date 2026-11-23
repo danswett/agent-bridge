@@ -592,6 +592,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     **A run whose jobs cannot be read is passed over only after 15 minutes, and only if it is not a failure.** The API can answer 404, a 5xx,
+     or an empty or cut-short body for a main run's jobs (a zombie run it never serves took every pull request's merge-rule to `error` for as
+     long as it sat newest). Such a run is skipped, and the status says `skipped unreadable run <id>` (first among the alerts, and in the
+     failure when nothing readable is left), only when all of these hold: it was created over 15 minutes ago (a fresh run can 404 briefly, and
+     until then the judge errors as it always has); it is not completed, or ended `cancelled`, `success`, `neutral`, `skipped`, `stale` or
+     `action_required` (an ALLOW-list: a failure, a conclusion GitHub doesn't document, a completed run with none, and a run with no status are
+     never skipped, so the unexpected fails closed); and a second read of its jobs, 3 seconds after the first, also failed. There is no memory
+     between evaluations, so a run unreadable on both reads of one evaluation is skipped even if the outage was brief: that is the limit.
+     A run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
+     The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
+     failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
@@ -636,7 +647,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
      retry: older runs are read back to its last real result, and a success there (or earlier in the
      same run) stops the lookup. The arm64 waiver applies to that result as to the latest one.
-     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     Unreadable history, plan or product data fails closed without fallback, with one exception: a main run whose jobs stay unreadable past
+     the grace and aren't a failure is skipped and named (above). No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
@@ -705,7 +717,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      When the open list itself stops partway, no head gets success from that run: a held pull
      request on it could be among the unread.
    - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
-     about one point per page of the open list plus one per pull request that isn't already
+     about one point per page of the open list (twenty-five to a page; a scoped run reads it light,
+     a number and a head each, a hundred to a page) plus one per pull request that isn't already
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), plus one REST call for
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
@@ -743,7 +756,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
      red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
-     (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
+     plus one per hundred open pull requests (the light open list, which finds the pull requests
+     on the head; those pull requests, each read in full; a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
      CI, up to 15 points each with 25 pull requests open, 315). Those are historical estimates,
