@@ -1,0 +1,38 @@
+From 45f3ae5d4238c3e5963424bb4362d9c5e2892ca9 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 14:47:23 -0800
+Subject: [PATCH] ci: run the ci-speed script's offline test in the light job
+ (Part of #4104)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f9fe6324b..f14725b46 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1360,6 +1360,7 @@ jobs:
+     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
++    #  - ci-speed-script: the CI-speed figures (merge gate, full run, queue wait, red rate), offline (quality/ci-speed.ps1);
+     #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
+     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
+     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+@@ -1407,6 +1408,11 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'wake-watch-script')) }}
+         shell: pwsh
+         run: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
++      - name: The CI-speed figures measure the merge gate from created_at and from run_started_at on a fixed run list
++        # A fixed run and job list: nothing reaches GitHub.
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'ci-speed-script')) }}
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/test-ci-speed.ps1
+       - name: The red-minutes figure counts spells the way the guardian does
+         # A fixed run list: nothing reaches GitHub.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+-- 
+2.56.1.windows.1
+
