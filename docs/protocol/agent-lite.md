@@ -125,6 +125,8 @@ Receiver refusals, in the order they are checked:
 | `notReplyTarget` | the target is not a session this host can type into. Lite types into Copilot and Claude Code sessions only (**owner-approved CHANGE, ~15:20 PT Nov 22**: Claude was refused before); Codex and unknown agents stay refused, and the lane (`laneDelivery`) still takes Copilot targets only. A Claude session is held to the same gates, idle, rate, signed account and process-incarnation fences as Copilot, and the fence is asked again before the first key and before each Enter pressed again when Claude took the first as part of the paste (a lost grant, kill switch or account stops the keys); its input box is read as the replier reads it (on screen, no `/` or `!` command waiting). Claude shows a suggested prompt in an empty box that a screen read cannot tell from typed words, so only a box that is off screen or holds a command is `composerNotEmpty` for Claude |
 | `busy` | the target is not idle (a working Claude too, unless `agentMessaging.claudeBusyQueue` is on, default off), or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
+| `queueHeld` | a relay message to this session is still held in Claude's own queue (proposed, with `agentMessaging.claudeBusyQueue`); nothing was typed. Final: not retried and never sent over Home Assistant, which `busy` would allow |
+| `statusFull` | the host's status store for busy-Claude sends is full (proposed, same flag); nothing was typed. Final, as `queueHeld` |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, (discovery held is `sessionResolutionIncomplete`, below). A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |
 | `sessionResolutionIncomplete` | the target is a node id and session discovery is held, so a live session may not be listed yet. Nothing was typed; retry after a few seconds. Final for the sender's HA fallback, as `noSuchSession` is (docs/design/reply-deduplication.md; #1396) |
 
@@ -140,6 +142,7 @@ resolve names. The ID-first refusal contract above takes precedence for identity
 | `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | no fallback over any transport: the first message may already have been typed, so a resend could deliver it twice. It is reported from the host's memory-only status store, which the sender pulls by request id (after a host restart the lookup answers unknown, reported as unconfirmed) |
 | `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant once; such a refusal means nothing was typed, which is its own proof (there is no separate `NoKeysSent` code). Never after a queued (Accepted) or `unconfirmed` result |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
+| `refused` with `queueHeld` or `statusFull` | final failure shown to the sender; never retried and never sent over Home Assistant (a `busy` code here would bypass the depth cap) |
 | any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
 
 ## Acceptance tests (tick before cut-over)
