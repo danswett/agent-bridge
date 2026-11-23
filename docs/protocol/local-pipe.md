@@ -334,9 +334,14 @@ Agent-only reads of the account's cross-machine session list, on a connection th
 ### `agent.send` (AP5-lite)
 
 Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other
-caller (a plain pipe client, a connector, the HTTP MCP server, a script) is refused with
-`refused: agent.send is for an agent connection that has passed agent.hello`. The sender is
-always the connection's credential (a non-Windows host, or one without agent credentials, answers
+caller (a plain pipe client, a connector, the HTTP MCP server, an unauthenticated script) is refused with
+`refused: agent.send is for an agent connection that has passed agent.hello`. An authenticated
+script credential may use this op as `script:<machine>/<name>` with `read+reply` scope.
+Its only other allowed ops are `fleet.list` and `fleet.find`; direct `session.reply`,
+answers, settings changes, credential/scope changes and unknown ops are refused with a reason.
+Launch still requires the separate explicit fleet grant. A script cannot authorize its own grant,
+reauthenticate to widen scope, or fall back to person authority after expiry or revocation.
+The sender is always the connection's credential (a non-Windows host, or one without agent credentials, answers
 `refused: agent.send isn't available on this host`; with the mode off or no sender wired, an agent
 connection gets the `off` outcome below): any `principal` or other extra field in the request is
 ignored.
@@ -370,6 +375,10 @@ sender, which answers
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
 | `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
 | `off` | the mode is off, killed, or no sender is wired; no channel was opened | legacy fallback to Home Assistant |
+
+A script's credential is checked against the host's stable machine ID even while the
+relay is detached. A live, correctly bound script sending to a pinned peer then receives
+`undeliverable`, not `refused/credential`; expired, revoked or misbound credentials remain refused.
 
 `request` is the sender's request id.
 
@@ -560,6 +569,13 @@ or ownership records, or another profile's record). Unknown future values read a
 With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
 `hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
 With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
+
+`hookMigrated` (optional boolean; absent reads as `false`; owner-approved additive field, #783) is
+`true` when `hookSetup` is `completed` because agent-ha-bridge's migration re-pointed this
+agent's hooks in this agent home (recorded in `migration.json`), not because this profile
+wrote an ownership record. Such an agent is Not tested yet until a hook is handled; clients
+offer neither Set up nor Remove for it, since the host has no owned record to remove. Older
+hosts omit it.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.

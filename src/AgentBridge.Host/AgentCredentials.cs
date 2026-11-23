@@ -77,6 +77,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly List<Record> records = [];
+    readonly Dictionary<string, string> scriptNames = new(StringComparer.Ordinal);
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<IProtocolChannel, Connection> connections = new();
     string? problem;
 
@@ -113,6 +114,42 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     public int Count { get { lock (gate) { return records.Count; } } }
 
     internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
+
+    internal string? ScriptPrincipal(IProtocolChannel channel) =>
+        connections.TryGetValue(channel, out var c) && c.Script ? c.Principal : null;
+
+    internal static string ScriptOperation(string op) =>
+        op is AgentProtocol.Hello or Fleet.FleetList.Op or Fleet.FleetList.FindOp or Lite.LiteAgentSend.Op or LaunchProtocol.Launch
+            ? op : "script.operation";
+
+    internal string? ScriptPrincipal(string? token)
+    {
+        if (token is not { Length: AgentProtocol.TokenLength } || !token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal)) { return null; }
+        var hash = Convert.FromHexString(Hash(token));
+        lock (gate)
+        {
+            string? principal = null;
+            foreach (var record in records)
+            {
+                if (record.Credential.Kind == "script"
+                    && CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(record.Hash)))
+                { principal = record.Credential.Principal; }
+            }
+            foreach (var entry in scriptNames)
+            {
+                if (CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(entry.Key))) { principal = entry.Value; }
+            }
+            return principal;
+        }
+    }
+
+    // Audit-only attribution survives removal, bounded to the most recently remembered hashes.
+    // It never participates in authentication, including when a foreign store fails closed.
+    void RememberScript(Record record)
+    {
+        if (!scriptNames.ContainsKey(record.Hash) && scriptNames.Count >= MaxCredentials) { scriptNames.Remove(scriptNames.Keys.First()); }
+        scriptNames[record.Hash] = record.Credential.Principal!;
+    }
 
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
@@ -268,6 +305,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
                 // without its hash. The existing file is untouched until the atomic replacement.
                 Save();
                 File.Move(temp, final, overwrite: true);
+                RememberScript(records.Single(r => r.Credential.Id == credential.Id));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException)
             {
@@ -403,22 +441,22 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // principal, for as long as its credential stands.
     public AgentHelloResult Accept(IProtocolChannel channel, AgentCredential credential)
     {
-        // A script connection cannot shed its read-only limit by authenticating again.
+        // A script connection cannot shed its scope limit by authenticating again.
         CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
-        return new AgentHelloResult(principal, credential.Kind == "script" ? AgentProtocol.ScopeRead : credential.Scope);
+        return new AgentHelloResult(principal, credential.Scope);
     }
 
     // Keep the script restriction even after its record disappears: absence is never person authority.
     internal void CheckScriptOperation(IProtocolChannel channel, string op, Action<string>? refusalLog = null)
     {
         if (!connections.TryGetValue(channel, out var c) || !c.Script) { return; }
-        var why = op is not (Fleet.FleetList.Op or Fleet.FleetList.FindOp)
-            ? "script connections may call only fleet.list and fleet.find"
+        var why = op is not (Fleet.FleetList.Op or Fleet.FleetList.FindOp or Lite.LiteAgentSend.Op)
+            ? "script credentials have read+reply scope: only fleet.list, fleet.find and agent.send are allowed; a script cannot raise its own scope"
             : Of(channel) is null ? "the script credential is no longer live" : null;
         if (why is null) { return; }
-        var line = $"refused {op} from {c.Principal}: {why}";
+        var line = $"refused {ScriptOperation(op)} from {c.Principal}: {why}";
         log($"agent credentials: {line}");
         refusalLog?.Invoke($"local pipe: {line}");
         throw new InvalidOperationException($"refused: {why}");
@@ -552,6 +590,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             if (file.Length > 4 * 1024 * 1024) { throw new JsonException("store exceeds its byte bound"); }
             var saved = JsonSerializer.Deserialize<Saved>(file, Json) ?? throw new JsonException("empty store");
             if (saved.Version != 1 || saved.Records is null || saved.Records.Length > MaxCredentials) { throw new JsonException("unsupported store"); }
+            foreach (var r in saved.Records)
+            {
+                if (r?.Credential is { Kind: "script", Principal: { } principal } c && r.Hash is { Length: 64 } && IsHex(r.Hash)
+                    && principal.IndexOf('/') is var slash && slash > "script:".Length
+                    && ValidScript(c, principal["script:".Length..slash]))
+                { RememberScript(r); }
+            }
             var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var r in saved.Records)
             {

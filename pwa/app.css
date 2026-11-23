@@ -1412,6 +1412,9 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .prompt-icon { flex: none; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--ab-agent); forced-color-adjust: none; }
 .driven-diamond { --ab-glyph-knockout: transparent; overflow: visible; }
 .prompt-facts { min-width: 0; color: var(--ab-agent-text); overflow-wrap: anywhere; }
+.prompt-origin[data-from="unverified"] .prompt-facts { color: var(--ab-text2); }
+.prompt-origin[data-from="unverified"] .prompt-icon { display: none; }
+.prompt-origin[data-from="unverified"] .prompt-full { border-color: var(--ab-text2); }
 .prompt-by { min-width: 0; overflow-wrap: anywhere; }
 .prompt-preview {
   margin: var(--ab-space-1) 0 0; color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere;
