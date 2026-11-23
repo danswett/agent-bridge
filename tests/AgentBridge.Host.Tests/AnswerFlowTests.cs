@@ -16,6 +16,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    // The real-time waits the negative-path tests sit through (#2454): half of what they were, so the class no longer holds a ~280 s floor under
+    // Host.Tests. The assertions that measure a wait read these, so they follow the options.
+    static readonly TimeSpan Confirm = TimeSpan.FromSeconds(1), Recheck = TimeSpan.FromSeconds(1), Reset = TimeSpan.FromMilliseconds(750), Words = TimeSpan.FromMilliseconds(1500), Resume = TimeSpan.FromSeconds(1);
 
     readonly Fixture f = new();
     readonly FakeProbe probe = new();
@@ -60,14 +63,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
         CopilotRemoteApproval = remoteApproval,
-        ConfirmTimeout = TimeSpan.FromSeconds(2),
+        ConfirmTimeout = Confirm,
         PollInterval = TimeSpan.FromMilliseconds(25),
         Time = time ?? TimeProvider.System,
-        ResumeWait = resume ? resumeWait ?? TimeSpan.FromSeconds(2) : TimeSpan.Zero,
+        ResumeWait = resume ? resumeWait ?? Resume : TimeSpan.Zero,
         ResumePoll = TimeSpan.FromMilliseconds(50),
-        ResetWait = TimeSpan.FromMilliseconds(1500),
-        FormRecheck = resume ? TimeSpan.FromMilliseconds(300) : TimeSpan.FromSeconds(2),
-        WordsWait = resume ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(3),
+        ResetWait = Reset,
+        FormRecheck = resume ? TimeSpan.FromMilliseconds(300) : Recheck,
+        WordsWait = resume ? TimeSpan.FromMilliseconds(500) : Words,
     }, m => { lock (logged) { logged.Add(m); } }, gate);
 
     // What the answer service logged, for its timing lines.
@@ -1191,7 +1194,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
         Assert.Equal(write + 1, injector.Attempts.Count);
         Assert.Equal(write + 1, injector.Plans.Count);
-        Assert.True(clock.GetElapsedTime(started) >= TimeSpan.FromSeconds(2),
+        Assert.True(clock.GetElapsedTime(started) >= Recheck,
             "The form recheck or missing-answer confirmation must exhaust the service's clock, not the channel's wall-clock budget.");
     }
 
@@ -1256,7 +1259,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             CopilotHome = f.CopilotHome,
             PlatformSupported = true,
-            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            ConfirmTimeout = Confirm,
             PollInterval = TimeSpan.FromMilliseconds(25),
             AttemptLedger = attempts,
         }));
@@ -1299,7 +1302,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             CopilotHome = f.CopilotHome,
             PlatformSupported = true,
-            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            ConfirmTimeout = Confirm,
             PollInterval = TimeSpan.FromMilliseconds(25),
             AttemptLedger = attempts,
         }, Log);
@@ -2323,7 +2326,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // changed before the next key could go" (#1497). The screen is still moving, so it waits.
         DateTime? refusedAt = null;
         var reads = 0;
-        injector.Screen = () => refusedAt is { } at && DateTime.UtcNow - at < TimeSpan.FromMilliseconds(2600)
+        injector.Screen = () => refusedAt is { } at && DateTime.UtcNow - at < Recheck + TimeSpan.FromMilliseconds(600)
             ? [$"\u25CF streaming output {Interlocked.Increment(ref reads)}"]
             : WhichOne;
         injector.Holding = _ => { if (injector.Attempts.Count == 1) { refusedAt = DateTime.UtcNow; } };
@@ -3861,7 +3864,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             Assert.DoesNotContain(injector.Plans[2].Plan.Sends, s => s.Enter);
             gap = injector.At[3] - injector.At[2];
         }
-        Assert.True(gap >= TimeSpan.FromSeconds(1.5), $"the Esc went {gap.TotalMilliseconds:0} ms after the keys were cut short");
+        Assert.True(gap >= Reset, $"the Esc went {gap.TotalMilliseconds:0} ms after the keys were cut short");
         Assert.Empty(AfterEscape());
     }
 
