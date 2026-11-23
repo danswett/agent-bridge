@@ -1,0 +1,14 @@
+[
+  {"Directory":"src/AgentBridge.HomeAssistant/","Files":23,"Slice":"S7 (S8 replaces it as an optional client)","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"The private HA connector: publishes cards and sensors, takes card presses, answers, stops, launches and updates, sends pushes"},
+  {"Path":"src/AgentBridge.Host/HaRunning.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Starts the connector and wires card answers, stops and launches into the audited legacy-ha paths"},
+  {"Path":"src/AgentBridge.Host/HaCommands.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"ha status, token, inventory and shadow commands; builds the HA client for shadow reads"},
+  {"Path":"src/AgentBridge.Host/Program.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Creates the HA auth guard and starts the connector on serve"},
+  {"Path":"src/AgentBridge.Host/Shadow/HaReader.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"GET-only reads of the legacy daemon's HA usage and resume entities for the shadow comparison"},
+  {"Path":"src/AgentBridge.Host.Delivery/Launch/AgentEnvironment.cs","Slice":"S2","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Puts the HA address in the environment of every launched agent (parity row 34)"},
+  {"Path":"tools/agents/reply-session.ps1","Slice":"S1 to S4","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Agent-side HA reply send, the third copy (parity row 26)"},
+  {"Path":"tools/ha-contract/Export-HaContract.ps1","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Records the HA contract fixtures from the legacy daemon (drift check tooling)"},
+  {"Path":"tools/AgentBridge.Rehearsal/HaCheck.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Rehearsal reads a disposable HA over REST and WebSocket; refuses a non-loopback address"},
+  {"Path":"tools/AgentBridge.Rehearsal/Program.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Rehearsal ha and soak commands against a loopback HA"},
+  {"Path":"tools/AgentBridge.Rehearsal/SoakDriver.cs","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Soak driver wraps the HA client against a disposable HA"},
+  {"Path":"build/shadow-soak-vm.ps1","Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"VM soak against a disposable HA; refuses a non-loopback address"}
+]
