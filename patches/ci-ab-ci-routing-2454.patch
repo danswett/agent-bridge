@@ -1,0 +1,64 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index ac19f77d..eb0b4c4f 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -271,7 +271,9 @@ jobs:
+       fail-fast: false
+       matrix:
+         os: ${{ fromJSON(needs.plan.outputs.product-os) }}
+-    runs-on: ${{ matrix.os }}
++    # Windows x64 on the ab-ci pool for a push or a same-repository pull request, only with AB_CI_SELF_HOSTED on; every
++    # other leg and case stays on its hosted runner (quality/README.md, routing guard; RunnerRouting checks the shape).
++    runs-on: ${{ (matrix.os == 'windows-latest' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
+     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
+     # (#129); this caps what a hang can cost.
+     timeout-minutes: 30
+@@ -588,7 +590,8 @@ jobs:
+   spikes:
+     needs: plan
+     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
+-    runs-on: windows-latest
++    # Windows x64 on the ab-ci pool behind the same guard as product; windows-latest otherwise.
++    runs-on: ${{ vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || 'windows-latest' }}
+     steps:
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+         with:
+@@ -596,11 +599,18 @@ jobs:
+       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+         with:
+           dotnet-version: '10.0.x'
++      # As product: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace (quality/README.md, warm caches).
++      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
++        shell: pwsh
++        run: |
++          $t = $env:RUNNER_TEMP
++          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
++          git clean -ffdx
+       - name: NuGet packages from main's cache
+         id: nuget
+         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+         with:
+-          path: ~/.nuget/packages
++          path: ${{ runner.temp }}/nuget-packages
+           key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+           restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
+       - name: Build spike projects
+@@ -615,7 +625,7 @@ jobs:
+         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+         with:
+-          path: ~/.nuget/packages
++          path: ${{ runner.temp }}/nuget-packages
+           key: ${{ steps.nuget.outputs.cache-primary-key }}
+       - name: Parse spike scripts
+         shell: pwsh
+@@ -639,6 +649,9 @@ jobs:
+         # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
+         shell: pwsh
+         run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
++      - name: Stop this job's build servers
++        if: always()
++        run: dotnet build-server shutdown
+ 
+   app:
+     # The Windows app (docs/app-windows.md): published with the host into one folder, packed
