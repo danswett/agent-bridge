@@ -306,6 +306,7 @@
                     Style="{StaticResource AbSecondaryText}"
                     TextWrapping="Wrap"
                     Text="New sessions can receive an allowed, unique fleet name. Applies immediately; existing names and trust stay unchanged." />
+                <local:ScriptCredentialsView x:Name="ScriptsSection" />
                 <ToggleSwitch
                     Header="Let this app and my devices approve Copilot permission prompts"
                     AutomationProperties.AutomationId="RemoteApproval"

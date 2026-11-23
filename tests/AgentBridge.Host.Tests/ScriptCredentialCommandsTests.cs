@@ -615,6 +615,18 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     }
 
     [Fact]
+    public async Task The_list_says_when_a_script_last_authenticated_since_this_host_started()
+    {
+        var script = credentials.MintScript("pump-wake");
+        var before = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(channel, "scripts.list", JsonSerializer.SerializeToElement(new { })), ProtocolJson.Options);
+        // Null is left out of the wire form, so "never" is a missing field.
+        Assert.False(Assert.Single(before.GetProperty("scripts").EnumerateArray()).TryGetProperty("lastUse", out var never) && never.ValueKind != JsonValueKind.Null);
+        credentials.Accept(channel, script.Credential);
+        var after = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(new Channel(), "scripts.list", JsonSerializer.SerializeToElement(new { })), ProtocolJson.Options);
+        Assert.NotEqual(JsonValueKind.Null, Assert.Single(after.GetProperty("scripts").EnumerateArray()).GetProperty("lastUse").ValueKind);
+    }
+
+    [Fact]
     public async Task The_list_gives_the_app_metadata_only_never_a_token_hash_path_or_credential_id()
     {
         var first = credentials.MintScript("pump-wake");
