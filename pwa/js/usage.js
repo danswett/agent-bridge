@@ -264,8 +264,10 @@ export const readOn = (entry) => (entry.readBy?.name ? `read on ${entry.readBy.n
 // "discovery held: …" while the host's discovery is held, as agent-ha-bridge's status line said.
 // The same, as facts for a machine's row (#213): { sessions, version, readOnly, held }, each a
 // short phrase or null; the reasons are the host's own words, for a tooltip, never the row.
-export function machineFacts({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null } = {}) {
+export function machineFacts({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null, registry = null } = {}) {
+  // `registry`: 'live' or 'stale' when the count is the relay's registry copy, which is unsigned until hostSign (#1776).
   return {
+    ...(registry ? { registry: registry === 'stale' ? 'stale, unverified' : 'unverified' } : {}),
     sessions: Number.isInteger(sessions) && sessions >= 0 ? `${sessions} session${sessions === 1 ? '' : 's'}` : null,
     version: hostVersion ? `${hostVersion}${dev ? ' (dev)' : ''}` : null,
     readOnly: typeof readOnly === 'string' && readOnly ? readOnly : null,
@@ -273,12 +275,14 @@ export function machineFacts({ sessions = null, hostVersion = null, dev = false,
   };
 }
 
-export function machineStatus({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null } = {}) {
+export function machineStatus({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null, registry = null } = {}) {
   const bits = [];
   if (Number.isInteger(sessions) && sessions >= 0) { bits.push(`${sessions} session${sessions === 1 ? '' : 's'}`); }
   if (hostVersion) { bits.push(`${hostVersion}${dev ? ' (dev)' : ''}`); }
   if (typeof readOnly === 'string' && readOnly) { bits.push(`read-only: ${readOnly}`); }
   if (typeof held === 'string' && held) { bits.push(`discovery held: ${held}`); }
+  if (registry === 'stale') { bits.push('stale'); }
+  if (registry) { bits.push('unverified'); }
   return bits.join(' \u00b7 ');
 }
 

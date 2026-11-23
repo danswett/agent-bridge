@@ -5,6 +5,7 @@ import { UsageBook } from '../../js/usage.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { readUpdateState } from '../../js/update.js';
 import { HostClient } from '../../js/host-client.js';
+import { FleetRegistryView } from '../../js/fleet-registry-view.js';
 
 const flush = async () => { for (let i = 0; i < 10; i++) { await new Promise((r) => setImmediate(r)); } };
 const usage = (percent) => ({ agents: [{ agent: 'copilot', label: 'GitHub Copilot', account: 'octo', source: 'api', measuredAt: '2026-10-28T20:00:00.000Z', windows: [{ key: 'plan', label: 'Plan', percent }] }] });
@@ -651,4 +652,61 @@ test('who can sign Copilot in is read from each machine that offers it, and drop
   assert.equal(fleet.signIns('v'), null);
   fleet.clear();
   assert.equal(fleet.signIns('b'), null);
+});
+// Slice 6 (C2): a machine's row takes its session count from the relay's registry, one socket for the account.
+function withRegistry(hostsById) {
+  const wall = { t: Date.parse('2026-11-22T12:00:00Z') };
+  const { connection, hosts, fleet } = fleetWith(hostsById);
+  connection.registry = new FleetRegistryView({ now: () => wall.t, mono: () => wall.t });
+  const heard = [];
+  connection.on('registry', () => {});
+  fleet.onChange(() => heard.push(1));
+  const put = (machine, sessions, seq = 1) => {
+    connection.registry.applyChanged({ t: 'registry-changed', machine, online: true,
+      record: { v: 1, machine, epoch: '0123456789abcdef', seq, at: new Date(wall.t).toISOString(), truncated: false, sessions } });
+    connection.emit('registry', connection.registry);
+  };
+  const session = (n) => ({ id: '000000000000a' + n, node: 'agent_bridge_000000000000000' + n, state: 'idle', since: new Date(wall.t).toISOString() });
+  return { connection, hosts, fleet, wall, heard, put, session };
+}
+
+test("a machine nothing else has counted shows the registry's count, labelled unverified, and the row is redrawn", async () => {
+  const { fleet, heard, put, session } = withRegistry({ a: { fail: true } });
+  fleet.probe();
+  await fleet.idle();
+  assert.equal(fleet.status('a'), '');
+  put('a', [session(1), session(2)]);
+  assert.equal(fleet.status('a'), '2 sessions · unverified');
+  assert.ok(heard.length > 0);
+});
+
+test('a live registry record beats an older probe count, and keeps the host version from the probe', async () => {
+  const { fleet, put, session } = withRegistry({ a: { machine: { hostVersion: '0.1.0', sessions: 3 }, capabilities: ['sessions.read'] } });
+  fleet.probe();
+  await fleet.idle();
+  put('a', [session(1)]);
+  assert.equal(fleet.status('a'), '1 session · 0.1.0 · unverified');
+});
+
+test('a stale registry copy is a last resort and says so; a probe count is preferred over it', async () => {
+  const stale = withRegistry({ a: { fail: true } });
+  stale.put('a', [stale.session(1)]);
+  stale.wall.t += 61_000;
+  assert.equal(stale.fleet.status('a'), '1 session · stale · unverified');
+
+  const probed = withRegistry({ a: { machine: { hostVersion: '0.1.0', sessions: 3 }, capabilities: ['sessions.read'] } });
+  probed.fleet.probe();
+  await probed.fleet.idle();
+  probed.put('a', [probed.session(1)]);
+  probed.wall.t += 61_000;
+  assert.equal(probed.fleet.status('a'), '3 sessions · 0.1.0');
+});
+
+test("a machine shown keeps its live channel count over the registry's", async () => {
+  const { hosts, fleet, put, session } = withRegistry({ a: { machine: { hostVersion: '0.1.0' }, capabilities: ['sessions.read'] } });
+  const client = { synced: true, on() {}, subscribeUsage: async () => usage(10) };
+  const { store } = hosts.view({ id: 'a', client, machine: { hostVersion: '0.1.0', sessions: 0 }, capabilities: ['sessions.read'] });
+  store.upsert({ id: 's1', agent: 'copilot', status: 'idle', updatedAt: '2026-10-28T20:00:00.000Z', activity: {} });
+  put('a', [session(1), session(2), session(3)]);
+  assert.equal(fleet.status('a'), '1 session · 0.1.0');
 });
