@@ -66,7 +66,12 @@ internal static class ConformanceInventory
         R(31, "ha-helper-liveness", InventoryDisposition.IntentionalDrop, MappingDecision),
         R(32, "owner-built-ha-inventory", InventoryDisposition.ResolvedInventory, OwnerInventoryDecision),
         R(33, "non-fleet-home-automation", InventoryDisposition.OutOfScope, OwnerInventoryDecision),
-        R(34, "agent-ha-token-migration", InventoryDisposition.HostOnly, MappingDecision)
+        R(34, "agent-ha-token-migration", InventoryDisposition.HostOnly, MappingDecision),
+        // Not parity rows: the session registry reader's shared vector (docs/protocol/vectors/fleet-registry-reader.json, slice 10).
+        R(35, "registry-order-and-replay"),
+        R(36, "registry-freshness"),
+        R(37, "registry-removal-and-purge"),
+        R(38, "registry-cache-expiry")
     ]);
 
     public static IReadOnlyList<ConformanceInventoryClient> Clients { get; } = Array.AsReadOnly<ConformanceInventoryClient>(
