@@ -562,6 +562,15 @@ controls consume that same contract; this extraction does not disable or remove 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
+  **An old relay copy may offer a newer release but never says "up to date"** (`ReleaseDiscovery.CdnFreshFor`, 10 minutes, the check
+  interval). A copy up to an hour old (`CdnOldest`) is still used, but once it is older than `CdnFreshFor` it counts only if it names a
+  release newer than the one installed: an offer meets the halt and digest checks as any does. A copy that shows nothing newer is "unknown",
+  because it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed): it is refused like an over-age
+  copy, so the check fails with words, GitHub is asked or its backoff says when, and the next check tries again. The copy kept here is judged
+  the same way by its true age on every check, and the log says why (`its copy was N minutes old and names nothing newer ...`). The halt
+  rules, `CdnOldest` and the 72 hour cap are unchanged. The log's fallback line says GitHub is asked first and the relay is the fallback
+  if GitHub refuses, which is what happens.
+
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
