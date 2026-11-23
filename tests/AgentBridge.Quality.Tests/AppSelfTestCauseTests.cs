@@ -47,6 +47,33 @@ public sealed class AppSelfTestCauseTests
         Assert.Contains("failed check", output);
     }
 
+    // The wrapper's own line that reads result.json's failed checks, run as the wrapper runs it, under strict mode, for the
+    // arm64 case: ONE failed check. An array of one assigned from an if is a string, and a string has no .Count (Codex, #3752).
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(0)]
+    public void The_wrapper_counts_the_failed_checks_in_result_json_whether_there_is_one_or_many(int failures)
+    {
+        var result = Path.Combine(Path.GetTempPath(), $"result-{Guid.NewGuid():N}.json");
+        File.WriteAllText(result, JsonSerializer.Serialize(new { failed = Enumerable.Range(1, failures).Select(i => $"check {i}").ToArray() }));
+        try
+        {
+            var script = Path.Combine(Root(), "build", "app-self-test.ps1").Replace("'", "''");
+            var command = "Set-StrictMode -Version Latest; $wrote = $true; $Result = '" + result.Replace("'", "''") + "'; " +
+                "$ast = [System.Management.Automation.Language.Parser]::ParseFile('" + script + "', [ref]$null, [ref]$null); " +
+                "$assign = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$failedChecks' }, $true) | Select-Object -First 1; " +
+                "Invoke-Expression $assign.Extent.Text; $failedChecks.Count";
+            var start = new ProcessStartInfo("pwsh", ["-NoProfile", "-Command", command]) { RedirectStandardOutput = true, RedirectStandardError = true };
+            using var p = Process.Start(start)!;
+            var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit();
+
+            Assert.Equal(failures.ToString(), output.Trim());
+        }
+        finally { File.Delete(result); }
+    }
+
     [Fact]
     public void A_crash_with_no_stderr_or_event_is_still_an_evidence_gap()
     {

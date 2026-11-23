@@ -1391,11 +1391,15 @@ Error Reporting entries in the launch-time window only when their faulting/emitt
 PID and executable name identify that app, not Setup or the host. An entry without
 that process attribution is not evidence of this app's cause. Event timestamps are
 Pacific. Missing stderr, absent matching events and query/read failures remain
-explicit evidence gaps; no event or cause is manufactured.
+explicit evidence gaps for a crash; no event or cause is manufactured. A self-test that
+finishes and fails checks makes the app exit normally with code 1: it leaves no stderr and
+no event, and its cause is the failed checks the app wrote to `result.json`, which the
+wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
+capture error (win-arm64, main 62c35b0a).
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
-event message, with no capture errors. A missing evidence file is reported as a
+event message, or exit code 1 with its failed checks, and no capture errors. A missing evidence file is reported as a
 capture failure, not behavioral RED. A passing app is not RED either. The original
 self-test failure still fails the job even when cause evidence is complete.
 This diagnostic cut changes no app behavior and establishes no root cause or fix;

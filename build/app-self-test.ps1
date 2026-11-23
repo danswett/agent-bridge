@@ -86,7 +86,8 @@ Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 # the app ended inside that check, whatever the exit code says. Every check before it passed.
 $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
 # The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
-$failedChecks = if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } } else { @() }
+# An array: one failed check, the arm64 case, would otherwise be a string with no .Count under strict mode.
+$failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
 $evidence = [ordered]@{
     processId = $p.Id; exitCode = $code; failedChecks = $failedChecks
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
