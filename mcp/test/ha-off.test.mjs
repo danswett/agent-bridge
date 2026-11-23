@@ -79,7 +79,7 @@ test('list and read answer with every Home Assistant variable absent, ask the ho
   assert.equal(Object.keys(process.env).some((k) => HA.test(k)), false);
 });
 
-test('the default list is typed: no session content; include "content" adds the latest answer and question and nothing else', async (t) => {
+test('the default list is typed: no session content and no working folder; include "content" adds the working folder, the latest answer and the question and nothing else', async (t) => {
   const host = await fakeHost({ hello: () => ({ capabilities: ['sessions.read'] }), 'agent.hello': () => ({ principal: 'p' }), 'sessions.list': () => ({ sessions: [session()] }) });
   const { client, connection } = await connect(host, { AGENT_BRIDGE_TOKEN: 'abat1_x' });
   t.after(() => { connection.close(); host.close(); });
@@ -87,9 +87,9 @@ test('the default list is typed: no session content; include "content" adds the 
   const plain = (await call(client, 'list_agent_sessions', {})).sessions[0];
   const withContent = (await call(client, 'list_agent_sessions', { include: 'content' })).sessions[0];
 
-  assert.deepEqual(Object.keys(plain).sort(), ['agent', 'branch', 'cwd', 'id', 'model', 'repository', 'startedAt', 'status', 'statusSince', 'title', 'updatedAt']);
-  assert.equal('activity' in plain || 'question' in plain, false);
-  assert.deepEqual(Object.keys(withContent).filter((k) => !(k in plain)).sort(), ['activity', 'question']);
+  assert.deepEqual(Object.keys(plain).sort(), ['agent', 'branch', 'id', 'model', 'repository', 'startedAt', 'status', 'statusSince', 'title', 'updatedAt']);
+  assert.equal('activity' in plain || 'question' in plain || 'cwd' in plain, false);
+  assert.deepEqual(Object.keys(withContent).filter((k) => !(k in plain)).sort(), ['activity', 'cwd', 'question']);
 });
 
 test('no server source reads a Home Assistant variable, names a Home Assistant endpoint, or opens a network connection of its own', () => {
