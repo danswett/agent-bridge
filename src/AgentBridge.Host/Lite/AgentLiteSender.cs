@@ -34,6 +34,7 @@ public sealed class AgentLiteSender(
     public const string TimedOut = "timeout", ModeSwitchedOff = "mode switched off", ChannelLost = "channel lost", BadAck = "unreadable acknowledgement";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
+    readonly string machine = Wire.DeviceId(staticPublic);
     readonly TimeSpan ackTimeout = ackTimeout ?? TimeSpan.FromSeconds(10);
     readonly TimeSpan watchEvery = watchEvery ?? TimeSpan.FromMilliseconds(500);
     readonly string instance = Codec.Base64Url(RandomNumberGenerator.GetBytes(12));
@@ -49,7 +50,7 @@ public sealed class AgentLiteSender(
         var data = Encoding.UTF8.GetBytes(input.Text);
         // Checked afresh, before anything is signed: a credential revoked or expired since the pipe call signs nothing.
         var script = caller.Kind == "script";
-        if ((script ? !AgentCredentials.ValidScript(caller, link.Self)
+        if ((script ? !AgentCredentials.ValidScript(caller, machine)
             : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
             || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 

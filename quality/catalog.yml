@@ -594,12 +594,26 @@ suites:
     kind: unit
     ring: 0
     select: affected
-    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
-    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    # quality-gate's win-arm64 waiver (#2564, permanent since Nov 22): which failed jobs it waives, every
+    # refusal, and that the switch and date are ignored, on fixed needs and jobs JSON. Nothing reaches GitHub.
     platforms: [win-x64, linux-x64]
     runner: local
     triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
     command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: host-shards-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The deterministic split of tests/AgentBridge.Host.Tests into class-level shards (#2454, #2225): no test
+    # lost or run twice, the same split every time, balanced by the committed per-class seconds. Offline.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/host-shards.ps1, quality/test-host-shards.ps1, quality/baselines/host-test-class-seconds.json]
+    command: pwsh -NoProfile -File quality/test-host-shards.ps1
     where: ci.yml light
     status: exists
 

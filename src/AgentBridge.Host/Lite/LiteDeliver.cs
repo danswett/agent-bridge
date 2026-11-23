@@ -32,6 +32,8 @@ public sealed class LiteDeliver(
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
     internal DeliveryLaneScheduler? Lane { get; init; }
+    // claudeBusyQueue (docs/message-delivery.md, #3828): read afresh per send; null or throwing means off.
+    internal Func<bool>? ClaudeBusyQueue { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -85,13 +87,18 @@ public sealed class LiteDeliver(
             if (query) { return FromLane(prior); }
         }
         if (Lane is not null) { Resolve(); }
-        if (session is null) { return Refused(LiteCodes.NoSuchSession); }
+        if (session is null) { return Refused(UnresolvedCode(target)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
+        // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
+        var busyQueue = session.Agent == AgentKind.Claude && BusyQueueOn();
         // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
-        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot)
+        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot && !busyQueue)
         { return Refused(LiteCodes.NotReplyTarget); }
-        if (Lane is { } lane)
+        // Owner option 2 (#3866): with laneDelivery on, a Claude keeps this legacy busy-queue typing path, with its own legacy text, guards and replier;
+        // only Copilot goes through the lane. Without claudeBusyQueue a Claude stays refused with the lane on, as before.
+        if (Lane is not null && session.Agent == AgentKind.Claude) { safe = Escape(text); }
+        if (Lane is { } lane && session.Agent == AgentKind.Copilot)
         {
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
             if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
@@ -105,34 +112,42 @@ public sealed class LiteDeliver(
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
             return FromLane(lane.Offer(request, id, sender, laneBody, Current, Revoked));
         }
-        if (!Idle(session)) { return Refused(LiteCodes.Busy); }
+        if (!Ready(session, busyQueue)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(session.Agent, pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
         // A node id is resolved again: a sibling or a hold that appeared while the composer was read
         // makes it ambiguous now, whatever it named a moment ago.
-        if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(LiteCodes.NoSuchSession); }
-        if (!Idle(now)) { return Refused(LiteCodes.Busy); }
+        if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
+        if (!Ready(now, busyQueue)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
-            StillCurrent = byNode || stillAllowed is not null || account is not null
-                ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
-        // The prompt this types is the sender's: armed with the exact words typed and a label from the
-        // verified principal, never from the body, so userMessageFrom=agent is set by the host alone.
-        // An undelivered arm is put back, or a prompt the owner types in the same words would wear it.
+        var framed = Frame(body.Principal, body.Request, safe);
+        // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
+        // about to go, with the exact words and a label from the verified principal, never from the body,
+        // so userMessageFrom=agent is set by the host alone. A delivery that typed nothing (refused,
+        // busy, or already delivered earlier) never arms, so a prompt the owner types in the same words
+        // stays theirs; one not confirmed puts back an arm still waiting, for the same reason.
         var driver = Drivers?.For(id);
-        var before = driver?.Save();
-        driver?.ArmDriver(SessionDrivers.Agent, time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), reply.Text, label: SenderLabel(body.Principal));
+        DriverArm? armed = null;
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = !busyQueue,
+            StillCurrent = byNode || stillAllowed is not null || account is not null
+                ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
+            KeysGoing = driver is null ? null : () =>
+            {
+                var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
+                armed = new DriverArm(saved, generation);
+            } };
+        void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { if (driver is not null) { driver.Restore(before!.Value); } throw; }
-        if (driver is not null && result.Outcome is not (AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)) { driver.Restore(before!.Value); }
+        catch { Unarm(); throw; }
+        if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
-            AnswerOutcome.Stale => Refused(Signed() ? LiteCodes.NoSuchSession : LiteReceiver.NotSameAccount),
+            AnswerOutcome.Stale => Refused(Signed() ? (byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession) : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
@@ -171,6 +186,15 @@ public sealed class LiteDeliver(
     // known while discovery is not held (ISessionSource.Held): a held pass may not list a second
     // live session with the same node id. So Held is read before the one materialised snapshot and
     // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
+    // A node id that did not resolve while discovery is held may name a live session the pass did not list, so the
+    // sender is told to retry, not that the session does not exist (#1396).
+    string UnresolvedCode(string target) =>
+        IsNodeId(target) && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
+
+    static bool IsNodeId(string target) =>
+        target.Length == "agent_bridge_".Length + 16 && target.StartsWith("agent_bridge_", StringComparison.Ordinal)
+        && !target.AsSpan("agent_bridge_".Length).ContainsAnyExcept("0123456789abcdef");
+
     string? FromNodeId(string target)
     {
         const string prefix = "agent_bridge_";
@@ -187,7 +211,13 @@ public sealed class LiteDeliver(
         return source.Held is null ? found : null;
     }
 
-    static bool Idle(Session s) => s.Status == SessionStatus.Idle && s.Question is null;
+    static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
+
+    bool BusyQueueOn()
+    {
+        try { return ClaudeBusyQueue?.Invoke() == true; }
+        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
 
     bool WithinRate(string target)
     {
@@ -215,6 +245,9 @@ public sealed class LiteDeliver(
         }
         catch (Exception e) when (e is not OperationCanceledException) { return false; }
     }
+
+    // The arm this delivery made, to put back only while it is still the one waiting.
+    readonly record struct DriverArm(SessionDriver.Saved Before, long Generation);
 
     // Both from the verified principal's own fields, one line, nothing hidden (Clean), and cut to the
     // protocol's byte limits where they are shown. The sender's title and the body are not read.

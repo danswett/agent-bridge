@@ -195,12 +195,23 @@ public sealed partial class SessionDriver
         }
     }
 
-    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt, string? label = null)
+    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt, string? label = null) =>
+        Swap(by, pending, agentPrincipal, opening, resumed, words, toCome, onlyAt, label);
+
+    // What the arm replaced and the generation it made, taken in the same step as the arm itself, so
+    // Restore(saved, generation) puts back only while nothing armed or took the driver since.
+    public (Saved Before, long Generation) ArmAgent(DateTimeOffset now, string? agentPrincipal, string words, string? label) =>
+        Swap(SessionDrivers.Agent, now, agentPrincipal, null, false, words, false, null, label);
+
+    (Saved Before, long Generation) Swap(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt, string? label = null)
     {
         bool changed;
+        Saved was;
+        long made;
         lock (gate)
         {
-            if (onlyAt is { } g && generation != g) { return; }
+            if (onlyAt is { } g && generation != g) { return default; }
+            was = new Saved(driver, principal, pendingAt, expected, wordsToCome, armedLabel);
             var before = ShownLocked();
             expected = words is null ? null : Collapse(words) is { Length: > 0 } said ? said : null;
             wordsToCome = toCome && expected is null;
@@ -212,9 +223,11 @@ public sealed partial class SessionDriver
             openingResumed = resumed;
             openingSeen = resumed ? lastMessage : null;
             generation++;
+            made = generation;
             changed = before != ShownLocked();
         }
         if (changed) { owner.Raise(id); }
+        return (was, made);
     }
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
@@ -222,11 +235,14 @@ public sealed partial class SessionDriver
 
     public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome, armedLabel); } }
 
-    public void Restore(Saved saved)
+    // onlyAt: put back only while the arm of that generation is still waiting for its prompt; one that was
+    // spent, or replaced by a later arm, is left as it is.
+    public void Restore(Saved saved, long? onlyAt = null)
     {
         bool changed;
         lock (gate)
         {
+            if (onlyAt is { } g && (generation != g || pendingAt is null)) { return; }
             var before = ShownLocked();
             (awaitingAgentPrompt, awaitingLabel) = (false, null);
             (driver, principal, pendingAt, expected, wordsToCome, armedLabel) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected, saved.WordsToCome, saved.Label);

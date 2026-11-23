@@ -128,6 +128,7 @@ test('live activity makes the latest turn at the end, and a page then replaces i
   assert.equal(six.provisional, true);
   assert.equal(six.at, null);
   assert.equal(six.prompt.text, 'Then this');
+  assert.equal(six.prompt.from, null);
   // Its reply is the turn responseTurn names, never under the new prompt.
   assert.equal(six.live.response, null);
   assert.equal(snap.turns[4].live.response, 'Old reply.');

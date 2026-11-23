@@ -1,4 +1,5 @@
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -13,11 +14,17 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
     Func<string, DeliveryHeader, string, Task> send, Action<LaneNotice> notice,
     TimeProvider time)
 {
-    sealed record Item(DeliveryHeader Header, string Body, DeliveryClass Sender);
+    sealed record Item(DeliveryHeader Header, string Body, DeliveryClass Sender, GrantAudience? Receiver = null);
     sealed class Lanes { public readonly List<Item> Urgent = []; public readonly List<Item> Queueable = []; }
     readonly object sync = new();
     readonly Dictionary<string, Lanes> sessions = new(StringComparer.Ordinal);
     bool uncertain;
+
+    // Propagates the journal's real uncertainty (never a mere clock refusal) to the scheduler and the shared gate.
+    void LatchJournalUncertainty()
+    {
+        if (journal.Uncertain) { uncertain = true; gate.MarkJournalUncertain(); }
+    }
 
     void Record(string session, DeliveryHeader header, string body, DeliveryState state, string? reason = null)
     {
@@ -25,27 +32,33 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
         catch { uncertain = true; gate.MarkJournalUncertain(); throw; }
     }
 
-    public bool Enqueue(string session, DeliveryHeader header, string body, DeliveryClass sender)
+    public bool Enqueue(string session, DeliveryHeader header, string body, DeliveryClass sender) =>
+        Enqueue(session, header, body, sender, null);
+
+    // Only Offer passes a grant, after the journal decided it; a caller-supplied agent "urgent" stays normal.
+    bool Enqueue(string session, DeliveryHeader header, string body, DeliveryClass sender, GrantAudience? granted)
     {
         List<LaneNotice> notices = [];
-        try { return EnqueueCore(session, header, body, sender, notices); }
+        try { return EnqueueCore(session, header, body, sender, notices, granted); }
         finally { foreach (var n in notices) { notice(n); } }
     }
 
-    bool EnqueueCore(string session, DeliveryHeader header, string body, DeliveryClass sender, List<LaneNotice> notices)
+    bool EnqueueCore(string session, DeliveryHeader header, string body, DeliveryClass sender, List<LaneNotice> notices,
+        GrantAudience? granted)
     {
         lock (sync)
         {
             if (uncertain) { throw new InvalidOperationException($"Target {session}: delivery journal uncertain."); }
             if (!Enum.IsDefined(sender)) { throw new ArgumentException($"Target {session}: unknown sender class."); }
             if (journal.State(session, header.Id) is not null) { return true; }
-            var urgent = sender != DeliveryClass.Agent;
+            var urgent = sender != DeliveryClass.Agent || granted is not null && header.Priority == "urgent";
             (header, body) = DeliveryEnvelope.Prepare(header with { Seq = null, At = time.GetUtcNow(),
                 Priority = urgent ? "urgent" : header.Priority == "fyi" ? "fyi" : "normal" }, body);
             _ = DeliveryEnvelope.Format(header with { Seq = "q1" }, body);
             if (!sessions.TryGetValue(session, out var lanes)) { sessions[session] = lanes = new(); }
             var displaced = urgent && lanes.Urgent.Count == 10 && sender == DeliveryClass.Owner
-                ? lanes.Urgent.LastOrDefault(i => i.Sender != DeliveryClass.Owner) : null;
+                ? lanes.Urgent.LastOrDefault(i => i.Sender == DeliveryClass.Agent) ??
+                    lanes.Urgent.LastOrDefault(i => i.Sender == DeliveryClass.System) : null;
             if (!urgent && header.Priority == "fyi" && lanes.Queueable.Count == 50 &&
                 !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
@@ -60,34 +73,44 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                 notices.Add(new(session, header, $"Target {session}: lane full; refused."));
                 return false;
             }
-            if ((!urgent || displaced is not null) && lanes.Queueable.Count == 50 &&
-                lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
-            {
-                var drop = lanes.Queueable.First(i => i.Header.Priority == "fyi");
-                Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
-                lanes.Queueable.Remove(drop);
-                notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
-            }
-            if (displaced is not null)
-            {
-                var moved = displaced with { Header = displaced.Header with { Priority = "normal" } };
-                Record(session, moved.Header, moved.Body, DeliveryState.Demoted, "owner overflow");
-                if (lanes.Queueable.Count == 50)
-                {
-                    Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");
-                    lanes.Urgent.Remove(displaced);
-                    notices.Add(new(session, moved.Header, $"Target {session}: dropped overflow."));
-                }
-                else
-                {
-                    lanes.Urgent.Remove(displaced);
-                    lanes.Queueable.Add(moved);
-                    notices.Add(new(session, moved.Header, $"Target {session}: demoted to queueable for owner."));
-                }
-            }
+            if (!urgent || displaced is not null) { EvictOldestFyi(session, lanes, notices); }
+            if (displaced is not null) { Demote(session, lanes, displaced, "owner overflow", "owner", notices); }
             Record(session, header, body, DeliveryState.Enqueued);
-            (urgent ? lanes.Urgent : lanes.Queueable).Add(new(header, body, sender));
+            (urgent ? lanes.Urgent : lanes.Queueable).Add(new(header, body, sender, sender == DeliveryClass.Agent ? granted : null));
             return true;
+        }
+    }
+
+    void EvictOldestFyi(string session, Lanes lanes, List<LaneNotice> notices)
+    {
+        if (lanes.Queueable.Count != 50 || lanes.Queueable.FirstOrDefault(i => i.Header.Priority == "fyi") is not { } drop) { return; }
+        Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
+        lanes.Queueable.Remove(drop);
+        notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
+    }
+
+    void Demote(string session, Lanes lanes, Item item, string reason, string noticeFor, List<LaneNotice> notices)
+    {
+        var moved = item with { Header = item.Header with { Priority = "normal" }, Receiver = null };
+        Record(session, moved.Header, moved.Body, DeliveryState.Demoted, reason);
+        if (item.Receiver is not null && fences.TryGetValue((session, item.Header.Id), out var authority))
+        {
+            // Best effort while the journal stays certain (a clock refusal); a real append failure latches and propagates.
+            try { journal.RecordDemotion(Guid.Parse(item.Header.Id), session, authority.Sender, reason, time.GetUtcNow()); }
+            catch (InvalidOperationException) when (!journal.Uncertain) { }
+            finally { LatchJournalUncertainty(); }
+        }
+        lanes.Urgent.Remove(item);
+        EvictOldestFyi(session, lanes, notices);
+        if (lanes.Queueable.Count == 50)
+        {
+            Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");
+            notices.Add(new(session, moved.Header, $"Target {session}: dropped overflow."));
+        }
+        else
+        {
+            lanes.Queueable.Add(moved);
+            notices.Add(new(session, moved.Header, $"Target {session}: demoted to queueable for {noticeFor}."));
         }
     }
 

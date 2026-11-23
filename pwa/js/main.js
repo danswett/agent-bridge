@@ -37,6 +37,7 @@ import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust, signUpdateNow } from './transfer.js';
+import { pinnedIdsFor } from './push-filters.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
@@ -928,6 +929,8 @@ function begin(account) {
     fetchKey: () => fetchVapidKey(BASE),
     appUrl: new URL('./', location.href).href,
     device: deviceName(),
+    // The pinned set of the machine a registration goes to, sent with it (push-filters.js).
+    pins: (client) => pinnedIdsFor(page.order.pinnedKeys, openLinks().find((l) => l.client === client)?.id),
   });
   // The machines shown with a channel open now: each one registers this device for its
   // notifications, as a single machine shown always has.
@@ -957,6 +960,14 @@ function begin(account) {
         : 'On for this device. The machines you open here notify it when a session asks you something or finishes.');
     $('notify-error').hidden = !notices.error;
     $('notify-error').textContent = notices.error;
+    // The filters apply once notifications are on; every turn in all sessions covers pinned ones.
+    const f = notices.filters;
+    $('notify-filters').hidden = !on || support !== 'ok';
+    $('notify-questions').checked = f.questions;
+    $('notify-pinned').checked = f.pinned || f.all;
+    $('notify-pinned').disabled = f.all;
+    $('notify-all').checked = f.all;
+    $('notify-failures').checked = f.deliveryFailures;
   };
   notices.onChange(drawNotify);
   // The Settings app can change the permission while this is in the background.
@@ -980,6 +991,13 @@ function begin(account) {
     notices.enable().catch((e) => console.warn('notifications:', e.message));
     for (const l of open) { registerOn(l); }
   };
+  // A filter changed here, or a session pinned or unpinned: every machine shown is told again, the
+  // pinned set with it, so each filters its own pushes (push-filters.js).
+  const registerAll = () => { if (notices.enabled) { for (const l of openLinks()) { registerOn(l); } } };
+  for (const [id, name] of [['notify-questions', 'questions'], ['notify-pinned', 'pinned'], ['notify-all', 'all'], ['notify-failures', 'deliveryFailures']]) {
+    $(id).onchange = () => { notices.setFilters({ [name]: $(id).checked }); registerAll(); };
+  }
+  page.order.onPinsChange(registerAll);
   const registerHere = () => {
     for (const l of openLinks()) { if (!registered.has(l.client)) { registerOn(l); } }
   };

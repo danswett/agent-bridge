@@ -19,8 +19,18 @@ public static class AuditCommands
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Grant = null);
 
     public static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error) =>
-        args.ElementAtOrDefault(1) == "archive" ? AuditArchiveCommand.Run(args, profileRoot, output, error)
-            : Read(args, profileRoot, output, error, null);
+        args.ElementAtOrDefault(1) switch
+        {
+            "archive" => AuditArchiveCommand.Run(args, profileRoot, output, error),
+            "gate" => AuditGateCommand.Run(args, profileRoot, output, error),
+            _ => Read(args, profileRoot, output, error, null),
+        };
+
+    // An ISO time with an offset, or Z: what --since takes here and in audit gate.
+    internal static bool TryParseTime(string value, out DateTimeOffset parsed) =>
+        DateTimeOffset.TryParseExact(value,
+            ["yyyy-MM-dd'T'HH:mm:sszzz", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"],
+            CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out parsed);
 
     internal static int Read(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, Action<Row>? receive, Action<string>? fault = null, bool alreadyLocked = false, Action<long, bool>? boundary = null, AuditLockTiming? lockTiming = null)
     {
@@ -36,9 +46,7 @@ public static class AuditCommands
         DateTimeOffset? since = null;
         if (options.TryGetValue("--since", out var value))
         {
-            if (!DateTimeOffset.TryParseExact(value,
-                ["yyyy-MM-dd'T'HH:mm:sszzz", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'"],
-                CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)) { return Usage(error); }
+            if (!TryParseTime(value, out var parsed)) { return Usage(error); }
             since = parsed;
         }
 
@@ -144,6 +152,7 @@ public static class AuditCommands
     static int Usage(TextWriter error)
     {
         error.WriteLine("usage: agent-bridge-host audit [--profile <name>] [--action <action>] [--outcome <outcome>] [--since <ISO time with offset>]");
+        error.WriteLine("       agent-bridge-host audit gate --since <ISO time with offset> [--profile <name>] [--messages <file>] [--json]");
         return 2;
     }
 }
