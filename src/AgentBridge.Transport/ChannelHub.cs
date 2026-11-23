@@ -21,6 +21,8 @@ public sealed class ChannelHub
     // Serves a peer's request: (channel, op, data) -> result. Null means no service, and
     // the peer is told "unknown op". An exception's message goes back as the error.
     public Func<SecureChannel, string, JsonElement, Task<object?>>? Handler { get; set; }
+    // Where a response that could not be sent is said; null says nothing.
+    public Action<string>? Log { get; set; }
     // Installed before relay callbacks become reachable; applies in both directions.
     public Func<SecureChannel, bool>? PeerAllowed { get; set; }
     // A peer opened a channel to this device and the handshake completed. Raised on the
@@ -428,13 +430,14 @@ public sealed class ChannelHub
     {
         byte[] reply;
         Func<IProtocolChannel, Task>? then = null;
+        var runsIfUnsent = false;
         var served = new ServedRequest(id, ch.Serialize, b => ch.SendAsync(b));
         ServedRequest.Enter(served);
         try
         {
             RequirePeer(ch);
             var result = Handler is null ? null : await Handler(ch, op, data);
-            if (result is ChannelReply r) { (result, then) = (r.Result, r.Then); }
+            if (result is ChannelReply r) { (result, then, runsIfUnsent) = (r.Result, r.Then, r.RunsIfUnsent); }
             reply = ch.Serialize(result is null ? new { re = id, ok = false, error = $"unknown op {op}" } : new { re = id, ok = true, result });
             // The caller hears why, rather than waiting out its timeout for a response that
             // could never be sent.
@@ -458,7 +461,12 @@ public sealed class ChannelHub
             await ch.SendAsync(reply);
             sent = true;
         }
-        catch (Exception e) when (e is IOException or MessageTooLargeException) { return; }
+        catch (Exception e) when (e is IOException or MessageTooLargeException)
+        {
+            // As on the local pipe: an action the host accepted (a Stop, a Restart, a Leave) still runs when its response did not reach the peer (#4134).
+            Log?.Invoke($"relay channel: the reply to {op} could not be sent ({e.GetType().Name}); {(then is not null && runsIfUnsent ? "its action runs anyway" : "nothing follows it")}");
+            if (!runsIfUnsent) { then = null; }
+        }
         finally { served.Responded(sent); }
         if (then is null) { return; }
         // Then owns its errors; there is no request left to report them on.
@@ -470,7 +478,10 @@ public sealed class ChannelHub
 // A handler result with work that must follow its response on the wire. sessions.subscribe
 // needs it: the client must have {revision, count} before the snapshot's upserts, and
 // anything Then sends goes through the channel's send lock after the response has.
-public sealed record ChannelReply(object Result, Func<IProtocolChannel, Task> Then);
+// RunsIfUnsent: the work is the action the client asked for and the host accepted (a Stop, a Restart, a Leave), so it runs once the request is
+// accepted, whether or not the response reached the client (it hung up first, or its pipe broke after the write): the failure is logged (#4134).
+// Left false, Then runs only after its response was sent, as a subscribe's snapshot must.
+public sealed record ChannelReply(object Result, Func<IProtocolChannel, Task> Then, bool RunsIfUnsent = false);
 
 // A request to make first, in an IK first message where the responder takes it early
 // (ChannelHub.OpenAsync).

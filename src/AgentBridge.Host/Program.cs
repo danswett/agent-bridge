@@ -1092,6 +1092,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustedPeers.Attach(hub);
             hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
+            hub.Log = Log;
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
