@@ -130,6 +130,30 @@ public class RosterEnforceTests
         Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync("other", w.Id("X")));
     }
 
+    // The mode only moves one way, so a store that reads back observe, off or anything else for a latched account is not "no
+    // enforce": it is refused. A relay that never latched the account still serves it as observe.
+    [Theory]
+    [InlineData("observe")]
+    [InlineData("off")]
+    [InlineData("bogus")]
+    [InlineData(null)]
+    public async Task A_latched_account_whose_stored_mode_reads_back_as_anything_but_enforce_is_unavailable(string? mode)
+    {
+        var w = Scenario();
+        var inner = new MemoryRosterStore();
+        var roster = Make(w, inner);
+        await roster.AppendAsync(Account, [Wire(w, "G")]);
+        Assert.True(await roster.EnforceAsync(Account, w.Id("G")));
+        var name = inner.Names.Single();
+        var current = (await inner.ReadAsync(name, CancellationToken.None))!;
+        var body = System.Text.Json.Nodes.JsonNode.Parse(current.Body)!.AsObject();
+        body["mode"] = mode;
+        Assert.NotNull(await inner.WriteAsync(name, System.Text.Encoding.UTF8.GetBytes(body.ToJsonString()), current.ETag, CancellationToken.None));
+
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("X")));
+        Assert.Equal(DeviceRoster.Admission.Open, await Make(w, inner).AdmissionAsync(Account, w.Id("X")));  // a relay that never latched it
+    }
+
     // In enforce a connected stranger (a key the roster does not hold) is pending: it sees nothing of the account, its control
     // messages are ignored, and no channel can be opened to or from it by another pending device.
     [Fact]
