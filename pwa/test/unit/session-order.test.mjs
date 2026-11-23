@@ -246,3 +246,20 @@ test('a machine\'s complete list forgets rows of its sessions that ended while n
   assert.deepEqual(kept.order, [key('b'), key('x', 'h2')]);
   assert.deepEqual(Object.keys(kept.seenTurns).sort(), [key('b'), key('x', 'h2')].sort());
 });
+
+test('the pinned set is told to a listener when it changes, and only then', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  shown(o, [entry('a', 3), entry('b', 2)]);
+  const told = [];
+  const off = o.onPinsChange((keys) => told.push(keys));
+  assert.deepEqual(o.pinnedKeys, []);
+  o.setPinned(key('a'), true);
+  o.setPinned(key('a'), true);
+  o.setPinned(key('b'), true);
+  o.setPinned(key('a'), false);
+  assert.deepEqual(told, [[key('a')], [key('a'), key('b')], [key('b')]]);
+  assert.deepEqual(o.pinnedKeys, [key('b')]);
+  off();
+  o.setPinned(key('b'), false);
+  assert.equal(told.length, 3);
+});

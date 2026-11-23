@@ -461,7 +461,7 @@ const failures = (data = {}, extra = {}) => ({
   },
 });
 
-test('a failures notice is shown alerting under the machine\'s failures tag, keeps its kind, and a tap opens the machine', async () => {
+test('a failures notice is shown alerting under the machine\'s failures tag, keeps its kind and count, and its tap target is the machine', async () => {
   const sw = worker();
   await sw.fire('push', push(failures()));
   const [n] = sw.shown;

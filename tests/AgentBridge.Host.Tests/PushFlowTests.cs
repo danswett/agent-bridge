@@ -169,6 +169,26 @@ public sealed class PushFlowTests : IAsyncLifetime
         Assert.Equal(PushNotice.Topic(host.Id, Id), Pushes()[1].Headers["Topic"]);
     }
 
+    // HA-off evidence (parity row 16, ha-s4-evidence-matrix.md): the phone's question, its withdrawal and a finished turn
+    // all reach it through the relay. This fixture has no Home Assistant connector at all, so the push path is shown to
+    // work without one; that nothing in the push code names Home Assistant is HaOffNotificationTests' source scan. (It
+    // does not detect a call to Home Assistant: nothing here listens for one.)
+    [Fact]
+    public async Task A_question_its_withdrawal_and_a_finished_turn_reach_the_phone_with_no_Home_Assistant_connector_in_the_process()
+    {
+        var ch = await OpenAsync();
+        await SubscribeAsync(ch);
+        await AskAsync("q1");
+        await HostWait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
+        await AnsweredAtTheMachineAsync("q1");
+        await HostWait.UntilAsync(() => Pushes().Length == 2, "the resolved push", Patience);
+        Fixture.Append(events, Copilot.Assistant("All done.", second++), Copilot.TurnEnd(second++));
+        await source.RefreshAsync();
+        await HostWait.UntilAsync(() => Pushes().Length == 3, "the finished turn's push", Patience);
+        Assert.Equal(["question", "resolved", "finished"],
+            Pushes().Select(p => Open(p).GetProperty("data").GetProperty("kind").GetString()));
+    }
+
     [Fact]
     public async Task A_question_answered_from_the_phone_sends_that_phone_no_resolved_notice()
     {

@@ -46,6 +46,19 @@ public class PushNoticeTests
     }
 
     [Fact]
+    public void Failures_are_wanted_only_when_the_device_turned_them_on_and_never_by_default()
+    {
+        // The doc's rule (v1-sessions.md, Notification filters): off by default, and not decided by any other flag.
+        Assert.False(new PushNotify().Wants(NoticeKind.Failures, ""));
+        Assert.False(new PushNotify { Questions = true, Pinned = true, All = true }.Wants(NoticeKind.Failures, ""));
+        Assert.True(new PushNotify { DeliveryFailures = true }.Wants(NoticeKind.Failures, ""));
+        Assert.False(new PushNotify { DeliveryFailures = true, Questions = false, Pinned = false }.Wants(NoticeKind.Question, "s1"));
+        // The kinds it already filtered, and the ones it never filters, are as before.
+        Assert.True(new PushNotify().Wants(NoticeKind.Question, "s1"));
+        Assert.True(new PushNotify().Wants(NoticeKind.SignIn, ""));
+    }
+
+    [Fact]
     public void A_notice_is_a_declarative_web_push_message_carrying_the_machine_session_and_question()
     {
         var json = JsonDocument.Parse(PushNotice.Serialize(PushNotice.Fit(Message("Fix the login", "DEV · waiting on you\nWhich one?")))).RootElement;
