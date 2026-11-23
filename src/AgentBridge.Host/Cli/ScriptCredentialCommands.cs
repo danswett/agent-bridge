@@ -22,7 +22,7 @@ public static class ScriptCredentialCommands
         { throw new InvalidOperationException("refused: script credentials are unavailable on this host"); }
         if (op == "scripts.list")
         {
-            return new { Scripts = credentials.ListScripts().Select(i => new { i.Name, i.Scope, i.ExpiresAt, i.Live, i.FleetLaunch }).ToArray() };
+            return new { Scripts = credentials.ListScripts().Select(i => new { i.Name, i.Scope, i.ExpiresAt, i.Live, i.FleetLaunch, i.LastUse }).ToArray() };
         }
         if (op == "scripts.confirm")
         {

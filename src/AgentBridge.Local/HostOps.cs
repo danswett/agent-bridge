@@ -21,6 +21,16 @@ public static class HostOps
     public const string AgentSignInCapability = "host.agents.signIn";
     public const string AgentsSignIn = "host.agents.signIn";
 
+    // The person's script credentials (HA retirement row 1): the app lists, mints, rotates, revokes and ticks launch:fleet,
+    // each press with the host's confirmation for that action. In hello only for the app, on Windows.
+    public const string ScriptCredentialsCapability = "host.scripts";
+    public const string ScriptList = "scripts.list";
+    public const string ScriptConfirm = "scripts.confirm";
+    public const string ScriptAdd = "scripts.add";
+    public const string ScriptRevoke = "scripts.revoke";
+    public const string ScriptGrantFleet = "scripts.grant-fleet";
+    public const string ScriptRevokeFleet = "scripts.revoke-fleet";
+
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
     public const string Subscribe = "host.subscribe";

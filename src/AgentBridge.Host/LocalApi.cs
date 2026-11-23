@@ -254,7 +254,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
-                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability, HostOps.ScriptCredentialsCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
