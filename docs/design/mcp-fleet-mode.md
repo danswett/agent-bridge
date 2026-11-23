@@ -17,7 +17,7 @@ are closed-set values, never text.
 
 - Keep `list_agent_sessions` as is (local, its documented default). Add an **opt-in `scope: "fleet"`** argument; absent means local.
   No separate tool, so a client that never passes it sees no change.
-- Fleet rows carry **only** `machine`, `machineName`, `node`, `state`, `since`, `secondsInState`, `machineOnline`, plus the closed-set
+- Fleet rows carry **only** `machine`, `machineName` (content-only, see the rulings), `node`, `state`, `since`, `secondsInState`, `machineOnline`, plus the closed-set
   evidence members when the relay sends them. Machine completeness (`complete`) is returned so a partial machine is not read as empty.
 - **`name` is untrusted text** (a person or agent chose it). It is returned only with `include: "content"`, as the relay already
   requires, and the tool description says so; the server never treats it as an instruction and never uses it to pick a target.
@@ -33,11 +33,15 @@ are closed-set values, never text.
 - A new relay field or op for this; the existing `fleet.list` is enough.
 - A default of fleet scope.
 
-## Open questions for the Engineering Lead
+## Engineering rulings (R10), folded in
 
-1. Does the MCP server hold (or may it be given) a relay credential for `fleet.list`, or must it go through the local host as a
-   pass-through? The second keeps the server local-only on the wire; the first is a new trust edge.
-2. Is `machineName` acceptable as returned, or is it also untrusted text to withhold without `include: "content"`?
+1. **Local pass-through via the host.** The MCP process never holds a relay credential: fleet scope is answered by asking the local host,
+   which makes the relay call with its own identity. The server stays local-only on the wire; no new trust edge.
+2. **`machineName` is untrusted display text**, returned only with `include: "content"`, never used to route, select or decide anything.
+   Routing and identity use the `machine` id, never the name.
+
+Both stay inside the owner CHANGE rule: any departure (a credential in the MCP process, returning `machineName` by default, acting on a
+remote session) is an owner CHANGE routed through the Chief, not a builder choice.
 
 ## Tests when built (tests first)
 
