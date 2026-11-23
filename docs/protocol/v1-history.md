@@ -350,8 +350,14 @@ Claude keeps the first part id across contiguous blocks with the same message id
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 Text after a tool or question in the same record keeps its identity: the index counts those
 parts as history does, once per call id in the readable turn. It omits identity for composite
-legacy text (text, tool, text of one message), duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
-in a turn. A readable new prompt reestablishes identity; text never supplies an id.
+legacy text (text, tool, text of one message), duplicate records, an unreadable record, a turn
+whose prompt was not read, or more than 4,096 assistant records in a turn. A window that opens
+inside a turn whose prompt was read (a long turn) keeps identity for each text record whose message
+id first appears in the window, because the id is the record's hash and its index in that record,
+which unread earlier records cannot change. The first message in such a window may have begun
+before it, and tool calls in an unread record may be repeated (history dedupes them), so that
+message and text after a tool in the same record stay without identity. A readable new prompt
+reestablishes identity; text never supplies an id.
 Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
 the first record's part id across both streams and updates. Distinct ids retain equal
 text replies. Missing ids, flat events and `last_agent_message` never inherit identity;

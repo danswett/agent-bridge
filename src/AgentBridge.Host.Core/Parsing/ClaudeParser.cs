@@ -123,8 +123,19 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         _wokenAt.Clear();
     }
 
-    void ResetReplyIdentity(bool known)
+    // A window that opens inside a turn (the skim saw its prompt, not the records after it). A part id
+    // is the record's hash and its index in that record, so unread earlier records cannot change it,
+    // except through the message the window opens in, which may have begun before it, and through
+    // tool calls an unread record repeated, which history dedupes. Both stay without identity.
+    bool _replyGap;
+    string? _edgeMessage;
+    bool _edgeSeen;
+
+    void ResetReplyIdentity(bool known, bool gap = false)
     {
+        _replyGap = gap;
+        _edgeMessage = null;
+        _edgeSeen = false;
         _replyIdentityKnown = known;
         _responseContiguous = false;
         _replyRecords.Clear();
@@ -154,7 +165,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
                 TurnStarts();
-                ResetReplyIdentity(known: false);
+                ResetReplyIdentity(known: true, gap: true);
                 S.Prompt(Json.Time(e, "timestamp"));
 
                 S.UncountedTurn = false;
@@ -165,7 +176,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 S.FirstUserMessage ??= queuedText;
                 S.UserMessage = queuedText;
                 TurnStarts();
-                ResetReplyIdentity(known: false);
+                ResetReplyIdentity(known: true, gap: true);
                 S.Prompt(Json.Time(e, "timestamp"));
                 S.UncountedTurn = false;
                 break;
@@ -477,6 +488,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // Without an id, the entry itself is the message.
         var messageId = Json.Str(message, "id");
         var key = messageId ?? Guid.NewGuid().ToString("N");
+        if (_replyGap && !_edgeSeen)
+        {
+            _edgeSeen = true;
+            _edgeMessage = messageId;
+        }
+        var toolBeforeText = false;
         foreach (var block in Blocks(message))
         {
             switch (Json.Str(block, "type"))
@@ -496,7 +513,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     {
                         // Legacy text can span several history parts. Never give that
                         // composite a single part id, or guess through an unread window.
-                        S.ResponseId = !append && _replyIdentityKnown && S.TurnId is not null && record is not null
+                        S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
+                            && (_edgeMessage is null || messageId != _edgeMessage)
                             ? Conversation.TurnIds.Part(record, part) : null;
                         part++;
                     }
@@ -514,6 +532,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                         // id in the turn. The turn was read whole (identity is known), so the
                         // ids seen say exactly how many parts precede the text after this tool.
                         if (_replyTools.Count >= MaxReplyRecords) { _replyIdentityKnown = false; S.ResponseId = null; }
+                        if (_replyGap) { toolBeforeText = true; }
                         if (_replyTools.Add(id)) { part++; }
                         if (name == "AskUserQuestion" && Json.Get(block, "input") is not null && _replyQuestions.Add(id)) { part++; }
                         _responseContiguous = false;
