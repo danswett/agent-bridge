@@ -376,7 +376,7 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
-    public async Task However_many_devices_subscribe_the_relay_runs_one_sweeper_and_none_before_the_first()
+    public async Task However_many_devices_subscribe_the_relay_runs_one_sweeper_none_before_the_first_and_drain_disposes_it()
     {
         var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
@@ -391,22 +391,11 @@ public sealed class RosterFieldsTests
                 await SubscribedAsync(d);
             }
             Assert.Equal(1, time.Sweepers);
+            Assert.Equal(0, time.Disposed);
+            await relay.App.Services.GetRequiredService<AgentBridge.Relay.RelayHub>().DrainAsync();
+            Assert.Equal(1, time.Disposed);
         }
         finally { foreach (var d in devices) { await d.DisposeAsync(); } }
-    }
-
-    [Fact]
-    public async Task Draining_the_relay_disposes_its_sweeper()
-    {
-        var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
-        await using var d = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
-        await SubscribedAsync(d);
-        Assert.Equal(0, time.Disposed);
-
-        await relay.App.Services.GetRequiredService<AgentBridge.Relay.RelayHub>().DrainAsync();
-
-        Assert.Equal(1, time.Disposed);
     }
 
     [Fact]

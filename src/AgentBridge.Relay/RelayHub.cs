@@ -99,18 +99,15 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public volatile bool RegistrySubscribed;
         RegistryOutbox? registryOutbox;
 
-        // Registry frames leave a socket in queue order, off the sender's receive loop, so a slow
-        // subscriber delays only itself. Its queue is bounded; past the bound it is closed (1013, try
-        // again later) and resyncs with registry-get on reconnect. Each send keeps the 10 s limit.
+        // Queued, in order, off the sender's receive loop; bounded, and closed with 1013 past the bound.
         public void EnqueueRegistry(byte[] data) =>
             LazyInitializer.EnsureInitialized(ref registryOutbox, () => new RegistryOutbox(
                 d => SendAsync(d, WebSocketMessageType.Text), () => { RegistrySubscribed = false; _ = CloseSlowAsync(); })).Enqueue(data);
 
-        // Once overflowed, the subscription is over for good: a later registry-subscribe on this socket is ignored.
+        // Once overflowed, a later registry-subscribe on this socket is ignored.
         public bool RegistryClosed => registryOutbox?.Closed == true;
 
-        // Close with 1013, then give the peer 2 s to answer the close before aborting, so a subscriber
-        // that never reads again cannot keep its slot (and its host record) after the receive loop ends.
+        // 1013, then abort after 2 s if the peer never answers: it must not keep its slot.
         async Task CloseSlowAsync()
         {
             try
@@ -486,8 +483,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     {
         try
         {
-            // Candidates are only read here; each is marked and announced under its account's gate, where a
-            // put that just refreshed it wins, so an offline frame never follows a newer online one.
+            // Marked and announced under the account's gate, where a fresher put wins.
             foreach (var (account, machine) in registry.Expired())
             {
                 lock (RegistryGate(account))

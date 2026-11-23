@@ -1,9 +1,7 @@
 namespace AgentBridge.Relay;
 
-// The registry-changed frames waiting to go to one subscriber, sent in order by one drain loop.
-// Bounded: a subscriber that stops reading holds at most MaxFrames / MaxBytes here (plus the one
-// frame in flight), and past that it is cut off (the owner closes its socket) rather than growing
-// the relay's memory. It resyncs with registry-get when it reconnects.
+// The registry-changed frames waiting for one subscriber, sent in order by one drain loop. Bounded:
+// past MaxFrames or MaxBytes (plus the frame in flight) it overflows and the owner closes the socket.
 public sealed class RegistryOutbox(Func<byte[], Task> send, Action overflow)
 {
     public const int MaxFrames = 32;
@@ -16,7 +14,6 @@ public sealed class RegistryOutbox(Func<byte[], Task> send, Action overflow)
 
     public long QueuedBytes { get { lock (gate) { return bytes; } } }
 
-    // True once it overflowed: nothing more is accepted, ever.
     public bool Closed { get { lock (gate) { return closed; } } }
 
     public void Enqueue(byte[] data)
@@ -27,7 +24,6 @@ public sealed class RegistryOutbox(Func<byte[], Task> send, Action overflow)
             if (closed) { return; }
             if (queue.Count >= MaxFrames || bytes + data.Length > MaxBytes)
             {
-                // Drop what is queued: the subscriber is being closed and will resync.
                 closed = true;
                 over = true;
                 queue.Clear();
