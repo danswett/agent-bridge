@@ -16,7 +16,6 @@ public sealed class SignInTests(ITestOutputHelper output)
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string OtherId = "99999999-9999-4999-8999-999999999999";
     const string SyntheticCode = "TEST-0001";
-    static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
     static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
     static JsonElement Frame(FakeTimeProvider time, string? code = null, string? uri = null) =>
         Json(new { kind = "code", userCode = code ?? SyntheticCode, verificationUri = uri ?? "https://github.com/login/device", expiresAt = time.GetUtcNow().AddSeconds(10) });
@@ -79,17 +78,17 @@ public sealed class SignInTests(ITestOutputHelper output)
             var start = h.Start(phone);
             await start.Then(phone);
             phase = "wait for recovery";
-            await h.Recovery.ResumeEntered.Task.WaitAsync(Patience);
+            await h.Recovery.ResumeEntered.Task;
             var flow = Json(start.Result).GetProperty("flow").GetString();
             var retained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             h.Clock.Changed = due => { if (due == h.Service.Kept) { retained.TrySetResult(); } };
             phase = "cancel";
             await h.Service.CancelAsync(phone, Json(new { flow }));
             phase = "wait for retention timer";
-            await retained.Task.WaitAsync(Patience);
+            await retained.Task;
             // The recovery task's finally and any in-flight sweep finish their Schedule() before the clock moves.
             phase = "drain background sweeps";
-            await h.Service.SweepAsync().WaitAsync(Patience);
+            await h.Service.SweepAsync();
             phase = "assert retention armed";
             Assert.Equal(1, h.Clock.Armed);
             h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
@@ -143,9 +142,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         };
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         if (runnerFirst)
         {
             Assert.Equal(1, h.Service.CodesHeld);
@@ -164,10 +163,10 @@ public sealed class SignInTests(ITestOutputHelper output)
                 h.Authority.Change();
             }
             else { h.Time.Advance(TimeSpan.FromSeconds(10)); }
-            await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+            await h.Factory.Process.Disposing.Task;
             h.Factory.Process.ReleaseDisposal.TrySetResult();
             // Disposal entry is not flow completion; a revoked phone cannot receive Done.
-            await ended.Task.WaitAsync(Patience);
+            await ended.Task;
             Assert.Equal(0, h.Service.CodesHeld);
             Assert.False(h.Service.FlowRunning);
             Assert.Equal(0, h.Recovery.Resumes);
@@ -190,7 +189,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         await h.Start(phone).Then(phone);
         h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
         h.Time.Advance(TimeSpan.FromSeconds(20));
-        Assert.Equal("expired", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        Assert.Equal("expired", (await phone.Done.Task).GetProperty("outcome").GetString());
         Assert.False(h.Service.FlowRunning);
         Assert.Equal(0, h.Clock.Repeating);
     }
@@ -265,10 +264,10 @@ public sealed class SignInTests(ITestOutputHelper output)
         var runner = new PrivateSignInRunner(factory, time);
         var received = new List<PrivateSignInCode>();
         var running = runner.RunAsync(new("fixture-store", AgentKind.Copilot, null), (value, _) => { received.Add(value); return Task.FromResult(true); }, CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         factory.Process.OutputPipe.Put(Frame(time, code, uri));
         factory.Process.Complete();
-        Assert.Equal(accepted ? SignInOutcome.SignedIn : SignInOutcome.Refused, await running.WaitAsync(Patience));
+        Assert.Equal(accepted ? SignInOutcome.SignedIn : SignInOutcome.Refused, await running);
         Assert.Equal(accepted ? 1 : 0, received.Count);
         Assert.All(received, value => Assert.DoesNotContain(SyntheticCode, value.ToString(), StringComparison.Ordinal));
         Assert.True(factory.Process.Disposed);
@@ -290,7 +289,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         var factory = new Factory();
         var runner = new PrivateSignInRunner(factory, time);
         var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         var p = factory.Process;
         if (variant == "duplicate") { p.OutputPipe.Put("{\"kind\":\"code\",\"kind\":\"code\"}\n"); }
         else if (variant == "unknown") { p.OutputPipe.Put("{\"kind\":\"code\",\"token\":\"must-not-be-read\"}\n"); }
@@ -308,7 +307,7 @@ public sealed class SignInTests(ITestOutputHelper output)
                 p.Complete(done: false);
             }
         }
-        Assert.Equal(SignInOutcome.Refused, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Refused, await running);
         Assert.True(p.Aborted);
         Assert.True(p.Disposed);
     }
@@ -323,14 +322,14 @@ public sealed class SignInTests(ITestOutputHelper output)
         var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new PrivateSignInRunner(factory, time) { CodeWait = TimeSpan.FromSeconds(2) };
         var running = runner.RunAsync(new("store", AgentKind.Copilot, null), (_, _) => { shown.TrySetResult(); return Task.FromResult(true); }, CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         if (issueCode)
         {
             factory.Process.OutputPipe.Put(Frame(time));
-            await shown.Task.WaitAsync(Patience);
+            await shown.Task;
         }
         time.Advance(TimeSpan.FromSeconds(issueCode ? 11 : 3));
-        Assert.Equal(SignInOutcome.Expired, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Expired, await running);
         Assert.True(factory.Process.Aborted);
     }
 
@@ -340,11 +339,11 @@ public sealed class SignInTests(ITestOutputHelper output)
         var factory = new Factory();
         var time = new FakeTimeProvider();
         var running = new PrivateSignInRunner(factory, time).RunAsync(new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         factory.Process.ErrorPipe.Put("synthetic private diagnostics never leave the runner");
         factory.Process.OutputPipe.Put(Frame(time));
         factory.Process.Complete(exit: 1);
-        Assert.Equal(SignInOutcome.Failed, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Failed, await running);
         Assert.True(factory.Process.Disposed);
     }
 
@@ -358,10 +357,10 @@ public sealed class SignInTests(ITestOutputHelper output)
             new("store", AgentKind.Copilot, null), (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
         if (stderr)
         {
-            await factory.Started.Task.WaitAsync(Patience);
+            await factory.Started.Task;
             factory.Process.ErrorPipe.Put(new string('x', 32 * 1024 + 1));
         }
-        Assert.Equal(SignInOutcome.Refused, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Refused, await running);
     }
 
     [Theory]
@@ -376,11 +375,11 @@ public sealed class SignInTests(ITestOutputHelper output)
         await using var h = await Harness.CreateAsync();
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         if (onDone)
         {
             h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-            await phone.Code.Task.WaitAsync(Patience);
+            await phone.Code.Task;
         }
         var value = field switch { "signIn" => "phone", "recovery" => "pending", _ => "synthetic-agent-account-text" };
         var frame = onDone ? Json(new { kind = "done", outcome = "signedIn", persisted = true, policyAllowed = true }) : Frame(h.Time);
@@ -389,7 +388,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         h.Factory.Process.OutputPipe.Put(Json(fields));
         h.Factory.Process.ErrorPipe.Put("synthetic agent prose: account=synthetic-agent-account-text; signIn=phone; recovery=pending");
         h.Factory.Process.Complete(done: false);
-        Assert.Equal("refused", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        Assert.Equal("refused", (await phone.Done.Task).GetProperty("outcome").GetString());
         var attention = h.Source.Get(Id)!.Attention!;
         Assert.Null(attention.Account);
         Assert.Null(attention.SignIn);
@@ -411,9 +410,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         Assert.Equal(0, h.Factory.Starts);
         var id = Json(first.Result).GetProperty("flow").GetString();
         await first.Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         Assert.Empty(observer.Events);
         Assert.Equal(1, h.Service.CodesHeld);
         Assert.DoesNotContain(SyntheticCode, Json(first.Result).GetRawText(), StringComparison.Ordinal);
@@ -427,16 +426,16 @@ public sealed class SignInTests(ITestOutputHelper output)
         var join = h.Start(observer, Guid.NewGuid());
         Assert.Equal("busy", Json(join.Result).GetProperty("outcome").GetString());
         await join.Then(observer);
-        await observer.Code.Task.WaitAsync(Patience);
+        await observer.Code.Task;
 
         phone.Close();
         await h.Service.SweepAsync();
         var reattached = h.Phone();
         await h.Start(reattached, request).Then(reattached);
-        await reattached.Code.Task.WaitAsync(Patience);
+        await reattached.Code.Task;
         Assert.Equal(1, h.Factory.Starts);
         h.Factory.Process.Complete();
-        var done = await reattached.Done.Task.WaitAsync(Patience);
+        var done = await reattached.Done.Task;
         Assert.Equal("signedIn", done.GetProperty("outcome").GetString());
         Assert.Equal(RecoveryState.Pending, h.Source.Get(Id)!.Attention!.Recovery);
         Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
@@ -462,12 +461,12 @@ public sealed class SignInTests(ITestOutputHelper output)
         h.ReadOnly = false;
         var start = h.Start(phone);
         await start.Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Authority.Denial = denial;
         if (denial == "g5") { h.ReadOnly = true; }
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
         h.Factory.Process.Complete();
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         await h.Service.SweepAsync();
         Assert.DoesNotContain(phone.Events, e => e.Name == AgentSignIn.Code);
         Assert.Equal(0, h.Recovery.Resumes);
@@ -480,13 +479,13 @@ public sealed class SignInTests(ITestOutputHelper output)
         await using var h = await Harness.CreateAsync();
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         h.Authority.Denial = "revoked";
         await h.Service.SweepAsync();
         h.Factory.Process.Complete();
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         Assert.Equal(0, h.Service.CodesHeld);
         Assert.Equal(0, h.Recovery.Resumes);
         Assert.DoesNotContain(phone.Events, e => e.Name == AgentSignIn.Done);
@@ -513,7 +512,7 @@ public sealed class SignInTests(ITestOutputHelper output)
             await h.Start(phone).Then(phone);
             if (queued)
             {
-                await h.Factory.Started.Task.WaitAsync(Patience);
+                await h.Factory.Started.Task;
                 h.Authority.Denial = "revoked";
                 if (sweepBeforeLaunch)
                 {
@@ -521,7 +520,7 @@ public sealed class SignInTests(ITestOutputHelper output)
                     Assert.False(h.Service.FlowRunning);
                 }
                 h.Factory.ReleaseLaunch.TrySetResult();
-                Assert.False(await h.Factory.Checked.Task.WaitAsync(Patience));
+                Assert.False(await h.Factory.Checked.Task);
             }
             else { Assert.Equal(0, h.Factory.Starts); }
             await h.Service.SweepAsync();
@@ -538,15 +537,15 @@ public sealed class SignInTests(ITestOutputHelper output)
         await using var h = await Harness.CreateAsync();
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         phone.Close();
         h.Authority.Binding = "epoch:2";
         var replacement = h.Phone();
         Assert.Equal("refused", Json(h.Service.Start(replacement, h.Request())).GetProperty("outcome").GetString());
         await h.Service.SweepAsync();
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         Assert.Equal(0, h.Service.CodesHeld);
         Assert.Equal(0, h.Recovery.Resumes);
         Assert.Empty(replacement.Events);
@@ -559,11 +558,11 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         h.Factory.Process.Complete();
-        await phone.Done.Task.WaitAsync(Patience);
+        await phone.Done.Task;
         for (var i = 0; i < 20; i++)
         {
             var replay = h.Phone();
@@ -583,13 +582,13 @@ public sealed class SignInTests(ITestOutputHelper output)
         var runner = new PrivateSignInRunner(factory, time) { Limit = TimeSpan.FromSeconds(2) };
         var target = new SignInTarget("store", AgentKind.Copilot, null);
         var running = runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         time.Advance(TimeSpan.FromSeconds(3));
-        Assert.Equal(SignInOutcome.Expired, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Expired, await running);
         Assert.Equal(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
         Assert.Equal(1, factory.Starts);
         factory.Delayed.TrySetResult(factory.Process);
-        await factory.Process.Disposing.Task.WaitAsync(Patience);
+        await factory.Process.Disposing.Task;
         Assert.True(factory.Process.Aborted);
     }
 
@@ -602,10 +601,10 @@ public sealed class SignInTests(ITestOutputHelper output)
         var runner = new PrivateSignInRunner(factory, time) { Cleanup = TimeSpan.Zero };
         var target = new SignInTarget("store", AgentKind.Copilot, null);
         var running = runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true);
-        await factory.Started.Task.WaitAsync(Patience);
+        await factory.Started.Task;
         factory.Process.OutputPipe.Put(Frame(time));
         factory.Process.Complete();
-        Assert.Equal(SignInOutcome.Failed, await running.WaitAsync(Patience));
+        Assert.Equal(SignInOutcome.Failed, await running);
         Assert.Equal(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
         factory.Process.ReleaseDisposal.TrySetResult();
         Assert.NotEqual(SignInOutcome.Refused, await runner.RunAsync(target, (_, _) => Task.FromResult(true), CancellationToken.None, () => true));
@@ -620,17 +619,17 @@ public sealed class SignInTests(ITestOutputHelper output)
         var start = h.Start(phone);
         var flow = Json(start.Result).GetProperty("flow").GetString();
         await start.Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         h.States.HangTerminal = true;
         var cancelling = h.Service.CancelAsync(phone, Json(new { flow }));
-        await h.States.TerminalWaiting.Task.WaitAsync(Patience);
+        await h.States.TerminalWaiting.Task;
         Assert.Equal(0, h.Service.CodesHeld);
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
-        Assert.Equal("cancelled", Json(await cancelling.WaitAsync(Patience)).GetProperty("outcome").GetString());
-        Assert.Equal("cancelled", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+        Assert.Equal("cancelled", Json(await cancelling).GetProperty("outcome").GetString());
+        Assert.Equal("cancelled", (await phone.Done.Task).GetProperty("outcome").GetString());
     }
 
     [Theory]
@@ -645,10 +644,10 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         Mark("process started");
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         Mark("code delivered");
         Task? replaying = null;
         try
@@ -658,17 +657,17 @@ public sealed class SignInTests(ITestOutputHelper output)
             Mark("process completed");
             if (replay)
             {
-                await phone.Done.Task.WaitAsync(Patience);
+                await phone.Done.Task;
                 Mark("terminal event delivered");
                 phone.BlockSends = true;
                 replaying = h.Start(phone, request).Then(phone);
             }
-            await phone.SendBlocked.Task.WaitAsync(Patience);
+            await phone.SendBlocked.Task;
             Mark("send blocked");
             h.Time.Advance(h.Service.CheckLimit + TimeSpan.FromSeconds(1));
-            await phone.SendFinished.Task.WaitAsync(Patience);
+            await phone.SendFinished.Task;
             Mark("send finished");
-            if (replaying is not null) { await replaying.WaitAsync(Patience); }
+            if (replaying is not null) { await replaying; }
             Assert.True(phone.HeldToken.IsCancellationRequested);
             Assert.Equal(0, phone.PendingSends);
         }
@@ -689,9 +688,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         Fixture.Append(h.Events, AuthError(3));
         await h.Source.RefreshAsync();
         var replacement = h.Phone();
@@ -712,12 +711,12 @@ public sealed class SignInTests(ITestOutputHelper output)
         h.Recovery.HoldResume = evidence;
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        if (evidence) { await h.Recovery.ResumeEntered.Task.WaitAsync(Patience); }
-        else { await h.Factory.Started.Task.WaitAsync(Patience); }
+        if (evidence) { await h.Recovery.ResumeEntered.Task; }
+        else { await h.Factory.Started.Task; }
         try
         {
             h.Time.Advance(TimeSpan.FromSeconds(3));
-            Assert.Equal("expired", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString());
+            Assert.Equal("expired", (await phone.Done.Task).GetProperty("outcome").GetString());
         }
         finally
         {
@@ -738,9 +737,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         var start = h.Start(phone);
         var flow = Json(start.Result).GetProperty("flow").GetString();
         await start.Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
         if (terminal == "cancel")
         {
             var stranger = h.Phone("stranger");
@@ -754,7 +753,7 @@ public sealed class SignInTests(ITestOutputHelper output)
             h.Time.Advance(TimeSpan.FromSeconds(31));
             await h.Service.SweepAsync();
         }
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         Assert.Equal(0, h.Service.CodesHeld);
         Assert.True(h.Factory.Process.Aborted);
         Assert.Equal(0, h.Recovery.Resumes);
@@ -767,7 +766,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Resolver.Store = "other-store";
         Assert.Equal("refused", Json(h.Service.Start(phone, h.Request(request))).GetProperty("outcome").GetString());
         h.Resolver.Store = "fixture-store";
@@ -799,7 +798,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         await h.Service.SweepAsync();
         Assert.Null(h.Source.Get(Id)!.Attention);
         if (automatic) { Assert.Empty(phone.Events); }
-        else { Assert.Equal("signedIn", (await phone.Done.Task.WaitAsync(Patience)).GetProperty("outcome").GetString()); }
+        else { Assert.Equal("signedIn", (await phone.Done.Task).GetProperty("outcome").GetString()); }
     }
 
     [Fact]
@@ -829,13 +828,13 @@ public sealed class SignInTests(ITestOutputHelper output)
         await h.Source.RefreshAsync();
         await h.Service.SweepAsync();
         Assert.Null(h.Source.Get(OtherId)!.Attention);
-        var done = await reattached.Done.Task.WaitAsync(Patience);
+        var done = await reattached.Done.Task;
         Assert.Equal("signedIn", done.GetProperty("outcome").GetString());
         Assert.Equal(Id, Assert.Single(done.GetProperty("resumed").EnumerateArray()).GetString());
         Assert.Equal(OtherId, Assert.Single(done.GetProperty("continue").EnumerateArray()).GetString());
         var receipt = h.Phone();
         await h.Start(receipt, request).Then(receipt);
-        Assert.Equal(done.GetRawText(), (await receipt.Done.Task.WaitAsync(Patience)).GetRawText());
+        Assert.Equal(done.GetRawText(), (await receipt.Done.Task).GetRawText());
     }
 
     // #1454: the read-only "a flow is running now" answer a remote restart reads.
@@ -910,7 +909,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         Assert.Equal(offered, hello.Capabilities.Contains(AgentSignIn.Capability));
         Assert.Equal(offered ? "started" : "refused", Json(result is ChannelReply reply ? reply.Result : result!).GetProperty("outcome").GetString());
         Assert.Equal(offered ? SignInWhere.Phone : null, h.Source.Get(Id)!.Attention!.SignIn);
-        if (result is ChannelReply started) { await started.Then(phone); await h.Factory.Started.Task.WaitAsync(Patience); }
+        if (result is ChannelReply started) { await started.Then(phone); await h.Factory.Started.Task; }
         Assert.Equal(offered ? 1 : 0, h.Factory.Starts);
     }
 
@@ -937,14 +936,14 @@ public sealed class SignInTests(ITestOutputHelper output)
         await using var h = await Harness.CreateAsync(manualSweeps: true);
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
-        await h.Factory.Started.Task.WaitAsync(Patience);
+        await h.Factory.Started.Task;
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
-        await phone.Code.Task.WaitAsync(Patience);
+        await phone.Code.Task;
 
         h.Authority.Denial = "removed from the roster";
         h.Authority.Change();
 
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        await h.Factory.Process.Disposing.Task;
         Assert.Equal(0, h.Service.CodesHeld);
     }
 
@@ -1020,14 +1019,14 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phone = h.Phone();
         var observer = h.Phone("observer");
         await Assert.IsType<ChannelReply>(service.Start(phone, h.Request())).Then(phone);
-        await cli.Started.Task.WaitAsync(Patience);
+        await cli.Started.Task;
 
         cli.Out.Put(CliCode() + "Waiting for authorization...\n");
         cli.Err.Put($"Failed to open browser. Please visit https://github.com/login/device and enter the code {SyntheticCode} manually.\nGH_TOKEN={SyntheticToken}\n");
-        var code = await phone.Code.Task.WaitAsync(Patience);
+        var code = await phone.Code.Task;
         cli.Out.Put($"Signed in successfully as {SyntheticLogin} (GitHub.com).\n");
         cli.Finish(0);
-        var done = await phone.Done.Task.WaitAsync(Patience);
+        var done = await phone.Done.Task;
 
         Assert.Equal(["flow", "agent", "userCode", "verificationUri", "expiresAt"], code.EnumerateObject().Select(p => p.Name));
         Assert.Equal(SyntheticCode, code.GetProperty("userCode").GetString());
@@ -1058,7 +1057,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         var shown = new List<PrivateSignInCode>();
         var running = new PrivateSignInRunner(cli, time).RunAsync(new("store", AgentKind.Copilot, null),
             (c, _) => { shown.Add(c); return Task.FromResult(true); }, CancellationToken.None, () => true);
-        await cli.Started.Task.WaitAsync(Patience);
+        await cli.Started.Task;
         var success = $"Signed in successfully as {SyntheticLogin}.\n";
         cli.Out.Put(variant switch
         {
@@ -1072,7 +1071,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         });
         cli.Finish(variant == "exit" ? 1 : 0);
 
-        Assert.Equal(variant == "exit" ? SignInOutcome.Failed : SignInOutcome.Refused, await running.WaitAsync(Patience));
+        Assert.Equal(variant == "exit" ? SignInOutcome.Failed : SignInOutcome.Refused, await running);
         Assert.True(cli.Aborted);
         Assert.Equal(variant is "trailing" or "exit" ? 1 : 0, shown.Count);
     }
