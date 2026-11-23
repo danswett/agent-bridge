@@ -1441,7 +1441,7 @@ public class MergeRuleTests
     // newest completed evidence is several runs down. Once the newest run has not answered, the runs
     // below it are read together, not one after another; a newest run that does answer is read alone
     // (a quota point per read: nothing is read ahead of an answer).
-    [Fact(Skip = "quarantined, #4148, expires Nov 24 11:00 PT")]
+    [Fact]
     public void Main_s_older_runs_are_read_together_once_the_newest_has_not_answered()
     {
         var runs = MainRuns((9, "in_progress", null, 1), (8, "in_progress", null, 1), (7, "in_progress", null, 1), (6, "in_progress", null, 1), (5, "completed", "success", 1));
