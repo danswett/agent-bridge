@@ -151,8 +151,11 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 if (!string.IsNullOrEmpty(a.ResponseId)) { identified.Add(a.ResponseTurn); }
                 var turn = Held(a.ResponseTurn);
                 var parts = turn.Parts.ToList();
-                var last = string.IsNullOrEmpty(a.ResponseId) ? parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response)
-                    : parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId);
+                // #3649: a reply with no id may update only an id-less (live) last part, or restate the last reply's words; if the last
+                // reply part has an id, it starts a new part and never rewrites that one.
+                var lastReply = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
+                var last = !string.IsNullOrEmpty(a.ResponseId) ? parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId)
+                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
                 var mutable = session.Agent == AgentKind.Codex && !string.IsNullOrEmpty(a.ResponseId);
                 var items = revisions.GetValueOrDefault(a.ResponseTurn);
                 var prior = items?.GetValueOrDefault(a.ResponseId ?? "") ?? default;
@@ -164,7 +167,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 {
                     var part = new HistoryPart
                     {
-                        Id = a.ResponseId ?? (last < 0 ? $"{turn.Id}:live" : parts[last].Id),
+                        Id = a.ResponseId ?? (last >= 0 ? parts[last].Id : parts.Any(p => p.Id == $"{turn.Id}:live") ? $"{turn.Id}:live{parts.Count}" : $"{turn.Id}:live"),
                         Kind = HistoryPartKind.Response, At = last < 0 ? default : parts[last].At,
                         Text = voice.Response, Truncated = voice.ResponseTruncated ? true : null,
                     };
@@ -394,6 +397,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             previous = previous >= 0 ? previous + 1 : later < 0 ? parts.Count : later;
             parts.Insert(previous, part);
         }
+        // An id-less live part (#3649) has no id to be replaced by: it goes once a stored reply says the same words.
+        parts.RemoveAll(p => p.Id.Contains(":live", StringComparison.Ordinal) && page.Any(q => q.Kind == HistoryPartKind.Response && q.Text?.Trim() == p.Text?.Trim()));
         var replies = parts.Where(p => p.Kind == HistoryPartKind.Response).TakeLast(HistoryLimits.TextsPerTurn).ToHashSet();
         return parts.Where(p => p.Kind != HistoryPartKind.Response || replies.Contains(p)).ToArray();
     }

@@ -61,7 +61,9 @@ function keepReplies(parts) {
 }
 const adopt = (page, held) => ({
   ...page, ...(held.live ? { live: held.live } : {}),
-  parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts : mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text), page.parts),
+  // An id-less live part (#3649) has no id to be replaced by: it goes once a stored reply says the same words.
+  parts: page.truncated || held.truncated || page.partsMore || held.partsMore ? page.parts
+    : mergeParts(held.parts.filter((p) => p.kind === 'response' && p.text && !(p.live && page.parts.some((q) => q.kind === 'response' && q.text?.trim() === p.text.trim()))), page.parts),
   ...(held.carried ? { carried: true, prompt: page.prompt ?? held.prompt, kind: page.kind ?? held.kind } : {}),
 });
 
@@ -566,6 +568,17 @@ export class HistoryStore {
       if (!same(reply, turns[of].live)) { turns[of] = { ...turns[of], live: reply }; changed = true; }
     }
     const target = replied ? i : of;
+    // A reply with no id (#3649) may update only an id-less last part; if the last reply part has an id, it starts a new part.
+    // The same words as the last stored reply are that reply restated (after a page adopted it), not a new one.
+    if (!a.responseId && voice.response && target >= 0) {
+      const held = turns[target].parts;
+      const at = held.findLastIndex((p) => p.kind === 'response');
+      const text = { text: voice.response, truncated: voice.responseTruncated };
+      const parts = at >= 0 && !held[at].live && held[at].text === voice.response ? held
+        : at >= 0 && held[at].live ? held.map((p, k) => (k === at ? { ...p, ...text } : p))
+        : [...held, { id: `${turns[target].id}:live${held.filter((p) => p.live).length || ''}`, kind: 'response', live: true, ...text }];
+      if (!same(parts, held)) { turns[target] = { ...turns[target], parts: keepReplies(parts) }; changed = true; }
+    }
     const finished = blocked || target >= 0 && (!mutable || !revised) && turns[target].parts.find((p) => p.id === a.responseId && p.at && !p.truncated);
     if (target >= 0 && a.responseId && voice.response && !finished) {
       const parts = mergeParts(turns[target].parts, [{

@@ -141,9 +141,10 @@ export function shownParts(t) {
 
 export function currentReply(snapshot, session) {
   const voice = liveVoice(session);
-  if (!session.activity.responseId || !voice.response) { return voice.response ?? ''; }
+  if (!voice.response) { return ''; }
   const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
-  return turn ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
+  // Replies kept as parts (by id, or id-less ones the store held, #3649) read together; a lone id-less reply is just the live words.
+  return turn && (session.activity.responseId || turn.parts.some((p) => p.live)) ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
 }
 
 export function turnView(t, inline = null) {

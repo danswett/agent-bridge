@@ -32,6 +32,73 @@ test('successive assistant messages keep both replies in order and a third appen
   assert.equal(currentReply(store.get('h', ID), current), 'Original answer.\n\nScheduled pulse, complete.\n\nBackground task completed.');
 });
 
+// #3649: a reply with no id may update only an id-less last part; if the last reply part has an id, it starts a new part. The live card
+// (currentReply) and the history parts must agree.
+const saySession = (responseId, response) => readSession({
+  id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), ...(responseId ? { responseId } : {}), response, userMessage: 'Question' },
+});
+const replyTexts = (store) => shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.text);
+
+test('an id-less reply after an identified one is a new part, never a rewrite of it, and the live card agrees', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('answer', 'First reply.'));
+  const second = saySession(null, 'Second reply.');
+  store.live('h', second);
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+  assert.equal(currentReply(store.get('h', ID), second), 'First reply.\n\nSecond reply.');
+});
+
+test('id-less streaming updates stay in one part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession(null, 'Par'));
+  const last = saySession(null, 'Partial answer');
+  store.live('h', last);
+  assert.deepEqual(replyTexts(store), ['Partial answer']);
+  assert.equal(currentReply(store.get('h', ID), last), 'Partial answer');
+});
+
+test('the same id updates one part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'one'));
+  store.live('h', saySession('a', 'one two'));
+  assert.deepEqual(replyTexts(store), ['one two']);
+});
+
+test('an id-less reply then an identified one keeps both, and a later id-less reply is a third part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession(null, 'First reply.'));
+  store.live('h', saySession('b', 'Second reply.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+  store.live('h', saySession(null, 'Third reply.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.', 'Third reply.']);
+});
+
+test('an id-less restatement of the last stored reply is that reply, not a new part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'Same words.'));
+  store.live('h', saySession(null, 'Same words.'));
+  assert.deepEqual(replyTexts(store), ['Same words.']);
+});
+test('a stored page replaces the id-less live parts without duplicating them', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'First reply.'));
+  store.live('h', saySession(null, 'Second reply.'));
+  page = [{ id: turn(6), at: '2026-11-21T22:00:00Z', parts: [['a', 'First reply.'], ['b', 'Second reply.']].map(([id, text]) => ({
+    id, kind: 'response', text, at: '2026-11-21T22:00:01Z',
+  })) }];
+  await store.open('h', ID);
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+});
 test('an old hosts missing reply identity keeps the legacy single streaming slot', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);
