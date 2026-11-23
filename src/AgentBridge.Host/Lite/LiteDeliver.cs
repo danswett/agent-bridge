@@ -121,23 +121,26 @@ public sealed class LiteDeliver(
         // makes it ambiguous now, whatever it named a moment ago.
         if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
         if (!Ready(now, busyQueue)) { return Refused(LiteCodes.Busy); }
-        if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // Busy-Claude queue (#3856): one relay message per session at a time. A held slot or a full store refuses before any key, with its own code
         // (never busy, which would allow the one HA fallback and so bypass the cap).
         var store = busyQueue ? BusyStore : null;
+        var peer = Principal(body.Principal);
         if (store is not null)
         {
-            var begin = store.TryBegin(body.Request, Principal(body.Principal), id);
+            var begin = store.TryBegin(body.Request, peer, id);
             // A prompt Claude took after the report frees its slot (D2b-2b1, #3856): look at the transcript before refusing a held slot.
-            if (begin == BusyQueueStore.Begin.Held && LateTaken(store, id)) { begin = store.TryBegin(body.Request, Principal(body.Principal), id); }
+            if (begin == BusyQueueStore.Begin.Held && LateTaken(store, id)) { begin = store.TryBegin(body.Request, peer, id); }
             switch (begin)
             {
                 case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
                 case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
             var transcript = source.Files(id)?.Transcript;
-            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript));
-        }        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
+            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript), peer);
+        }
+        // The slot is taken before the rate token is spent, so a held or full refusal never burns the window and so never turns into busy (receipt 7110190967 P1-1).
+        if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
+        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
         // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
@@ -153,11 +156,14 @@ public sealed class LiteDeliver(
                 ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
             KeysGoing = () =>
             {
+                if (driver is not null)
+                {
+                    var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
+                    armed = new DriverArm(saved, generation);
+                }
+                // After arming: a failure above leaves keysWent false, so an exception that follows frees the slot instead of wedging it.
                 keysWent = true;
-                store?.KeysWent(body.Request);
-                if (driver is null) { return; }
-                var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
-                armed = new DriverArm(saved, generation);
+                store?.KeysWent(body.Request, peer);
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
@@ -167,11 +173,14 @@ public sealed class LiteDeliver(
             if (store is null) { return; }
             switch (r)
             {
-                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true); break;
-                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false); break;
-                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); break;
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); break;
                 default:
-                    if (keysWent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
+                    // KeysGoing runs before the injector's own fence, so it proves nothing by itself: a result carries the replier's word (NoKeysSent frees the slot);
+                    // only a thrown exception, with no result, falls back to whether KeysGoing ran.
+                    var mayHaveBeenSent = r is null ? keysWent : r.KeyDisposition != ReplyKeyDisposition.NoKeysSent;
+                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
                     break;
             }
         }
@@ -258,7 +267,7 @@ public sealed class LiteDeliver(
     {
         var held = store.Holder(session);
         if (held?.Transcript is not { } path || !ClaudeQueue.Taken(path, held.Offset, held.Request)) { return false; }
-        store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false);
+        store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false, principal: held.Principal);
         return true;
     }
     static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
