@@ -533,6 +533,14 @@ exact grant id and record verified caller principal, action, request id, ingress
 audience/generation, payload binding, cap decision, intent and terminal outcome.
 Every use, including refused attempts, writes the existing audit; unavailable
 audit refuses execution. Issue/revoke and reconciliation are recorded there too.
+Grant stop rows (`session.stop`, intent and terminal) carry three additive gate fields, all or none:
+`generation` (the grant generation), `payloadDigest` (SHA-256 hex of `fleet.end/1|request|grant|session|target`,
+a digest, never the content) and `caps` (the grant's hourly/daily/live caps in force). Rows written before
+they existed carry none and stay valid; the fields are omitted, not null, so those rows are byte-identical.
+A previous version reads a new row and ignores the fields (the line hash covers the raw line, not the parsed
+row). A repeated request id is matched by the intent row's `Gate.Operation`, grant, caller and session: another
+binding or payload refuses `duplicate-id`, one recorded `ended` outcome replays, and none or more than one
+distinct terminal is `unconfirmed` and never dispatched again.
 Grant counters derive from durable admissions, not a mutable UI number.
 
 | Threat | Control and remaining boundary |

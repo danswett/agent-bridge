@@ -351,9 +351,11 @@ public sealed class FleetStopTests : IDisposable
     }
     // A stop request id is remembered from the audit, so a host restart (a fresh StopService, an empty
     // memory) never dispatches it again (fleet-grants.md, stop replay and audit).
-    AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null) =>
-        new("local", request.ToString(), credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, session ?? id, outcome,
-            Gate: new(1, Guid.NewGuid(), Guid.Empty, 0, phase, "local", "agent",
+    // The intent and terminal rows of one operation share its Gate.Operation (the request id stands in for it).
+    AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null,
+        string? principal = null, Guid? operation = null) =>
+        new("local", request.ToString(), principal ?? credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, session ?? id, outcome,
+            Gate: new(1, operation ?? request, Guid.Empty, 0, phase, "local", "agent",
                 StopAudit.Identity(Guid.Parse(id), 700, started), outcome == "attempted" ? "none" : outcome == "ended" ? "none" : "refused"))
         { Grant = (grantId ?? grant.Id).ToString() };
     [Fact]
@@ -389,6 +391,42 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
     }
     [Fact]
+    public async Task A_request_id_bound_to_another_caller_or_session_is_refused_without_dispatching()
+    {
+        Own();
+        var byCaller = Guid.NewGuid();
+        var bySession = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        foreach (var phase in new[] { ("intent", "attempted"), ("terminal", "ended") })
+        {
+            Assert.True(audit.Append(Row(byCaller, phase.Item1, phase.Item2, principal: "someone-else")));
+            Assert.True(audit.Append(Row(bySession, phase.Item1, phase.Item2, session: Guid.NewGuid().ToString())));
+        }
+        foreach (var request in new[] { byCaller, bySession })
+        {
+            var receipt = await End(request: request);
+            Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
+    public async Task More_than_one_distinct_terminal_for_an_operation_is_unconfirmed_and_a_terminal_of_another_operation_is_not_trusted()
+    {
+        Own();
+        var conflicting = Guid.NewGuid();
+        var foreign = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(conflicting, "intent", "attempted")));
+        Assert.True(audit.Append(Row(conflicting, "terminal", "ended")));
+        Assert.True(audit.Append(Row(conflicting, "terminal", "unconfirmed")));
+        Assert.True(audit.Append(Row(foreign, "intent", "attempted")));
+        Assert.True(audit.Append(Row(foreign, "terminal", "ended", operation: Guid.NewGuid())));
+        foreach (var request in new[] { conflicting, foreign })
+        {
+            var receipt = await End(request: request);
+            Assert.Equal(("unconfirmed", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
     public async Task A_request_refused_before_dispatch_may_be_sent_again_with_the_same_id()
     {
         Own();
@@ -396,6 +434,78 @@ public sealed class FleetStopTests : IDisposable
         Assert.True(new AgentAuditLog(Folder).Append(Row(request, "terminal", "refused")));
         Assert.Equal("ended", (await End(request: request)).Outcome);
         Assert.Equal(1, injector.Calls);
+    }
+    static string Digest(Guid request, Guid grantId, string session, string? target) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            $"fleet.end/1|{request}|{grantId}|{session}|{target}")));
+    [Fact]
+    public async Task Stop_audit_rows_record_the_grant_generation_payload_digest_and_caps()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var rows = GateAuditProjection.Load(Folder).Rows.Where(r => r.Action == Ops.SessionStop && r.Request == request.ToString()).ToArray();
+        Assert.Equal(["intent", "terminal"], rows.Select(r => r.Gate!.Phase).ToArray());
+        Assert.All(rows, r => Assert.Equal((grant.Generation, Digest(request, grant.Id, id, null), grant.Caps),
+            (r.Gate!.Generation, r.Gate.PayloadDigest, r.Gate.Caps)));
+    }
+    [Fact]
+    public async Task A_request_resent_with_a_changed_payload_is_refused_without_dispatching()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        var changed = await Open().HandleAsync(caller, JsonSerializer.SerializeToElement(
+            new FleetStopInput(1, request, grant.Id, id, Device), ProtocolJson.Options));
+        Assert.Equal(("refused", "duplicate-id", calls), (changed.Outcome, changed.Reason, injector.Calls));
+    }
+    [Fact]
+    public void Generation_digest_and_caps_are_valid_only_together_on_a_stop_row()
+    {
+        GateAuditMetadata Gate(long? generation, string? digest, GrantCaps? caps) =>
+            new(1, Guid.NewGuid(), Guid.NewGuid(), 1, "intent", "local", "agent", Guid.NewGuid(), "none",
+                Generation: generation, PayloadDigest: digest, Caps: caps);
+        var target = Guid.NewGuid().ToString();
+        var digest = new string('a', 64);
+        var caps = new GrantCaps(3, 3, 2);
+        Assert.True(Gate(1, digest, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.True(Gate(null, null, null).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, null, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(0, digest, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, "not-hex", caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, digest, new GrantCaps(0, 3, 2)).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, digest, caps).Valid("session.launch", target, "attempted"));
+    }
+    // The gate metadata as the previous version read it: no generation, digest or caps.
+    sealed record PreviousGate(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
+        string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null,
+        string? GrantBinding = null, ProcessInstance? LaunchProcess = null);
+    [Fact]
+    public void An_old_row_without_the_new_fields_is_unchanged_and_a_new_row_is_read_by_the_previous_shape()
+    {
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var oldRow = new GateAuditMetadata(1, Guid.NewGuid(), Guid.NewGuid(), 4, "intent", "local", "agent", Guid.NewGuid(), "none");
+        var text = JsonSerializer.Serialize(oldRow, web);
+        Assert.DoesNotContain("generation", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payloadDigest", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("caps", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(oldRow, JsonSerializer.Deserialize<GateAuditMetadata>(text, web));
+        Assert.True(oldRow.Valid(Ops.SessionStop, Guid.NewGuid().ToString(), "attempted"));
+        var current = oldRow with { Generation = 2, PayloadDigest = new string('b', 64), Caps = new GrantCaps(3, 3, 2) };
+        var previous = JsonSerializer.Deserialize<PreviousGate>(JsonSerializer.Serialize(current, web), web)!;
+        Assert.Equal((oldRow.Operation, oldRow.Sequence, oldRow.Phase, oldRow.ReasonCode), (previous.Operation, previous.Sequence, previous.Phase, previous.ReasonCode));
+    }
+    [Fact]
+    public async Task A_stop_that_really_ended_replays_ended_when_retried_and_never_dispatches_twice()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        var again = await End(request: request);
+        Assert.Equal(("ended", null, calls), (again.Outcome, again.Reason, injector.Calls));
+        Assert.Contains(GateAuditProjection.Load(Folder).Rows, r => r.Action == "fleet.end.replay" && r.Request == request.ToString());
     }
     sealed class Chan : IProtocolChannel
     {
