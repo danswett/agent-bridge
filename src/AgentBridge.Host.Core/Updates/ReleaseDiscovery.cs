@@ -53,6 +53,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
     const string AssetApiPrefix = "https://api.github.com/repos/danswett/agent-bridge/releases/assets/";
     // A relay copy older than this is not used: GitHub is asked, or its backoff says when it will be.
     public static readonly TimeSpan CdnOldest = TimeSpan.FromHours(1);
+    // A person's press reads the CDN fresh (owner, Nov 22): a copy older than this is not used for it.
+    public static readonly TimeSpan PressCdnOldest = TimeSpan.FromMinutes(5);
     // GitHub is asked at least this often, whatever the relay says.
     public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
     public static readonly TimeSpan GithubRelayAtMost = TimeSpan.FromHours(24);
@@ -180,6 +182,24 @@ public sealed partial class ReleaseDiscovery : IDisposable
             // the relay's copy may predate the latest publish by most of CdnOldest (37 minutes, on
             // a dev VM), so GitHub is asked, conditionally on a list it gave. Its backoff still holds.
             var press = pressed && !holding;
+            // A person's press reads the CDN first, fresh, past any copy kept here (owner, Nov 22): its
+            // answer is used when it validates as a background one does and is at most PressCdnOldest old.
+            // Not while GitHub's revalidation is due (it answers that first, as before) and under the same
+            // grace as the background check while GitHub is limited. Otherwise GitHub, as before.
+            if (pressed && askCdn && !state.RelayExpired
+                && (!revalidate || holding && state.Problem == Problems.Limited && RelayWindow(state, now)))
+            {
+                var (fresh, freshAge, freshRefused) = await AskCdnAsync(floor, installed, channel!, prereleases, cancellationToken, PressCdnOldest);
+                now = time.GetUtcNow();
+                if (fresh is not null && freshAge is { } freshBy && Readable(fresh, read, out var freshList))
+                {
+                    state = state with { Url = url, Body = fresh, ETag = null, FetchedAt = now - freshBy, FreshUntil = now + Interval + IntervalJitter * random(), Source = Sources.Cdn };
+                    Write(state);
+                    log?.Invoke($"update check: the release list came from the CDN for a pressed check, from its copy of {Span(freshBy)} ago");
+                    return freshList;
+                }
+                log?.Invoke($"update check: the CDN's fresh list was not used for the pressed check, as {freshRefused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+            }
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
                 // A relay's list kept here is judged for every caller as a fresh one would be: it
@@ -365,7 +385,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // The relay's list and how old its copy is, or why it is not used: words for the log, never
     // an exception's text or the relay's body. A copy of unknown age is not used: it could be any
     // age, and counted fresh it would end holds only a new answer may end (#934, review 6711939053).
-    async Task<(string? Body, TimeSpan? Age, string? Refused)> AskCdnAsync(string? floor, string? installed, string channel, bool prereleases, CancellationToken cancellationToken)
+    async Task<(string? Body, TimeSpan? Age, string? Refused)> AskCdnAsync(string? floor, string? installed, string channel, bool prereleases, CancellationToken cancellationToken, TimeSpan? oldest = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, CdnList);
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
@@ -379,7 +399,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
             // page: a redirect followed elsewhere is not it.
             if (response.RequestMessage?.RequestUri?.AbsoluteUri is { } answered && answered != CdnList) { return (null, null, "the CDN sent the check elsewhere"); }
             if (response.Headers.Age is not { } age) { return (null, null, "the CDN didn't say how old its copy is"); }
-            if (age > CdnOldest) { return (null, age, $"its copy was {Span(age)} old"); }
+            if (age > (oldest ?? CdnOldest)) { return (null, age, $"its copy was {Span(age)} old"); }
             // Read as UTF-8 whatever charset it claims (GitHub's list is JSON), and only so much:
             // a reply this can't decode or that never ends is the relay's failure, not the check's.
             if (response.Content.Headers.ContentLength > CdnLargest) { return (null, age, "its list was too large"); }

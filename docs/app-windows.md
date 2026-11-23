@@ -557,6 +557,20 @@ controls consume that same contract; this extraction does not disable or remove 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
+  **A person's press reads the CDN first, fresh** (owner decision, Nov 22; extends #2225). Settings,
+  **Check for updates**, and the Home Assistant press ask the relay before GitHub, and bypass any list
+  kept here: `ReleaseDiscovery.PressCdnOldest` (five minutes) is the oldest copy a press accepts, where
+  a background check accepts an hour. The list is judged exactly as a background relay list is
+  (above), and a refusal, a stale copy or no answer goes on to GitHub as before. A press still asks
+  GitHub first once its 6-hour revalidation is due, and the 24-hour relay grace and every other rule
+  above are unchanged; a press while GitHub is held re-asks the relay rather than serving a kept copy.
+  "GitHub is limiting" is said only when no source answered. **Trade-off, accepted by the owner:** a
+  compromised or stale relay can withhold an update from a press for as long as GitHub's revalidation
+  allows (up to six hours); package authenticity is unaffected, since feeds and packages still come
+  from GitHub and are checked against their checksums. Background checks still ask GitHub first when
+  its revalidation is due; making them relay-first, with GitHub's revalidation never blocking one, is
+  the next slice.
+
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen

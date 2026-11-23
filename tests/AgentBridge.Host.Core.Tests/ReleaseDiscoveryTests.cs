@@ -88,6 +88,76 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
     }
 
+    static string ListOf(string version) => $$"""[{"tag_name":"v{{version}}","assets":[{"name":"releases.win.json","browser_download_url":"{{ReleaseDiscovery.DownloadPrefix}}v{{version}}/releases.win.json"}]}]""";
+
+    HttpResponseMessage Cdn(string version, TimeSpan age) => new(HttpStatusCode.OK) { Content = new StringContent(ListOf(version)), Headers = { Age = age } };
+
+    async Task GitHubAnswered(string version = "0.1.2")
+    {
+        github.Answer = _ => Ok(ListOf(version), "\"v1\"");
+        using var direct = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false);
+        await direct.ReleasesAsync(Url, CancellationToken.None);
+    }
+
+    // Owner, Nov 22: a person's press reads the CDN first, fresh (at most five minutes old), then GitHub.
+    [Fact]
+    public async Task A_pressed_check_reads_a_fresh_CDN_copy_first_and_asks_GitHub_nothing()
+    {
+        await GitHubAnswered();
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.FromSeconds(60)) : Ok(ListOf("0.1.2"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+
+        Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+    }
+
+    [Fact]
+    public async Task A_pressed_check_does_not_use_a_CDN_copy_older_than_five_minutes_and_asks_GitHub()
+    {
+        await GitHubAnswered();
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.FromMinutes(6)) : Ok(ListOf("0.1.4"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.4"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+    }
+
+    [Fact]
+    public async Task A_pressed_check_while_GitHub_is_held_re_reads_the_CDN_past_a_kept_CDN_copy()
+    {
+        await GitHubAnswered();
+        time.Advance(ReleaseDiscovery.Interval);
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.Zero)
+            : new(HttpStatusCode.Forbidden) { Headers = { { "X-RateLimit-Remaining", "0" } } };
+        using (var held = new ReleaseDiscovery(folder, github, time, random: () => 0, cdn: false)) { await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => held.ReleasesAsync(Url, CancellationToken.None)); }
+        using var discovery = Discovery();
+        Assert.Equal(ListOf("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        time.Advance(TimeSpan.FromMinutes(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.4", TimeSpan.FromSeconds(30))
+            : new(HttpStatusCode.Forbidden) { Headers = { { "X-RateLimit-Remaining", "0" } } };
+
+        Assert.Equal(ListOf("0.1.4"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+    }
+
+    [Fact]
+    public async Task A_pressed_check_still_asks_GitHub_first_when_its_revalidation_is_due()
+    {
+        await GitHubAnswered();
+        time.Advance(ReleaseDiscovery.GithubRevalidateEvery + TimeSpan.FromMinutes(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.Zero) : Ok(ListOf("0.1.4"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.4"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
+
+        Assert.Equal(Url, github.Requests[^1].Url);
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+    }
+
     [Fact]
     public async Task A_pressed_check_of_a_list_GitHub_gave_asks_again_conditional_on_its_ETag()
     {
@@ -215,9 +285,10 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         github.Answer = _ => Ok(list, "\"v1\"");
         await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win");
         time.Advance(TimeSpan.FromMinutes(1));
+        // A CDN copy too old for a press (over five minutes), so GitHub is asked, refuses, and the grace serves it.
         github.Answer = r => r.RequestUri!.AbsoluteUri == Url
             ? new(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(5)) } }
-            : new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.Zero } };
+            : new(HttpStatusCode.OK) { Content = new StringContent(list), Headers = { Age = TimeSpan.FromMinutes(10) } };
 
         Assert.Equal(list, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win", pressed: true));
         Assert.Contains($"update check: using the relay under a grace window ending {(Now + ReleaseDiscovery.GithubRelayAtMost):O}", log);
