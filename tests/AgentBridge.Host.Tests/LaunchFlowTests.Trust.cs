@@ -304,7 +304,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.StartsWith("Claude in App is asking whether to allow Bypass Permissions", options.GetProperty("busy").GetString());
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined for #4229 (expires Nov 24 2026 16:00 PT): flaky 10 s timeout waiting for the declined-trust log line; red on three commits, green on two with the same code")]
     public async Task Quitting_from_a_phone_closes_the_agent_and_the_launch_reads_declined()
     {
         screens.Rows = CopilotAsks();
