@@ -43,6 +43,20 @@ Deploy (owner-approved on #927, done by the Cloudflare session on the owner's ma
 cloud) DNS record for `releases` so the Worker receives traffic. This is the one proxied record on the zone.
 `wrangler.toml` records the intended settings.
 
+Redeploy after a Worker change (the owner's step; nothing in CI deploys it). From a checkout of main, in a terminal logged in to the
+Cloudflare account that owns the `slipgates.com` zone:
+
+```
+cd infra/cloudflare/release-feed
+npx wrangler login
+npx wrangler deploy
+```
+
+`wrangler login` opens a browser once; skip it if `npx wrangler whoami` already shows that account. `wrangler deploy` reads
+`wrangler.toml` (name `agent-bridge-release-feed`, route `releases.slipgates.com/*`, `workers_dev = false`) and publishes `worker.js`;
+it sets no secret and changes no DNS. The first requests after a deploy that changes the cache key refetch from GitHub once. Then run
+the Verify step below, and the manual workflow "Release feed purge check" for the purge-by-URL check (#3870).
+
 Verify: `curl -i "https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1"`
 returns 200 JSON with an `Age` header; a second call returns a larger `Age`.
 Repeat with `If-None-Match: <ETag from the first response>` to verify a bodyless 304 with its real `Age`.
