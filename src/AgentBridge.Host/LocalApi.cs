@@ -5,7 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
+// CallerGuard and scoped credentials govern pipe ops; script management is the host command line or the app's confirmed press (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.

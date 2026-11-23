@@ -555,37 +555,37 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     }
 
     // A person's press needs a confirmation the host issued for exactly this action and script on this connection. Per script name the
-    // host keeps a generation counter, bumped by every press attempt (right or wrong) and by every mint, revoke, tick, untick and
-    // rotation, and at most ONE outstanding confirmation, bound to that generation. The confirmation is derived from a random
-    // per-process salt and a fresh nonce, lives two minutes, and is checked and used up under the same lock as the change it
-    // allows, so a state that returns to an earlier one can never revalidate an old value (#3883 receipt 7099362785).
+    // host keeps a generation counter, moved on by every press attempt (right or wrong) and by every change to the script's
+    // credentials: mint, revoke, rotation, expiry, tick and untick. At most ONE confirmation is outstanding for a name, bound to that
+    // generation. The generation check is the one guard against a state that returns to an earlier one; nothing else drops a held
+    // confirmation when the script changes. The value is derived from a random per-process salt and a fresh nonce, lives two
+    // minutes on the monotonic clock (a wall-clock step cannot stretch it), and is used up atomically under the store's lock
+    // (#3883 receipts 7099362785 and 7101860025).
     public static readonly TimeSpan ScriptConfirmationLife = TimeSpan.FromMinutes(2);
     public const int MaxScriptConfirmations = 64;
     readonly byte[] confirmationSalt = RandomNumberGenerator.GetBytes(32);
     readonly Dictionary<string, long> scriptGeneration = [];
-    readonly Dictionary<string, (string Token, string Op, long Generation, IProtocolChannel Channel, DateTimeOffset Expires)> confirmations = [];
+    readonly Dictionary<string, (string Token, string Op, long Generation, IProtocolChannel Channel, long Issued)> confirmations = [];
 
     long GenerationOf(string name) => scriptGeneration.TryGetValue(name, out var g) ? g : 0;
 
-    // Called with the gate held: the script's state or its outstanding confirmation is no longer what it was.
-    void BumpGeneration(string name)
-    {
-        scriptGeneration[name] = GenerationOf(name) + 1;
-        confirmations.Remove(name);
-    }
+    // Called with the gate held: the script's credentials are no longer what an earlier confirmation was asked for.
+    void BumpGeneration(string name) => scriptGeneration[name] = GenerationOf(name) + 1;
+
+    static string NameOf(string principal) => principal[(principal.LastIndexOf('/') + 1)..];
 
     internal string IssueScriptConfirmation(string op, string name, IProtocolChannel channel)
     {
         lock (gate)
         {
-            var now = time.GetUtcNow();
-            foreach (var stale in confirmations.Where(c => c.Value.Expires <= now).Select(c => c.Key).ToList()) { confirmations.Remove(stale); }
+            foreach (var stale in confirmations.Where(c => time.GetElapsedTime(c.Value.Issued) >= ScriptConfirmationLife).Select(c => c.Key).ToList())
+            { confirmations.Remove(stale); }
             while (!confirmations.ContainsKey(name) && confirmations.Count >= MaxScriptConfirmations)
-            { confirmations.Remove(confirmations.MinBy(c => c.Value.Expires).Key); }
+            { confirmations.Remove(confirmations.MinBy(c => c.Value.Issued).Key); }
             var generation = GenerationOf(name);
             var seed = System.Text.Encoding.UTF8.GetBytes($"{machine}|{op}|{name}|{generation}|").Concat(RandomNumberGenerator.GetBytes(16)).ToArray();
             var token = BlobFormat.Base64Url(HMACSHA256.HashData(confirmationSalt, seed));
-            confirmations[name] = (token, op, generation, channel, now + ScriptConfirmationLife);
+            confirmations[name] = (token, op, generation, channel, time.GetTimestamp());
             return token;
         }
     }
@@ -594,10 +594,12 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     {
         lock (gate)
         {
-            var ok = token is not null && confirmations.TryGetValue(name, out var held)
+            // Used up by any presentation, right or wrong; the generation then moves on.
+            var found = confirmations.Remove(name, out var held);
+            var ok = found && token is not null
                 && CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(held.Token), System.Text.Encoding.ASCII.GetBytes(token))
-                && held.Op == op && ReferenceEquals(held.Channel, channel) && held.Generation == GenerationOf(name) && held.Expires > time.GetUtcNow();
-            // Every attempt, right or wrong, uses up what the script had outstanding and moves its generation on.
+                && held.Op == op && ReferenceEquals(held.Channel, channel) && held.Generation == GenerationOf(name)
+                && time.GetElapsedTime(held.Issued) < ScriptConfirmationLife;
             BumpGeneration(name);
             return ok;
         }
@@ -653,6 +655,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var gone = records.Where(r => which(r)).ToList();
         if (gone.Count == 0) { return false; }
         records.RemoveAll(which);
+        // Revoke, expiry and rotation all end here: a script whose credentials changed is not what an earlier confirmation was asked for.
+        foreach (var r in gone.Where(r => r.Credential.Kind == "script" && r.Credential.Principal is not null)) { BumpGeneration(NameOf(r.Credential.Principal!)); }
         foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for {PrincipalOf(r.Credential)}: {why}"); }
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
