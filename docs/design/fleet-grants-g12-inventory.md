@@ -38,7 +38,7 @@ E2 is a launch comparison only. It is not slice 11 and does not stand in for it.
 fleet tool's HA press (section A) need the gate named in the row. Every row that removes the HA
 connector's launch surface (sections B and C) needs **E4**, whole, never a part of it.
 
-A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt, not this doc.
+**Nothing is deleted before E4, all of (a) to (f).** HA stays the rollback (design.md P7; fleet `ha-retirement.md` section 3: turn HA back on until removal is approved). E1 to E3 only allow the *switch* to the Host path (default flip, dispatcher, G11 wrappers) while the HA code remains selectable. Every row in section A, the `-Transport HA` value, and every row in B and C therefore needs E4 to be deleted. A deletion PR cites the receipt, not this doc.
 
 ## Inventory
 
@@ -48,12 +48,12 @@ A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt
 
 | # | Item | What it does over HA | Replaced by (slice) | Unlocked by |
 |---|---|---|---|---|
-| A1 | (fleet repo) `launch-remote.ps1` HA transport: the `Call button press` on the machine's `new_session` button, the `new_prompt_payload` write, and the pre-launch snapshot of the HA `new_session_result` and `sessions` entities | Submits a launch as an HA payload plus a button press | `fleet launch --target` (G9c2, then G11 A) | E2 |
-| A2 | (fleet repo) `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | E2 |
-| A3 | (fleet repo) `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | E3 |
-| A4 | (fleet repo) `end-sessions.ps1`: its `button/press` of `button.<target>_stop` and its `AGENT_HA_AGENT_TOKEN` read. `end-one.ps1`, `end-many.ps1` and `end-remote.ps1` are already thin wrappers with no HA press of their own; they change only in G11 B | Ending press over HA | One `fleet end` per session (G10, G11 B) | E3 |
-| A6 | (fleet repo) The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2, **and** only after A3 has stopped reading the ledger (E3) |
-| A7 | (fleet repo) The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | E1, then E2 |
+| A1 | (fleet repo) `launch-remote.ps1` HA transport: the `Call button press` on the machine's `new_session` button, the `new_prompt_payload` write, and the pre-launch snapshot of the HA `new_session_result` and `sessions` entities | Submits a launch as an HA payload plus a button press | `fleet launch --target` (G9c2, then G11 A) | **E4** (the switch to the replacement may go at E2; the HA code stays selectable) |
+| A2 | (fleet repo) `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | **E4** (switch at E2; HA code stays) |
+| A3 | (fleet repo) `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | **E4** (switch at E3; HA code stays) |
+| A4 | (fleet repo) `end-sessions.ps1`: its `button/press` of `button.<target>_stop` and its `AGENT_HA_AGENT_TOKEN` read. `end-one.ps1`, `end-many.ps1` and `end-remote.ps1` are already thin wrappers with no HA press of their own; they change only in G11 B | Ending press over HA | One `fleet end` per session (G10, G11 B) | **E4** (switch at E3; HA code stays) |
+| A6 | (fleet repo) The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | **E4**, and only after A3 has stopped reading the ledger |
+| A7 | (fleet repo) The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | **E4** (the dispatcher switches to the host verb at E2; the HA calls stay for rollback) |
 | A8 | (fleet repo) `launch-remote.ps1 -Transport` value `HA` and its default | Selects HA | Default `Host` first (cutover row 1); the `HA` value is removed last | Default flip: E1. Value removed: E4, before or with B2/B4/B5. The `-Transport` default `HA` of `end-one.ps1`, `end-many.ps1`, `end-remote.ps1` and `end-sessions.ps1` flips with G11 B; the HA-only modes `-List`, `-Options`, `-Resolve`, `-EndWhenIdle` need a replacement first |
 
 Other allowlisted HA call sites that touch launch but are **not** retired by the G9 to G11 stack. They
@@ -119,12 +119,13 @@ These stay. A deletion PR that touches one is wrong.
 
 ## Deletion order
 
-1. **Default flip** (A8, value left in place): after E1, in its own small Fleet PR.
-2. **Dispatcher** (A7): after E2, the same gate as step 3 (E1 alone is not enough); it stops the three HA calls and calls the host verb.
-3. **Wrapper bodies** (A1, A2): after E2, replaced by the G11 A thin wrapper.
-4. **End path** (A3, A4): after E3, replaced by the G11 B thin wrappers.
-5. **Launch bookkeeping** (A6): only after step 4, once A3 no longer reads the ledger.
-6. **Host HA launch surface** (B1 to B6 with C1 to C7; B2 also needs A9 replaced): after E4, last, one family of PRs in
+1. **Default flip (a switch, no deletion)** (A8, value left in place): after E1, in its own small Fleet PR.
+2. **Dispatcher switch** (A7): after E2 it calls the host verb; its HA calls are deleted only at E4.
+3. **Wrapper switch** (A1, A2): after E2, replaced by the G11 A thin wrapper.
+4. **End path switch** (A3, A4): after E3, replaced by the G11 B thin wrappers.
+5. **Launch bookkeeping** (A6): its deletion is E4 and only after A3 no longer reads the ledger.
+   Steps 1 to 4 are switches. Every deletion, including the A rows, happens at E4 or later, in steps 6 and 7 below.
+6. **The HA code**, at E4 and not before: first the Fleet HA presses and calls (A1 to A4, A6, A7), then the Host HA launch surface (B1 to B6 with C1 to C7; B2 also needs A9 replaced), last, one family of PRs in
    the order B1/B6/C1/C3/C6, B2/B4, then B3/C2, then docs C4/C7.
 7. **`-Transport HA`** (A8 value): before or with step 6 (the HA mode reads the launch entities B2, B4 and B5 remove), and only once `-List`, `-Options`, `-Resolve` and `-EndWhenIdle`, which only the HA transport serves, have a replacement.
 
