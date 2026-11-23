@@ -26,12 +26,12 @@ public sealed class RetryFenceTests
         var send = h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Owner, cancel.Token);
         try
         {
-            await h.Gate.TypingQueued.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await h.Gate.TypingQueued.Task.WaitAsync(HandoffWait.Hang);
             Assert.False(send.IsCompleted);
             await h.Change(change, cancel);
         }
         finally { h.Gate.DoneTyping(); }
-        Assert.True(await send.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(await send.WaitAsync(HandoffWait.Hang));
         Assert.Equal(0, h.Keys);
         Assert.Equal(change is "episode" or "cancel" ? RetryStop.Cancelled : RetryStop.Changed, h.Episode.Stop);
         Assert.Equal(AnswerOutcome.Stale, Assert.Single(h.Episode.Attempts).Outcome);
@@ -69,12 +69,12 @@ public sealed class RetryFenceTests
         using var cancel = new CancellationTokenSource();
         h.KeysDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var send = h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Owner, cancel.Token);
-        await h.KeysStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await h.KeysStarted.Task.WaitAsync(HandoffWait.Hang);
         cancel.Cancel();
         Assert.False(send.IsCompleted);
         Assert.False(await h.Episode.TryAsync(2, Guid.NewGuid(), RetryReason.Owner));
         h.KeysDone.SetResult();
-        Assert.True(await send.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.True(await send.WaitAsync(HandoffWait.Hang));
         Assert.Equal(1, h.Keys);
         Assert.Equal(RetryStop.Cancelled, h.Episode.Stop);
     }

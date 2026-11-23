@@ -231,7 +231,7 @@ public sealed class FleetStopTests : IDisposable
         if (injectorSlot) { injector.BeforeSlot = Wait; }
         else { source.BeforeEnding = Wait; }
         var run = End();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(HandoffWait.Hang);
         try
         {
             switch (change)
