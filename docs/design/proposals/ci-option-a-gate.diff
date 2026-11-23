@@ -1,0 +1,422 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2ab972da..ed9d6de5 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -648,6 +648,12 @@ jobs:
+           ${{ fromJSON(format('[{0}{1}]',
+           '{"runtime":"win-x64","runner":"windows-latest","out":"out/app","artifact":"agent-bridge-windows"}',
+           github.event_name != 'pull_request' && ',{"runtime":"win-arm64","runner":"windows-11-arm","out":"out/app-arm64","artifact":"agent-bridge-windows-arm64"}' || '')) }}
++    # The pack steps below are not required for main to be green (owner decision, Option A, Nov 23): each runs with continue-on-error,
++    # and the last records whether they all succeeded. A matrix job's outputs need unique names: each leg sets its own and the other's
++    # stays empty. quality-gate passes both on and publish-gate fails closed unless both are success.
++    outputs:
++      pack-outcome-win-x64: ${{ steps.packout.outputs.outcome-win-x64 }}
++      pack-outcome-win-arm64: ${{ steps.packout.outputs.outcome-win-arm64 }}
+     runs-on: ${{ matrix.runner }}
+     steps:
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+@@ -660,6 +666,8 @@ jobs:
+           dotnet-version: '10.0.x'
+       - run: dotnet tool install -g vpk --version 1.2.161
+       - name: Publish and pack
++        id: pack
++        continue-on-error: true
+         shell: pwsh
+         env:
+           GH_TOKEN: ${{ github.token }}
+@@ -670,6 +678,8 @@ jobs:
+           ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
+           ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
+       - name: The publish folder, for the sign job
++        id: signinput
++        continue-on-error: true
+         # Uploaded as published, before anything below runs the app from it, so the sign job packs
+         # exactly the files this job built and then tested in the unsigned package.
+         if: env.APP_SIGNING == 'true'
+@@ -715,6 +725,8 @@ jobs:
+         shell: pwsh
+         run: Write-Output "::warning title=app (win-arm64) flake::the self-test failed once and passed on retry; flake record https://github.com/danswett/agent-bridge/issues/2026"
+       - name: The release would publish (dry run)
++        id: dryrun
++        continue-on-error: true
+         # What the publish job would upload, publish and prune, against the repository's real
+         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
+         shell: pwsh
+@@ -722,17 +734,23 @@ jobs:
+           GH_TOKEN: ${{ github.token }}
+         run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir ${{ matrix.out }}/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
+       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        id: packages
++        continue-on-error: true
+         with:
+           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
+           path: ${{ matrix.out }}/releases
+           if-no-files-found: error
+           retention-days: 30
+       - name: Record the installer input from this tested pack
++        id: instinput
++        continue-on-error: true
+         shell: pwsh
+         run: |
+           . ./build/app-installer-input.ps1
+           Write-AppInstallerInput -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Out "$env:RUNNER_TEMP/installer-input" -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Commit '${{ github.sha }}' -RunId '${{ github.run_id }}'
+       - name: The installer input's notices and identity
++        id: instupload
++        continue-on-error: true
+         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+         with:
+           name: ${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}
+@@ -744,8 +762,12 @@ jobs:
+       # in the published folder, read from its .deps.json files, as CycloneDX. On every build, so a
+       # pull request shows it still works; publish attests it against the packages it uploads.
+       - name: Install Trivy
++        id: trivy
++        continue-on-error: true
+         uses: ./.github/actions/install-trivy
+       - name: SBOM of the published app (CycloneDX)
++        id: sbom
++        continue-on-error: true
+         shell: pwsh
+         run: |
+           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
+@@ -754,11 +776,45 @@ jobs:
+           . ./build/app-notices.ps1
+           Add-AppSbomLicences -Publish '${{ matrix.out }}/publish' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json"
+       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        id: sbomup
++        continue-on-error: true
+         with:
+           name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
+           path: ${{ runner.temp }}/sbom
+           if-no-files-found: error
+           retention-days: 30
++      - name: Record the pack outcome
++        id: packout
++        if: always()
++        shell: bash
++        env:
++          PACK: ${{ steps.pack.outcome }}
++          PACKAGES: ${{ steps.packages.outcome }}
++          SIGNINPUT: ${{ steps.signinput.outcome }}
++          DRYRUN: ${{ steps.dryrun.outcome }}
++          INSTINPUT: ${{ steps.instinput.outcome }}
++          INSTUPLOAD: ${{ steps.instupload.outcome }}
++          TRIVY: ${{ steps.trivy.outcome }}
++          SBOM: ${{ steps.sbom.outcome }}
++          SBOMUP: ${{ steps.sbomup.outcome }}
++          RUNTIME: ${{ matrix.runtime }}
++        run: |
++          # Success needs the pack and the package upload to have run and succeeded; the rest may be skipped (the sign input only with
++          # APP_SIGNING) but not failed. Nothing here fails the job: main stays green, and nothing publishes from this run.
++          bad=
++          for name in PACK PACKAGES SIGNINPUT DRYRUN INSTINPUT INSTUPLOAD TRIVY SBOM SBOMUP; do
++            value="${!name}"
++            case "$name" in
++              PACK|PACKAGES) [ "$value" = success ] || bad="$bad $name=$value" ;;
++              *) [ "$value" = success ] || [ "$value" = skipped ] || bad="$bad $name=$value" ;;
++            esac
++          done
++          if [ -z "$bad" ]; then
++            echo "outcome-$RUNTIME=success" >> "$GITHUB_OUTPUT"
++          else
++            echo "outcome-$RUNTIME=failure" >> "$GITHUB_OUTPUT"
++            echo "::warning title=app ($RUNTIME) pack::the pack did not succeed ($bad ); main stays green, but nothing publishes from this run"
++          fi
+       - name: Stage named self-test text, never WER dumps or archives
+         if: always()
+         id: selftest-text
+@@ -948,10 +1004,11 @@ jobs:
+     # and the relay workflow run apart and don't hold a release. Needing quality-gate, rather than
+     # a second copy of its list, keeps the two from drifting apart (#512); the catalog check fails
+     # if this need goes. !cancelled() replaces the default success(), so the result is checked here.
+-    needs: [quality-gate]
++    needs: [quality-gate, app-installer]
+     if: >-
+       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+-      && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
++      && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success' && needs.app-installer.result == 'success'
++      && needs.quality-gate.outputs.pack-x64 == 'success' && needs.quality-gate.outputs.pack-arm64 == 'success'
+     runs-on: ubuntu-latest
+     steps:
+       - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
+@@ -1787,7 +1844,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, ha-integration, spikes, spikes-linux, app, light, pwa-ui, pwa-e2e]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+@@ -1799,6 +1856,9 @@ jobs:
+       # Whether this run built and checked the app's packages: publish-gate publishes only then.
+       # The raw result, never the waiver's: main doesn't publish while an Arm64 leg is red.
+       app: ${{ needs.app.result }}
++      # Whether each leg's pack succeeded (app's pack-outcome outputs): publish-gate publishes only when both did.
++      pack-x64: ${{ needs.app.outputs.pack-outcome-win-x64 }}
++      pack-arm64: ${{ needs.app.outputs.pack-outcome-win-arm64 }}
+     steps:
+       # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
+       # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-27 00:00 PT
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 70530745..97379cd7 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -399,7 +399,9 @@ public class CiPlanTests
+             .Replace("JOBS: product ha-integration app", "JOBS: product ha-integration app app-installer", StringComparison.Ordinal)
+             .Replace("app: ${{ steps.select.outputs.app }}", "app: ${{ steps.select.outputs.app }}\n      app-installer: ${{ steps.select.outputs.app-installer }}", StringComparison.Ordinal)
+             .Replace("  relay-image-sarif:", "  app-installer:\n    needs: [plan, app]\n    if: \"!cancelled() && (needs.plan.outputs.app-installer == 'true')\"\n  relay-image-sarif:", StringComparison.Ordinal)
+-            .Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, ha-integration, app, app-installer]", StringComparison.Ordinal);
++            .Replace("needs: [quality-gate]", "needs: [quality-gate, app-installer]", StringComparison.Ordinal)
++            .Replace("&& needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'",
++                "&& needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success' && needs.app-installer.result == 'success'", StringComparison.Ordinal);
+         Assert.Empty(Check(wired));
+         foreach (var id in new[] { "app", "app-installer" })
+         {
+@@ -412,6 +414,102 @@ public class CiPlanTests
+         }
+     }
+ 
++    // Owner decision (Option A, Nov 23): the installer check runs on main and still blocks a release, but never a merge. It is gated on
++    // the plan like any check job, yet outside quality-gate's needs, and publish-gate holds the release to it.
++    static string WithOptionalInstaller() => Wired
++        .Replace("JOBS: product ha-integration app", "JOBS: product ha-integration app app-installer", StringComparison.Ordinal)
++        .Replace("app: ${{ steps.select.outputs.app }}", "app: ${{ steps.select.outputs.app }}\n      app-installer: ${{ steps.select.outputs.app-installer }}", StringComparison.Ordinal)
++        .Replace("  relay-image-sarif:", "  app-installer:\n    needs: [plan, app]\n    if: \"!cancelled() && (needs.plan.outputs.app-installer == 'true')\"\n  relay-image-sarif:", StringComparison.Ordinal)
++        .Replace("needs: [quality-gate]", "needs: [quality-gate, app-installer]", StringComparison.Ordinal)
++        .Replace("&& needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'",
++            "&& needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success' && needs.app-installer.result == 'success'", StringComparison.Ordinal);
++
++    [Fact]
++    public void An_optional_installer_outside_quality_gate_and_required_by_publish_gate_is_the_wired_shape()
++    {
++        Assert.Empty(Check(WithOptionalInstaller()));
++    }
++
++    [Fact]
++    public void Quality_gate_needing_the_installer_makes_an_installer_failure_block_a_merge_so_it_is_a_problem()
++    {
++        var wired = WithOptionalInstaller().Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, ha-integration, app, app-installer]", StringComparison.Ordinal);
++
++        Assert.Equal(["ci.yml quality-gate needs app-installer, which is optional: an installer failure blocks a release through publish-gate, never a merge"], Check(wired));
++    }
++
++    [Fact]
++    public void Publish_gate_must_still_hold_a_release_to_the_installer_both_in_its_needs_and_in_its_if()
++    {
++        var withoutNeed = WithOptionalInstaller().Replace("needs: [quality-gate, app-installer]", "needs: [quality-gate]", StringComparison.Ordinal);
++        var withoutIf = WithOptionalInstaller().Replace(" && needs.app-installer.result == 'success'", "", StringComparison.Ordinal);
++
++        Assert.Equal(["ci.yml delivery job publish-gate must need exactly [quality-gate, app-installer]"], Check(withoutNeed));
++        Assert.Contains("ci.yml publish-gate's if: doesn't require needs.app-installer.result == 'success' (as one of its top-level && conditions), so a release would publish past a failed installer check", Check(withoutIf));
++    }
++
++    [Fact]
++    public void The_optional_installer_must_still_need_exactly_the_plan_and_app()
++    {
++        var wired = WithOptionalInstaller().Replace("    needs: [plan, app]\n    if: \"!cancelled()", "    needs: [plan]\n    if: \"!cancelled()", StringComparison.Ordinal);
++
++        Assert.Equal(["ci.yml optional job app-installer must need exactly [plan, app]"], Check(wired));
++    }
++
++    // Option A (owner decision, Nov 23): the pack steps inside app are not required for main to be green (continue-on-error), so app
++    // exports each leg's pack outcome and publish-gate fails closed unless both legs' packs succeeded.
++    // The fixture is a raw string in a file with CRLF line endings: match on LF, and fail loudly when a swap does not apply, so a
++    // fixture that quietly stayed unwired can never make a rule test pass.
++    static string Swap(string text, string from, string to)
++    {
++        var lf = text.Replace("\r\n", "\n");
++        Assert.Contains(from, lf, StringComparison.Ordinal);
++        return lf.Replace(from, to, StringComparison.Ordinal);
++    }
++
++    static string WithPackOutcome()
++    {
++        var wired = Swap(WithOptionalInstaller(), "  app:\n    needs: plan", "  app:\n    outputs:\n      pack-outcome-win-x64: ${{ steps.packout.outputs.outcome-win-x64 }}\n      pack-outcome-win-arm64: ${{ steps.packout.outputs.outcome-win-arm64 }}\n    needs: plan");
++        wired = Swap(wired, "outputs:\n      app: ${{ needs.app.result }}", "outputs:\n      app: ${{ needs.app.result }}\n      pack-x64: ${{ needs.app.outputs.pack-outcome-win-x64 }}\n      pack-arm64: ${{ needs.app.outputs.pack-outcome-win-arm64 }}");
++        return Swap(wired, " && needs.app-installer.result == 'success'", " && needs.app-installer.result == 'success' && needs.quality-gate.outputs.pack-x64 == 'success' && needs.quality-gate.outputs.pack-arm64 == 'success'");
++    }
++
++    [Fact]
++    public void An_app_that_exports_its_pack_outcome_with_the_gate_passing_it_on_and_publish_gate_requiring_both_is_the_wired_shape()
++    {
++        Assert.Empty(Check(WithPackOutcome()));
++    }
++
++    [Theory]
++    [InlineData("x64")]
++    [InlineData("arm64")]
++    public void Publish_gate_that_does_not_require_a_legs_pack_to_have_succeeded_would_publish_without_a_package_so_it_is_reported(string leg)
++    {
++        var wired = Swap(WithPackOutcome(), $" && needs.quality-gate.outputs.pack-{leg} == 'success'", "");
++
++        Assert.Equal([$"ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.pack-{leg} == 'success' (as one of its top-level && conditions), so a release would publish past a failed pack"], Check(wired));
++    }
++
++    [Theory]
++    [InlineData("x64", "win-x64")]
++    [InlineData("arm64", "win-arm64")]
++    public void A_gate_output_that_is_not_the_apps_pack_outcome_for_its_leg_cannot_tell_publish_gate_what_happened_so_it_is_reported(string leg, string runtime)
++    {
++        var wired = Swap(WithPackOutcome(), $"pack-{leg}: ${{{{ needs.app.outputs.pack-outcome-{runtime} }}}}", $"pack-{leg}: success");
++
++        Assert.Equal([$"ci.yml quality-gate's output pack-{leg} isn't exactly ${{{{ needs.app.outputs.pack-outcome-{runtime} }}}}, so publish-gate can't tell this run's {leg} pack succeeded"], Check(wired));
++    }
++
++    [Theory]
++    [InlineData("win-x64")]
++    [InlineData("win-arm64")]
++    public void An_app_output_that_is_not_bound_to_the_recording_step_would_report_a_pack_it_never_saw_so_it_is_reported(string runtime)
++    {
++        var wired = Swap(WithPackOutcome(), $"pack-outcome-{runtime}: ${{{{ steps.packout.outputs.outcome-{runtime} }}}}", $"pack-outcome-{runtime}: success");
++
++        Assert.Equal([$"ci.yml app's output pack-outcome-{runtime} isn't exactly ${{{{ steps.packout.outputs.outcome-{runtime} }}}}"], Check(wired));
++    }
++
+     // Wired with tiers (#3209): app's win-arm64 leg and all of ha-integration are post-merge.
+     const string AppLegs = "'{\"runtime\":\"win-x64\"}', github.event_name != 'pull_request' && ',{\"runtime\":\"win-arm64\"}' || ''";
+     const string HaGated = "needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'";
+@@ -560,8 +658,10 @@ public class CiPlanTests
+         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
++        // The installer is optional (Option A): it blocks a release through publish-gate, never a merge.
+         Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+-            "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
++            "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
++        Assert.Equal(new[] { "app-installer", "quality-gate" }, ((YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs["publish-gate"])["needs"]).Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+         Assert.Equal(new[] { "plan", "app" },
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index 8dd2f93e..e9675483 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -88,9 +88,9 @@ public class HaValidationCoverageTests
+ 
+         Assert.Equal(
+             new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+-                "app-installer", "light", "pwa-ui", "pwa-e2e" },
++                "light", "pwa-ui", "pwa-e2e" },
+             Needs(jobs, "quality-gate"));
+-        Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
++        Assert.Equal(new[] { "quality-gate", "app-installer" }, Needs(jobs, "publish-gate"));
+         Assert.Equal("${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}",
+             ((YamlMappingNode)jobs["quality-gate"])["name"].ToString());
+     }
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 0d250108..f1a7c821 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -29,6 +29,12 @@ static partial class CiPlan
+         ["relay-image-sarif"] = ["product"],
+     };
+     static readonly HashSet<string> Delivery = new(DeliveryNeeds.Keys, StringComparer.Ordinal);
++    // Jobs that check, plan-gated like any check job, but not required (owner decision, Option A, Nov 23): a failure of one blocks a
++    // release, since publish-gate needs it, and never a merge, since quality-gate does not. Each with the jobs it follows.
++    static readonly Dictionary<string, string[]> OptionalNeeds = new(StringComparer.Ordinal)
++    {
++        ["app-installer"] = [Plan, "app"],
++    };
+     static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
+     // A pull request's whole ring leaves windows-11-arm to main (#1249).
+     static string RunnerList(IEnumerable<string> runners) => $"'[{string.Join(",", runners.Select(r => $"\"{r}\""))}]'";
+@@ -49,9 +55,14 @@ static partial class CiPlan
+     private static partial Regex ReadsSuites();
+     [GeneratedRegex(@"^needs\.quality-gate\.result == 'success'$")]
+     private static partial Regex GatePassed();
++    [GeneratedRegex(@"^needs\.app-installer\.result == 'success'$")]
++    private static partial Regex InstallerPassed();
+     [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
+     private static partial Regex AppBuilt();
+     const string AppResult = "${{ needs.app.result }}";
++    // Option A (Nov 23): the pack steps inside app are not required for main to be green, so app exports each leg's pack outcome (a matrix
++    // job's outputs need unique names: each leg sets its own), quality-gate passes them on, and publish-gate fails closed unless both succeed.
++    static readonly (string Leg, string Runtime)[] PackLegs = [("x64", "win-x64"), ("arm64", "win-arm64")];
+     // The waiver-adjusted form (#2454): the same result, read after the gate's waiver step, so a red Arm64 leg does not read as an unbuilt app.
+     const string AppStepResult = "${{ steps.app.outputs.result }}";
+     const string AppStepNeeds = "${{ steps.waiver.outputs.needs || toJSON(needs) }}";
+@@ -232,15 +243,21 @@ static partial class CiPlan
+ 
+         // A delivery job stays out of quality-gate's needs by name, so each is pinned to its place:
+         // a check job renamed to one, needing the plan, would otherwise drop out of the gate.
+-        foreach (var (id, expected) in DeliveryNeeds)
++        foreach (var (id, expectedNeeds) in DeliveryNeeds)
+             if (jobs.TryGetValue(id, out var delivery))
+             {
++                // publish-gate also follows every optional job the workflow has: a release is held to them.
++                var expected = id == PublishGate ? [.. expectedNeeds, .. OptionalNeeds.Keys.Where(jobs.ContainsKey)] : expectedNeeds;
+                 if (!Needs(delivery).SetEquals(expected))
+                     Add($"ci.yml delivery job {id} must need exactly [{string.Join(", ", expected)}]");
+                 if (gated.Contains(id))
+                     Add($"ci.yml delivery job {id} reads the plan, as only a check job does");
+             }
+ 
++        foreach (var (id, expected) in OptionalNeeds)
++            if (jobs.TryGetValue(id, out var optional) && !Needs(optional).SetEquals(expected))
++                Add($"ci.yml optional job {id} must need exactly [{string.Join(", ", expected)}]");
++
+         // quality-gate: every job that needs the plan, so none can fail, or be skipped when it had
+         // to run, without failing the gate.
+         if (!jobs.TryGetValue(Gate, out var gate))
+@@ -258,7 +275,9 @@ static partial class CiPlan
+             // on main after the gate, stay out; a check placed
+             // downstream of the gate (needs: quality-gate) could fail after it passed, so it's
+             // reported too.
+-            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key)))
++            foreach (var id in OptionalNeeds.Keys.Where(gateNeeds.Contains))
++                Add($"ci.yml {Gate} needs {id}, which is optional: an installer failure blocks a release through {PublishGate}, never a merge");
++            foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key) && !OptionalNeeds.ContainsKey(j.Key)))
+                 if (!gateNeeds.Contains(id))
+                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
+             // What publish-gate reads to tell the app was built and checked in this run.
+@@ -268,6 +287,22 @@ static partial class CiPlan
+             var appStep = Steps(gate).FirstOrDefault(s => Scalar(s, "id") == "app");
+             var stepReadsApp = appStep is not null && Child(appStep, "env") is YamlMappingNode appEnv && Normalize(Scalar(appEnv, "NEEDS") ?? "") == AppStepNeeds
+                 && Normalize(Scalar(appStep, "run") ?? "") == AppStepRun;
++            // app exports its pack outcome: each leg's output is bound to the recording step, and the gate passes each on, exactly, or
++            // publish-gate can't tell a pack failed.
++            if (PackExported(jobs))
++            {
++                var appOutputs = Child(jobs["app"], "outputs") as YamlMappingNode;
++                foreach (var (_, runtime) in PackLegs)
++                    if (Normalize((appOutputs is null ? null : Scalar(appOutputs, $"pack-outcome-{runtime}")) ?? "") != $"${{{{ steps.packout.outputs.outcome-{runtime} }}}}")
++                        Add($"ci.yml app's output pack-outcome-{runtime} isn't exactly ${{{{ steps.packout.outputs.outcome-{runtime} }}}}");
++            }
++            if (PackExported(jobs))
++                foreach (var (leg, runtime) in PackLegs)
++                {
++                    var bound = $"${{{{ needs.app.outputs.pack-outcome-{runtime} }}}}";
++                    if (Normalize((gateOutputs is null ? null : Scalar(gateOutputs, $"pack-{leg}")) ?? "") != bound)
++                        Add($"ci.yml {Gate}'s output pack-{leg} isn't exactly {bound}, so {PublishGate} can't tell this run's {leg} pack succeeded");
++                }
+             if (appOutput != AppResult && !(appOutput == AppStepResult && stepReadsApp))
+                 Add($"ci.yml {Gate}'s output app isn't exactly {AppResult} (or {AppStepResult} with a step id app), so {PublishGate} can't tell this run built the app");
+             // The jobs a pull request skips aren't selected there, or the gate would wait on them.
+@@ -295,6 +330,14 @@ static partial class CiPlan
+             // has no packages: the gate passing isn't enough to publish.
+             else if (!TopLevelConjuncts(publishIf).Any(t => AppBuilt().IsMatch(t)))
+                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish");
++            // The installer is outside quality-gate (optional), so a release is held to it here.
++            else if (jobs.ContainsKey("app-installer") && !TopLevelConjuncts(publishIf).Any(t => InstallerPassed().IsMatch(t)))
++                Add($"ci.yml {PublishGate}'s if: doesn't require needs.app-installer.result == 'success' (as one of its top-level && conditions), so a release would publish past a failed installer check");
++            // A pack that did not succeed leaves no package, and the pack steps don't fail the app job: each leg's outcome is required here.
++            if (PackExported(jobs))
++                foreach (var (leg, _) in PackLegs)
++                    if (!TopLevelConjuncts(publishIf).Any(t => t.Trim() == $"needs.{Gate}.outputs.pack-{leg} == 'success'"))
++                        Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.pack-{leg} == 'success' (as one of its top-level && conditions), so a release would publish past a failed pack");
+         }
+         // sign, which holds the signing identity, and publish, which writes the release: exactly
+         // these, not the implicit success(): that also needs every job further up to have
+@@ -588,6 +631,11 @@ static partial class CiPlan
+     static IEnumerable<YamlMappingNode> Steps(YamlMappingNode job) =>
+         Child(job, "steps") is YamlSequenceNode steps ? steps.Children.OfType<YamlMappingNode>() : [];
+ 
++    // Whether app exports the per-leg pack outcome (and so the gate and publish-gate must carry it).
++    static bool PackExported(Dictionary<string, YamlMappingNode> jobs) =>
++        jobs.TryGetValue("app", out var app) && Child(app, "outputs") is YamlMappingNode outputs
++        && PackLegs.Any(l => outputs.Children.Keys.OfType<YamlScalarNode>().Any(k => k.Value == $"pack-outcome-{l.Runtime}"));
++
+     static HashSet<string> Needs(YamlMappingNode job) => Child(job, "needs") switch
+     {
+         YamlScalarNode { Value: { } one } => new(StringComparer.Ordinal) { one },
