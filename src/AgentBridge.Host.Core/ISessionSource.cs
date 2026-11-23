@@ -127,8 +127,10 @@ public sealed record SessionEvent(string Name, object Data, long? Revision = nul
 public sealed class SessionSubscription : IDisposable
 {
     readonly Action<SessionSubscription> _onDispose;
+    // One reader (the feed), but not declared so: a single-reader channel cannot say how many events wait
+    // in it, and a test that moves a fake clock waits for none to (WireBytesTests, #2343).
     internal readonly Channel<SessionEvent> Channel = System.Threading.Channels.Channel.CreateUnbounded<SessionEvent>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
 
     internal SessionSubscription(SubscribeResult result, Action<SessionSubscription> onDispose)
     {

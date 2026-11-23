@@ -488,6 +488,16 @@ public sealed class RosterFieldsTests
         Assert.Equal(2, back.GetProperty("record").GetProperty("seq").GetInt64());
     }
 
+    // Stuck-prompt evidence (owner decision A1): a host sends the evidence members only to a relay that says it takes them.
+    [Fact]
+    public async Task The_relay_advertises_that_it_takes_session_evidence_beside_the_session_id_capability()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        Assert.Contains(AgentBridge.Protocol.SessionEvidence.RelayCapability, host.Relay.Capabilities);
+        Assert.Contains(AgentBridge.Protocol.FleetSessionId.RelayCapability, host.Relay.Capabilities);
+    }
+
     // HA retirement row 30 (cross-machine session list), HA off (#1396): every host publishes its own sessions to the relay and one read on
     // any device of the account returns all of them, each machine's session count equal to what that host published.
     [Fact]

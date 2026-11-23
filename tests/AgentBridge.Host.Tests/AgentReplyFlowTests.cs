@@ -184,6 +184,60 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Empty(console.Plans);
     }
 
+    // Slice C of claudeBusyQueue (docs/message-delivery.md, #3828): the box must be positively empty or show exactly the known hint.
+    [Theory]
+    [InlineData("> half a thought")]
+    [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_refused_for_a_draft_or_an_unknown_suggestion_with_no_keys(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Empty(console.Plans);
+    }
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("> Press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_typed_into_an_empty_box_or_the_exact_queued_hint(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(request, Peer)).Outcome);
+        Assert.Single(console.Plans);
+    }
+
+    // D2b (#3828, #3856): a Claude reply confirmed by its queue entry is accepted into Claude's queue, not yet taken; one recorded as a prompt is not marked queued.
+    [Fact]
+    public async Task A_Claude_reply_confirmed_by_its_queue_entry_reports_the_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Also add tests.");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)ReplyStage.Queued), (result.Outcome, result.Stage));
+    }
+    [Fact]
+    public async Task A_Claude_reply_recorded_as_a_prompt_reports_no_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Ship it");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)null), (result.Outcome, result.Stage));
+    }
+
     [Fact]
     public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
     {

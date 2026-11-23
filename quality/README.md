@@ -723,6 +723,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
      Below 200 points left, a run warns in its log.
+   - Reads are made together where they don't depend on each other: once main's newest CI run has not
+     answered, the runs below it are read four at a time (the newest alone: a read is a point); and a
+     sweep reads four heads' pull requests at a time. The answers are used in order, so the verdicts
+     and what is posted are what reading one after another gave: a sweep of about 110 pull requests
+     took 205 s one call at a time and 70 s this way, for the same points and calls (2026-11-23).
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
@@ -875,11 +880,21 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
 pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
 `true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
 start within about a minute; a queue that grows is the signal to add runners or flip it back.
-  `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` checks that the guard text appears, exactly, ahead of a label and
-  followed by `&&`, and fails a self-hosted job without it or one in a workflow with a `pull_request_target` trigger. **It is a
-  text check, not proof that the guard controls routing** (swapped arms, a label in a later `||` arm, a negated guard,
-  `workflow_run` and a runner chosen from a variable can still get round it); the real check is #3824, and it is a
-  **precondition of setting `AB_CI_SELF_HOSTED` to `true`**.
+  `tools/AgentBridge.Quality/RunnerRouting.cs` parses each `runs-on` (and each caller's `with:` input naming the pool) as an
+  expression: the pool is reachable only through `<guard> && <self-hosted label> || <hosted label>`, other `&&` conditions
+  only narrowing. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner group, a bare
+  self-hosted label, a runner from a variable, input or event field, an unparseable file, and a self-hosted job where
+  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It fails
+  closed: only a GitHub-hosted label (`ubuntu-*`, `windows-latest`/`20xx`/`11-arm`, `macos-*`) passes unguarded, and only a
+  literal label set (a literal, `fromJSON` of a literal, or a matrix whose strategy lists literals) may name the pool, even
+  behind the guard. A matrix or job output built from `vars`, `inputs`, `env`, `secrets` or the event, any other function
+  (`format`, `join`), and a partial label set such as `[windows, x64]` are flagged. This lint passing is a precondition of
+  setting `AB_CI_SELF_HOSTED` to `true`.
+  **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
+  lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
+  neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork
+  run after reading its changes; that approval is the boundary. In this repository's own files the guard's
+  same-repository test sends every fork run that is approved to hosted runners.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
@@ -939,8 +954,7 @@ and self-testing their bytes before it publishes is a separate proposed change (
 pushes `ci.yml` and the merge rule: this document is the design, step (1) is written as a patch (`docs/design/proposals/ci-per-sha-main-concurrency.diff` on
 branch `sg-ci-gate-diff`: `ci.yml`, the plan's pinned concurrency expression in `tools/AgentBridge.Quality/CiPlan.cs`,
 `CiPlanTests` and the text that named the old group; `git apply` it, the Quality tests pass with it), and step (2)'s `runs-on` is
-the CI builder's: it must carry the exact guard above. `CiRunnerRoutingTests` only checks that text appears (it does not prove
-the guard controls routing); the stronger lint of #3824 is a precondition of step (3), setting `AB_CI_SELF_HOSTED=true`.
+the CI builder's: it must have the whole shape above, which `RunnerRouting` checks; that passing gates step (3).
 
 ### Independent review depth
 
