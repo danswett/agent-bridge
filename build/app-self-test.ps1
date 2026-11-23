@@ -17,7 +17,10 @@ param(
     # 30 s, and again in high contrast on CI, about 25 s) added about 55 s, and the progress gallery
     # (ui.md §6.5) adds four passes of about 25 s each; the live resize pass runs last and is the one
     # a tight limit cuts off (reported as unfinished).
-    [int]$TimeoutSeconds = 360
+    [int]$TimeoutSeconds = 360,
+    # One shard of the self-test, "i/n" with n 1 to 3 (#1755): the app runs only that shard's stages, and the
+    # result must say it ran that shard; build/app-self-test-join.ps1 then adds the shards up.
+    [ValidatePattern('^[1-3]/[1-3]$')][string]$Shard
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -70,7 +73,8 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
 $started = Get-Date
 $stderrPath = Join-Path $Logs 'app.stderr.log'
 $evidencePath = Join-Path $Logs 'app-exit-cause.json'
-$p = Start-Process $Exe -ArgumentList '--self-test', "`"$Result`"" -RedirectStandardError $stderrPath -PassThru
+$arguments = @('--self-test', "`"$Result`"") + $(if ($Shard) { @('--self-test-shard', $Shard) } else { @() })
+$p = Start-Process $Exe -ArgumentList $arguments -RedirectStandardError $stderrPath -PassThru
 # Held from the start: a Process from Start-Process that is first asked for its exit code after
 # it has gone can report it wrongly.
 $null = $p.Handle
@@ -87,10 +91,16 @@ Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
 # The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
 # An array: one failed check, the arm64 case, would otherwise be a string with no .Count under strict mode.
+# A sharded run that wrote another shard, or none, did not run what it was asked: not a pass.
+$wrongShard = $false
+if ($Shard -and $wrote) {
+    try { $wrongShard = (Get-Content $Result -Raw | ConvertFrom-Json).shard -ne $Shard } catch { $wrongShard = $true }
+}
 $failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
+. (Join-Path $PSScriptRoot 'app-self-test-trace.ps1')
 $evidence = [ordered]@{
-    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks
-    failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
+    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks; bounceTrace = $null
+    failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished -or $wrongShard)
     stderr = ''; events = @(); captureErrors = @()
 }
 try { $evidence.stderr = [IO.File]::ReadAllText($stderrPath) }
@@ -104,6 +114,7 @@ $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # Ended with 0 having written nothing, or with a check never finished: it did not pass.
 if (-not $evidence.failed) { exit 0 }
 
+if ($wrongShard) { Write-Output "::error::the self-test result is not shard $Shard" }
 if ($null -eq $code) { Write-Output "::error::the self-test did not finish in $TimeoutSeconds s" }
 elseif ($code -ne 0) {
     $hex = '0x{0:X8}' -f $code
@@ -157,6 +168,20 @@ catch {
 }
 if ($code -eq 1 -and $failedChecks.Count -gt 0 -and -not $unfinished) { Write-Output "::error::the self-test failed $($failedChecks.Count) check(s), and the app exited normally with code 1 (no crash, so no Windows event): $($failedChecks -join ' | ')" }
 elseif ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
+# The bottom-bounce trace, when the app wrote one beside the result: which frame and which term made its surface invalid.
+$bounce = Get-BounceTraceSummary -Path ([IO.Path]::ChangeExtension($Result, '.history-bottom-bounce.json'))
+if ($null -ne $bounce) {
+    $evidence.bounceTrace = $bounce
+    Write-Output '--- bottom bounce trace'
+    Write-Output "frames sampled: $($bounce.frames)"
+    if ($null -ne $bounce.firstInvalid) {
+        Write-Output "first invalid surface: $($bounce.firstInvalid | ConvertTo-Json -Compress)"
+        foreach ($why in $bounce.why) { Write-Output "  because: $why" }
+    }
+    else { Write-Output 'no sampled frame had an invalid surface' }
+    Write-Output "head: $($bounce.head | ConvertTo-Json -Compress -Depth 4)"
+    Write-Output "tail: $($bounce.tail | ConvertTo-Json -Compress -Depth 4)"
+}
 $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # The crashing thread's stack from the dump, by the runner's own cdb when it has one (the Windows
 # SDK's Debugging Tools), with Microsoft's public symbols. Bounded: a slow symbol server costs at

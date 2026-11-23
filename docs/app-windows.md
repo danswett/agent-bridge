@@ -33,7 +33,11 @@ shows the window: a start at sign-in or a toast launch leaves it pending for the
 The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
 rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
 keeps exception types and frames, not messages or source paths, in `crash.log` and the
-existing diagnostics journal. Neither submits anything.
+existing diagnostics journal. Neither submits anything. Each exception's type is followed by its HResult
+(a number, never its message), because a native XAML failure carries no managed frames.
+A UI-thread exception is written there first; then, outside self-tests, the app keeps running (the
+exception is marked handled and `app.log` says so), unless more than three arrive within 10 seconds,
+when it ends as before. A handled exception still leaves its evidence in the run marker.
 The marker and `crash.log` include nested/aggregate exception types and frames,
 bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
 Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`
@@ -63,6 +67,15 @@ profile's `*-reading.json` beside the other app stores. Startup restores that se
 and reading position; a missing or stale session falls back to the first available session.
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
+The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
+following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
+nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
+and `app.log` records the first skipped correction of a storm with its count (#3842). The guard keeps at most 60 stamps however dense the burst, and a skipped
+pass while a saved reading position still waits schedules one retry after the window, so a finite burst cannot leave
+the restore undone (#3811). They also run once, at low priority,
+after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
+layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
+#3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
@@ -393,6 +406,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -949,6 +967,14 @@ controls consume that same contract; this extraction does not disable or remove 
 
 ### Releases and updates: every merge to main is a pre-release
 
+**Planned change (owner decision, Nov 23, as Eng R8b ruled; proposed, not yet built).** Main is green on build and test only.
+Packing, the installer check, `sign`, `attest` and `vpk` stay in `ci.yml` as non-required jobs, so they hold neither main nor
+a merge. The release train never rebuilds; #3769 (merged) is only its commit selector, which requires both architectures'
+package artifacts (the Arm64 jobs may be red). **Proposed, a separate change:** the train installs and self-tests those exact
+bytes before it publishes, and a failure publishes nothing and raises an alert, so a bad installer blocks the release, not a
+merge. `publish` is then the train's, and release order is the train's. Until that is built, what follows is what runs. The speed plan and the main concurrency
+change (one group per commit, nothing cancelled) are in quality/README.md, "CI: speed, runners and what gates main".
+
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
 app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
 select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
@@ -973,9 +999,8 @@ connector's Install button on a machine the dashboard drives.
   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
-  doesn't rest on the order main's CI runs go in (first attempts share
-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, unless main's head has since
+  doesn't rest on the order main's CI runs go in (each push has a group of its
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
   changed the app (main's own selector, under the lock, says so; main's later run publishes
   both, where publishing this first could leave that one's lower version refused), and
   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
@@ -1111,6 +1136,57 @@ From then on it downloads the newest pre-release by itself ("Download updates au
 offers **Restart to update**, or Settings, **Check for updates**, then **Restart to update**,
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
+
+### The release train (#2225)
+
+A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
+(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
+Merging never waits for it and it never blocks a merge.
+
+**Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
+superseded run that went green still publishes nothing when `main`'s head has since changed the
+app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
+(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
+`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
+starvation lasts until the train lands.
+
+* **Which commit** (`build/select-release-commit.ps1`, fixtures in
+  `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
+  attempt (a successful re-run counts). The first that has all of these:
+  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
+    `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
+    publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
+    cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
+    reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
+  - its commit follows the latest release's commit;
+  - its run number, the version's last part, is above every published version;
+  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
+
+  One that fails a rule is skipped for the next newest. If the first one found is already
+  released, nothing is published and the run does nothing, so an hourly run with nothing new is
+  a no-op.
+
+  **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
+* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+  rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
+  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  refuses a version already out, an older one, or a commit behind the latest release, so the
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
+  `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
+  (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+  change is the next verified commit's to publish.
+* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
+  unsigned, until it gains the sign step.
+* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+  so a train release carries neither until they are added.
 
 ### Signing
 
@@ -1396,6 +1472,12 @@ finishes and fails checks makes the app exit normally with code 1: it leaves no 
 no event, and its cause is the failed checks the app wrote to `result.json`, which the
 wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
 capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process

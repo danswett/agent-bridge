@@ -12,6 +12,20 @@
          never an edge or a glow (#178). -->
 
     <UserControl.Resources>
+        <Style x:Key="PromptFactsStyle" TargetType="TextBlock" BasedOn="{StaticResource AbTypeMeta}">
+            <Setter Property="Foreground" Value="{ThemeResource AbAgentText}" />
+        </Style>
+        <Style x:Key="UnverifiedPromptFactsStyle" TargetType="TextBlock" BasedOn="{StaticResource PromptFactsStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
+        </Style>
+        <Style x:Key="PromptRuleStyle" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{ThemeResource AbAgent}" />
+        </Style>
+        <Style x:Key="UnverifiedPromptRuleStyle" TargetType="Border" BasedOn="{StaticResource PromptRuleStyle}">
+            <Setter Property="BorderBrush" Value="{ThemeResource AbText2}" />
+        </Style>
+        <local:PromptStyleConverter x:Key="PromptFactsStyleChoice" Normal="{StaticResource PromptFactsStyle}" Unverified="{StaticResource UnverifiedPromptFactsStyle}" />
+        <local:PromptStyleConverter x:Key="PromptRuleStyleChoice" Normal="{StaticResource PromptRuleStyle}" Unverified="{StaticResource UnverifiedPromptRuleStyle}" />
         <!-- A delegate in the Delegates tab: its glyph on line 1, its name and how long it has run,
              who started it where the indent can't say, and its latest line, its own words. -->
         <DataTemplate x:Key="DelegateRowTemplate" x:DataType="core:DelegateItem">
@@ -385,8 +399,8 @@
                                             </Grid>
                                             <TextBlock
                                                 VerticalAlignment="Center"
-                                                Style="{StaticResource AbTypeMeta}"
-                                                Foreground="{ThemeResource AbAgentText}"
+                                                Style="{x:Bind Disclosure.Origin.Unverified, Converter={StaticResource PromptFactsStyleChoice}}"
+                                                ToolTipService.ToolTip="{x:Bind Disclosure.Origin.Spoken}"
                                                 TextWrapping="Wrap"
                                                 Text="{x:Bind Disclosure.Origin.Label}" />
                                             <ContentControl IsTabStop="False" VerticalAlignment="Center" Content="{x:Bind PromptBeside}" ContentTemplate="{StaticResource MessageTimeTemplate}" />
@@ -426,7 +440,7 @@
                                         <Border
                                             Margin="0,4,0,0"
                                             Padding="12,0,0,0"
-                                            BorderBrush="{ThemeResource AbAgent}"
+                                            Style="{x:Bind Disclosure.Origin.Unverified, Converter={StaticResource PromptRuleStyleChoice}}"
                                             BorderThickness="2,0,0,0"
                                             Visibility="{x:Bind local:Ui.Show(Disclosure.Open), Mode=OneWay}">
                                             <TextBlock
@@ -553,10 +567,10 @@
                             </Grid>
                             <TextBlock
                                 VerticalAlignment="Center"
-                                Style="{StaticResource AbTypeMeta}"
-                                Foreground="{ThemeResource AbAgentText}"
+                                Style="{x:Bind Card.PromptIsUnverified, Converter={StaticResource PromptFactsStyleChoice}, Mode=OneWay}"
                                 TextWrapping="Wrap"
                                 AutomationProperties.AutomationId="PromptLabelText"
+                                ToolTipService.ToolTip="{x:Bind Card.PromptLabel, Mode=OneWay}"
                                 Text="{x:Bind Card.PromptLabel, Mode=OneWay}" />
                             <TextBlock
                                 VerticalAlignment="Center"
@@ -620,7 +634,7 @@
                             x:Name="PromptRule"
                             Margin="0,4,0,0"
                             Padding="12,0,0,0"
-                            BorderBrush="{ThemeResource AbAgent}"
+                            Style="{x:Bind Card.PromptIsUnverified, Converter={StaticResource PromptRuleStyleChoice}, Mode=OneWay}"
                             BorderThickness="2,0,0,0"
                             AutomationProperties.AutomationId="PromptRule"
                             Visibility="{x:Bind local:Ui.Show(Card.PromptOpen), Mode=OneWay}">
