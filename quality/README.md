@@ -846,8 +846,12 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
 pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
 `true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
 start within about a minute; a queue that grows is the signal to add runners or flip it back.
-  `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` fails a workflow whose self-hosted job lacks the guard,
-  or that has any self-hosted job and a `pull_request_target` trigger.
+  `tools/AgentBridge.Quality/RunnerRouting.cs` reads each `runs-on` as an expression: every value it can resolve to
+  that may name a self-hosted runner (a self-hosted label, or a variable, input or event field the workflow doesn't
+  hold) must be reached only through both whole conjuncts of that guard, compared after normalizing spacing and
+  parentheses, so a swapped or or-chained fallback fails. A runner group, a bare self-hosted label, and any self-hosted
+  job in a workflow that `pull_request_target` or `workflow_run` can run fail too (`CiRunnerRoutingTests`,
+  `CiRunnerGuardProbeTests`).
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
