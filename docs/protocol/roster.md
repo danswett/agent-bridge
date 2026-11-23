@@ -189,7 +189,11 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
     has had no new snapshot for 60 seconds (checked every second, so within about a minute).
   * `{ t, machine, removed: true }` when a person's device forgets the machine.
   A device that never subscribes is never sent one. Frames are sent in order, one at a time, with the same
-  10-second send limit as every other control frame.
+  10-second send limit as every other control frame. A subscriber that stops reading is bounded: at most
+  32 queued frames or 256 KiB, after which the relay closes that socket with 1013 (try again later) and the
+  subscription ends; it resyncs with `registry-get` after reconnecting. A `registry-get` reply and
+  `registry-changed` frames are not ordered against each other, so a reader applies the epoch, `seq` and
+  `at` order rule to both.
 
 The host normally publishes immediately on each authenticated connection, then polls every two seconds
 with a 20-second heartbeat. Pending failed-put backoff is retained across reconnects before that
