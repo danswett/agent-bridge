@@ -63,6 +63,8 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host audit gate --since <time> [--messages <file>] [--host <id>] [--json]
+//                                               the windowed HA-fallback gate, one host (docs/design/ha-gate-counters.md)
 //   agent-bridge-host audit [--action <action>] [--outcome <outcome>] [--since <time>]
 //                                               read known audit metadata, without changing the profile
 //   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
