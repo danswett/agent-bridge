@@ -90,6 +90,11 @@ signed envelope the receiver checks. Its fields (proposed):
 | scope | At most `read+reply`. Never `launch`: fleet launch stays its own person-set flag per credential (script-credentials.md 2) |
 | expiry | Short (proposed: at most 24 hours) |
 | signer | A presence-proven person device, resolved from the verified roster |
+| account, roster generation | The account id and the pinned roster generation the signer was verified in, so a grant cannot cross accounts or outlive its signer |
+
+The signature covers every field above. The host verifies it against the signer's entry in the **verified roster**,
+and checks again **at consumption** that the signer is still an active, non-probationary person device (a signer
+removed after signing makes the grant refused).
 
 **Principals a grant may name (proposed default: `script` only).** A `script` is a named, long-lived caller
 (`script:<machine>/<name>`, script-credentials.md). `agent-fleet-child` means a session a fleet script launches under
@@ -100,15 +105,60 @@ owner says otherwise (question 2 below).
 **Default: off.** A host accepts provisioning grants only if a person turned that on for that host. Approving this
 design changes nothing on any machine by itself; rolling it out is a separate decision.
 
-**Consumed-id store (proposed).** The host keeps a store of consumed and revoked grant ids, the pattern of the fleet
-grant store (fleet-grants.md, `GrantStore`): bounded, every consumption written with its audit record before the
-credential is minted, kept at least as long as the grant's longest lifetime, and **failing closed**: if the store is
-missing, unreadable or incomplete the host refuses every grant rather than resetting it, so a lost store cannot
-make a used grant usable again.
+**Why a stolen or intercepted grant is useless (proposed).** A grant carries no secret and the credential is never
+sent anywhere: the host mints it on its own disk, in an owner-only file, protected for the user the script runs as
+(script-credentials.md 7), which a holder of the grant cannot read. What a holder could try, and why each fails:
 
-**Revoking an unconsumed grant (proposed).** The person who issued a grant can revoke it before it is consumed, from
-a presence-proven device, by the same signed path; the host records the revoked id, and a revoked grant is refused as
-a consumed one is. A grant that expired unused needs no revoke.
+| Attempt | Why it fails |
+|---|---|
+| Use it on another machine | Bound to one target machine's device id; any other host refuses it |
+| Change the name, scope, expiry or machine | The signature covers them; the host verifies it against the roster |
+| Use it twice | Single use: the id is recorded as consumed before the credential is minted |
+| Use it later | Expires (at most 24 hours); the host checks the clock at consumption |
+| Present it from outside the account | The host takes provisioning only from a device of its own account, as it does `push.*` and fleet grants; the relay delivers nothing else |
+| Use it after the person was removed | The signer is re-checked in the verified roster at consumption |
+| Read the minted credential | The token never leaves the host and the file is owner-only and user-bound |
+
+The worst case left is that the holder gets there first and the host mints, once, the very credential the person
+meant for that named script on that machine; the person can then revoke that credential with the existing person
+revoke (script-credentials.md 5). A grant for one name cannot mint a different name's.
+
+**Revoking an unconsumed grant (proposed).**
+
+* **Who cancels.** Any active, non-probationary person device of the account, from a presence-proven action,
+  not only the issuer (the one who notices a theft may not be the one who signed). Never a host, an agent or a
+  script.
+* **How.** A signed **revoke** naming the grant id, sent over the same account-scoped channel to the target host,
+  which records the id as revoked. A revoke for an id the host has not seen yet is recorded all the same, so a
+  revoke that overtakes the grant still wins.
+* **How fast.** Effective the moment the target host has it: a grant is only ever consumed by that host, so a
+  revoke that reaches it first stops it. A host that is offline cannot consume either, and on reconnect it **takes
+  its pending revokes before accepting any grant**. The relay can delay a message but cannot forge one, so delivery
+  is best effort and **expiry is the bound**: whatever the relay withholds, a grant is dead at its expiry (at most 24
+  hours; the owner may choose a shorter one, question 2).
+* **What a person sees.** On the issuing device and any other person device, each grant is listed as **issued**,
+  **consumed** (the host confirmed), **revoked**, or **expired**. Revoking shows "revoking" until the host's signed
+  acknowledgement arrives (it proves the host key, not consent), then "revoked"; if none arrives it says "not yet
+  confirmed by the machine, expires at <time>". Neither shows a token, because none exists. The host writes an audit
+  line for issue, consumption and revoke (the id, never anything secret).
+
+**Consumed-id store (proposed).**
+
+* **Where.** On the target host, beside its credential store in the profile folder (owner-only, never synced and never
+  on the relay), in its own file (proposed name `provisioning-grants.json`). It follows the fleet grant store
+  (fleet-grants.md, `GrantStore`): bounded, with each consumption or revoke written, with its audit record, **before** the
+  credential is minted or the answer sent.
+* **How long.** Each id is kept at least until its expiry plus a day for clock skew, never pruned earlier. After
+  that the grant is refused by expiry anyway, so dropping it is safe. At its size bound the store refuses new grants
+  rather than evicting an id (fails closed).
+* **Lost, unreadable, or restored from a backup.** The store carries a `notBefore` time and a generation. A new,
+  missing or unreadable store is created with `notBefore` = now, and **any grant issued before `notBefore` is
+  refused**: a lost store can never make a used grant usable again. A restored-from-backup store is treated the same
+  when it is older than the evidence the host has of later activity (the latest audit line or minted credential
+  record): the host then replaces it with a new one (`notBefore` = now) and **turns provisioning off** until a person
+  turns it on again on that host. The credential store records the grant id each credential came from, so a store
+  rolled back alone is also caught by the other. If both were restored together from the same backup, the one-day
+  margin plus the 24 hour lifetime bound the window, and the person sees the host turned provisioning off.
 
 **Flow (proposed):** the person signs the grant on their device; it reaches the host over the existing
 account-scoped channel; the host checks the signer against the **verified roster**, the machine, the principal, the
@@ -136,6 +186,9 @@ Both parts refuse, with a stated reason, and never fall back to HA, a bearer tok
 | A host's `hostSign`, an agent credential, a script credential or a relay-listed kind offered as the person | refused (a non-person never authorizes) |
 | Grant expired | expired |
 | Grant id already consumed (a replay), or revoked before use | already used or revoked |
+| Grant issued before the store's `notBefore` (a lost or restored store) | refused, fails closed |
+| Signer no longer an active person device at consumption, or any signed field altered | not authorized |
+| Grant delivered from outside the host's own account | refused |
 | The consumed-id store is missing, unreadable or incomplete | refused, fails closed |
 | A grant naming `agent-fleet-child` (not grantable by default) | refused |
 | Provisioning grants not enabled on this host (the default) | refused |
@@ -156,7 +209,8 @@ Evidence is recorded in the epic (#1396) per row, every client the parity rule r
   section 6 that apply to Part A each return their reason.
 * **Part B (only if approved).** All of Part A, and: a provisioning grant consumed once mints the credential with no
   person at the machine and no HA present; replaying it, an expired one and one for another machine are each
-  refused; a revoked unconsumed grant is refused; a grant asking for `launch` or for `agent-fleet-child` is refused;
+  refused; a revoked unconsumed grant (also one revoked before it reached the host) is refused; a grant from a store restored
+  from an older backup is refused and provisioning turns off; a grant asking for `launch` or for `agent-fleet-child` is refused;
   with the verifier off, or the consumed-id store unreadable, the grant is refused, not accepted.
 * **Row 11, the pairing itself** (a new machine joins only after a matching code is approved) is the device-approval
   build (#55), checked in the clean-VM release-gate harness (#736); this note adds no step to it.
