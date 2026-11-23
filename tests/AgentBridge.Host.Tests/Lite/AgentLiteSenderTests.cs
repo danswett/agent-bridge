@@ -87,11 +87,11 @@ public class AgentLiteSenderTests
         bool ownMachine, bool live, LiteKind expected)
     {
         using var r = new Rig();
-        var sender = new AgentLiteSender(r.Mode, new Peers(true), new RelayLiteLink(), _ => live,
-            () => { r.Signed++; return new EcdsaEnvelopeSigner(r.Key); }, OwnStatic);
+        r.Link.Account = "";
+        r.Live = live;
         var script = AgentCredential.Script("fixture-credential", ownMachine ? Self : Other, "collector", DateTimeOffset.UtcNow);
 
-        var result = await sender.SendAsync(script, new LiteSendInput("vm2", "agent-b2", "hello"), default);
+        var result = await r.Sender().SendAsync(script, new LiteSendInput(Other, "agent-b2", "hello"), default);
 
         Assert.Equal(expected, result.Kind);
         Assert.Equal(expected == LiteKind.Undeliverable ? AgentLiteSender.OfflineText : AgentLiteSender.NoCredential, result.Code);
