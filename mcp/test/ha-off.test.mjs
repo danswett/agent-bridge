@@ -13,7 +13,11 @@ import { createConnection, createServer } from '../src/server.mjs';
 // does not test the absence of an ask tool (a separate guard test owns that) and it is not a fleet-mode test: list_agent_sessions lists this
 // machine's sessions (sessions.list); a fleet-wide MCP list does not exist yet.
 
+// The ops the fake host can answer: a fixed set, so a name that arrives on the pipe is never used to pick a method.
+const SERVED = new Set(['hello', 'agent.hello', 'sessions.list', 'session.get']);
+
 async function fakeHost(handlers) {
+  const served = new Map(Object.entries(handlers).filter(([op]) => SERVED.has(op)));
   const name = process.platform === 'win32' ? `\\\\.\\pipe\\haoff-${process.pid}-${Math.random().toString(36).slice(2)}` : path.join(os.tmpdir(), `haoff-${process.pid}-${Math.random().toString(36).slice(2)}.sock`);
   const seen = [];
   const server = net.createServer((socket) => {
@@ -25,7 +29,9 @@ async function fakeHost(handlers) {
         const req = JSON.parse(buf.subarray(4, 4 + len).toString('utf8'));
         buf = buf.subarray(4 + len);
         seen.push(req.op);
-        const result = handlers[req.op]?.(req.data);
+        // Only the ops this fake host serves, from a fixed set; any other name from the wire is refused, never looked up.
+        const handler = SERVED.has(req.op) ? served.get(req.op) : undefined;
+        const result = handler === undefined ? undefined : handler(req.data);
         const reply = result === undefined ? { re: req.id, ok: false, error: 'unknown op' } : { re: req.id, ok: true, result };
         const body = Buffer.from(JSON.stringify(reply));
         const head = Buffer.alloc(4);
