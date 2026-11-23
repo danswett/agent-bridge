@@ -331,6 +331,103 @@ public class CopilotPlannerTests
         Assert.Equal(2, Keys(Plan(arguments, Answer(new { l = new[] { "a", "c" } }))).Count);
     }
 
+    // The checkbox list's walk (docs/host-answers.md, "The keys (Copilot)"): Up N-1 times to the top row wherever the
+    // caret was left, then one walk down, Space on a row only when its state must change, each toggle its own send,
+    // and the Enter that submits on the last send. Four options, so three Ups.
+    const string Space = " ";
+    const string Four = """{ "type": "array", "items": { "enum": ["a", "b", "c", "d"] } }""";
+    const string FourWithBTicked = """{ "type": "array", "items": { "enum": ["a", "b", "c", "d"] }, "default": ["b"] }""";
+
+    static List<(string Text, bool Enter)> Walk(string property, params string[] chosen) =>
+        Keys(Plan(Schema("l", property), Answer(new { l = chosen })));
+
+    [Fact]
+    public void One_chosen_row_walks_to_the_top_then_down_to_it_and_presses_Space_with_the_Enter_on_that_same_send()
+    {
+        Assert.Equal([(U + U + U + Space, true)], Walk(Four, "a"));
+        Assert.Equal([(U + U + U + D + Space, true)], Walk(Four, "b"));
+        Assert.Equal([(U + U + U + D + D + D + Space, true)], Walk(Four, "d"));
+    }
+
+    [Fact]
+    public void Two_chosen_rows_are_two_toggles_the_second_walking_on_from_the_first_and_only_the_last_carries_the_Enter()
+    {
+        Assert.Equal([(U + U + U + Space, false), (D + D + Space, true)], Walk(Four, "a", "c"));
+        Assert.Equal([(U + U + U + D + Space, false), (D + D + Space, true)], Walk(Four, "b", "d"));
+        Assert.Equal([(U + U + U + D + D + Space, false), (D + Space, true)], Walk(Four, "c", "d"));
+    }
+
+    [Fact]
+    public void Every_row_chosen_is_one_toggle_per_row_a_Down_between_them()
+    {
+        Assert.Equal([(U + U + U + Space, false), (D + Space, false), (D + Space, false), (D + Space, true)], Walk(Four, "a", "b", "c", "d"));
+    }
+
+    [Fact]
+    public void The_order_the_values_are_given_in_changes_neither_the_keys_nor_what_is_recorded()
+    {
+        var forward = Plan(Schema("l", Four), Answer(new { l = new[] { "a", "c" } }));
+        var backward = Plan(Schema("l", Four), Answer(new { l = new[] { "c", "a" } }));
+
+        Assert.Equal(Keys(forward), Keys(backward));
+        var (name, expected) = Assert.Single(backward.Fields);
+        Assert.Equal("l", name);
+        Assert.Equal(["a", "c"], Assert.IsType<Expected.Set>(expected).Raws.Select(r => r.GetString()));
+    }
+
+    [Fact]
+    public void A_list_that_opens_with_a_row_ticked_is_toggled_only_where_the_answer_differs_so_a_ticked_row_is_never_unticked_by_a_blind_Space()
+    {
+        // b opens ticked. Keeping it and adding a and d toggles a and d only.
+        Assert.Equal([(U + U + U + Space, false), (D + D + D + Space, true)], Walk(FourWithBTicked, "a", "b", "d"));
+        // Dropping it is a toggle on b: the same Space that would have ticked it unticks it.
+        Assert.Equal([(U + U + U + D + Space, true)], Walk(FourWithBTicked));
+        // Choosing b alone, as it opened, is nothing to toggle: the walk to the top and the Enter.
+        Assert.Equal([(U + U + U, true)], Walk(FourWithBTicked, "b"));
+    }
+
+    [Fact]
+    public void A_list_of_one_row_needs_no_Up_and_an_empty_walk_is_just_the_Enter()
+    {
+        var one = """{ "type": "array", "items": { "enum": ["only"] } }""";
+        Assert.Equal([(Space, true)], Walk(one, "only"));
+        Assert.Equal([("", true)], Walk(one));
+    }
+
+    // The planner is a second guard behind Answers.Check: what a client's check would also refuse is refused
+    // here, before any key, with the field named.
+    [Theory]
+    [InlineData("""{ "l": [ { "other": "something else" } ] }""", "\"l\": a multi-select list takes no other answer at Copilot's prompt")]
+    [InlineData("""{ "l": [ "a", { "other": "x" } ] }""", "\"l\": a multi-select list takes no other answer at Copilot's prompt")]
+    [InlineData("""{ "l": [ "z" ] }""", "\"l\": not one of the choices")]
+    [InlineData("""{ "l": [ "a", "z" ] }""", "\"l\": not one of the choices")]
+    public void A_checkbox_list_refuses_an_other_and_a_value_that_is_not_a_row_before_any_key(string fields, string reason)
+    {
+        var (form, _) = Ask(Schema("l", Four));
+        var answer = new AnswerRequest
+        {
+            Id = "s", Question = "call-1", Request = Guid.NewGuid().ToString(),
+            Fields = JsonDocument.Parse(fields).RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()),
+        };
+
+        var (plan, problem) = CopilotPlanner.Plan(form, answer);
+
+        Assert.Null(plan);
+        Assert.Equal(reason, problem);
+    }
+
+    [Fact]
+    public void An_empty_answer_to_a_list_that_needs_at_least_one_is_refused_before_any_key_and_one_that_allows_none_is_just_the_Enter()
+    {
+        var needsOne = """{ "type": "array", "minItems": 1, "items": { "enum": ["a", "b"] } }""";
+        var (form, _) = Ask(Schema("l", needsOne));
+        var (plan, problem) = CopilotPlanner.Plan(form, Answer(new { l = Array.Empty<string>() }));
+        Assert.Null(plan);
+        Assert.Equal("\"l\": choose at least one option", problem);
+
+        Assert.Equal([(U, true)], Walk("""{ "type": "array", "items": { "enum": ["a", "b"] } }"""));
+    }
+
     [Theory]
     // A bound JavaScript would hold as another number, or none at all.
     [InlineData("""{ "type": "integer", "maximum": 9007199254740993 }""")]
