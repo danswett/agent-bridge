@@ -13,7 +13,7 @@ index 63a6053..e725310 100644
      types: [completed] # the only type Actions accepts here
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..b5e0cc5
+index 0000000..3390e75
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
 @@ -0,0 +1,272 @@
@@ -269,11 +269,11 @@ index 0000000..b5e0cc5
 +          $answer = Invoke-RestMethod -Method Post -Uri "https://api.cloudflare.com/client/v4/zones/$env:CF_ZONE_ID/purge_cache" -Headers $headers -ContentType 'application/json' -Body $body
 +          if (-not $answer.success) { throw "Cloudflare refused the purge: $(($answer.errors | ForEach-Object { $_.message }) -join '; ')" }
 +          Write-Host "purged $($urls.Count) URLs"
-+          # Re-fetch until the relay's first page names the published tag with a fresh copy, within a minute.
++          # Re-fetch until both pages name the published tag with a fresh copy, within a minute.
 +          $stale = $null
 +          foreach ($attempt in 1..6) {
 +            $stale = $null
-+            foreach ($url in $urls[0]) {
++            foreach ($url in $urls) {
 +              $response = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'application/vnd.github+json' } -SkipHttpErrorCheck
 +              $age = [int](@($response.Headers['Age'])[0] ?? -1)
 +              $tags = if ($response.StatusCode -eq 200) { @(($response.Content | ConvertFrom-Json) | ForEach-Object { $_.tag_name }) } else { @() }
