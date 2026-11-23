@@ -23,9 +23,13 @@ Quality/SRE owns the evidence on disposable VMs, never a builder and never this 
 | Gate | Unlocks when |
 |---|---|
 | **E1 Host launch proof** | G9 (envelope, receiver, sender, `fleet.launch` op) is merged, and a disposable-VM run shows a remote launch over the Host transport that starts a registered session, with the receiver's own caps, kill switch and counters |
-| **E2 Dual run (slice 11)** | Over an agreed window, every launch is issued on the Host transport while the HA path is still present, and the two paths' outcomes are compared per request: same `started` and `registered`, same refusals, no double launch, no HA press made as a fallback. The window and pass count are Quality's to set |
+| **E2 Launch dual run** (not slice 11) | Over an agreed window, every launch is issued on the Host transport while the HA path is still present, and the two paths' outcomes are compared per request: same `started` and `registered`, same refusals, no double launch, no HA press made as a fallback. The window and pass count are Quality's to set |
 | **E3 End proof** | G10 (remote stop) is merged and a disposable-VM run shows `fleet end` per session with a fresh request id each, matching what the HA stop press did |
-| **E4 Cutover sign-off** | Quality/SRE receipt for E1 to E3, plus the lead's written go to delete. G12 deletion of the HA entities is covered by the owner's F1 to F9 answer but goes **last** |
+| **E4 Connector-removal gate** | **All** of: (a) **slice 11**, the 24 h session-registry dual run, which is an **owner gate** before any HA connector removal, passed and accepted by the owner; (b) the load proof (#1949, fleet #314); (c) the HA-off rehearsal: the fleet runs with HA switched off and launch, end, and messaging all work; (d) the owner's sign-off, in writing, after E1 to E3 and (a) to (c) have Quality/SRE receipts. G12 deletion of the HA entities is covered by the owner's F1 to F9 answer but goes **last** |
+
+E2 is a launch comparison only. It is not slice 11 and does not stand in for it. Rows that remove a
+fleet tool's HA press (section A) need the gate named in the row. Every row that removes the HA
+connector's launch surface (sections B and C) needs **E4**, whole, never a part of it.
 
 A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt, not this doc.
 
