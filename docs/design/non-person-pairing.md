@@ -86,7 +86,7 @@ signed envelope the receiver checks. Its fields (proposed):
 |---|---|
 | grant id | Unique; recorded when consumed, so it is single use |
 | machine | The target host's device id: a grant for one machine is refused on another |
-| principal | `script` and its name (`script:<machine>/<name>`), or `agent-fleet-child` where fleet launch is already granted |
+| principal | A `script` and its name (`script:<machine>/<name>`) only |
 | scope | At most `read+reply`. Never `launch`: fleet launch stays its own person-set flag per credential (script-credentials.md 2) |
 | expiry | Short (proposed: at most 24 hours) |
 | signer | A presence-proven person device, resolved from the verified roster |
@@ -96,11 +96,11 @@ The signature covers every field above. The host verifies it against the signer'
 and checks again **at consumption** that the signer is still an active, non-probationary person device (a signer
 removed after signing makes the grant refused).
 
-**Principals a grant may name (proposed default: `script` only).** A `script` is a named, long-lived caller
-(`script:<machine>/<name>`, script-credentials.md). `agent-fleet-child` means a session a fleet script launches under
-the person-set fleet launch grant, whose credential the host already mints itself at launch (`read+reply`, depth 1;
-`AgentCredentials.PrepareFleet`): a provisioning grant adds nothing for it, so it is **not grantable** unless the
-owner says otherwise (question 2 below).
+**Part B covers script credentials only, and nothing wider.** A `script` is a named, long-lived caller
+(`script:<machine>/<name>`, script-credentials.md). A provisioning grant cannot name an agent session, a fleet child,
+a host or a connector, and cannot carry `launch`: an agent session's credential stays minted by the host at launch
+(`AgentCredentials.Prepare` and `PrepareFleet`), and nothing in Part B changes that. (An earlier draft considered
+fleet children; they are removed, since a grant adds nothing for a credential the host already mints itself.)
 
 **Default: off.** A host accepts provisioning grants only if a person turned that on for that host. Approving this
 design changes nothing on any machine by itself; rolling it out is a separate decision.
@@ -190,7 +190,7 @@ Both parts refuse, with a stated reason, and never fall back to HA, a bearer tok
 | Signer no longer an active person device at consumption, or any signed field altered | not authorized |
 | Grant delivered from outside the host's own account | refused |
 | The consumed-id store is missing, unreadable or incomplete | refused, fails closed |
-| A grant naming `agent-fleet-child` (not grantable by default) | refused |
+| A grant naming any principal other than a `script` (an agent session, a fleet child, a host, a connector) | refused |
 | Provisioning grants not enabled on this host (the default) | refused |
 | Grant names another machine | wrong machine |
 | Scope above `read+reply`, or a launch scope requested in a grant | refused (launch is a separate person-set flag) |
@@ -210,21 +210,27 @@ Evidence is recorded in the epic (#1396) per row, every client the parity rule r
 * **Part B (only if approved).** All of Part A, and: a provisioning grant consumed once mints the credential with no
   person at the machine and no HA present; replaying it, an expired one and one for another machine are each
   refused; a revoked unconsumed grant (also one revoked before it reached the host) is refused; a grant from a store restored
-  from an older backup is refused and provisioning turns off; a grant asking for `launch` or for `agent-fleet-child` is refused;
+  from an older backup is refused and provisioning turns off; a grant asking for `launch`, or naming anything but a `script`, is refused;
   with the verifier off, or the consumed-id store unreadable, the grant is refused, not accepted.
 * **Row 11, the pairing itself** (a new machine joins only after a matching code is approved) is the device-approval
   build (#55), checked in the clean-VM release-gate harness (#736); this note adds no step to it.
 
 ## 8. Open questions for the owner
 
+**If the owner says nothing: Part A stays as decided, Part B stays NOT in force, and nothing in Part B is built.**
+Each question below states what happens by default.
+
 1. **Keep Part A as it is, or approve Part B?** Part A would meet row 20's "no HA token step" once the app press and
    device approval are built, with a person's press per script per machine; today it does not (the CLI mints, and
    neither is built). Part B is only needed if provisioning must work with nobody at the machine. This reverses
    "never a remote device" for script credentials, so it is the owner's call.
-2. If B: the grant's longest lifetime (24 hours proposed), and whether it may name an `agent-fleet-child` (proposed
-   default: no, `script` only) and whether it is off by default on every host (proposed: yes).
-3. Confirm the HA component (S8) pairs as a **connector** principal with its own key, approved by the mutual code
+   **Default (no answer): Part A only; Part B not in force.**
+2. **If B is approved:** the grant's longest lifetime, and whether provisioning is off by default on every host.
+   **Default if B is approved and nothing else is said:** 24 hours at most, and off on every host until a person
+   turns it on for that host. Principals are `script` only (not a question: nothing wider is proposed).
+3. **Confirm the HA component (S8) pairs as a connector principal** with its own key, approved by the mutual code
    exchange (agent-principals.md 9.2), rather than carrying any shared secret.
+   **Default (no answer): as designed in agent-principals.md 9.2, which Part B does not touch.**
 
 ## 9. What the C-build waits on
 
