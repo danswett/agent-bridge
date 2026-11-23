@@ -1,0 +1,300 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 4c4d0b83..17f2db33 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -302,26 +302,18 @@ jobs:
+           git clean -ffdx
+       # The ab-ci runners can't reach nuget.org (run 45277647321, NU1301). On a self-hosted runner only, this job's
+       # restores use a config in RUNNER_TEMP (MSBuild reads RestoreConfigFile from the environment; the tool restore
+-      # below gets --configfile) that lists only the runner's mirror (AGENT_BRIDGE_NUGET_SOURCE in its .env, https),
+-      # clears every fallback folder, and requires every package to carry nuget.org's repository signature: the mirror
+-      # can serve nuget.org's own bytes or nothing (NU3034). A mirror that is down fails the restore (NU1301), with no
+-      # other source to fall back on. nuget.config, the cache key and every hosted runner's restore are unchanged.
+-      # nuget.org's repository certificate (SHA-256 below) rotates rarely and announced: a rotation fails closed here.
++      # below gets --configfile), written by quality/nuget-mirror.ps1 (New-AbCiNuGetConfig, NuGetMirrorTests): the
++      # runner's mirror (AGENT_BRIDGE_NUGET_SOURCE in its .env) must be https://packagefeedproxy.microsoft.io/... with
++      # no user info, port or query; it is the only package and audit source, with no fallback folder; and every
++      # package must carry a nuget.org repository signature, so the mirror serves nuget.org's own bytes or nothing
++      # (NU3034). A mirror that is down fails the restore (NU1301). nuget.config and every hosted restore are unchanged.
+       - name: NuGet through the runner's mirror, nuget.org-signed packages only (self-hosted only)
+         if: runner.environment == 'self-hosted'
+         shell: pwsh
+         run: |
+-          $src = "$env:AGENT_BRIDGE_NUGET_SOURCE"
+-          if ($src -notmatch '^https://[A-Za-z0-9.-]+/[^\s"<>&]*$') { Write-Host '::error::this self-hosted runner names no https mirror in AGENT_BRIDGE_NUGET_SOURCE, and nuget.org is unreachable from it'; exit 1 }
++          . ./quality/nuget-mirror.ps1
+           $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
+-          @(
+-            '<?xml version="1.0" encoding="utf-8"?>', '<configuration>',
+-            '  <config><add key="signatureValidationMode" value="require" /></config>',
+-            "  <packageSources><clear /><add key=`"mirror`" value=`"$src`" /></packageSources>",
+-            '  <fallbackPackageFolders><clear /></fallbackPackageFolders>',
+-            '  <trustedSigners><repository name="nuget.org" serviceIndex="https://api.nuget.org/v3/index.json">',
+-            '    <certificate fingerprint="1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D" hashAlgorithm="SHA256" allowUntrustedRoot="false" />',
+-            '  </repository></trustedSigners>', '</configuration>') | Set-Content -Encoding utf8 $cfg
++          try { New-AbCiNuGetConfig -Source "$env:AGENT_BRIDGE_NUGET_SOURCE" -Path $cfg } catch { Write-Host "::error::$($_.Exception.Message)"; exit 1 }
+           "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
+       - name: Choose what to test
+         # The whole solution when the whole ring runs (a change to the solution, a workflow or
+@@ -352,8 +344,9 @@ jobs:
+         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+         with:
+           path: ${{ runner.temp }}/nuget-packages
+-          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+-          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
++          # A self-hosted leg's packages get their own key (the suffix is empty on a hosted runner, whose key is as before).
++          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ runner.environment == 'self-hosted' && 'ab-ci-' || '' }}${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
++          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-{3}', github.job, runner.os, runner.arch, runner.environment == 'self-hosted' && 'ab-ci-' || '') || '' }}
+       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json. Hosted: this step, as before.
+       - run: dotnet tool restore
+         if: env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG == ''
+diff --git a/quality/README.md b/quality/README.md
+index 20f9c000..3fdf37e4 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -901,6 +901,19 @@ start within about a minute; a queue that grows is the signal to add runners or
+   (those machines also run fleet sessions: a runner uses its own account with none of theirs, and a job that needs a secret gets
+   it from the workflow, as now). Tests that bind a fixed port, a named pipe or a machine-wide mutex name must take a
+   per-job name: a clash there is a bug this move exposes, not one to retry.
++* **NuGet on an ab-ci leg goes through the runner's mirror, and only nuget.org's signed bytes.** The ab-ci machines
++  can't reach nuget.org. Each runner's `.env` names `AGENT_BRIDGE_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json`
++  (set, with the PATH the jobs need, by the owner's `setup/fix-abci-env.ps1`, #4104). On a self-hosted leg only,
++  `ci.yml`'s product writes its restore config with `New-AbCiNuGetConfig` (`quality/nuget-mirror.ps1`,
++  `NuGetMirrorTests`, `CiNuGetMirrorTests`):
++  - that host alone, https, with no user info, port or query, as the only package and audit source;
++  - no fallback folder;
++  - every package required to carry nuget.org's repository signature (its current and two earlier certificates).
++
++  A missing or other mirror, a mirror that is down, or a package nuget.org didn't sign fails the leg; nothing falls
++  back to another source. A hosted leg restores from nuget.org as before. Only product runs on ab-ci: `app` (vpk,
++  publish) has no mirror config and would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
++  an `ab-ci-` part, so it never shares packages with the hosted Windows leg.
+ 
+ **Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
+ (`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on
+diff --git a/quality/nuget-mirror.ps1 b/quality/nuget-mirror.ps1
+index fb2c9e3d..3f2d2705 100644
+--- a/quality/nuget-mirror.ps1
++++ b/quality/nuget-mirror.ps1
+@@ -11,6 +11,73 @@
+   control on purpose: CI and every other machine keep the committed nuget.config.
+ #>
+ 
++# The ab-ci runners' mirror (ci.yml product, self-hosted legs only; #4104, #4218). Their .env names it in
++# AGENT_BRIDGE_NUGET_SOURCE; this is the one host CI accepts there. nuget.org's repository-signing certificates,
++# current and earlier (packages signed under each are still served), by SHA-256: a package must carry one of them.
++$script:AbCiMirrorHost = 'packagefeedproxy.microsoft.io'
++$script:NuGetOrgRepositoryCertificates = @(
++    '1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D'
++    '5A2901D6ADA3D18260B9C6DFE2133C95D74B9EEF6AE0E5DC334C8454D1477DF4'
++    '0E5F38F57DC1BCC806D8494F4F90FBCEDD988B46760709CBEEC6F4219AA6157D')
++
++# The parsed mirror URL, or a throw that never echoes the value: https only, the one pinned host, and no user info,
++# port, query or fragment. Parsed, not pattern-matched, so a look-alike host or an @-trick can't pass.
++function Assert-AbCiMirrorUrl([string] $Source) {
++    $uri = $null
++    # The text's own authority too: [uri] drops a default port, so https://host:443/ would otherwise pass.
++    $authority = if ($Source -match '^https://([^/?#]*)') { $Matches[1] } else { '' }
++    $ok = $authority -eq $script:AbCiMirrorHost -and
++        [uri]::TryCreate($Source, [UriKind]::Absolute, [ref] $uri) -and $uri.Scheme -ceq 'https' -and
++        $uri.Host -eq $script:AbCiMirrorHost -and $uri.UserInfo -eq '' -and $uri.Authority -eq $uri.Host -and
++        $uri.Query -eq '' -and $uri.Fragment -eq ''
++    if (-not $ok) { throw "AGENT_BRIDGE_NUGET_SOURCE must be https://$($script:AbCiMirrorHost)/... with no user info, port or query; nuget.org is unreachable from this runner, so nothing else restores." }
++    $uri
++}
++
++# The config an ab-ci leg restores with: the mirror as the only package and audit source, no fallback folders, and
++# every package required to carry a nuget.org repository signature, so the mirror can serve nuget.org's own bytes
++# or nothing (NU3034). A mirror that is down fails the restore (NU1301): there is no other source.
++function New-AbCiNuGetConfig {
++    param(
++        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Source,
++        [Parameter(Mandatory)] [string] $Path
++    )
++    $uri = Assert-AbCiMirrorUrl $Source
++    $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path)
++    $settings = [System.Xml.XmlWriterSettings]@{ Indent = $true; Encoding = [System.Text.UTF8Encoding]::new($false) }
++    $writer = [System.Xml.XmlWriter]::Create($Path, $settings)
++    try {
++        $writer.WriteStartElement('configuration')
++        $writer.WriteStartElement('config')
++        $writer.WriteStartElement('add'); $writer.WriteAttributeString('key', 'signatureValidationMode'); $writer.WriteAttributeString('value', 'require'); $writer.WriteEndElement()
++        $writer.WriteEndElement()
++        foreach ($section in 'packageSources', 'auditSources') {
++            $writer.WriteStartElement($section)
++            $writer.WriteStartElement('clear'); $writer.WriteEndElement()
++            $writer.WriteStartElement('add'); $writer.WriteAttributeString('key', 'mirror'); $writer.WriteAttributeString('value', $uri.AbsoluteUri); $writer.WriteEndElement()
++            $writer.WriteEndElement()
++        }
++        $writer.WriteStartElement('fallbackPackageFolders'); $writer.WriteStartElement('clear'); $writer.WriteEndElement(); $writer.WriteEndElement()
++        $writer.WriteStartElement('trustedSigners')
++        $writer.WriteStartElement('repository')
++        $writer.WriteAttributeString('name', 'nuget.org')
++        $writer.WriteAttributeString('serviceIndex', 'https://api.nuget.org/v3/index.json')
++        foreach ($fingerprint in $script:NuGetOrgRepositoryCertificates) {
++            $writer.WriteStartElement('certificate')
++            $writer.WriteAttributeString('fingerprint', $fingerprint)
++            $writer.WriteAttributeString('hashAlgorithm', 'SHA256')
++            $writer.WriteAttributeString('allowUntrustedRoot', 'false')
++            $writer.WriteEndElement()
++        }
++        $writer.WriteEndElement()
++        $writer.WriteEndElement()
++        $writer.WriteEndElement()
++    }
++    finally {
++        $writer.Dispose()
++    }
++}
++
+ function New-NuGetMirrorConfig {
+     param(
+         [Parameter(Mandatory)] [string] $Source,
+diff --git a/tests/AgentBridge.Quality.Tests/CiNuGetMirrorTests.cs b/tests/AgentBridge.Quality.Tests/CiNuGetMirrorTests.cs
+new file mode 100644
+index 00000000..c54a875d
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/CiNuGetMirrorTests.cs
+@@ -0,0 +1,56 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++// ci.yml product's NuGet mirror (#4218): only a self-hosted (ab-ci) leg restores through the runner's mirror, with
++// the config quality/nuget-mirror.ps1 writes (NuGetMirrorTests); every hosted leg's restore is as before, and a
++// self-hosted leg's NuGet packages never share a cache key with the hosted Windows leg's.
++public class CiNuGetMirrorTests
++{
++    static YamlMappingNode Jobs()
++    {
++        var path = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "ci.yml");
++        var stream = new YamlStream();
++        stream.Load(new StringReader(File.ReadAllText(path)));
++        return (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode).Children[new YamlScalarNode("jobs")];
++    }
++
++    static string? Scalar(YamlMappingNode node, string key)
++        => node.Children.TryGetValue(new YamlScalarNode(key), out var value) && value is YamlScalarNode scalar ? scalar.Value : null;
++
++    static List<YamlMappingNode> Steps(YamlMappingNode job)
++        => job.Children.TryGetValue(new YamlScalarNode("steps"), out var steps) && steps is YamlSequenceNode list
++            ? list.Children.OfType<YamlMappingNode>().ToList() : [];
++
++    [Fact]
++    public void Only_a_self_hosted_product_step_reads_the_runners_mirror_and_it_writes_the_tested_config()
++    {
++        var readers = Jobs().Children
++            .SelectMany(job => Steps((YamlMappingNode)job.Value).Select(step => (Job: ((YamlScalarNode)job.Key).Value, Step: step)))
++            .Where(s => (Scalar(s.Step, "run") ?? "").Contains("AGENT_BRIDGE_NUGET_SOURCE", StringComparison.Ordinal))
++            .ToList();
++
++        var (job, step) = Assert.Single(readers);
++        Assert.Equal("product", job);
++        Assert.Equal("runner.environment == 'self-hosted'", Scalar(step, "if"));
++        Assert.Contains("New-AbCiNuGetConfig", Scalar(step, "run"), StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void The_hosted_tool_restore_is_unchanged_and_the_nuget_cache_key_is_per_runner_kind()
++    {
++        var steps = Steps((YamlMappingNode)Jobs().Children[new YamlScalarNode("product")]);
++
++        // Hosted: the same command and shell as before; its condition only adds what is always true on a hosted runner.
++        var hosted = Assert.Single(steps, s => Scalar(s, "run") == "dotnet tool restore");
++        Assert.Null(Scalar(hosted, "shell"));
++        Assert.Equal("env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG == ''", Scalar(hosted, "if"));
++        var selfHosted = Assert.Single(steps, s => (Scalar(s, "run") ?? "").StartsWith("dotnet tool restore --configfile", StringComparison.Ordinal));
++        Assert.Equal("env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG != ''", Scalar(selfHosted, "if"));
++
++        var cache = steps.Single(s => Scalar(s, "id") == "nuget");
++        var with = (YamlMappingNode)cache.Children[new YamlScalarNode("with")];
++        Assert.Contains("runner.environment == 'self-hosted' && 'ab-ci-' || ''", Scalar(with, "key"), StringComparison.Ordinal);
++        Assert.Contains("runner.environment == 'self-hosted' && 'ab-ci-' || ''", Scalar(with, "restore-keys"), StringComparison.Ordinal);
++    }
++}
+diff --git a/tests/AgentBridge.Quality.Tests/NuGetMirrorTests.cs b/tests/AgentBridge.Quality.Tests/NuGetMirrorTests.cs
+index 8f64a498..2b889eb3 100644
+--- a/tests/AgentBridge.Quality.Tests/NuGetMirrorTests.cs
++++ b/tests/AgentBridge.Quality.Tests/NuGetMirrorTests.cs
+@@ -55,7 +55,71 @@ public class NuGetMirrorTests
+         }
+     }
+ 
+-    static (int Exit, string Error) Generate(string source, string path)
++    // The ab-ci legs' config (ci.yml product, self-hosted only; #4218): the pinned host, and nuget.org-signed packages only.
++    [Fact]
++    public void The_ab_ci_config_pins_the_mirror_and_requires_a_nuget_org_repository_signature()
++    {
++        var folder = Fixture.ScratchFolder();
++        try
++        {
++            var path = Path.Combine(folder, "mirror.nuget.config");
++            var (exit, error) = Generate("https://packagefeedproxy.microsoft.io/nuget/v3/index.json", path, "New-AbCiNuGetConfig");
++
++            Assert.True(exit == 0, error);
++            var configuration = XDocument.Load(path).Root!;
++            Assert.Equal("require", configuration.Element("config")!.Elements("add").Single(e => e.Attribute("key")!.Value == "signatureValidationMode").Attribute("value")!.Value);
++            foreach (var section in new[] { "packageSources", "auditSources" })
++            {
++                var entries = configuration.Element(section)!.Elements().ToList();
++                Assert.Equal(["clear", "add"], entries.Select(e => e.Name.LocalName));
++                Assert.Equal("https://packagefeedproxy.microsoft.io/nuget/v3/index.json", entries[1].Attribute("value")!.Value);
++            }
++            Assert.Equal(["clear"], configuration.Element("fallbackPackageFolders")!.Elements().Select(e => e.Name.LocalName));
++            var repository = configuration.Element("trustedSigners")!.Elements("repository").Single();
++            Assert.Equal("nuget.org", repository.Attribute("name")!.Value);
++            // nuget.org's current and two earlier repository certificates: packages signed under each are still served.
++            Assert.Equal(["1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D", "5A2901D6ADA3D18260B9C6DFE2133C95D74B9EEF6AE0E5DC334C8454D1477DF4", "0E5F38F57DC1BCC806D8494F4F90FBCEDD988B46760709CBEEC6F4219AA6157D"],
++                repository.Elements("certificate").Select(c => c.Attribute("fingerprint")!.Value));
++            Assert.All(repository.Elements("certificate"), c => Assert.Equal("false", c.Attribute("allowUntrustedRoot")!.Value));
++        }
++        finally
++        {
++            Fixture.Delete(folder);
++        }
++    }
++
++    [Theory]
++    [InlineData("https://evil.example/nuget/v3/index.json")]
++    [InlineData("https://packagefeedproxy.microsoft.io.evil.example/nuget/v3/index.json")]
++    [InlineData("https://evil.example/packagefeedproxy.microsoft.io/nuget/v3/index.json")]
++    [InlineData("https://user:pw@packagefeedproxy.microsoft.io/nuget/v3/index.json")]
++    [InlineData("https://packagefeedproxy.microsoft.io@evil.example/nuget/v3/index.json")]
++    [InlineData("https://packagefeedproxy.microsoft.io:8443/nuget/v3/index.json")]
++    [InlineData("https://packagefeedproxy.microsoft.io:443/nuget/v3/index.json")]
++    [InlineData("http://packagefeedproxy.microsoft.io/nuget/v3/index.json")]
++    [InlineData("https://packagefeedproxy.microsoft.io/nuget/v3/index.json?feed=x")]
++    [InlineData("https://packagefeedproxy.microsoft.io/nuget/v3/index.json#x")]
++    [InlineData("")]
++    public void The_ab_ci_config_refuses_any_other_mirror_and_never_echoes_it(string source)
++    {
++        var folder = Fixture.ScratchFolder();
++        try
++        {
++            var path = Path.Combine(folder, "mirror.nuget.config");
++            var (exit, error) = Generate(source, path, "New-AbCiNuGetConfig");
++
++            Assert.NotEqual(0, exit);
++            Assert.Contains("AGENT_BRIDGE_NUGET_SOURCE must be https://packagefeedproxy.microsoft.io/", error);
++            Assert.False(File.Exists(path));
++            if (source.Length > 0) { Assert.DoesNotContain(source, error); }
++        }
++        finally
++        {
++            Fixture.Delete(folder);
++        }
++    }
++
++    static (int Exit, string Error) Generate(string source, string path, string function = "New-NuGetMirrorConfig")
+     {
+         var script = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "nuget-mirror.ps1");
+         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+@@ -64,7 +128,7 @@ public class NuGetMirrorTests
+         start.Environment["MIRROR_TEST_SOURCE"] = source;
+         start.Environment["MIRROR_TEST_PATH"] = path;
+         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
+-                     "$ErrorActionPreference = 'Stop'; . $env:MIRROR_TEST_SCRIPT; New-NuGetMirrorConfig -Source $env:MIRROR_TEST_SOURCE -Path $env:MIRROR_TEST_PATH" })
++                     $"$ErrorActionPreference = 'Stop'; . $env:MIRROR_TEST_SCRIPT; {function} -Source $env:MIRROR_TEST_SOURCE -Path $env:MIRROR_TEST_PATH" })
+             start.ArgumentList.Add(arg);
+         using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+         var error = process.StandardError.ReadToEndAsync();
