@@ -398,10 +398,13 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         var result = await ReplyAsync(ClaudeId, words);
 
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
-        Assert.True(console.Plans.Count > 1, "typed in one burst");
-        Assert.All(console.Plans, p => Assert.All(p.Plan.Sends, s => Assert.True(s.Text.Length <= 100)));
-        Assert.NotNull(console.Plans[0].Plan.Sends[0].Expect);
-        Assert.All(console.Plans.Skip(1), p => Assert.Null(p.Plan.Sends[0].Expect));
+        var sends = console.Plans.SelectMany(p => p.Plan.Sends).ToList();
+        Assert.True(sends.Count > 1, "typed in one burst");
+        Assert.All(sends, s => Assert.True(s.Text.Length <= 100));
+        Assert.NotNull(sends[0].Expect);
+        Assert.All(sends.Skip(1), s => Assert.Null(s.Expect));
+        Assert.All(sends.SkipLast(1), s => Assert.False(s.Enter));
+        Assert.True(sends[^1].Enter);
         Assert.Equal(words, typed.ToString().Trim());
     }
 

@@ -297,6 +297,20 @@ prompt (`promptSource: "queued"`) repeats it and confirms nothing. Codex: an
 `item_completed` `UserMessage` whose text is the line (an older `user_message` event is read
 too). Each record confirms one reply. Anything else is `unconfirmed`.
 
+**Long text (Claude).** Claude takes a long burst of typed keys for a paste: one of 1000 characters
+arrived as about 300 typed and a `[Pasted text]` block, and one of 4514 lost its head (a console input
+the host wrote whole, in one `WriteConsoleInput`). Replies, Lite and relay messages alike are therefore
+typed as chunks of at most 100 UTF-16 units (`AgentReply.ChunkUnits`, never ending inside a surrogate
+pair), 40 ms apart (`ChunkPauseMs`), the Enter only on the last. They go to the worker as one plan
+(`agent-bridge-keys 2`, unchanged: each chunk is a `send` with its pause), the screen check on the first
+send only. 4500 characters took about 3 s and arrived whole in the probe below. Copilot and Codex are
+typed as before, and a reply of 100 units or fewer is one send. Bracketed paste was not used: Claude
+would hold a `[Pasted text]` placeholder, and the recorded prompt could no longer be matched to the
+reply. **Owner-approved CHANGE, Nov 23 (Part of #2568).** The probe is
+`docs/runbooks/claude-typing-probe.ps1`: synthetic marker text typed into the builder's own session
+without Enter, read back from the screen and cleared; never another person's session. Claude's paste
+detection depends on timing, so a machine that still folds a chunked reply shows it there first.
+
 **Enter again.** Claude takes a long burst as a paste and can swallow the Enter after it
 (the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
 the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
