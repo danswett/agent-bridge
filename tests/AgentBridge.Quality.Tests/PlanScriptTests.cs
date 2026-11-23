@@ -82,8 +82,16 @@ public class PlanScriptTests
     public Task In_the_whole_ring_the_sharded_project_runs_on_every_product_runner_and_the_solution_run_leaves_it_out() =>
         CheckPlan("push", "unknown/input.txt", false, true, shardProject: "tests/Example.Tests");
 
+    [Fact]
+    public Task A_main_push_that_skips_product_emits_no_shard_legs() =>
+        CheckPlan("push", "tests/Example.Tests/Test.cs", false, false, shardProject: "tests/Example.Tests");
+
+    [Fact]
+    public Task Without_a_host_tests_job_in_ci_yml_the_project_is_not_sharded_and_stays_in_product() =>
+        CheckPlan("pull_request", "tests/Example.Tests/Test.cs", false, false, shardProject: "tests/Example.Tests", shardJob: false);
+
     static async Task CheckPlan(
-        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false, string? shardProject = null)
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false, string? shardProject = null, bool shardJob = true)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -172,7 +180,11 @@ public class PlanScriptTests
                 File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
 
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
-            Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj", "tests/Example.Tests/Tests.csproj");
+            // The shard legs need the job that runs them: plan.ps1 shards only when ci.yml has a `host-tests` job (#2454).
+            if (shardProject is not null && shardJob) { Write(".github/workflows/ci.yml", "jobs:\n  host-tests:\n    runs-on: ubuntu-latest\n"); }
+            var baseFiles = new List<string> { "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj", "tests/Example.Tests/Tests.csproj" };
+            if (shardProject is not null && shardJob) { baseFiles.Add(".github/workflows/ci.yml"); }
+            Commit("base", baseFiles.ToArray());
             ChangedFiles.Git(folder, "tag", "v0.1.1");
             if (runsUnreadable.HasValue || unpaidApp)
             {
@@ -259,18 +271,22 @@ public class PlanScriptTests
                     JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
             // #2454: the sharded project leaves product and runs as numbered shards; nothing is sharded when it is not selected.
             var legs = JsonSerializer.Deserialize<JsonElement[]>(outputs["host-shards"])!.Select(l => $"{l.GetProperty("os").GetString()}#{l.GetProperty("shard").GetInt32()}/{l.GetProperty("of").GetInt32()}").ToArray();
-            if (shardProject is not null && outputs["product"] == "true")
+            if (shardProject is not null && shardJob && outputs["product"] == "true")
             {
                 var os = wholeRing ? new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" } : new[] { "ubuntu-latest" };
                 if (eventName == "pull_request") { os = os.Where(o => o != "windows-11-arm").ToArray(); }
                 Assert.Equal(os.SelectMany(o => new[] { 1, 2, 3 }.Select(n => $"{o}#{n}/3")), legs);
                 Assert.DoesNotContain(shardProject, JsonSerializer.Deserialize<string[]>(outputs["test-projects"])!);
                 Assert.Equal("true", outputs["host-sharded"]);
+                Assert.Equal("true", outputs["host-tests"]); // the host-tests job's own gate
             }
             else
             {
                 Assert.Empty(legs);
                 Assert.Equal("false", outputs["host-sharded"]);
+                Assert.Equal("false", outputs["host-tests"]);
+                // Not sharded (no host-tests job in ci.yml): the project stays in product's list, so its tests still run.
+                if (shardProject is not null && outputs["product"] == "true") { Assert.Contains(shardProject, JsonSerializer.Deserialize<string[]>(outputs["test-projects"])!); }
             }
             Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
             Assert.Equal("!cancelled() && github.event_name != 'pull_request' && (needs.plan.outputs.app-installer == 'true')",

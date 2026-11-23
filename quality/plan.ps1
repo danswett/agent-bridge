@@ -98,9 +98,15 @@ $productOs = @($runners.Keys | Where-Object { ($whole -or $_ -in $platforms) -an
 if ($productOs.Count -eq 0 -and $productIds.Count -gt 0) { $productOs = @($runners.Keys | Where-Object { -not $platform -or $_ -eq $platform } | ForEach-Object { $runners[$_] }) }
 
 # The sharded project leaves product's list when it runs as shards. The shard job runs on the runners the project's
-# own suites declare (every product runner in the whole ring), one leg per shard, and not on the fast ring.
+# own suites declare (every product runner in the whole ring), one leg per shard, and not on the fast ring. Two more
+# conditions keep its tests from going unrun: ci.yml must have the `host-tests` job that runs the legs (the project leaves
+# product only when something else runs it), and a main push whose product job is skipped (docs or ordinary-test-only
+# changes) emits no legs, since product's own evidence is being reused and a shard job would only repeat it.
 $hostLegs = @()
-$sharded = $Shards -gt 1 -and -not $FastRing -and $ShardProject -in $testProjects
+$ciYml = Join-Path $root '.github/workflows/ci.yml'
+$hostJob = (Test-Path $ciYml) -and (Select-String -Path $ciYml -Pattern '^  host-tests:\s*$' -Quiet)
+$productSkippedOnMain = $MainPush -and -not $whole -and $selection.nonProductOnly -eq $true
+$sharded = $Shards -gt 1 -and -not $FastRing -and $hostJob -and -not $productSkippedOnMain -and $ShardProject -in $testProjects
 if ($sharded) {
     $shardPlatforms = @($productSuites | Where-Object { $_.project -eq $ShardProject } | ForEach-Object { $_.platforms })
     $shardOs = @($runners.Keys | Where-Object { $whole -or $_ -in $shardPlatforms } | ForEach-Object { $runners[$_] } | Where-Object { $_ -in $productOs })
@@ -149,6 +155,8 @@ $outputs['product-os'] = ConvertTo-JsonArray $productOs
 # even when the whole solution runs.
 $outputs['host-shards'] = ConvertTo-JsonArray $hostLegs
 $outputs['host-sharded'] = if ($sharded) { 'true' } else { 'false' }
+# The host-tests job's own gate: true exactly when it has legs, so a skipped host-tests is never mistaken for a pass of what it ran.
+$outputs['host-tests'] = $outputs['host-sharded']
 $outputs['test-filter'] = "$($selection.testFilter)"
 # Only the catalog's exact post-merge names; anything else, an unknown tier too, blocks.
 $postMerge = @($selection.postMergeJobs)
@@ -199,8 +207,12 @@ foreach ($job in $Jobs) {
 }
 $md.Add("")
 if ($outputs['product'] -eq 'true') {
-    $projects = if ($whole) { 'all of AgentBridge.slnx' } else { (@($testProjects | ForEach-Object { Code $_ }) -join ', ') }
+    $projects = if ($whole) { 'all of AgentBridge.slnx' + $(if ($sharded) { " except $(Code $ShardProject)" }) } else { (@($testProjects | ForEach-Object { Code $_ }) -join ', ') }
     $md.Add("product tests $(if ($projects) { $projects } else { 'no .NET test project' }), on $((@($productOs) -join ', ')).")
+    $md.Add("")
+}
+if ($sharded) {
+    $md.Add("$(Code $ShardProject) runs as $Shards shards in host-tests, on $((@($shardOs) -join ', ')).")
     $md.Add("")
 }
 $md.Add("| Suite | Status | Runs in | Why |")
