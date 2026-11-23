@@ -830,7 +830,9 @@ already in A.
   can read it, never sent to the relay, never logged; it rotates at each host restart, which costs one "changed" observation. A stolen key lets
   whoever also holds the hashes (the relay, or an agent with read scope) guess short unsent text offline, so a theft means rotating the key and
   treating recent hashes as exposed.
-* **What the read may capture.** Only the composer region, as the send path does; never the rest of the screen. A suggested-prompt placeholder can
+* **What the read sees.** The screen read the send path uses (`ReadScreenAsync`) returns the whole screen and the composer is then found in it, so
+  a background read would see everything on screen (prompts, paths, output), in host memory. Only the composer-derived length and keyed hash may
+  leave that step: the rest is discarded at once, never stored, logged or published, and a test must show it. A suggested-prompt placeholder can
   look like unsent text (`LiteDeliver.ComposerEmptyAsync` has to tell them apart for a send), so the background read applies the same rule or
   it would report unsent input that the person never typed.
 * **What B leaks to the relay and to agents with read scope:** that a session has unsent text, its length, and whether it changed between
