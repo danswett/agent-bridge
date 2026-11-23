@@ -26,6 +26,67 @@ public sealed class CiRunnerGuardProbeTests
 
     static IReadOnlyList<string> Check(string yaml) => RunnerRouting.Violations(yaml, "ci.yml");
 
+    // R4zzB226 P1-1: a matrix (or another job's output) built from something the workflow doesn't hold may name any
+    // runner, so it fails closed, as vars.RUNNER and inputs.runner do written directly.
+    [Theory]
+    [InlineData("${{ fromJSON(vars.OSES) }}", "${{ matrix.os }}")]
+    [InlineData("${{ fromJSON(inputs.oses) }}", "${{ matrix.os }}")]
+    [InlineData("${{ fromJSON(github.event.pull_request.title) }}", "${{ matrix.os }}")]
+    [InlineData("${{ fromJSON(vars.OSES) }}", "${{ " + Guard + " && matrix.os || 'windows-latest' }}")]
+    [InlineData("${{ fromJSON(vars.OSES) }}", "${{ " + Guard + " && 'ab-ci' || matrix.os }}")]
+    public void A_matrix_from_a_variable_input_or_the_event_is_flagged(string os, string runsOn) =>
+        // Quoted, so the YAML is readable and the flag comes from the source, not an unreadable file.
+        Assert.Contains("without the guard", string.Join("\n", Check(Workflow(runsOn, strategy: $"strategy: {{ matrix: {{ os: '{os}' }} }}"))));
+
+    // R4zzB226 P2-2, P2-3: a label built from pieces, or a part of the pool's label set, can reach the pool too.
+    [Theory]
+    [InlineData("${{ format('{0}-{1}', 'ab', 'ci') }}")]
+    [InlineData("${{ format('ab-{0}', 'ci') }}")]
+    [InlineData("${{ join(fromJSON('[\"ab\",\"ci\"]'), '-') }}")]
+    [InlineData("[windows, x64]")]
+    [InlineData("windows")]
+    [InlineData("[x64]")]
+    [InlineData("{labels: [windows, x64]}")]
+    public void A_built_label_or_a_subset_of_the_pools_labels_is_flagged(string runsOn) =>
+        Assert.Contains("without the guard", string.Join("\n", Check(Workflow(runsOn))));
+
+    [Theory]
+    [InlineData("[ubuntu-latest]")]
+    [InlineData("macos-15")]
+    [InlineData("${{ fromJSON('[\"ubuntu-24.04\"]') }}")]
+    [InlineData("${{ fromJSON('\"windows-11-arm\"') }}")]
+    public void A_hosted_label_alone_or_from_a_fromJSON_literal_is_allowed(string runsOn) => Assert.Empty(Check(Workflow(runsOn)));
+
+    [Fact]
+    public void A_matrix_include_runner_from_a_variable_is_flagged() =>
+        Assert.NotEmpty(Check(Workflow("${{ matrix.runner }}", strategy: "strategy: { matrix: { include: [ { runner: '${{ vars.R }}' } ] } }")));
+
+    [Theory]
+    [InlineData("${{ vars.R }}", true)]
+    [InlineData("${{ inputs.r }}", true)]
+    [InlineData("${{ steps.pick.outputs.r }}", false)]
+    public void A_runner_from_another_jobs_output_is_flagged_when_that_output_reads_a_variable_or_input(string output, bool flagged)
+    {
+        var yaml = $$$"""
+            name: ci
+            on: [push, pull_request]
+            jobs:
+              plan:
+                runs-on: ubuntu-latest
+                outputs:
+                  r: {{{output}}}
+                steps:
+                  - id: pick
+                    run: echo "r=ubuntu-latest" >> "$GITHUB_OUTPUT"
+              product:
+                needs: plan
+                runs-on: ${{ needs.plan.outputs.r }}
+                steps:
+                  - run: echo hi
+            """;
+        Assert.Equal(flagged, Check(yaml).Count > 0);
+    }
+
     [Fact]
     public void The_product_line_proposed_for_ci_yml_is_allowed()
     {
