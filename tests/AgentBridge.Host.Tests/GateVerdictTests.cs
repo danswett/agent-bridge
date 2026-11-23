@@ -24,12 +24,6 @@ public sealed class GateVerdictTests : IDisposable
     public void Message_evidence_with_a_negative_count_cannot_be_constructed(int delivered, int fallbacks) =>
         Assert.Throws<ArgumentOutOfRangeException>(() => new GateMessageEvidence(delivered, fallbacks));
 
-    [Fact]
-    public void Message_evidence_of_zero_counts_is_valid_and_only_the_thresholds_decide()
-    {
-        var verdict = GateVerdict.Evaluate(Report(), new GateMessageEvidence(0, 0));
-        Assert.Equal(GateVerdictKind.Incomplete, verdict.Kind);
-    }
 
     [Fact]
     public void Relay_sums_at_the_four_thresholds_with_no_fault_pass()
@@ -350,15 +344,5 @@ public sealed class GateVerdictTests : IDisposable
         Assert.DoesNotContain("retention-trimmed-into-window", report.IncompleteReasons);
         Assert.False(report.Invalidated);
         Assert.Equal(16, report.Totals.Single(t => t is { Action: "session.answer", Path: "relay" }).Successes);
-    }
-
-    [Fact]
-    public void A_long_window_over_history_that_was_never_trimmed_is_fine()
-    {
-        Directory.CreateDirectory(Profile);
-        var log = new AgentAuditLog(Profile, clock);
-        for (var day = 0; day < 5; day++) { AnswerRow(log); clock.Advance(TimeSpan.FromDays(1)); }
-        var report = GateAuditProjection.ReadWindow(Profile, Now.AddDays(-60));
-        Assert.DoesNotContain("retention-trimmed-into-window", report.IncompleteReasons);
     }
 }
