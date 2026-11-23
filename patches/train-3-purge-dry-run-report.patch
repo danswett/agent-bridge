@@ -1,0 +1,113 @@
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+index 7f4dc13a..4ebe1dce 100644
+--- a/.github/workflows/release-train.yml
++++ b/.github/workflows/release-train.yml
+@@ -267,3 +267,82 @@ jobs:
+           if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
+           $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
+           ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
++
++  purge:
++    name: Refresh the release-list CDN
++    # After a release is published, purge the relay's list pages by URL and check the relay serves the new
++    # release (#3870 option A; the Worker's zone-keyed cache key is #3880). Failing loudly here never
++    # unpublishes anything: the release is out, the relay is just not yet showing it.
++    needs: [pick, publish]
++    if: needs.publish.result == 'success'
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    # Main only; holds the secret CF_PURGE_TOKEN (Cloudflare Cache Purge on the slipgates.com zone, nothing
++    # else) and the variable CF_ZONE_ID, set in GitHub settings, never typed in a terminal.
++    environment: release-purge
++    permissions: {}
++    steps:
++      - name: Purge the list pages by URL, then check the relay serves the published release
++        shell: pwsh
++        env:
++          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
++          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
++          TAG: v${{ needs.pick.outputs.version }}
++        run: |
++          $ErrorActionPreference = 'Stop'
++          if (-not $env:CF_PURGE_TOKEN -or -not $env:CF_ZONE_ID) { throw 'CF_PURGE_TOKEN or CF_ZONE_ID is not set in the release-purge environment' }
++          # The public zone URLs the Worker keys its cache on: the page clients read (first ten) and the
++          # larger page older clients still ask for.
++          $base = 'https://releases.slipgates.com/repos/danswett/agent-bridge/releases'
++          $urls = @("${base}?per_page=10&page=1", "${base}?per_page=100&page=1")
++          $headers = @{ Authorization = "Bearer $env:CF_PURGE_TOKEN" }
++          $body = @{ files = $urls } | ConvertTo-Json -Compress
++          $answer = Invoke-RestMethod -Method Post -Uri "https://api.cloudflare.com/client/v4/zones/$env:CF_ZONE_ID/purge_cache" -Headers $headers -ContentType 'application/json' -Body $body
++          if (-not $answer.success) { throw "Cloudflare refused the purge: $(($answer.errors | ForEach-Object { $_.message }) -join '; ')" }
++          Write-Host "purged $($urls.Count) URLs"
++          # Re-fetch until both pages name the published tag with a fresh copy, within a minute.
++          $stale = $null
++          foreach ($attempt in 1..6) {
++            $stale = $null
++            foreach ($url in $urls) {
++              $response = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'application/vnd.github+json' } -SkipHttpErrorCheck
++              $age = [int](@($response.Headers['Age'])[0] ?? -1)
++              $tags = if ($response.StatusCode -eq 200) { @(($response.Content | ConvertFrom-Json) | ForEach-Object { $_.tag_name }) } else { @() }
++              if ($response.StatusCode -ne 200) { $stale = "$url answered $($response.StatusCode)" }
++              elseif ($tags -cnotcontains $env:TAG) { $stale = "$url does not list $env:TAG yet (Age $age)" }
++              elseif ($age -lt 0 -or $age -gt 120) { $stale = "$url lists $env:TAG but its copy is $age seconds old" }
++            }
++            if (-not $stale) { break }
++            Start-Sleep -Seconds 10
++          }
++          if ($stale) {
++            Write-Host "::error title=release train::the relay is still stale after the purge: $stale. The release is published; the CDN list was not refreshed."
++            exit 1
++          }
++          Write-Host "the relay serves $env:TAG"
++
++  dry-run-report:
++    name: Dry run report
++    # Only for a dry run: says what the train would have published and whether verification passed.
++    needs: [pick, verify]
++    if: always() && inputs.dry_run
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: What a real run would do
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++          VERIFY: ${{ needs.verify.result }}
++        run: |
++          if [ -z "$SHA" ]; then
++            echo "### Release train dry run: nothing to publish (no new verified commit)" >> "$GITHUB_STEP_SUMMARY"
++            exit 0
++          fi
++          echo "### Release train dry run: would publish v$VERSION (commit $SHA, CI run $RUN_ID); verification: $VERIFY" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$VERIFY" != "success" ]; then
++            echo "::error title=release train dry run::verification would fail: nothing would be published"
++            exit 1
++          fi
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index a6811a1d..2f86349b 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -1217,6 +1217,8 @@ starvation lasts until the train lands.
+   `ci.yml`'s push runs leave the PWA's WebKit legs out and `pwa-webkit.yml` runs them hourly on main's head; the train then calls it at the commit it picked
+   (the `webkit` job) and `publish` needs it to have succeeded. With the variable unset (the default) the job is skipped and the train behaves as without it.
+   The hourly run's failures feed main-red as their own stream (`quality/main-red.ps1`).
++* **After it publishes.** The `purge` job (environment `release-purge`) purges the relay's list pages by URL and checks the relay serves the new release
++  (#3870). Failing there never unpublishes anything: the release is out, the relay is just not yet showing it.
+ * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
+   unsigned, until it gains the sign step.
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index efc94e57..ad3b3752 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1001,7 +1001,7 @@ suites:
+     runner: hosted
+     triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
+     command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
+-    where: release-train.yml pick, verify, alert, publish
++    where: release-train.yml pick, verify, alert, publish, purge, dry-run-report
+     status: exists
+ 
+   - id: pwa-iphone
