@@ -395,6 +395,16 @@ is `RotationRequired` and G7 readiness holds; None, Unavailable, Other and every
 refusal never qualify. This contract has no producer: until the receiver seals it
 the value is unavailable, not None.
 
+The App adapter implements `IVerifiedGrantReader` and internally constructs the sealed,
+read-only `VerifiedGrantRead` from its verified problem, computed G7 readiness and list
+data. The VM handles no contexts, keys or proof verification. Its separate `CanIssueFirst`
+requires typed RotationRequired plus G7Ready; list/revoke remain unavailable, and New grant
+uses the normal person prepare/confirm path. The notice describes first-issue rotation,
+not a completed rotation: only the verified receipt's `Rotated` confirms that. Without
+the adapter the reader returns Unavailable/G7Ready=false; production stays unavailable
+until G4 + PR2 land and AcceptHostSign is ON. Cached list/first-issue gates also require
+the receiver id captured for that read; a changed-receiver reply is discarded, retaining only stale rows.
+
 ### Sealed paginated grant.read DATA
 
 `FleetGrantReadDataResult(Page, Proof)` and `FleetGrantReadDataProof.Seal/Verify/Parse`
@@ -579,7 +589,7 @@ exception. Assignments and rollout need separate briefs and review; this contrac
 | G8 | Windows app list/counters/revoke and pending/offline state; after G7 | Receiver counters, tombstone receipt, in-flight visibility and stale-state labeling |
 | G9 | Remote grant launch via signed FleetActionEnvelope v1; after G5 and existing own-peer messaging trust, no separate roster gate (Nov 21, 12:50 PT) | Wrong account/audience, envelope replay, stolen id, offline target and kill switch; receiver-side grant and same caps as local |
 | G10 | Remote grant stop and multi-receiver issuance partitions; after G6/G8/G9 | Generation/target fence, quota sums, no borrowing, partial issue/revoke receipts |
-| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation |
+| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension. Two slices: A launch-remote (after G9c2 and Host-transport evidence), B end wrappers (after G10); see [fleet-grants-cli.md](fleet-grants-cli.md) "G11 slices" | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation; no wrapper is removed (G12) |
 | G12 | Retire wrappers/tools sync after approved cutover evidence; phone grant UI remains later | No surviving launch/end HA submissions; preserve separately authorized messaging and all person guards |
 
 Retirement targets are Fleet `launch-remote.ps1` launch-submit/MQTT/HA presses,
@@ -590,6 +600,25 @@ Do not remove `reply-session`, messaging HA fallback or lookup scripts as a side
 effect of this design; those have separate umbrella slices.
 No wrapper may synthesize a grant, click a person confirmation or auto-retry an
 unconfirmed request. Quality/SRE owns disposable-VM cutover evidence separately.
+
+### G9 wire and cutover rows (HA retirement, #1396)
+
+`FleetActionEnvelope v1` fields: `v`, `action` (`fleet.launch`; G10 adds `fleet.end`), `account`,
+`sourceDevice`, `subject`, `audience` (receiver node id), `grantId`, `generation`, `requestId`, `nonce`,
+`expiresAt` and `payloadSha256` (SHA-256 of the canonical launch request, base64url). It is signed by the
+source device key and never accepted as an EnvelopeBody v1 message. G9 limits: expiry at most 120 s, a
+128-bit random nonce, and a receiver replay cache keyed by (sourceDevice, nonce) kept until expiry plus
+clock skew. An offline target refuses with the local exit codes; it never queues and never falls back to HA.
+The G9 PR splits envelope (sign/verify, replay) from receiver (grant gate, launch) if over the PR cap.
+
+Cutover order, each step gated on Quality/SRE Host-transport evidence, never on this doc alone:
+
+1. G9 lands the remote launch path; `launch-remote.ps1 -Transport` default changes from `HA` to `Host`
+   in a separate small Fleet PR (HA remains selectable only until row 4).
+2. The Fleet dispatcher's FleetLaunch stops its three HA calls and calls the host verb.
+3. G10/G11 follow for end and wrappers.
+4. G12 removes the HA launch path: `launch-remote.ps1` HA/MQTT presses and the HA connector's
+   `launch_options` and `new_session_result` entities (HaConnector.Launch, HaContract.Launch), with tests.
 
 No open decision is required to brief G1. Remote acting requires existing own-peer
 messaging trust, a signed fleet-action envelope and the receiver-side grant, not a roster;

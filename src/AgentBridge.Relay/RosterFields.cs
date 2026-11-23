@@ -106,7 +106,7 @@ public static class RosterFields
 // from its next snapshot, so the relay's restart or a machine's leaving leaves no session behind.
 public sealed class SessionRegistry(TimeProvider time)
 {
-    sealed record Held(string Epoch, long Seq, DateTimeOffset At, DateTimeOffset ReceivedAt, string Json);
+    sealed record Held(string Epoch, long Seq, DateTimeOffset At, DateTimeOffset ReceivedAt, string Json, bool Announced = false);
     readonly ConcurrentDictionary<(string Account, string Machine), Held> held = new();
 
     // Null when kept, else why not: too-large, bad-record, or stale (not newer than what is held).
@@ -130,8 +130,25 @@ public sealed class SessionRegistry(TimeProvider time)
         }
     }
 
-    public void Drop(string account, string machine) => held.TryRemove((account, machine), out _);
+    // True when subscribers still think the machine is online: one already announced offline (a quiet
+    // minute) is not announced again.
+    public bool Drop(string account, string machine) => held.TryRemove((account, machine), out var old) && !old.Announced;
 
+    // Machines whose record has gone a minute without a new snapshot and was not yet announced. Read
+    // only: the caller marks each under its own account's gate, where a newer put wins.
+    public List<(string Account, string Machine)> Expired()
+    {
+        var now = time.GetUtcNow();
+        return [.. held.Where(h => !h.Value.Announced && now - h.Value.ReceivedAt > RosterFields.HeartbeatWindow).Select(h => h.Key)];
+    }
+
+    // True once, when the entry is still the quiet one and is now marked announced. A later put replaces it and rearms.
+    public bool MarkExpired(string account, string machine)
+    {
+        var key = (account, machine);
+        return held.TryGetValue(key, out var h) && !h.Announced && time.GetUtcNow() - h.ReceivedAt > RosterFields.HeartbeatWindow
+            && held.TryUpdate(key, h with { Announced = true }, h);
+    }
     // The account's held machines. Fresh is false once a host has gone a minute without a new
     // snapshot: its sessions are then withheld and it reads as offline, whatever its socket says.
     public List<(string Machine, string Json, DateTimeOffset LastSeen, bool Fresh)> Read(string account)

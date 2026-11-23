@@ -110,6 +110,9 @@ public static class Limits
     public const int OptionId = 64;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
+    // activity.background.shells (v1-sessions.md "Background"): a shell whose latest start or "still running"
+    // mark is older than this stops counting, so a finished session whose shell never reported back reads idle (#1108).
+    public static readonly TimeSpan BackgroundShellStale = TimeSpan.FromHours(4);
     // Free text in an answer (session.answer's text, or a field's other), and the request.
     public const int AnswerText = 4 * 1024;
     public const int AnswerRequest = 16 * 1024;
@@ -397,6 +400,11 @@ public sealed class SessionFinishedEvidence
 
 public sealed record Session
 {
+    // Host-only, never sent: the background work counted WITHOUT the stale-shell limit (Limits.BackgroundShellStale),
+    // set only when that limit dropped a shell from activity.background. What is shown, relayed and busy-checked is aged;
+    // what an AGENT's End asks (StopService) stays the unaged count, so a silent command that still runs is never read as idle (#1396).
+    [JsonIgnore]
+    public Background? BackgroundUnaged { get; init; }
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     [Strict(Strictness.Identity)]
@@ -866,6 +874,9 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    // Host-only: called once, with the typing slot held and every fence passed, just before the keys go.
+    [JsonIgnore]
+    public Action? KeysGoing { get; init; }
     [JsonIgnore]
     public Func<string>? HandoffText { get; init; }
     [JsonIgnore]
