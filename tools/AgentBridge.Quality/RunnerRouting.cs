@@ -24,6 +24,13 @@ static partial class RunnerRouting
     private static partial Regex Label();
     [GeneratedRegex(@"^\s*\$\{\{(.*)\}\}\s*$", RegexOptions.Singleline)]
     private static partial Regex WholeExpression();
+    // GitHub-hosted labels. Any other label (windows, x64, a custom one) can match the pool's labels, so it needs the guard.
+    [GeneratedRegex(@"^\s*(ubuntu-(latest|\d{2}\.\d{2}(-arm)?)|windows-(latest|\d{4}|11-arm)|macos-(latest|\d{2}(-large|-xlarge|-intel)?))\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex Hosted();
+    // Sources the workflow doesn't hold: a matrix or a job output built from them may name any runner (R4zzB226 P1-1).
+    [GeneratedRegex(@"(?<![\w.])(vars|inputs|env|secrets)\.|(?<![\w.])github\.event(?!\w)")]
+    private static partial Regex Untrusted();
+    static bool MaySelfHost(string label) => Label().IsMatch(label) || !Hosted().IsMatch(label);
 
     public static IReadOnlyList<string> Violations(string yaml, string file)
     {
@@ -35,8 +42,11 @@ static partial class RunnerRouting
         if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode map) { return []; }
         var jobs = map.Children.Where(p => p.Key is YamlScalarNode && p.Value is YamlMappingNode)
             .ToDictionary(p => ((YamlScalarNode)p.Key).Value!, p => (YamlMappingNode)p.Value, StringComparer.Ordinal);
-        // The jobs whose own text names a label: a runner chosen from their outputs can carry it.
-        var labelled = jobs.Where(p => Label().IsMatch(Text(p.Value))).Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
+        // The jobs whose own text names a label, or whose outputs read a source the workflow doesn't hold: a runner chosen
+        // from their outputs can carry anything. A job whose outputs come from its own steps (ci.yml's plan) stays allowed.
+        var labelled = jobs.Where(p => Label().IsMatch(Text(p.Value))
+                || p.Value.Children.TryGetValue(new YamlScalarNode("outputs"), out var outputs) && Untrusted().IsMatch(Text(outputs)))
+            .Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         var privileged = Triggers(root).Intersect(Privileged).ToList();
         var problems = new List<string>();
         foreach (var (name, job) in jobs)
@@ -50,7 +60,9 @@ static partial class RunnerRouting
                 routes.AddRange(inputs.Children.Values.Where(v => Label().IsMatch(Text(v))));
             }
             var strategy = job.Children.TryGetValue(new YamlScalarNode("strategy"), out var s) ? Text(s) : "";
-            var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, strategy, labelled, name))).OfType<string>().ToList();
+            // A matrix value is a literal set when its strategy lists literals: nothing the workflow doesn't hold, no output.
+            var literalMatrix = !Untrusted().IsMatch(strategy) && !labelled.Any(other => other != name && strategy.Contains($"needs.{other}.", StringComparison.Ordinal));
+            var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, strategy, labelled, name), literalMatrix)).OfType<string>().ToList();
             if (whys.Count == 0) { continue; }
             if (whys.FirstOrDefault(w => w.Length > 0) is { } why) { problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({Guard}) around it: {why}"); }
             foreach (var trigger in privileged) { problems.Add($"{file} job {name} can take a self-hosted runner in a workflow that a {trigger} can run"); }
@@ -59,20 +71,20 @@ static partial class RunnerRouting
     }
 
     // null: never self-hosted. "": self-hosted only behind the whole guard. Otherwise why not.
-    static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost)
+    static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost, bool literalMatrix)
     {
         if (runsOn is YamlMappingNode mapping)
         {
             if (mapping.Children.ContainsKey(new YamlScalarNode("group"))) { return "a runner group"; }
-            return mapping.Children.TryGetValue(new YamlScalarNode("labels"), out var labels) ? Unguarded(labels, maySelfHost) : null;
+            return mapping.Children.TryGetValue(new YamlScalarNode("labels"), out var labels) ? Unguarded(labels, maySelfHost, literalMatrix) : null;
         }
         if (runsOn is YamlSequenceNode sequence)
         {
-            var each = sequence.Children.Select(item => Unguarded(item, maySelfHost)).Where(w => w is not null).ToList();
+            var each = sequence.Children.Select(item => Unguarded(item, maySelfHost, literalMatrix)).Where(w => w is not null).ToList();
             return each.Count == 0 ? null : each.FirstOrDefault(w => w!.Length > 0) ?? "";
         }
         var text = (runsOn as YamlScalarNode)?.Value ?? "";
-        if (!text.Contains("${{", StringComparison.Ordinal)) { return Label().IsMatch(text) ? $"the label {text.Trim()}" : null; }
+        if (!text.Contains("${{", StringComparison.Ordinal)) { return MaySelfHost(text) ? $"the label {text.Trim()}" : null; }
         var whole = WholeExpression().Match(text);
         Expr expr;
         try { expr = whole.Success && !whole.Groups[1].Value.Contains("${{", StringComparison.Ordinal) ? Expr.Parse(whole.Groups[1].Value) : throw new FormatException(); }
@@ -83,6 +95,11 @@ static partial class RunnerRouting
         if (reachable.Count == 0) { return null; }
         var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions));
         if (open.Value is not null) { return $"{open.Value} is reached without it"; }
+        // Even behind the guard, only a literal label set may name the pool: a variable, input, event field, matrix or
+        // output from them, or a built string could name any runner, so it fails closed (R4zzB226 P1-1).
+        var dynamic = reachable.FirstOrDefault(v => v.Value is not Expr.Literal && !(literalMatrix && v.Value is Expr.Path { Text: var m } && m.StartsWith("matrix.", StringComparison.Ordinal))
+            && !(v.Value is Expr.Call { Args: [Expr.Literal] } call && call.Name.Equals("fromJSON", StringComparison.OrdinalIgnoreCase)));
+        if (dynamic.Value is not null) { return $"{dynamic.Value} isn't a literal label set, so even behind the guard it could name any runner"; }
         // The whole shape: GUARD (with any narrowing && conditions) && <the one self-hosted value> || <one hosted fallback>.
         // A second ||, a second self-hosted arm or no hosted fallback is a violation even when each piece is guarded.
         var shaped = expr is Expr.Or { Arms: [Expr.And pool, var fallback] } && reachable.Count == 1
@@ -116,13 +133,34 @@ static partial class RunnerRouting
 
     static IEnumerable<Expr> Conjuncts(Expr expr) => expr is Expr.And and ? and.Arms.SelectMany(Conjuncts) : [expr];
 
+    // The labels a fromJSON literal holds (a string or an array of strings), or null if it holds anything else.
+    static string[]? JsonLabels(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => [doc.RootElement.GetString()!],
+                System.Text.Json.JsonValueKind.Array when doc.RootElement.EnumerateArray().All(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
+                    => [.. doc.RootElement.EnumerateArray().Select(e => e.GetString()!)],
+                _ => null,
+            };
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     static bool MaySelfHost(Expr value, string strategy, HashSet<string> labelled, string self) => value switch
     {
-        Expr.Literal { Value: string s } => Label().IsMatch(s),
+        Expr.Literal { Value: string s } => MaySelfHost(s),
         Expr.Literal or Expr.Compare or Expr.Not => false,
-        Expr.Call call => call.Args.Any(a => MaySelfHost(a, strategy, labelled, self)),
+        // fromJSON of a literal is that literal's labels; of anything else, whatever that is. Any other function (format,
+        // join) can build a label from pieces, so it fails closed (R4zzB226 P2-3).
+        Expr.Call { Name: var n, Args: [Expr.Literal { Value: string json }] } when n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) => JsonLabels(json) is { } labels ? labels.Any(MaySelfHost) : true,
+        Expr.Call { Name: var n } call when n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) => call.Args.Any(a => MaySelfHost(a, strategy, labelled, self)),
+        Expr.Call => true,
         Expr.Path { Text: var p } when p.StartsWith("matrix.", StringComparison.Ordinal) =>
-            Label().IsMatch(strategy) || labelled.Any(other => other != self && strategy.Contains($"needs.{other}.", StringComparison.Ordinal)),
+            Label().IsMatch(strategy) || Untrusted().IsMatch(strategy) || labelled.Any(other => other != self && strategy.Contains($"needs.{other}.", StringComparison.Ordinal)),
         Expr.Path { Text: var p } when p.StartsWith("needs.", StringComparison.Ordinal) => labelled.Any(other => p.StartsWith($"needs.{other}.", StringComparison.Ordinal)),
         // A variable, an input, the event or anything else the workflow doesn't hold may name any runner.
         _ => true,

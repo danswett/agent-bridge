@@ -884,9 +884,17 @@ start within about a minute; a queue that grows is the signal to add runners or 
   expression: the pool is reachable only through `<guard> && <self-hosted label> || <hosted label>`, other `&&` conditions
   only narrowing. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner group, a bare
   self-hosted label, a runner from a variable, input or event field, an unparseable file, and a self-hosted job where
-  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). Fork-PR
-  approval is not the guard: an approved fork run reaches hosted runners only because the guard sends it there. This lint
-  passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It fails
+  closed: only a GitHub-hosted label (`ubuntu-*`, `windows-latest`/`20xx`/`11-arm`, `macos-*`) passes unguarded, and only a
+  literal label set (a literal, `fromJSON` of a literal, or a matrix whose strategy lists literals) may name the pool, even
+  behind the guard. A matrix or job output built from `vars`, `inputs`, `env`, `secrets` or the event, any other function
+  (`format`, `join`), and a partial label set such as `[windows, x64]` are flagged. This lint passing is a precondition of
+  setting `AB_CI_SELF_HOSTED` to `true`.
+  **What the lint can't stop: a fork PR that edits `runs-on` in its own copy of a workflow**, since a fork's run uses the
+  fork's file. What stops that is the guard's same-repository test (`github.event.pull_request.head.repo.full_name ==
+  github.repository`, false for every fork) together with the repository's "Require approval for all external
+  contributors" setting. The fork-PR approval alone is not the guard: an approved fork run reaches hosted runners only
+  because the guard sends it there.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
