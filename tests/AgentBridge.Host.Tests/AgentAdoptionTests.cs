@@ -123,8 +123,9 @@ public sealed class AgentAdoptionTests : IDisposable
         {
             var handler = LocalApi.Handler(null!, null!, new FreshCaller(kind), credentials: store);
             // Its own endpoint per caller kind: a server started on the name the previous one just closed can still find
-            // an old pipe instance alive under load, and fail as EndpointInUse (#2558).
-            var endpoint = LocalEndpoint.For(Path.Combine(root, kind.ToString()));
+            // an old pipe instance alive under load, and fail as EndpointInUse (#2558). The folder must exist first: on
+            // Linux and macOS the socket is <folder>/host.sock, and Bind does not create its folder.
+            var endpoint = LocalEndpoint.For(Directory.CreateDirectory(Path.Combine(root, kind.ToString())).FullName);
             await using var server = LocalServer.Start(endpoint, handler);
             await using var channel = await LocalClient.ConnectAsync(endpoint);
             var error = await Assert.ThrowsAsync<HostErrorException>(() => channel.CallAsync(op, new { session = "sess-1" }));
