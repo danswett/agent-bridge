@@ -2342,6 +2342,46 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_device_that_filters_finished_turns_still_has_the_answered_question_withdrawn_when_the_turn_ends_at_once()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "question"], Received().Select(r => Kind(r.Notification)));
+        // Answered and finished inside the resolved delay: the finished notice replaces the question on the
+        // laptop, so the phone, which is sent none, must be told it is no longer waiting.
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        var phone = Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)).ToList();
+        Assert.Equal(["question", "resolved"], phone);
+        Assert.Equal(["question", "finished"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_question_still_waiting_to_go_never_goes_to_a_device_that_filters_the_finished_turn_that_follows_it()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        Subscribe(Laptop);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+        Assert.DoesNotContain(next.Sent, p => p.Endpoint.EndsWith(Phone, StringComparison.Ordinal));
+        Assert.Contains(next.Sent, p => p.Endpoint.EndsWith(Laptop, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Pinned_on_notifies_finished_turns_of_the_pinned_sessions_only()
     {
         Start();

@@ -1473,7 +1473,7 @@ visible notification for every push it receives. A flag left out takes its defau
 | `pinned` | true | `finished` notices for the sessions in `pinnedSessions` |
 | `all` | false | `finished` notices for every session; it covers `pinned` |
 | `deliveryFailures` | false | A count-only notice, debounced to one per 60 s and always visible, for messages a lane could not deliver. A host that does not send it ignores the flag |
-| `pinnedSessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids. An id the host does not know is ignored |
+| `pinnedSessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids of 1 to 128 characters each; a request with more, or with an empty or longer id, fails as a request. An id the host does not know is ignored |
 
 A client sends `push.subscribe` again, with the whole current `notify`, whenever a flag or a
 pin changes while notifications are on; the host replaces the device's filters. The pinned set
@@ -1481,6 +1481,7 @@ leaves the device only in this request, only to hosts of the account (the rule a
 stored with the subscription and removed with it, and is not returned by `push.list`. Sign-in
 and other notice kinds are not filtered. An older host that does not know `notify` ignores it
 and keeps sending everything. A request with a `notify` of the wrong shape fails as a request.
+A device that filters a session's finished turns is still told when a question it was shown is no longer waiting: the host sends it the `resolved` notice, and drops a question not yet sent, when the turn ends.
 
 ### `push.unsubscribe`
 

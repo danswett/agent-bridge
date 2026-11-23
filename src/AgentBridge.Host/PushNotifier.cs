@@ -904,6 +904,17 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
                     }
                     Enqueue(s, NoticeKind.Finished, null, unseen, queued: due.Queued);
+                    // A device that filters this session's finished turns is sent none, so nothing replaces
+                    // the question it was told: one still waiting to go is stale, and one it shows is withdrawn
+                    // there, as a refused finished notice's would be (below).
+                    foreach (var d in unseen.Where(d => !d.Wants(NoticeKind.Finished, id)))
+                    {
+                        outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
+                        if (t.Replaced is { } answered && shownOn.GetValueOrDefault((d.Device, id)) == answered)
+                        {
+                            Enqueue(s, NoticeKind.Resolved, answered, [d], ended: t.Removed, queued: due.Queued);
+                        }
+                    }
                     break;
                 // Checked again as it goes: a question asked once more is not resolved.
                 case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
