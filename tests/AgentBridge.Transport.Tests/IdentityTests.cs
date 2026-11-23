@@ -125,6 +125,67 @@ public sealed class IdentityTests : IDisposable
         Assert.ThrowsAny<CryptographicException>(() => DeviceKeys.LoadOrCreate(folder));
     }
 
+    // #2673: a missing reference file is not proof that no protected key exists; a new key is never written over one.
+    [WindowsFact("DPAPI exists only on Windows")]
+    [SupportedOSPlatform("windows")]
+    public void A_missing_reference_beside_a_protected_key_is_refused_and_the_key_is_left_alone()
+    {
+        var folder = Path.Combine(root, "orphan");
+        var made = DeviceKeys.LoadOrCreate(folder, KeyStorage.Dpapi);
+        var dpapi = Path.Combine(folder, "device-key.dpapi");
+        var before = File.ReadAllBytes(dpapi);
+        File.Delete(Path.Combine(folder, "device-key.json"));
+
+        foreach (var prefer in new KeyStorage?[] { null, KeyStorage.Dpapi, KeyStorage.Tpm })
+        {
+            var refused = Assert.Throws<DeviceKeyConflictException>(() => DeviceKeys.LoadOrCreate(folder, prefer));
+            Assert.Contains("device-key.dpapi", refused.Message);
+            Assert.DoesNotContain("PowerShell", refused.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("pwsh", refused.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(before, File.ReadAllBytes(dpapi));
+            Assert.False(File.Exists(Path.Combine(folder, "device-key.json")), "a refusal must not write a new reference");
+        }
+
+        // Putting the reference back is the person's recovery, and the same key opens.
+        File.WriteAllText(Path.Combine(folder, "device-key.json"), "{\"Storage\":\"dpapi\",\"Name\":null}");
+        Assert.Equal(made.Key.Public, DeviceKeys.LoadOrCreate(folder).Key.Public);
+    }
+
+    [WindowsFact("DPAPI exists only on Windows")]
+    [SupportedOSPlatform("windows")]
+    public void An_empty_profile_still_creates_a_key_and_its_reference()
+    {
+        var folder = Path.Combine(root, "fresh");
+        var made = DeviceKeys.LoadOrCreate(folder, KeyStorage.Dpapi);
+        Assert.True(File.Exists(Path.Combine(folder, "device-key.dpapi")));
+        Assert.True(File.Exists(Path.Combine(folder, "device-key.json")));
+        Assert.Equal(made.Key.Public, DeviceKeys.LoadOrCreate(folder).Key.Public);
+    }
+
+    [WindowsFact("DPAPI exists only on Windows")]
+    [SupportedOSPlatform("windows")]
+    public async Task Two_creators_on_one_empty_profile_one_wins_and_the_other_is_refused_without_touching_the_winners_key()
+    {
+        var folder = Path.Combine(root, "race");
+        using var loserReady = new ManualResetEventSlim();
+        using var loserGo = new ManualResetEventSlim();
+        var loser = Task.Run(() =>
+        {
+            DeviceKeys.BeforeDpapiWrite = _ => { loserReady.Set(); Assert.True(loserGo.Wait(TimeSpan.FromSeconds(30))); };
+            try { DeviceKeys.LoadOrCreate(folder, KeyStorage.Dpapi); return (Exception?)null; }
+            catch (Exception e) { return e; }
+            finally { DeviceKeys.BeforeDpapiWrite = null; }
+        });
+        Assert.True(loserReady.Wait(TimeSpan.FromSeconds(30)));
+
+        var winner = DeviceKeys.LoadOrCreate(folder, KeyStorage.Dpapi);
+        var written = File.ReadAllBytes(Path.Combine(folder, "device-key.dpapi"));
+        loserGo.Set();
+
+        Assert.IsType<DeviceKeyConflictException>(await loser);
+        Assert.Equal(written, File.ReadAllBytes(Path.Combine(folder, "device-key.dpapi")));
+        Assert.Equal(winner.Key.Public, DeviceKeys.LoadOrCreate(folder).Key.Public);
+    }
     [WindowsFact("the choice is between the TPM and DPAPI, which exist only on Windows")]
     [SupportedOSPlatform("windows")]
     public void A_new_profile_on_Windows_chooses_the_TPM_when_there_is_one_and_DPAPI_otherwise()

@@ -96,8 +96,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
         public int RosterInFlight;
-        // Enforce mode only (DeviceRoster.Admission): the key is not in the account's roster. It gets no control messages and no
-        // presence, and may answer only a person's device that opened a channel to it (HeardFrom).
+        // Enforce only: the key is not in the roster. No control messages, no presence; it answers only a device that sent to it first.
         public volatile bool Pending;
         public readonly ConcurrentDictionary<string, byte> HeardFrom = new();
         public TokenBucket? RegistryReads;
@@ -201,7 +200,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await conn.CloseAsync(CloseCodes.Removed, "removed");
             return;
         }
-        // The store could not say whether this account is in enforce: turned away to try again, never served as if it were not.
+        // A latched account's store could not answer: turned away to try again, never served as if it were not in enforce.
         if (admission == DeviceRoster.Admission.Unavailable)
         {
             metrics.Refused(CloseCodes.Restarting);
@@ -590,15 +589,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             : DeviceRoster.AppendReply(id, results);
     }
 
-    // Re-tags the account's connected devices against its roster after a change: an approved device stops being pending, a
-    // removed one is closed with Removed. Nothing changes for an account in observe, where every device reads as Open.
+    // Re-tags the account's connected devices after a roster change: an approved one stops being pending, a removed one is closed.
     async Task ReclassifyAsync(string accountId)
     {
         if (!accounts.TryGetValue(accountId, out var devices)) { return; }
         foreach (var c in devices.Values.ToArray())
         {
             var admission = await deviceRoster.AdmissionAsync(accountId, c.DeviceId);
-            // A read that failed changes nothing: no device is un-pended, and none closed, on a transient store error.
+            // A failed read keeps every current tag.
             if (admission == DeviceRoster.Admission.Unavailable) { continue; }
             c.Pending = admission == DeviceRoster.Admission.Pending;
             if (admission == DeviceRoster.Admission.Removed) { await c.CloseAsync(CloseCodes.Removed, "removed"); }
