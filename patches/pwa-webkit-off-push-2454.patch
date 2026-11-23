@@ -1,0 +1,178 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 76a9f418..530be854 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1589,11 +1589,13 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
++        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it, and its
++        # push runs leave it to pwa-webkit.yml (hourly and before a release) while the repository
++        # variable PWA_WEBKIT_OFF_PUSH is 'true' (#2454, item B). Unset, nothing changes.
+         include: >-
+           ${{ fromJSON(format('[{0}{1}]',
+           '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+-          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
++          github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
+     runs-on: ubuntu-24.04
+     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
+index c0189fa6..4d38caf2 100644
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -45,7 +45,7 @@ on:
+     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+   status:
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
++    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, PWA WebKit, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+     types: [in_progress, completed]
+   check_suite:
+     types: [completed] # the only type Actions accepts here
+diff --git a/.github/workflows/pwa-webkit.yml b/.github/workflows/pwa-webkit.yml
+new file mode 100644
+index 00000000..ad1ff3ef
+--- /dev/null
++++ b/.github/workflows/pwa-webkit.yml
+@@ -0,0 +1,91 @@
++name: PWA WebKit
++
++# The PWA's WebKit legs off the push path (#2454, item B; the owner decides whether to turn it on).
++# With the repository variable PWA_WEBKIT_OFF_PUSH set to 'true', ci.yml's main push runs leave WebKit
++# out, and this runs it instead: on main's head every hour, by hand, and, called by the release train,
++# on the commit the train would publish. Unset (the default), every job here is skipped and ci.yml
++# runs WebKit on every main push, as before. WebKit is the post-merge tier (quality/catalog.yml
++# pwa-ui suite, #3209), so it never holds a merge either way. Its steps are pwa-ui's in ci.yml for
++# the WebKit project; keep the two the same.
++on:
++  schedule:
++    - cron: '41 * * * *'
++  workflow_dispatch:
++  workflow_call:
++    inputs:
++      ref:
++        description: The commit to test (the release train's pick)
++        type: string
++        required: true
++
++permissions:
++  contents: read
++
++# An hourly run gives way to the next one; a train's call for a commit is a group of its own.
++concurrency:
++  group: pwa-webkit-${{ inputs.ref || 'main' }}
++  cancel-in-progress: ${{ inputs.ref == '' }}
++
++jobs:
++  webkit:
++    name: webkit ${{ matrix.shard }}
++    # Only while the switch is on, in this repository, and only for main or the train's commit.
++    if: vars.PWA_WEBKIT_OFF_PUSH == 'true' && github.repository == 'danswett/agent-bridge' && (inputs.ref != '' || github.ref == 'refs/heads/main')
++    strategy:
++      fail-fast: false
++      matrix:
++        shard: ['1/3', '2/3', '3/3']
++    runs-on: ubuntu-24.04
++    # As pwa-ui's legs (#689): room for WebKit's 181 system packages on a slow apt mirror.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    env:
++      PWA_SKIP_E2E: '1'
++      PROJECT: webkit
++      SHARD: ${{ matrix.shard }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ inputs.ref || github.sha }}
++          persist-credentials: false
++          fetch-depth: 1
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-webkit
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: webkit
++          working-directory: pwa
++      - run: npx playwright install "$PROJECT"
++      # Only main's own hourly run saves (ci.yml's main pushes no longer do while this is on); never a
++      # train's call or a run by hand.
++      - name: Save Playwright's browsers to main's cache
++        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && inputs.ref == '' && steps.browsers.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.browsers.outputs.cache-primary-key }}
++      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
++      # Every test that failed, then passed on the one WebKit retry (#1692), so a retry never hides a flake.
++      - name: Flaky report
++        if: ${{ !cancelled() }}
++        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-webkit-${{ strategy.job-index }}
++          path: pwa/test-results
++          retention-days: 7
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 20cf6d13..085b3fc9 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -879,8 +879,9 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui
+-    # WebKit runs after merge (#3208); Chromium blocks.
++    where: ci.yml pwa-ui; pwa-webkit.yml webkit
++    # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
++    # runs it hourly and before a release instead of on every main push (#2454).
+     tier: post-merge
+     tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
+     baseline: { files: 25 }
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a4..8dabfb71 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -443,6 +443,12 @@ public class CiPlanTests
+             "ci.yml job app leaves app (win-x86) to main, but the catalog doesn't make it post-merge" })]
+     [InlineData("github.event_name != 'pull_request' && ',", "github.event_name == 'push' && ',", new[] { "app (win-arm64)", "ha-integration" },
+         new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
++    // The post-merge legs may step off main's pushes behind PWA_WEBKIT_OFF_PUSH (#2454), in exactly that one form.
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',",
++        new[] { "app (win-arm64)", "ha-integration" }, new string[0])]
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || true) && ',",
++        new[] { "app (win-arm64)", "ha-integration" },
++        new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
+     public void Pull_requests_skip_exactly_the_catalog_post_merge_jobs_and_legs(string from, string to, string[] tierJobs, string[] expected)
+     {
+         var catalog = Fixture.Catalog();
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 8c389b3c..3d2d283a 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -102,7 +102,9 @@ static partial class CiPlan
+     // Tiers (quality/README.md §4.9, #3209): a pull request runs only blocking legs, main both. A
+     // job with some post-merge legs lists them in its matrix include only off pull requests.
+     const string NotPullRequest = "github.event_name != 'pull_request'";
+-    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request' && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
++    // The post-merge legs may also step off main's push runs behind PWA_WEBKIT_OFF_PUSH (pwa-webkit.yml, #2454): that one
++    // conjunct, exactly; pull requests still run the blocking legs alone.
++    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request'(?: && \(github\.event_name != 'push' \|\| vars\.PWA_WEBKIT_OFF_PUSH != 'true'\))? && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
+     private static partial Regex TierInclude();
+     [GeneratedRegex(@"\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}")]
+     private static partial Regex MatrixName();
