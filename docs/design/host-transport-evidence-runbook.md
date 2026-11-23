@@ -18,9 +18,10 @@ elevated relay-drop session below. The parent design is updated in a follow-up s
 - **SRE** runs the evidence, presses every control the run needs that is not listed under OWNER, and keeps the raw records.
 - **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy. But the host app update installs
   through the app, and **the restart that finishes it is OWNER-only** (guard 67): the owner presses that restart on each disposable host.
-- **OWNER** is live for exactly these: **the dry run's elevated-session approval and Restart press (S-2)**, **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus
-  a restart if a lost-response fault needs one (S5). The owner types nothing and runs no terminal step: they use the host's own person
-  surface (the app) when SRE asks.
+- **OWNER** is live for exactly these: **the dry run's elevated-session approval and Restart press (S-2)**, **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**,
+  **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus **the approvals the owner gives
+  through the Chief**: the quiet-hour drain, the main run's elevated session, the go to launch, each induced event, and recovery if it is ever needed. The owner runs no terminal step.
+  The only thing the owner types is **the grant digest at S1** (below); every other press is in the host's own person surface (the app) when SRE asks.
 - **Quality** attests the receipt against the bars; **the lead** approves the flip from the attested receipt.
 - A builder who wrote the code never witnesses the run.
 
@@ -43,7 +44,7 @@ time. Anything else is out of bounds and stops the run.
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 | **Dry run, before the main run:** the elevated session on the **spare host** | The owner approves launching it, through the Chief, as its own approval; SRE uses it | The owner, once, before the dry run. It is ended when the dry run ends; the main run's elevated session is a separate approval |
 | **Dry run:** the owner's **Restart** press on the spare host | OWNER, in the app, once per dry-run event | The owner, per event, before it happens |
-| **Dry run:** run `relay-drop-event.ps1` on the spare host (the block, the proofs, the restore, the disarm) | The elevated session on the spare host, started by SRE | The owner, per event; the commands are exactly the script below, nothing else |
+| **Dry run:** run `relay-drop-event.ps1` on the spare host (the block, the proofs, the restore, the disarm) | The elevated session on the spare host, **started by the person the approval names** (see "Who starts it") | The owner, per event; the commands are exactly the script below, nothing else |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real Home Assistant (there is no disposable HA: the HA-fallback checks are NOT COVERED and the HA comparison is waived by the owner).
 
@@ -67,7 +68,7 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
   "Restart the host" bar when the app shows that a restart is required; wherever this runbook says "Restart" for the owner it means that control. **No relay-link
   restart command is added**: none is supported, and this run does not create one.
 - **Who starts it, and any UAC click.** The owner's approval names the **one person who starts the elevated session** on the drop host (for the dry run, on the spare
-  host), and that person, not the owner, clicks any UAC prompt or enters any administrator credential there. **The owner clicks nothing and types nothing.** If the
+  host), and that person, not the owner, clicks any UAC prompt or enters any administrator credential there. **The owner clicks and types nothing at that session.** If the
   session cannot be started without the owner clicking or typing, the run waits and the owner is asked; nothing is improvised.
 - **The dry-run spare host.** It is **a fleet VM with no live sessions** that is **not one of the run's hosts**, so the owner's drain decision for the run does not
   cover it and none is needed. It is **named off the repository in the dry-run approval**, and SRE verifies it has no live session before S-2. A Restart press and
@@ -250,7 +251,7 @@ sha256, and the load readings before and after.
 | **S-2** | SRE; **OWNER presses the restart** | **Dry run** of `relay-drop-event.ps1` on a **spare host** (not a disposable host of the run), before anything else. It checks that the elevated session survives the host restart, the scope check, both proofs, the restore and the disarm, and that the profile defaults and the RDP rules are unchanged. **It sends no launch**: the dry run has no grant, no grant row, no source host and no session name, and it must never put a live session on the spare host; it proves only session survival, the block, the restart, the proofs, the restore and the disarm. **Not started until the three dry-run approvals in the table above are given; no dry run has happened.** A failure stops the run until it is fixed and the dry run is repeated | The dry run's log with its sha256, the process ids before and after, and the result |
 | **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, load (the HA fallback counter is NOT COVERED: no disposable HA) | The plan, the baseline reads |
-| **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
+| **S1** | **OWNER** (SRE asks) | The owner issues the launch grant in the app page **Fleet > Grants > New grant**: the grant document from the frozen plan is in the "Grant document" box, the owner presses **"Review grant"**, checks the receiver-verified summary, scope, caps and expiry, **types the displayed SHA-256 digest into "Type the exact digest to confirm"**, and presses **"Issue grant"** (AutomationIds `GrantPrepare`, `GrantPersonDigest`, `GrantConfirm`) | The grant id, scope and caps (no secret) |
 | **S2** | SRE | **Smoke:** one Host launch on one pair (no HA twin: the comparison is waived by the owner). Stop if it does not start and register exactly once | The receipt, the three double-launch counts |
 | **S3** | SRE | **Main Host launches** (the HA comparison is waived by the owner, so these are Slipgates-path launches on their own bars, not compared pairs; no parity claim), in batches no larger than the cap, each batch ended by list before the next | Per launch: the receipt and exit code, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
@@ -262,16 +263,16 @@ sha256, and the load readings before and after.
 | **S10** | SRE | **End-by-list sweep:** end whatever the plan's names still show live, by the ends rule below (two idle reads, name check, end only, worktrees stay), never a raw kill; confirm none of the plan's names remains on any disposable host | The sweep results and the final session lists |
 | **S11** | SRE, then Quality | Assemble the receipt (the frozen plan, actual counts and denominators per floor, every record with its sha256, the evidence path, failed and INCONCLUSIVE runs kept); Quality attests against the bars | The receipt |
 
-**The S5 sequence (lost response).** It is **not rehearsed in the dry run** (which sends no launch); its send timing is **first exercised as the first S5 event of the main run, under the S1 grant**. (1) The script's block is in place and scope-checked; it only stops **new** connections, so the established
+**The S5 sequence (lost response).** It is **not rehearsed in the dry run** (which sends no launch); its send timing is **first exercised as the first S5 event of the main run, under the S1 grant**. (1) The script's block is in place and scope-checked, which **SRE sees from the script's own evidence line** (`2-3 block in place, scope checked; waiting for the owner to press Restart` in `relay-drop-<event id>.log` on the drop host); it only stops **new** connections, so the established
 one still carries traffic. (2) **SRE sends** one Host-path launch from the source host to the drop host. (3) SRE tells the owner "sent" and **the owner presses Restart on the
 drop host at once**, which kills the connection mid-flight. (4) The source host sees the connection die: the receipt is **unconfirmed (exit 7)** if the request reached the
-drop host, or a `policy` or `target-offline` refusal if it did not. **Only an exit 7 counts toward the 3**; any other result is recorded and the case is repeated, up to
+drop host, or a `policy` or `target-offline` refusal if it did not. **Only an exit 7 counts toward the 3**; any other result is recorded and the case is repeated, **each repeat being a new event with its own event id, its own script run and its own approval from the owner**, up to
 a limit the frozen plan sets, after which S5 is INCONCLUSIVE. Each exit 7 is resolved with `launches status` on the drop host once it is back, and the 2.5 minute warm-up
 after its restart applies to any launch made in that window.
 
 ## Launching and ending the run's sessions
 
-- **Launches:** SRE launches **only the sessions the frozen plan names**, under the person-issued grant, and only with the **Chief's go** for
+- **Launches:** SRE launches **only the sessions the frozen plan names**, under the person-issued grant, and only with the **Chief's go and the owner's go, through the Chief**, for
   the run. No other launch, name or target is used.
 - **Ends use SRE's rule:** a session is ended only after **two idle reads**, with a **name check** that it is one of the plan's names, and the
   **end only**: its worktree stays. Never a raw kill, never a name outside the plan. This applies to the batch ends in S3 and the sweep in S10.
