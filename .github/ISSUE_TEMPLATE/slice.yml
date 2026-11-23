@@ -17,7 +17,7 @@ body:
   - type: textarea
     id: goal
     attributes:
-      label: Goal
+      label: Outcome
       description: One to three plain-English sentences. Name the real classes, functions or screens involved.
     validations:
       required: true
@@ -31,6 +31,22 @@ body:
         - [ ]
         - [ ]
         - [ ] `pwsh quality/run.ps1` passes and any docs touched by the change are updated in the same PR
+    validations:
+      required: true
+  - type: textarea
+    id: failing_first_test
+    attributes:
+      label: Failing-first test
+      description: Name the test (file and test name) that fails before the change and passes after it. A docs-only slice names the check that proves the change.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: hold_group
+    attributes:
+      label: Hold group
+      description: "`none`, or one `group:<name>` label shared with slices that must not run at the same time. The dispatcher runs one in-flight issue per group."
+      value: none
     validations:
       required: true
   - type: textarea
@@ -75,6 +91,26 @@ body:
     id: sensitive_reason
     attributes:
       label: Matching sensitive path (if Yes)
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model
+      description: The dispatcher launches the builder on this model. For any other model, add a "### Model reason" section to the issue body by hand; without one the dispatcher skips the slice.
+      options:
+        - gpt-6.1-sol
+        - claude-opus-5.5
+        - claude-sonnet-5.5
+      default: 0
+    validations:
+      required: true
+  - type: input
+    id: end_when
+    attributes:
+      label: End-when
+      description: When the builder session may end.
+      value: Quality has merged your PR and you have confirmed your own named worktree is clean, with no unpushed commits and no open PR you still own
+    validations:
+      required: true
   - type: input
     id: depends_on
     attributes:
