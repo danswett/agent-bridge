@@ -1209,8 +1209,11 @@ starvation lasts until the train lands.
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
-  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
-    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
+  - **FAST:** `quality-gate` and the x64 `app` job (the build) succeeded; a cancelled or superseded run counts only if those
+    both did. **And FULL** (`full.yml`, S2, #4104: the lane that never gates a merge): the same commit's FULL run finished with the
+    x64 self-test, pack and installer (`app-selftest (win-x64)`, `app-pack (win-x64)`, `app-installer (win-x64)`) succeeded and no
+    other job red, Arm64's apart. A commit with no FULL run yet is not publishable; the train dispatches one, and a later hourly
+    run picks it up. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, `app-selftest`, and
     `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
     publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
@@ -1222,14 +1225,14 @@ starvation lasts until the train lands.
     not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
+  - the package artifacts of both architectures are unexpired (that commit's FULL run builds them and keeps them 30 days); the version is read from their names.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
   **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
-* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+* **How.** The train downloads that commit's FULL run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
