@@ -19,9 +19,13 @@ engineering lead. The approved way to finish it:
   setting both off and on. Until the last pull request, a machine behaves as it does today.
 - **Turning activation on is the last pull request**, and only after the update acceptance
   proof passes on an existing fleet VM, the least loaded, with a rollback, run with SRE.
-  No new Azure VM is created for it.
-- `MinimumApp` is to be set in the first release after #3810 (`--update-only` run) ships.
-  It is not defined anywhere on main or in #3810 yet; where it lives is an open question.
+  No new Azure VM is created for it. That pull request goes to the engineering lead first,
+  not to Quality, and the chief takes it to the owner as its own yes.
+- `HeadlessUpdateTimer.MinimumApp` (the minimum app version headless updates require) is
+  set in the first release after #3810 (`--update-only` run) ships, in a separate small pull
+  request. Per the engineering lead it lives on #3810's branch; it was not found on main, nor
+  at #3810's head `991e92c1` (a search for `MinimumApp` and `HeadlessUpdateTimer`), so this
+  document does not describe it further.
 
 Carried-versus-new: sections B to E and D3c below describe carried code, except the
 off-by-default activation setting, which is **new code** the carry adds (the carried
