@@ -953,7 +953,20 @@ jobs:
       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
       && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Both architectures' packages and the Arm64 SBOM are in this run (an Arm64 leg may be red, but never unpackaged, and attest needs the SBOM)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          names=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
+          for want in "agent-bridge-windows-$APP_VERSION" "agent-bridge-windows-arm64-$APP_VERSION" "sbom-win-arm64-$APP_VERSION"; do
+            echo "$names" | grep -Fxq "$want" || { echo "::error title=publish-gate::$want was not uploaded by this run, so nothing publishes"; exit 1; }
+          done
       - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
 
   sign:
@@ -1374,7 +1387,7 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
-      - name: "The waiver covers three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), only before expiry"
+      - name: "The waiver covers exactly three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), with no switch and no expiry"
         # Fixed needs and jobs JSON: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
         shell: pwsh
@@ -1796,28 +1809,27 @@ jobs:
       actions: read
       contents: read
     outputs:
-      # Whether this run built and checked the app's packages: publish-gate publishes only then.
-      # The raw result, never the waiver's: main doesn't publish while an Arm64 leg is red.
-      app: ${{ needs.app.result }}
+      # Whether this run built and checked the app (x64 and its packages): publish-gate publishes only
+      # then. Arm64 legs may be red (#2454), so this is the waiver-adjusted result below; publish-gate
+      # still requires both architectures' package artifacts.
+      app: ${{ steps.app.outputs.result }}
     steps:
-      # Time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13; quality/README.md §4.7):
-      # while the repository variable ARM64_WAIVER is exactly "on" and before 2026-11-27 00:00 PT
-      # (08:00 UTC, checked in the script), only app (win-arm64), app-installer (win-arm64) and
-      # product (windows-11-arm) failures count as success below, on main and PRs. Raw jobs stay red.
-      # Publishing refuses raw app failures; x64, every other failure and any API error block.
+      # win-arm64 waiver, permanent (owner, Nov 22, #2454; was #2564; quality/README.md §4.7): only app
+      # (win-arm64), app-installer (win-arm64) and product (windows-11-arm) failures count as success
+      # below, on main and PRs, with no switch and no date. Raw jobs stay red; x64, every other failure
+      # and any API error block. publish-gate needs both architectures' package artifacts.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        if: ${{ contains(needs.*.result, 'failure') }}
         with:
           persist-credentials: false
           sparse-checkout: quality
-      - name: Waive the failed win-arm64 legs, until 2026-11-27 00:00 PT
+      - name: Waive the failed win-arm64 legs (permanent, #2454)
         id: waiver
-        if: ${{ vars.ARM64_WAIVER == 'on' && contains(needs.*.result, 'failure') }}
+        if: ${{ contains(needs.*.result, 'failure') }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          SETTING: ${{ vars.ARM64_WAIVER }}
           NEEDS: ${{ toJSON(needs) }}
         run: |
           printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
@@ -1833,14 +1845,19 @@ jobs:
             echo "::warning title=quality-gate::the jobs API failed 3 times, so no win-arm64 failure is waived"
             exit 0
           fi
-          pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -Setting "$SETTING" -SummaryFile "$GITHUB_STEP_SUMMARY"
+          pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -SummaryFile "$GITHUB_STEP_SUMMARY"
           waived=$(cat "$RUNNER_TEMP/waived.json")
           if [ "$waived" != "[]" ]; then
-            echo "Run: [$RUN_ID](https://github.com/$REPO/actions/runs/$RUN_ID); waiver expires 2026-11-27 00:00 PT (08:00 UTC)." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning title=quality-gate win-arm64 waiver::Run $RUN_ID; waived job ids: $waived; expires 2026-11-27 00:00 PT (08:00 UTC). Raw failed jobs remain red."
+            echo "Run: [$RUN_ID](https://github.com/$REPO/actions/runs/$RUN_ID)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=quality-gate win-arm64 waiver::Run $RUN_ID; waived job ids: $waived. Raw failed jobs remain red."
             effective=$(echo "$NEEDS" | jq -c --argjson w "$waived" 'with_entries(.key as $k | if ($w | any(. == $k)) then .value.result = "success" else . end)')
             echo "needs=$effective" >> "$GITHUB_OUTPUT"
           fi
+      - name: The app's result, waiver-adjusted (an Arm64 leg may be red, x64 may not)
+        id: app
+        env:
+          NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
+        run: echo "result=$(echo "$NEEDS" | jq -r '.app.result')" >> "$GITHUB_OUTPUT"
       - name: Every job the plan selected passed, and none failed
         env:
           # The waiver's needs when it waived something, otherwise the real ones.
