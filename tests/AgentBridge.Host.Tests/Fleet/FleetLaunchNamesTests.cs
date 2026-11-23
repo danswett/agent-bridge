@@ -160,6 +160,20 @@ public sealed class FleetLaunchNamesTests : IDisposable
     }
 
     [Fact]
+    public async Task Name_availability_is_read_from_the_registry_fresh_never_from_the_shared_read()
+    {
+        var request = Ask();
+        await policy.RunAsync(request, "fixture", async () =>
+        {
+            var started = await Start();
+            launcher.Register(Guid.Parse(request.Request), started.Session!);
+            return started;
+        });
+        Assert.NotEmpty(roster.Fresh);
+        Assert.All(roster.Fresh, Assert.True);
+    }
+
+    [Fact]
     public async Task A_durable_write_failure_does_not_claim_that_a_started_session_was_refused()
     {
         Directory.CreateDirectory(Path.Combine(fixture.Root, FleetNames.FileName));
@@ -195,7 +209,9 @@ public sealed class FleetLaunchNamesTests : IDisposable
     {
         public IReadOnlyList<FleetMachine> Machines = [];
         public bool Unreadable;
-        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Unreadable ? throw new System.Net.WebSockets.WebSocketException() : Task.FromResult(Machines);
+        public List<bool> Fresh { get; } = [];
+        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) { Fresh.Add(RegistryReads.FreshRequested); return Read(); }
+        Task<IReadOnlyList<FleetMachine>> Read() =>  Unreadable ? throw new System.Net.WebSockets.WebSocketException() : Task.FromResult(Machines);
     }
     sealed class Launcher : ISessionLauncher
     {
