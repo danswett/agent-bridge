@@ -148,7 +148,13 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     protected override void Unreadable(ReadOnlySpan<byte> line)
     {
         base.Unreadable(line);
-        _replyIdentityKnown = false;
+        // The record may have held text of a message that continues after it, or tool calls a later record repeats:
+        // the same doubt as a window that opens mid-turn, so it opens the same gap (every message seen up to the next
+        // record with text or thinking has no id) instead of leaving the rest of the turn without ids, which made a
+        // client rewrite the last reply's part (#3649). A record that may start a turn (UnreadableTurn) still leaves
+        // the turn unknown until a readable prompt.
+        _replyGap = true;
+        _edgeOpen = true;
         _responseContiguous = false;
     }
 

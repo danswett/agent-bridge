@@ -357,7 +357,11 @@ id first appears in the window, because the id is the record's hash and its inde
 which unread earlier records cannot change. History skips a repeated tool call without a part, so
 the doubt stays open through tool-only records until the first record with text or thinking: every
 message seen up to and including that record may continue an earlier response, and those messages,
-and text after a tool in the same record, stay without identity. A readable new prompt
+and text after a tool in the same record, stay without identity. An unreadable record (a complete line that is
+not valid JSON, or one over the line cap) opens the same doubt, since it may have held text of a message that
+continues after it: the first message after it has no identity and the replies after that keep theirs (#3649;
+a client rewrites the last reply's part for a reply with no identity), except that an unreadable record that
+may start a turn leaves the turn unknown. A readable new prompt
 reestablishes identity; text never supplies an id.
 Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
 the first record's part id across both streams and updates. Distinct ids retain equal
