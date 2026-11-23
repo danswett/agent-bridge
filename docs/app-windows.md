@@ -68,10 +68,12 @@ and reading position; a missing or stale session falls back to the first availab
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
-following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
-records the first such storm with its count. They also run once, at low priority, after the layout event rather than in it,
-because setting the panel's scroll mode or the scroll offset there starts the next layout pass; layout that a correction itself
-causes runs it at most once more in that turn (#3782, the suspect named in #3716's anchoring, not yet a proven fix).
+following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
+nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
+and `app.log` records the first skipped correction of a storm with its count (#3842). They also run once, at low priority,
+after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
+layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
+#3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
