@@ -373,7 +373,7 @@ sender, which answers
 | `delivered` | the target host typed it into the session | done |
 | `refused` | the target or device selector refused; identity diagnostics name the ID, other receiver reasons include `notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ... | identity or rate refusal is final, no HA fallback; legacy fallback on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
-| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
+| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived, and a queued prompt may still be taken later | terminal: never resent, no Home Assistant fallback (docs/message-delivery.md, "Busy sends to Claude") |
 | `off` | the mode is off, killed, or no sender is wired; no channel was opened | legacy fallback to Home Assistant |
 
 A script's credential is checked against the host's stable machine ID even while the
