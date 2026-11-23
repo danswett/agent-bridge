@@ -41,6 +41,7 @@ public sealed class AgentLiteDeliveryTests
         public DiscoveryHeld? Held { get; set; }
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
+        public ReplyStage? Stage;
         public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Action<KeyPlan>? OnInject;
         public readonly List<KeyPlan> Plans = [];
@@ -94,7 +95,7 @@ public sealed class AgentLiteDeliveryTests
             OnWait?.Invoke(request.Text!);
             if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
-            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal });
+            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
@@ -717,6 +718,17 @@ public sealed class AgentLiteDeliveryTests
         Assert.Single(unconfirmed.Typed);
         var delivered = new Fixture { Agent = agent, Rows = rows }; delivered.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(true, null), await Send(delivered));
+    }
+    // D2b: with the flag on, a reply that only reached Claude's queue is reported queued, not delivered; flag off is unchanged.
+    [Theory]
+    [InlineData(true, ReplyStage.Queued, true)]
+    [InlineData(true, null, false)]
+    [InlineData(false, ReplyStage.Queued, false)]
+    public async Task With_the_flag_on_a_reply_confirmed_only_by_claudes_queue_is_reported_queued(bool flag, ReplyStage? stage, bool queued)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = flag ? SessionStatus.Working : SessionStatus.Idle, BusyQueue = flag, Stage = stage }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
+        Assert.Single(f.Typed);
     }
     // Option 2 (owner decision on #3866, #3828 design "Busy sends to Claude"): with laneDelivery on, a Claude target keeps the legacy
     // busy-queue typing path while claudeBusyQueue is on; Copilot stays on the lane; nothing changes with the flag off.

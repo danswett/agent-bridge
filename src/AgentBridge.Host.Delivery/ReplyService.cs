@@ -953,7 +953,8 @@ public sealed partial class ReplyService : ISessionReplier
                 if (plan.Attached(prompt))
                 {
                     timeline.Confirmed();
-                    return new ReplyResult(AnswerOutcome.Delivered);
+                    // Confirmed by an enqueue row: accepted into the agent's queue, not yet taken (docs/message-delivery.md, #3856).
+                    return new ReplyResult(AnswerOutcome.Delivered) { Stage = prompt.Queued ? ReplyStage.Queued : null };
                 }
                 // Codex records its images with the prompt: missing then is missing for good.
                 if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it"); }
