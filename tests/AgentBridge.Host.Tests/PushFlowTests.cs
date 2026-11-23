@@ -169,6 +169,49 @@ public sealed class PushFlowTests : IAsyncLifetime
         Assert.Equal(PushNotice.Topic(host.Id, Id), Pushes()[1].Headers["Topic"]);
     }
 
+    // HA-off evidence (parity row 16, ha-s4-evidence-matrix.md): the phone's question, its withdrawal and a finished turn
+    // all reach it through the relay with every Home Assistant setting pointed at a listener that nothing may call.
+    [Fact]
+    public async Task A_question_and_a_finished_turn_reach_the_phone_with_Home_Assistant_pointed_at_a_tripwire_nothing_calls()
+    {
+        using var tripwire = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        tripwire.Start();
+        var calls = 0;
+        using var stop = new CancellationTokenSource();
+        var watch = Task.Run(async () =>
+        {
+            try { while (true) { using var c = await tripwire.AcceptTcpClientAsync(stop.Token); Interlocked.Increment(ref calls); } }
+            catch (OperationCanceledException) { }
+        });
+        var url = $"http://127.0.0.1:{((System.Net.IPEndPoint)tripwire.LocalEndpoint).Port}";
+        string[] names = ["FLEET_HA_URL", "AGENT_HA_AGENT_TOKEN"];
+        var saved = names.ToDictionary(n => n, Environment.GetEnvironmentVariable);
+        Environment.SetEnvironmentVariable("FLEET_HA_URL", url);
+        Environment.SetEnvironmentVariable("AGENT_HA_AGENT_TOKEN", "tripwire-token");
+        try
+        {
+            var ch = await OpenAsync();
+            await SubscribeAsync(ch);
+            await AskAsync("q1");
+            await HostWait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
+            await AnsweredAtTheMachineAsync("q1");
+            await HostWait.UntilAsync(() => Pushes().Length == 2, "the resolved push", Patience);
+            Fixture.Append(events, Copilot.Assistant("All done.", second++), Copilot.TurnEnd(second++));
+            await source.RefreshAsync();
+            await HostWait.UntilAsync(() => Pushes().Length == 3, "the finished turn's push", Patience);
+            Assert.Equal(["question", "resolved", "finished"],
+                Pushes().Select(p => Open(p).GetProperty("data").GetProperty("kind").GetString()));
+        }
+        finally
+        {
+            foreach (var (n, v) in saved) { Environment.SetEnvironmentVariable(n, v); }
+            stop.Cancel();
+            tripwire.Stop();
+            await watch;
+        }
+        Assert.Equal(0, Volatile.Read(ref calls));
+    }
+
     [Fact]
     public async Task A_question_answered_from_the_phone_sends_that_phone_no_resolved_notice()
     {
