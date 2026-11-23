@@ -610,3 +610,11 @@ test('an app updated to the new name keeps notifications on and its browser subs
   assert.deepEqual(host.requests.map((q) => [q.op, q.data.endpoint, q.data.device]),
     [['push.subscribe', 'https://web.push.apple.com/sub-1', `iPhone · ${BRAND.name}`]]);
 });
+
+test('closing stale question notices leaves a failures notice alone: it is no question', async () => {
+  const closed = [];
+  const notice = (data) => ({ data, close: () => closed.push(data.kind) });
+  const shown = [notice({ machine: 'h1', kind: 'failures', session: null, question: null }), notice({ machine: 'h1', kind: 'question', session: 's9', question: 'q9' })];
+  await closeStaleNotices({ getNotifications: async () => shown }, 'h1', new SessionsStore(), () => true);
+  assert.deepEqual(closed, ['question']);
+});
