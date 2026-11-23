@@ -43,4 +43,20 @@ public sealed class BusyQueueArmKeeperTests
         clock.Advance(BusyQueueArmKeeper.Every);
         await keeping.WaitAsync(TimeSpan.FromSeconds(5));
     }
-}
+
+    // The keeper carries the peer of its send, so two peers that hold the same request id never touch each other's record (#3926 review P2).
+    [Fact]
+    public async Task A_keeper_with_the_peer_keeps_that_peers_send_even_when_another_peer_holds_the_same_request_id()
+    {
+        var s = new BusyQueueStore(clock); var r = Guid.NewGuid().ToString(); var kept = 0;
+        s.TryBegin(r, "agent:m/a", "sess1"); s.KeysWent(r, "agent:m/a"); s.Settle(r, BusyQueueStore.Unconfirmed, "noRow", held: true, "agent:m/a");
+        s.TryBegin(r, "agent:m/b", "sess2");
+        var keeping = new BusyQueueArmKeeper(s, clock).KeepAsync(r, () => kept++, principal: "agent:m/a");
+        for (var i = 0; i < 3; i++) { clock.Advance(BusyQueueArmKeeper.Every); await Task.WhenAny(keeping, Task.Delay(5)); }
+        Assert.True(kept >= 3);
+        Assert.False(keeping.IsCompleted);
+        s.Settle(r, BusyQueueStore.Delivered, null, held: false, "agent:m/a");
+        clock.Advance(BusyQueueArmKeeper.Every);
+        await keeping.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(s.SlotHeld("sess2"));
+    }}

@@ -7,13 +7,13 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
     public static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
 
     // Starts keeping in the background. A keeper that fails leaves the arm as it was.
-    public Task Start(string request, Action keep) => Task.Run(async () =>
+    public Task Start(string request, Action keep, string? principal = null) => Task.Run(async () =>
     {
-        try { await KeepAsync(request, keep); }
+        try { await KeepAsync(request, keep, default, principal); }
         catch (Exception e) when (e is not OutOfMemoryException) { }
     });
 
-    public async Task KeepAsync(string request, Action keep, CancellationToken ct = default)
+    public async Task KeepAsync(string request, Action keep, CancellationToken ct = default, string? principal = null)
     {
         while (!ct.IsCancellationRequested)
         {
