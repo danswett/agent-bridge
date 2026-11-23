@@ -494,7 +494,8 @@ static class MergeRuleCommand
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
+                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one"
+                    + (skipped.Count == 0 ? "" : $" (skipped unreadable run {string.Join(", ", skipped)})"));
             }
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
@@ -621,7 +622,8 @@ static class MergeRuleCommand
                 : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
             // A run whose jobs stayed unreadable past the grace was passed over for an older readable one: the status says which, so it is
             // never silent (alerts follow the blocking reasons in the description).
-            return fact with { Alerts = skipped.Count == 0 ? alerts : [.. alerts, $"skipped unreadable run {string.Join(", ", skipped)}"] };
+            // First, ahead of any infra alert: the description shows the first alert and counts the rest, and cuts at 140 characters.
+            return fact with { Alerts = skipped.Count == 0 ? alerts : [$"skipped unreadable run {string.Join(", ", skipped)}", .. alerts] };
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -635,6 +637,12 @@ static class MergeRuleCommand
     /// as it always has. A zombie run the API never serves must not hold every pull request's merge-rule for good.
     /// </summary>
     internal static readonly TimeSpan UnreadableGrace = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// A run old enough to skip is read once more after this pause before it is: one transient 404 or 5xx must not skip a main run (they take
+    /// 26 to 35 minutes, so most are older than the grace). There is no memory between evaluations: a run unreadable on both reads of one evaluation is skipped.
+    /// </summary>
+    internal static TimeSpan UnreadableRetryAfter { get; set; } = TimeSpan.FromSeconds(3);
 
     static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session, List<long>? skipped = null)
     {
@@ -653,19 +661,27 @@ static class MergeRuleCommand
                 {
                     JsonDocument listed;
                     JsonElement batch;
+                    var jobsPath = $"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}";
                     try
                     {
-                        listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}");
-                        batch = listed.RootElement.GetProperty("jobs");
+                        (listed, batch) = ReadJobs(session, jobsPath);
                     }
                     // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
                     catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
                     {
-                        // Skipped only once unreadable for over the grace, never a completed failure (it would hide a red main), and
-                        // never when the run's age isn't known: those error, as before.
+                        // Skipped only once unreadable for over the grace, never a failure or a state not known (it would hide a red main),
+                        // and never when the run's age isn't known: those error, as before. An old enough run is read once more first.
                         if (!MayBeSkipped(session, run)) { throw; }
-                        unreadable = true;
-                        break;
+                        Thread.Sleep(UnreadableRetryAfter);
+                        try
+                        {
+                            (listed, batch) = ReadJobs(session, jobsPath);
+                        }
+                        catch (Exception again) when (again is InvalidOperationException or JsonException or KeyNotFoundException)
+                        {
+                            unreadable = true;
+                            break;
+                        }
                     }
                     using var held = listed;
                     jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
@@ -723,11 +739,35 @@ static class MergeRuleCommand
         }
     }
 
+    // A page of a run's jobs, the document disposed if its body turns out to have no jobs.
+    static (JsonDocument Doc, JsonElement Jobs) ReadJobs(Session session, string path)
+    {
+        var doc = session.Rest(path);
+        try
+        {
+            return (doc, doc.RootElement.GetProperty("jobs"));
+        }
+        catch
+        {
+            doc.Dispose();
+            throw;
+        }
+    }
+
     // A run may be passed over when its jobs can't be read only if it is old enough and isn't a completed failure.
+    // An ALLOW-list, so what isn't known fails closed: a run not yet completed, or one that ended in a conclusion GitHub documents as not a failure.
+    // An unknown status or conclusion, a completed run with none, and a failure of any kind are never skipped.
     static bool MayBeSkipped(Session session, JsonElement run)
     {
-        if (run.TryGetProperty("status", out var status) && status.GetString() == "completed"
-            && run.TryGetProperty("conclusion", out var conclusion) && conclusion.GetString() is "failure" or "timed_out" or "startup_failure")
+        if (!run.TryGetProperty("status", out var statusNode) || statusNode.ValueKind != JsonValueKind.String)
+            return false;
+        if (statusNode.GetString() == "completed")
+        {
+            if (!run.TryGetProperty("conclusion", out var conclusion) || conclusion.ValueKind != JsonValueKind.String
+                || conclusion.GetString() is not ("cancelled" or "success" or "neutral" or "skipped" or "stale" or "action_required"))
+                return false;
+        }
+        else if (statusNode.GetString() is not ("queued" or "in_progress" or "waiting" or "pending" or "requested"))
             return false;
         return run.TryGetProperty("created_at", out var created) && created.ValueKind == JsonValueKind.String
             && DateTimeOffset.TryParse(created.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
