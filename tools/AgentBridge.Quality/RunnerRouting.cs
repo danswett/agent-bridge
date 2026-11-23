@@ -68,6 +68,10 @@ static partial class RunnerRouting
         return problems;
     }
 
+    // Whether a job's runner may be anything but known hosted labels, guarded or not: CachePolicy's ab-ci test (B221 P1-2).
+    internal static bool MayRunSelfHosted(YamlMappingNode job, string name, string file)
+        => job.Children.TryGetValue(new YamlScalarNode("runs-on"), out var runsOn) && Unguarded(runsOn, v => MaySelfHost(v, job, name, file)) is not null;
+
     // null: never self-hosted. "": self-hosted only behind the whole guard. Otherwise why not.
     static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost)
     {

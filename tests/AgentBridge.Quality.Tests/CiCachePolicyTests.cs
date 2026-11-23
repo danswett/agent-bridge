@@ -50,7 +50,81 @@ public sealed class CiCachePolicyTests
                   key: nuget-key
         """;
 
-    static IReadOnlyList<string> Check(string yaml) => CachePolicy.Violations(yaml);
+    static IReadOnlyList<string> Check(string yaml, Dictionary<string, string>? actions = null)
+        => CachePolicy.Violations(yaml, path => actions is not null && actions.TryGetValue(path, out var text) ? text : null);
+
+    static string Composite(string steps) => "name: x\nruns:\n  using: composite\n  steps:\n" + steps.Replace("\n      ", "\n    ", StringComparison.Ordinal).Replace("      - ", "    - ", StringComparison.Ordinal);
+
+    // B221 P1-1: local composite actions are read and held to the same rules, with the two documented exceptions.
+    [Fact]
+    public void A_local_composite_action_is_followed_and_held_to_the_same_rules()
+    {
+        var uses = "      - uses: ./.github/actions/x\n";
+        Assert.NotEmpty(Check(Ci("product", uses), new() { ["./.github/actions/x"] = Composite(Cache("actions/cache@v4")) }));
+        Assert.NotEmpty(Check(Ci("app", uses), new() { ["./.github/actions/x"] = Composite(Cache(Restore)) }));
+        Assert.Empty(Check(Ci("product", uses), new() { ["./.github/actions/x"] = Composite(Cache(Restore)) }));
+        // Unreadable: fail closed.
+        Assert.NotEmpty(Check(Ci("product", uses)));
+    }
+
+    [Fact]
+    public void The_two_documented_exceptions_are_named_and_only_they_pass()
+    {
+        // install-trivy: its restore is hash-checked before use, so a shipping job may take it.
+        Assert.Empty(Check(Ci("app", "      - uses: ./.github/actions/install-trivy\n"), new() { ["./.github/actions/install-trivy"] = Composite(Cache(Restore)) }));
+        // playwright-system-packages: its debs are verified against live signed indexes, so it saves on always().
+        var apt = Composite(Cache(Save, condition: "always() && steps.packages.outputs.cache-ready == 'true'"));
+        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = apt }));
+        Assert.NotEmpty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/other\n"), new() { ["./.github/actions/other"] = apt }));
+    }
+
+    [Fact]
+    public void A_reusable_workflow_job_fails_closed() => Assert.NotEmpty(Check("""
+        name: CI
+        on: [push]
+        jobs:
+          build:
+            uses: ./.github/workflows/build.yml
+        """));
+
+    // B221 P2: the other ways a step can save or restore a cache.
+    [Theory]
+    [InlineData("actions/setup-dotnet@v5", "cache: true")]
+    [InlineData("actions/setup-node@v5", "cache: npm")]
+    [InlineData("buildjet/cache@v4", "path: x")]
+    [InlineData("docker/build-push-action@v6", "cache-to: type=gha,mode=max")]
+    public void Setup_caches_buildjet_and_docker_cache_to_count_as_saves(string uses, string with)
+        => Assert.NotEmpty(Check(Ci("product", $"      - uses: {uses}\n        with:\n          {with}\n")));
+
+    [Fact]
+    public void A_docker_cache_to_on_main_pushes_only_is_allowed_but_cache_from_never_ships()
+    {
+        Assert.Empty(Check(Ci("product", $"      - if: {MainPush}\n        uses: docker/build-push-action@v6\n        with:\n          cache-to: type=gha\n")));
+        Assert.NotEmpty(Check(Ci("publish", "      - uses: docker/build-push-action@v6\n        with:\n          cache-from: type=gha\n")));
+    }
+
+    [Fact]
+    public void A_step_that_never_runs_and_text_in_a_comment_do_not_count()
+    {
+        Assert.Empty(Check(Ci("product", Cache("actions/cache@v4", condition: "false"))));
+        var commented = PerJob.Replace("git clean -ffdx", "# git clean -ffdx", StringComparison.Ordinal) + "\n" + Shutdown;
+        Assert.NotEmpty(Check(Ci("product", commented, Guarded)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("name: CI\non: [push]\n")]
+    [InlineData("name: CI\non: [push]\njobs: [a, b]\n")]
+    public void An_empty_file_or_no_jobs_map_fails_closed(string yaml) => Assert.NotEmpty(Check(yaml));
+
+    [Fact]
+    public void The_build_server_shutdown_is_the_last_step()
+        => Assert.NotEmpty(Check(Ci("product", PerJob + "\n" + Shutdown + "\n      - run: echo after\n", Guarded)));
+
+    // B221 P1-2: a runner that doesn't resolve to hosted labels may be ab-ci, so the per-job rules apply.
+    [Fact]
+    public void A_runner_read_from_an_unresolved_matrix_gets_the_ab_ci_rules()
+        => Assert.NotEmpty(Check(Ci("product", Cache(Restore), "${{ matrix.os }}")));
 
     [Fact]
     public void A_restore_and_a_save_gated_on_main_pushes_are_allowed()
@@ -117,6 +191,7 @@ public sealed class CiCachePolicyTests
         var root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output."); }
 
-        Assert.Empty(Check(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        Assert.Empty(CachePolicy.Violations(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml")),
+            path => File.Exists(Path.Combine(root, path, "action.yml")) ? File.ReadAllText(Path.Combine(root, path, "action.yml")) : null));
     }
 }
