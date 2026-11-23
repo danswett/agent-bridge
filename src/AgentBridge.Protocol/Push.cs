@@ -10,13 +10,38 @@ using System.Text.Json.Serialization;
 namespace AgentBridge.Protocol;
 
 // push.subscribe. Endpoint and keys are exactly what the browser's PushSubscription.toJSON()
-// gives; App is where a tap opens the client; Device names this device in push.list.
+// gives; App is where a tap opens the client; Device names this device in push.list; Notify is this
+// device's notification filters (null: no filtering, as before).
 public sealed record PushSubscribeRequest
 {
     public required string Endpoint { get; init; }
     public required PushKeys Keys { get; init; }
     public required string App { get; init; }
     public string? Device { get; init; }
+    public PushNotify? Notify { get; init; }
+}
+
+// Per-device notification filters (docs/protocol/v1-sessions.md, "Notification filters"), kept with the
+// device's subscription so the host filters when it sends. PinnedSessions is the device's pinned set of
+// session ids (no order), at most MaxPinned. DeliveryFailures is read and kept; a host sends nothing for it yet.
+public sealed record PushNotify
+{
+    public const int MaxPinned = 300;
+    public const int MaxIdChars = 128;
+    public bool Questions { get; init; } = true;
+    public bool Pinned { get; init; } = true;
+    public bool All { get; init; }
+    public bool DeliveryFailures { get; init; }
+    public IReadOnlyList<string> PinnedSessions { get; init; } = [];
+
+    // Whether a notice of this kind about this session is wanted. Only questions and finished turns are
+    // filtered (a group is questions); resolved follows the question it withdraws, and every other kind is always wanted.
+    public bool Wants(NoticeKind kind, string session) => kind switch
+    {
+        NoticeKind.Question or NoticeKind.Group => Questions,
+        NoticeKind.Finished => All || (Pinned && PinnedSessions.Contains(session)),
+        _ => true,
+    };
 }
 
 public sealed record PushKeys(string P256dh, string Auth);
