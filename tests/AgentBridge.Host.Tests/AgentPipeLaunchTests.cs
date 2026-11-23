@@ -1060,6 +1060,18 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(1, s.Link.Calls);
     }
 
+    // G9c2: a present host that is not a trusted own-account peer is peer-not-trusted (CLI doc refusal table), not target-offline.
+    [Fact]
+    public async Task A_peer_that_is_not_a_trusted_own_host_is_peer_not_trusted_and_not_retried()
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, serve: _ => Task.FromException<JsonElement>(new LitePeerNotTrustedException("not the same account")));
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, "peer-not-trusted"), (receipt.Result.Outcome, receipt.Reason));
+        Assert.Equal(1, s.Link.Calls);
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;

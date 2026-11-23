@@ -9,6 +9,8 @@ namespace AgentBridge.Host.Lite;
 
 // The relay raised Undeliverable, or the peer could not be reached at all: nothing was sent.
 public sealed class LitePeerOfflineException(string message) : Exception(message);
+// A present host that is not a trusted own-account peer (G9c2): the sender refuses it as peer-not-trusted and sends nothing.
+public sealed class LitePeerNotTrustedException(string message) : Exception(message);
 
 // What the sender needs of the relay link: who this host is, who is present, and one request to a peer.
 // The real one is RelayLiteLink; tests use a fake channel. SendAsync must honour `ct`: the 10 s limit and
@@ -171,7 +173,7 @@ public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? lo
         try
         {
             var c = LiteChannel.Of(ch);
-            if ((c.Account != account ? LiteReceiver.NotSameAccount : c.Untrusted) is { } why) { throw new LitePeerOfflineException($"not a present host of this account ({why})"); }
+            if ((c.Account != account ? LiteReceiver.NotSameAccount : c.Untrusted) is { } why) { throw new LitePeerNotTrustedException($"not a present host of this account ({why})"); }
             var response = await ch.RequestAsync(op, request, TimeSpan.FromSeconds(30), ct);
             // The channel wraps a served reply as { ok, result }; the sender reads the bare result. Anything else is a lost answer.
             if (!response.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True || !response.TryGetProperty("result", out var result))

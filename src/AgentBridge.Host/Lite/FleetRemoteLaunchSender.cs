@@ -65,6 +65,7 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
                 ? reply.Deserialize<FleetLaunchReceipt>(ProtocolJson.Options) : null;
             return receipt is not null && receipt.Request == input.Request && receipt.Grant == input.Grant ? receipt : Unconfirmed();
         }
+        catch (LitePeerNotTrustedException) { return Refuse("peer-not-trusted"); }
         catch (LitePeerOfflineException) { return Refuse("target-offline"); }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { return Unconfirmed(); }
 
