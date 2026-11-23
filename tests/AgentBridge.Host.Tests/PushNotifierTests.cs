@@ -64,7 +64,7 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/")
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/", object? notify = null)
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
@@ -73,6 +73,7 @@ public sealed class PushNotifierTests : IDisposable
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
             app,
             device = name ?? (device == Phone ? "iPhone" : "Laptop"),
+            notify,
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
@@ -2282,6 +2283,121 @@ public sealed class PushNotifierTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void Upsert(Session s) => Changed?.Invoke(this, new SessionChange(SessionChangeKind.Upserted, s.Id, s, 0));
         public void Remove(string id) => Changed?.Invoke(this, new SessionChange(SessionChangeKind.Removed, id, null, 0));
+    }
+
+    // Per-device notification filters (push.subscribe notify): the host filters when it sends, so the
+    // service worker never has to drop a push. Absent notify means no filtering.
+    static object Filters(bool questions = true, bool pinned = true, bool all = false, string[]? pins = null) =>
+        new { questions, pinned, all, deliveryFailures = false, pinnedSessions = pins ?? [] };
+
+    async Task Finish(string id)
+    {
+        source.Upsert(S(id, SessionStatus.Working, turns: 0));
+        source.Upsert(S(id, SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Questions_off_also_withholds_the_grouped_notice_of_a_burst_of_questions()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false, all: true));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+        Assert.DoesNotContain(Received(), r => r.Device == Phone);
+        Assert.Contains(Received(), r => r.Device == Laptop && Kind(r.Notification) == "group");
+    }
+
+    [Fact]
+    public async Task A_device_without_notify_is_told_of_questions_and_every_finished_turn_as_before()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await Finish("s2");
+        Assert.Equal(["question", "finished"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task Questions_off_sends_that_device_no_question_notice_while_another_device_still_gets_it()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal([Laptop], Received().Select(r => r.Device));
+        // Its answer withdraws the notice only where it was shown: nothing goes to the filtered device.
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.DoesNotContain(Phone, Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task Pinned_on_notifies_finished_turns_of_the_pinned_sessions_only()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["s1"]));
+        await Finish("s2");
+        Assert.Empty(sender.Sent);
+        await Finish("s1");
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("finished", Kind(n));
+        Assert.Equal("s1", n.GetProperty("data").GetProperty("session").GetString());
+    }
+
+    [Fact]
+    public async Task All_covers_pinned_and_both_off_sends_no_finished_notice()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(all: true));
+        Subscribe(Laptop, notify: Filters(pinned: false, pins: ["s1"]));
+        await Finish("s1");
+        Assert.Equal([Phone], Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task Subscribing_again_replaces_the_filters_so_a_new_pin_takes_effect()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["s1"]));
+        await Finish("s2");
+        Assert.Empty(sender.Sent);
+        Subscribe(Phone, notify: Filters(pins: ["s1", "s3"]));
+        await Finish("s3");
+        Assert.Single(Received());
+    }
+
+    [Fact]
+    public async Task Filters_survive_a_restart_with_the_subscription()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false, pins: ["s1"]));
+        Assert.Equal(Phone, store.Get(Phone)!.Device);
+        Start();
+        var kept = store.Get(Phone)!.Notify!;
+        Assert.False(kept.Questions);
+        Assert.Equal(["s1"], kept.PinnedSessions);
+    }
+
+    [Fact]
+    public void A_notify_with_too_many_or_empty_pinned_ids_is_refused()
+    {
+        Start();
+        var tooMany = Filters(pins: [.. Enumerable.Range(0, PushNotify.MaxPinned + 1).Select(i => $"s{i}")]);
+        Assert.Throws<ArgumentException>(() => Subscribe(Phone, notify: tooMany));
+        Assert.Throws<ArgumentException>(() => Subscribe(Phone, notify: Filters(pins: [""])));
+        Assert.Null(store.Get(Phone));
+        Subscribe(Phone, notify: Filters(pins: [.. Enumerable.Range(0, PushNotify.MaxPinned).Select(i => $"s{i}")]));
+        Assert.NotNull(store.Get(Phone));
     }
 
     sealed class FakeSender(string account) : IPushSender

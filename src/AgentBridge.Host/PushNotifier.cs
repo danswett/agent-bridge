@@ -438,7 +438,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     lock (gate)
                     {
                         if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
-                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
+                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant, request.Notify));
                     }
                     log($"push subscription from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}, {new Uri(request.Endpoint).Host}); {store.Count} in all");
                     // A sign-in notice held back for want of any device to tell goes to this one now.
@@ -481,6 +481,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             return "keys must be base64url: p256dh a P-256 point, auth 16 bytes";
         }
         if (!WebUrl(r.App, 1024)) { return "app must be an https URL"; }
+        if (r.Notify is { } n)
+        {
+            if ((object?)n.PinnedSessions is null) { return "notify.pinnedSessions must be a list"; }
+            if (n.PinnedSessions.Count > PushNotify.MaxPinned) { return $"notify.pinnedSessions has at most {PushNotify.MaxPinned} ids"; }
+            if (n.PinnedSessions.Any(id => string.IsNullOrEmpty(id) || id.Length > PushNotify.MaxIdChars)) { return $"notify.pinnedSessions ids are 1 to {PushNotify.MaxIdChars} characters"; }
+        }
         return null;
     }
 
@@ -978,7 +984,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     {
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, GroupKey)) { continue; }
             var alerts = kind == NoticeKind.Group && (!silent || groupAlertOwed.Contains(sub.Device));
             if (alerts) { groupAlertOwed.Add(sub.Device); }
             outbox.Add(GroupOutgoing(sub, kind, count, alerts, now));
@@ -1191,7 +1197,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         var now = time.GetUtcNow();
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, s.Id)) { continue; }
             var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended, reminder));
             var ttl = kind == NoticeKind.Finished ? options.FinishedTtl : options.QuestionTtl;
             // The latest state of a session wins: a newer notice replaces one still waiting.
