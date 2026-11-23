@@ -143,8 +143,10 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [InlineData("scripts.revoke", true)]
     public async Task A_credential_cannot_mint_or_revoke_even_with_host_cli_classification(string op, bool session)
     {
-        var grant = session ? credentials.Check(credentials.Mint("session1", "launch1", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead),
-            new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!
+        // One start time for the credential and the caller's process: Check refuses them more than 1 s apart (#2558).
+        var started = DateTimeOffset.UtcNow;
+        var grant = session ? credentials.Check(credentials.Mint("session1", "launch1", 100, started, AgentProtocol.ScopeRead),
+            new ProcessAncestry([new PeerProcess(100, started, "agent.exe")], true)).Accepted!
             : credentials.MintScript("pump-wake").Credential;
         credentials.Accept(channel, grant);
         var count = credentials.Count;
@@ -249,6 +251,382 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         Assert.Equal(4, process.ExitCode);
         Assert.Empty(await output);
         Assert.Contains("person", await error);
+    }
+
+    // App press (HA retirement row 1, owner option 1, ruling A): the local app may mint, revoke, rotate and tick the fleet
+    // launch grant, but only with the host's confirmation bound to the action, the script name and the current state.
+    async Task<string> Confirm(string op, string name = "pump-wake", CallerKind kind = CallerKind.App) =>
+        JsonSerializer.SerializeToElement(await Handler(kind)(channel, "scripts.confirm", JsonSerializer.SerializeToElement(new { op, name })),
+            ProtocolJson.Options).GetProperty("confirm").GetString()!;
+    static JsonElement Press(string confirm, string name = "pump-wake") => JsonSerializer.SerializeToElement(new { name, confirm });
+
+    [Theory]
+    [InlineData("scripts.add")]
+    [InlineData("scripts.revoke")]
+    [InlineData("scripts.grant-fleet")]
+    [InlineData("scripts.revoke-fleet")]
+    public async Task An_app_press_without_the_bound_confirmation_is_refused_and_changes_nothing(string op)
+    {
+        credentials.MintScript("pump-wake");
+        var before = credentials.Count;
+        foreach (var data in new[] { Name(), Press("0000"), Press("") })
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, op, data));
+            Assert.Contains("person's press", error.Message);
+        }
+        Assert.Equal(before, credentials.Count);
+        Assert.All(credentials.ListScripts(), s => Assert.False(s.FleetLaunch));
+    }
+
+    [Fact]
+    public async Task An_app_press_with_the_bound_confirmation_mints_once_and_is_audited_as_the_person()
+    {
+        var confirm = await Confirm("scripts.add");
+        var result = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)), ProtocolJson.Options);
+        Assert.Equal("script:machine1/pump-wake", result.GetProperty("principal").GetString());
+        Assert.Equal(1, credentials.Count);
+        Assert.Equal("scripts.add", Assert.Single(Audit()).GetProperty("action").GetString());
+        // The state changed, so the same confirmation cannot be replayed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_confirmation_is_bound_to_its_action_its_script_and_the_current_state()
+    {
+        var add = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(add, "other-script")));
+        credentials.MintScript("pump-wake");
+        var revoke = await Confirm("scripts.revoke");
+        Assert.NotEqual(add, revoke);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(revoke)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(revoke)));
+        Assert.Equal(1, credentials.Count);
+        // A refused attempt uses its confirmation up, so the person's real press asks again.
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(await Confirm("scripts.revoke")));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    // P1 finding (#3883 receipt 7099362785): a confirmation is random, single-use, short-lived and tied to the connection it
+    // was issued to, so a state that comes back (mint, then revoke) never revalidates an old one.
+    [Fact]
+    public async Task A_used_confirmation_cannot_be_replayed_when_the_state_returns_to_what_it_was()
+    {
+        var confirm = await Confirm("scripts.add");
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(confirm));
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(await Confirm("scripts.revoke")));
+        Assert.Equal(0, credentials.Count);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(0, credentials.Count);
+    }
+
+    // R9's two proven replays (#3883 2/3): tick, untick, then the old tick re-enables launch:fleet; add, revoke, then the old add mints again.
+    [Fact]
+    public async Task An_old_tick_confirmation_cannot_re_enable_launch_after_a_tick_and_an_untick()
+    {
+        credentials.MintScript("pump-wake");
+        File.WriteAllText(Path.Combine(fixture.Root, HostSettings.FileName), JsonSerializer.Serialize(new { agents = new { enabled = true } }));
+        var tick = await Confirm("scripts.grant-fleet");
+        await Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick));
+        await Handler(CallerKind.App)(channel, "scripts.revoke-fleet", Press(await Confirm("scripts.revoke-fleet")));
+        Assert.False(Assert.Single(credentials.ListScripts()).FleetLaunch);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick)));
+        Assert.False(Assert.Single(credentials.ListScripts()).FleetLaunch);
+    }
+
+    [Fact]
+    public async Task An_old_add_confirmation_cannot_mint_again_after_an_add_and_a_revoke()
+    {
+        var add = await Confirm("scripts.add");
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(add));
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(await Confirm("scripts.revoke")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(add)));
+        Assert.Empty(credentials.ListScripts());
+    }
+
+    // A double press with the one confirmation: the check, the audit attempt and the change run under the store's lock, so exactly
+    // one wins (#3883 2/3, ScriptCredentialCommands.cs 38-44). Two confirmations asked at once may cancel each other, but never
+    // make two credentials.
+    [Fact]
+    public async Task Two_presses_at_once_with_the_same_confirmation_make_exactly_one_credential()
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            var name = "pump-wake-" + i;
+            var c = await Confirm("scripts.add", name);
+            using var start = new ManualResetEventSlim();
+            var first = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(c, name)); });
+            var second = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(c, name)); });
+            start.Set();
+            var results = await Task.WhenAll(Settle(first), Settle(second));
+            Assert.Equal(1, results.Count(r => r));
+            Assert.Equal(1, credentials.ListScripts().Single(s => s.Name == name).Live);
+        }
+    }
+
+    [Fact]
+    public async Task Two_confirmations_asked_at_once_for_the_same_state_never_make_two_credentials()
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            var name = "dispatcher-" + i;
+            var a = await Confirm("scripts.add", name);
+            var b = await Confirm("scripts.add", name);
+            using var start = new ManualResetEventSlim();
+            var first = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(a, name)); });
+            var second = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(b, name)); });
+            start.Set();
+            var results = await Task.WhenAll(Settle(first), Settle(second));
+            Assert.True(results.Count(r => r) <= 1);
+            Assert.True(credentials.ListScripts().SingleOrDefault(s => s.Name == name)?.Live is null or 1);
+        }
+    }
+
+    static async Task<bool> Settle(Task<object?> press)
+    {
+        try { await press; return true; }
+        catch (InvalidOperationException) { return false; }
+    }
+
+    // P1 finding (#3883 receipt 7101860025): the press must not hold the credential store's lock while it waits on the audit log's
+    // own lock, which can take up to two seconds; every other store call (Count, a hello, a list) would stall behind it.
+    // P1 review 2/2 (receipt 7101860025): the generation moves on rotation and expiry too, and the two minutes run on a monotonic clock.
+    // Each test below would stay green with the generation check removed only if another guard carried it, so each pins it: the
+    // generation check is the one mechanism, and nothing else drops an outstanding confirmation when the script changes.
+    [Fact]
+    public async Task A_mint_between_the_ask_and_the_press_voids_the_confirmation()
+    {
+        var confirm = await Confirm("scripts.add");
+        credentials.MintScript("pump-wake");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_rotation_that_retires_the_old_credential_voids_an_outstanding_confirmation()
+    {
+        credentials.MintScript("pump-wake");
+        var newest = credentials.MintScript("pump-wake");
+        var revoke = await Confirm("scripts.revoke");
+        // The newest credential completes a fleet read, so the old one is retired: the script is no longer what was shown.
+        credentials.CompleteFleetRead(newest.Credential, new { });
+        Assert.Equal(1, credentials.Count);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.revoke", Press(revoke)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task Expiry_pruning_voids_an_outstanding_confirmation()
+    {
+        var clock = new StepClock();
+        var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), log: logs.Add, credentials: timed, audit: new AgentAuditLog(fixture.Root, log: logs.Add));
+        timed.MintScript("pump-wake", TimeSpan.FromSeconds(60));
+        var asked = JsonSerializer.SerializeToElement(await handler(channel, "scripts.confirm",
+            JsonSerializer.SerializeToElement(new { op = "scripts.revoke", name = "pump-wake" })), ProtocolJson.Options).GetProperty("confirm").GetString()!;
+        clock.Advance(TimeSpan.FromSeconds(90));
+        // Another mint prunes the expired credential; the confirmation (90 s old, still inside its two minutes) must not survive that.
+        timed.MintScript("other-script");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.revoke", Press(asked)));
+        Assert.Contains("person's press", error.Message);
+    }
+
+    [Fact]
+    public async Task A_wall_clock_step_back_does_not_stretch_a_confirmation()
+    {
+        var clock = new StepClock();
+        var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), log: logs.Add, credentials: timed, audit: new AgentAuditLog(fixture.Root, log: logs.Add));
+        var asked = JsonSerializer.SerializeToElement(await handler(channel, "scripts.confirm",
+            JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" })), ProtocolJson.Options).GetProperty("confirm").GetString()!;
+        clock.StepWall(TimeSpan.FromHours(-1));
+        clock.Advance(TimeSpan.FromMinutes(59));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Press(asked)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(0, timed.Count);
+    }
+
+    // Wall time and the monotonic timestamp move apart only when a test says so.
+    sealed class StepClock : TimeProvider
+    {
+        DateTimeOffset utc = DateTimeOffset.UtcNow;
+        long stamp;
+        public override DateTimeOffset GetUtcNow() => utc;
+        public override long GetTimestamp() => stamp;
+        public override long TimestampFrequency => 1000;
+        public void Advance(TimeSpan by) { utc += by; stamp += (long)by.TotalMilliseconds; }
+        public void StepWall(TimeSpan by) => utc += by;
+    }
+
+    [Fact]
+    public async Task A_press_waiting_on_the_audit_lock_does_not_block_the_credential_store()
+    {
+        var confirm = await Confirm("scripts.add");
+        var auditLock = Path.Combine(fixture.Root, AgentAuditLog.FolderName) + ".lock";
+        using var held = new FileStream(auditLock, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var press = Task.Run(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        await Task.Delay(400);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        _ = credentials.Count;
+        _ = credentials.ListScripts();
+        var waited = watch.ElapsedMilliseconds;
+        Assert.True(waited < 500, $"the store was blocked for {waited} ms behind a press waiting on the audit lock");
+        // The audit log never opened, so the press is refused and nothing was written.
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => press);
+        Assert.Contains("audit", error.Message);
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_press_that_fails_still_uses_up_its_confirmation()
+    {
+        credentials.MintScript("pump-wake");
+        credentials.MintScript("pump-wake");
+        var confirm = await Confirm("scripts.add");
+        var first = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Contains("two", first.Message);
+        var again = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Contains("person's press", again.Message);
+    }
+
+    [Fact]
+    public async Task A_confirmation_expires_after_two_minutes()
+    {
+        var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), log: logs.Add, credentials: timed, audit: new AgentAuditLog(fixture.Root, log: logs.Add));
+        string Ask(object r) => JsonSerializer.SerializeToElement(r, ProtocolJson.Options).GetProperty("confirm").GetString()!;
+        var request = JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" });
+        var late = Ask((await handler(channel, "scripts.confirm", request))!);
+        clock.Advance(TimeSpan.FromSeconds(121));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Press(late)));
+        Assert.Equal(0, timed.Count);
+        var fresh = Ask((await handler(channel, "scripts.confirm", request))!);
+        clock.Advance(TimeSpan.FromSeconds(90));
+        await handler(channel, "scripts.add", Press(fresh));
+        Assert.Equal(1, timed.Count);
+    }
+
+    [Fact]
+    public async Task A_confirmation_only_works_on_the_connection_that_asked_for_it()
+    {
+        var elsewhere = new Channel();
+        var confirm = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(elsewhere, "scripts.add", Press(confirm)));
+        Assert.Equal(0, credentials.Count);
+        // The wrong connection used it up too: a stolen value is spent whoever tries it first.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_new_confirmation_for_a_script_replaces_the_one_before_it()
+    {
+        var first = await Confirm("scripts.add");
+        var second = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(first)));
+        // The refused try was an attempt, so it used up what was outstanding for the script: the person asks again.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(second)));
+        Assert.Equal(0, credentials.Count);
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_wrong_try_for_a_script_uses_up_its_outstanding_confirmation()
+    {
+        var real = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press("guess")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(real)));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Fact]
+    public async Task Outstanding_confirmations_are_bounded_across_scripts_and_the_oldest_goes_first()
+    {
+        var first = await Confirm("scripts.add", "script-0");
+        string last = first;
+        for (var i = 1; i <= 80; i++) { last = await Confirm("scripts.add", "script-" + i); }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(first, "script-0")));
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(last, "script-80"));
+        Assert.Single(credentials.ListScripts());
+    }
+
+    [Fact]
+    public async Task An_app_rotate_is_a_second_mint_and_a_revoke_press_ends_both()
+    {
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
+        Assert.Equal(2, Assert.Single(credentials.ListScripts()).Live);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add"))));
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(await Confirm("scripts.revoke")));
+        Assert.Empty(credentials.ListScripts());
+    }
+
+    [Fact]
+    public async Task The_launch_fleet_tick_and_untick_are_app_presses_bound_to_state()
+    {
+        credentials.MintScript("pump-wake");
+        // The host's own policy still decides: with agents off the tick is refused even with a valid confirmation.
+        var early = await Confirm("scripts.grant-fleet");
+        var off = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(early)));
+        Assert.Contains("agents.enabled", off.Message);
+        File.WriteAllText(Path.Combine(fixture.Root, HostSettings.FileName), JsonSerializer.Serialize(new { agents = new { enabled = true } }));
+        var tick = await Confirm("scripts.grant-fleet");
+        await Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick));
+        Assert.True(Assert.Single(credentials.ListScripts()).FleetLaunch);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick)));
+        await Handler(CallerKind.App)(channel, "scripts.revoke-fleet", Press(await Confirm("scripts.revoke-fleet")));
+        Assert.False(Assert.Single(credentials.ListScripts()).FleetLaunch);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    public async Task Only_the_app_or_the_host_command_line_can_ask_for_a_confirmation_or_the_list(CallerKind kind)
+    {
+        credentials.MintScript("pump-wake");
+        foreach (var op in new[] { "scripts.confirm", "scripts.list" })
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Handler(kind)(channel, op, JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" })));
+            Assert.Contains("person", error.Message);
+        }
+    }
+
+    [Fact]
+    public async Task A_credentialed_connection_cannot_press_or_list_even_when_classified_as_the_app()
+    {
+        var script = credentials.MintScript("pump-wake");
+        credentials.Accept(channel, script.Credential);
+        foreach (var op in new[] { "scripts.list", "scripts.confirm", "scripts.add" })
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Handler(CallerKind.App)(channel, op, JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake", confirm = "x" })));
+        }
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task The_list_gives_the_app_metadata_only_never_a_token_hash_path_or_credential_id()
+    {
+        var first = credentials.MintScript("pump-wake");
+        credentials.MintScript("other-script");
+        var raw = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(channel, "scripts.list", JsonSerializer.SerializeToElement(new { })),
+            ProtocolJson.Options);
+        var rows = raw.GetProperty("scripts").EnumerateArray().ToArray();
+        Assert.Equal(["other-script", "pump-wake"], rows.Select(r => r.GetProperty("name").GetString()!).Order().ToArray());
+        Assert.All(rows, r => Assert.Equal(AgentProtocol.ScopeReadReply, r.GetProperty("scope").GetString()));
+        Assert.DoesNotContain(first.Path, raw.GetRawText());
+        Assert.DoesNotContain(first.Credential.Id, raw.GetRawText());
+        Assert.DoesNotContain(AgentProtocol.TokenPrefix, raw.GetRawText());
     }
 
     sealed class Channel : IProtocolChannel

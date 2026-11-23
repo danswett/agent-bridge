@@ -59,7 +59,7 @@ public static class LiteComposition
             pump = new DeliveryDispatchPump(lane, source, log);
             notices = new LaneNoticeSink(lane);
         }
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, Composition = lane, Pump = pump, Notices = notices };
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, Composition = lane, Pump = pump, Notices = notices };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)

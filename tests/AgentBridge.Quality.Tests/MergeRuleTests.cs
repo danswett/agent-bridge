@@ -9,7 +9,7 @@ public class MergeRuleTests
     const string Head = "abcdef0123456789abcdef0123456789abcdef01";
     const string Older = "0000000123456789abcdef0123456789abcdef01";
 
-    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse("""
+    const string ConfigYaml = """
         base: main
         status_poster: github-actions
         copilot_reviewer: copilot-pull-request-reviewer
@@ -33,11 +33,16 @@ public class MergeRuleTests
           labels: [copilot-waived]
           second_review: independent-review-2
           one_review_paths: [docs/status.md]
+        codex_waiver:
+          switch: CODEX_WAIVER
+          description: "owner-waiver (Nov 22 15:25)"
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
           - src/**pair**
-        """);
+        """;
+
+    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse(ConfigYaml);
 
     static readonly MainFact MainGreen = new("success", "main's CI 2222222 passed");
 
@@ -284,6 +289,86 @@ public class MergeRuleTests
 
         Assert.Equal("failure", verdict.State);
         Assert.Equal([RedMain], verdict.Reasons);
+    }
+
+    // Owner decision (#2454): while Codex is down, a second receipt whose description is EXACTLY the token stands in for the
+    // second model family, next to a clean first receipt that names a family, and only with the CODEX_WAIVER switch on.
+    const string OwnerWaiver = "owner-waiver (Nov 22 15:25)";
+    static readonly string[] WorkflowFiles = [".github/workflows/ci.yml"];
+    static readonly ReviewFact[] Quota = [Copilot with { Body = QuotaError }];
+
+    static StatusFact Token(string description = OwnerWaiver, string state = "success", string creator = "danswett") =>
+        new("independent-review-2", state, description, creator, new DateTimeOffset(2026, 11, 3, 12, 1, 0, TimeSpan.Zero));
+
+    static MergeVerdict Judge(StatusFact[] statuses, bool switchOn = true) =>
+        MergeRule.Evaluate(Config, MainGreen, Pr(WorkflowFiles, reviews: Quota, statuses: statuses) with { CodexWaiverOn = switchOn })!;
+
+    [Fact]
+    public void The_owner_waiver_stands_in_for_the_second_family_next_to_a_clean_first_receipt_when_the_switch_is_on()
+    {
+        var verdict = Judge([First("claude-sonnet-5.5"), Token()]);
+
+        Assert.Equal("success", verdict.State);
+        Assert.Contains(OwnerWaiver, verdict.Description);
+        Assert.Contains("every check passed", verdict.Description);
+    }
+
+    [Fact]
+    public void With_the_switch_off_the_waiver_changes_nothing_and_a_real_second_family_still_passes()
+    {
+        var off = Judge([First("claude-sonnet-5.5"), Token()], switchOn: false);
+        Assert.Equal("failure", off.State);
+        Assert.DoesNotContain(OwnerWaiver, off.Description);
+
+        foreach (var on in new[] { true, false })
+        {
+            var real = Judge([First(), Second()], switchOn: on);
+            Assert.Equal(("success", "Two model families' reviews on file; every check passed"), (real.State, real.Description));
+        }
+    }
+
+    [Theory]
+    [InlineData("owner-waiver (Nov 22 15:25) and more")]
+    [InlineData("see owner-waiver (Nov 22 15:25)")]
+    [InlineData("Owner-waiver (Nov 22 15:25)")]
+    [InlineData("owner-waiver (Nov 22 15:25) ")]
+    [InlineData("owner-waiver (nov 22 15:25)")]
+    [InlineData("owner-waiver")]
+    [InlineData("")]
+    public void Only_the_whole_description_matching_exactly_counts_never_one_that_contains_it(string description)
+    {
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(description)]).State);
+    }
+
+    [Fact]
+    public void The_waiver_never_stands_in_for_the_first_receipt_and_needs_a_clean_first_that_names_a_family()
+    {
+        // No first receipt at all.
+        Assert.Equal("failure", Judge([Token()]).State);
+        // The token as the FIRST receipt's description.
+        Assert.Equal("failure", Judge([new StatusFact("independent-review", "success", OwnerWaiver, "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero)), Token()]).State);
+        // A first receipt that is not a success.
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5", state: "failure"), Token()]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5", state: "pending"), Token()]).State);
+        // A first receipt that names no model family.
+        Assert.Equal("failure", Judge([new StatusFact("independent-review", "success", "CLEAN ENTIRE: security-review (Engineering)", "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero)), Token()]).State);
+    }
+
+    [Fact]
+    public void A_waiver_from_a_poster_who_may_not_review_or_in_a_failed_state_does_not_count()
+    {
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(creator: "someone-else")]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(state: "failure")]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(state: "pending")]).State);
+    }
+
+    [Fact]
+    public void The_codex_waiver_block_needs_its_switch_and_a_description_or_the_config_refuses_to_load()
+    {
+        var yaml = ConfigYaml;
+        Assert.NotNull(MergeRuleConfig.Parse(yaml).CodexWaiver);
+        Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace("switch: CODEX_WAIVER", "switch: ARM64_WAIVER")));
+        Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace("description: \"owner-waiver (Nov 22 15:25)\"", "description: \"\"")));
     }
 
     [Fact]
@@ -974,27 +1059,98 @@ public class MergeRuleTests
         Assert.Equal(("failure", "Check native-clients ended failure on abcdef0 (+1 more)"), (verdict.State, verdict.Description));
     }
 
+    // Workflows left out of merge-rule.yml's workflow_run list because none of their runs can put a check or status on a
+    // pull request's head, and the judge reads only a head's checks and statuses (quality/merge-rule.yml: "Every check run
+    // and status on the head must pass"). EVENT TABLE, why no verdict can change when one of them starts or finishes:
+    //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
+    //                               branch's tip, never a pull request's head, and it cannot be dispatched.
+    //   Re-run known flakes         the same trigger, the same reason.
+    //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
+    //                               on a pull request's branch ends skipped, which the judge counts as passing.
+    // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
+    // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
+    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+
+    // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
+    // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
+    // never a pull request's head. The one way onto a head is a person dispatching one by hand on a pull request's branch;
+    // for that one case a start or finish no longer re-judges at once, and the verdict catches up at the head's next event
+    // or the backstop (the named residual; each of these is an operations job, not a pull request check):
+    //   Pages (schedule every 5 min, CI-on-main workflow_run, dispatch), Revert culprit (schedule every 5 min, dispatch),
+    //   Ops probe, Flake hunt (daily schedule, dispatch), Update gap, Beta acceptance, ARM64 self-test loop (dispatch only),
+    //   Lab nightly and Lab release verification (dispatch / workflow_call; held).
+    static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+    [
+        "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+        "Ops probe", "Pages", "Revert culprit", "Update gap",
+    ];
+
+    static YamlMappingNode LoadWorkflow(string file)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(file)));
+        return (YamlMappingNode)stream.Documents[0].RootNode;
+    }
+
     // A workflow left out of merge-rule.yml's workflow_run list could still fail after the last
     // evaluation, and its red would never reach merge-rule until the schedule came round.
     [Fact]
     public void A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
-        static YamlMappingNode Load(string file)
-        {
-            var stream = new YamlStream();
-            stream.Load(new StringReader(File.ReadAllText(file)));
-            return (YamlMappingNode)stream.Documents[0].RootNode;
-        }
         var names = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
-            .Select(f => Load(f).Children[new YamlScalarNode("name")].ToString())
-            .Where(n => n != "Merge rule")
+            .Select(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString())
+            .Where(n => n != "Merge rule" && !CannotReachAPullRequestHead.Contains(n) && !OnlyOnTheDefaultBranchOrByHand.Contains(n))
             .Order(StringComparer.Ordinal);
-        var on = (YamlMappingNode)Load(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
+        var on = (YamlMappingNode)LoadWorkflow(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
         var listed = ((YamlSequenceNode)((YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")])
             .Children[new YamlScalarNode("workflows")]).Children.Select(n => n.ToString()).Order(StringComparer.Ordinal);
 
         Assert.Equal(names, listed);
+    }
+
+    // The exclusions above hold only while each of those workflows still cannot reach a pull request's head.
+    [Fact]
+    public void The_workflows_left_out_of_the_list_still_cannot_put_a_check_on_a_pull_request_head()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var byName = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+            .ToDictionary(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString(), f => f);
+        foreach (var name in CannotReachAPullRequestHead)
+        {
+            Assert.True(byName.TryGetValue(name, out var file), $"{name} no longer exists: remove it from the exclusions");
+            var workflow = LoadWorkflow(file!);
+            var on = (YamlMappingNode)workflow.Children[new YamlScalarNode("on")];
+            var triggers = on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal).ToArray();
+            if (name == "Upload release halt policy")
+            {
+                Assert.All(triggers, t => Assert.Contains(t, new[] { "push", "workflow_dispatch" }));
+                var push = (YamlMappingNode)on.Children[new YamlScalarNode("push")];
+                Assert.Equal(["main"], ((YamlSequenceNode)push.Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString()));
+                var jobs = (YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")];
+                Assert.All(jobs.Children.Values.Cast<YamlMappingNode>(),
+                    job => Assert.Contains("refs/heads/main", job.Children[new YamlScalarNode("if")].ToString(), StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.Equal(["workflow_run"], triggers);
+            }
+            Assert.DoesNotMatch(@"(statuses|checks):\s*write", File.ReadAllText(file!));
+        }
+        foreach (var name in OnlyOnTheDefaultBranchOrByHand)
+        {
+            Assert.True(byName.TryGetValue(name, out var file), $"{name} no longer exists: remove it from the exclusions");
+            var on = (YamlMappingNode)LoadWorkflow(file!).Children[new YamlScalarNode("on")];
+            var triggers = on.Children.Keys.Select(k => k.ToString()).ToArray();
+            // No trigger that runs on a pull request's head; workflow_run only for CI finishing on main.
+            Assert.All(triggers, t => Assert.Contains(t, new[] { "schedule", "workflow_dispatch", "workflow_call", "workflow_run" }));
+            if (on.Children.TryGetValue(new YamlScalarNode("workflow_run"), out var run))
+            {
+                var branches = ((YamlSequenceNode)((YamlMappingNode)run).Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString());
+                Assert.Equal(["main"], branches);
+            }
+            Assert.DoesNotMatch(@"(statuses|checks):\s*write", File.ReadAllText(file!));
+        }
     }
 
     [Fact]
@@ -1190,6 +1346,187 @@ public class MergeRuleTests
         {
             File.Delete(config);
         }
+    }
+
+    // A main run whose jobs cannot be read (a zombie run the API 404s on, a 5xx, an empty or cut-short body) used to error every pull request's
+    // merge-rule. It is skipped only once it has been unreadable for over 15 minutes (a fresh run can 404 briefly), never when it is a
+    // completed failure, and the status names it.
+    static readonly DateTimeOffset MainNow = new(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
+
+    // The pause before an old unreadable run is read once more costs nothing here.
+    static MergeRuleTests() => MergeRuleCommand.UnreadableRetryAfter = TimeSpan.Zero;
+
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times);
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain, utcNow: () => MainNow);
+            return (Assert.Single(github.Posted), output.ToString());
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("404")]
+    [InlineData("500")]
+    [InlineData("empty")]
+    [InlineData("truncated")]
+    public void A_main_run_unreadable_for_over_15_minutes_is_skipped_and_named_and_the_newest_readable_run_is_judged(string kind)
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 16), (6, "completed", "success", 1, 40));
+
+        var (posted, output) = JudgeMain(runs, new Dictionary<long, string> { [7] = kind });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+        Assert.Contains("Main: ci.yml run 6 (attempt 1) on c600000", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_404_on_a_run_under_15_minutes_old_is_not_skipped_and_the_judge_errors_as_before()
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 14), (6, "completed", "success", 1, 40));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("read main's CI", posted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_without_a_creation_time_is_treated_as_fresh_so_it_is_never_skipped()
+    {
+        var runs = MainRuns((7, "in_progress", null, 1), (6, "completed", "success", 1));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_newer_readable_completed_failed_run_always_blocks_even_when_an_unreadable_run_was_skipped()
+    {
+        // 9 is the zombie (skipped), 8 is the newest readable run and it failed, 7 passed before it.
+        var runs = MainRunsAged(MainNow, (9, "in_progress", null, 1, 60), (8, "completed", "failure", 1, 30), (7, "completed", "success", 1, 90));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [9] = "404" });
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("Main is red (CI c800000): named job light is not green", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 9", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_completed_failed_run_is_never_skipped_however_long_its_jobs_have_been_unreadable()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "failure", 1, 600), (7, "completed", "success", 1, 700));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [8] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_cancelled_run_whose_jobs_are_unreadable_is_skipped_after_the_grace_like_a_zombie()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "cancelled", 1, 20), (6, "completed", "success", 1, 40));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_unreadable_run_skipped_is_named_not_only_the_first()
+    {
+        var runs = MainRunsAged(MainNow, (9, "in_progress", null, 1, 90), (8, "completed", "cancelled", 1, 60), (7, "completed", "success", 1, 120));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [9] = "404", [8] = "500" });
+
+        Assert.Contains("skipped unreadable run 9, 8", posted, StringComparison.Ordinal);
+    }
+
+    // #3894, from the Sonnet FULL read of #3888. P2-1: only a run that is not completed, or ended in a conclusion GitHub documents as not a
+    // failure, may be passed over; an unknown conclusion, a completed run with none, or one with no status fails closed.
+    [Theory]
+    [InlineData("completed", "mystery")]
+    [InlineData("completed", null)]
+    [InlineData("completed", "failure")]
+    [InlineData("completed", "timed_out")]
+    [InlineData("completed", "startup_failure")]
+    [InlineData(null, null)]
+    [InlineData(null, "success")]
+    public void A_run_with_an_unknown_missing_or_failed_state_is_never_skipped_so_the_unexpected_fails_closed(string? status, string? conclusion)
+    {
+        var runs = MainRunsRaw(MainNow, 7, status, conclusion, 600, 6, "completed", "success");
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("in_progress", null)]
+    [InlineData("queued", null)]
+    [InlineData("completed", "cancelled")]
+    [InlineData("completed", "success")]
+    [InlineData("completed", "neutral")]
+    [InlineData("completed", "skipped")]
+    [InlineData("completed", "stale")]
+    [InlineData("completed", "action_required")]
+    public void A_run_that_is_not_completed_or_ended_in_a_documented_non_failure_may_be_skipped_after_the_grace(string status, string? conclusion)
+    {
+        var runs = MainRunsRaw(MainNow, 7, status, conclusion, 600, 6, "completed", "success");
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // P2-2: a run older than the grace is skipped on its first failed read, and main runs take 26 to 35 minutes, so one transient 404 or 5xx
+    // skipped a cancelled run that had a failed job and the judge read the older green. It is read once more before it is passed over.
+    [Fact]
+    public void One_unreadable_answer_is_not_enough_to_skip_a_run_it_is_read_once_more()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "success", 1, 40), (6, "completed", "failure", 1, 80));
+
+        var (posted, output) = JudgeMain(runs, new Dictionary<long, string> { [7] = "500" }, new Dictionary<long, int> { [7] = 1 });
+
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+        Assert.Contains("Main: ci.yml run 7 (attempt 1) on c700000", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_unreadable_on_both_reads_is_skipped_as_before()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "success", 1, 40), (6, "completed", "success", 1, 80));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" }, new Dictionary<long, int> { [7] = 2 });
+
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // P3-2: nothing readable is a failure that still names what was skipped.
+    [Fact]
+    public void When_no_run_is_readable_the_failure_still_names_the_skipped_ones()
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 90));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1861,30 +2198,27 @@ public class MergeRuleTests
         }
     }
 
-    const string WaiverYaml = """
-        arm64_waiver:
-          switch: ARM64_WAIVER
-          until: 2026-11-27T08:00:00Z
-          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
-        """;
+    // A fixed clock for the tests (the waiver itself no longer expires, owner decision #2454).
     static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 27, 8, 0, 0, TimeSpan.Zero);
 
+    const string WaiverYaml = """
+        arm64_waiver:
+          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
+        """;
+
     [Theory]
-    [InlineData("2026-11-27T07:59:59Z", "on", "app (win-arm64)", true)]
-    [InlineData("2026-11-27T08:00:00Z", "on", "app (win-arm64)", false)]
-    [InlineData("2026-11-27T08:00:01Z", "on", "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "on", "app (win-arm64)", true)]
-    [InlineData("2026-11-20T08:00:01Z", null, "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "off", "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "on", "light", false)]
-    public void The_repository_arm64_waiver_obeys_the_renewed_window_and_exact_job_scope(
-        string now, string? setting, string job, bool allowed)
+    [InlineData("app (win-arm64)", true)]
+    [InlineData("app-installer (win-arm64)", true)]
+    [InlineData("product (windows-11-arm)", true)]
+    [InlineData("light", false)]
+    [InlineData("app (win-x64)", false)]
+    public void The_repository_arm64_waiver_is_permanent_and_has_an_exact_job_scope(string job, bool allowed)
     {
+        // Owner, Nov 22 (#2454): Arm64 jobs run and report but never gate; no switch, no expiry.
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
         var waiver = Assert.IsType<Arm64WaiverConfig>(config.Arm64Waiver);
 
-        Assert.Equal(allowed, waiver.Active(DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture), setting)
-            && waiver.Allows(job, "failure"));
+        Assert.Equal(allowed, waiver.Allows(job, "failure"));
     }
 
     [Fact]
@@ -1907,13 +2241,23 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("ARM64_WAIVER", "ARM64_WAIVER_TYPO")]
-    [InlineData("2026-11-27T08:00:00Z", "0001-01-01T00:00:00Z")]
     [InlineData("app-installer (win-arm64)", "app-installer (win-x64)")]
     public void An_incomplete_or_broadened_waiver_config_is_rejected(string before, string after)
     {
         var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
         Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace(before, after, StringComparison.Ordinal)));
+    }
+
+    // The waiver is permanent (#2454): the block takes only its jobs, so a leftover until: or switch: fails the load.
+    [Theory]
+    [InlineData("until: 2026-11-27T08:00:00Z")]
+    [InlineData("switch: ARM64_WAIVER")]
+    public void A_leftover_until_or_switch_in_the_arm64_waiver_block_fails_the_config_load(string leftover)
+    {
+        var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        Assert.Contains("\n  jobs:", yaml.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+
+        Assert.ThrowsAny<Exception>(() => MergeRuleConfig.Parse(yaml.ReplaceLineEndings("\n").Replace("\n  jobs:", "\n  " + leftover + "\n  jobs:", StringComparison.Ordinal)));
     }
 
     static string WaiverPullRequest(string name = "app (win-arm64)", string result = "FAILURE",
@@ -1925,25 +2269,21 @@ public class MergeRuleTests
                 createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } }]);
 
     [Theory]
-    [InlineData("on", -1, "success")]
-    [InlineData("on", 0, "failure")]
-    [InlineData("on", 1, "failure")]
-    [InlineData(null, -1, "failure")]
-    [InlineData("off", -1, "failure")]
-    [InlineData("ON", -1, "failure")]
-    public void The_arm64_waiver_reads_clock_and_switch_once_and_expires_at_the_exact_boundary(string? value, int seconds, string state)
+    [InlineData(null, -1)]
+    [InlineData("on", -1)]
+    [InlineData("on", 1)]
+    [InlineData("off", 3650)]
+    [InlineData("ON", 400)]
+    public void The_arm64_waiver_ignores_the_clock_and_any_switch_value(string? value, int days)
     {
+        // Owner, Nov 22 (#2454): permanent. A failed Arm64 job never blocks, whatever ARM64_WAIVER says or the date.
         var config = WriteConfig(arm64Waiver: true);
         var github = new FakeGitHub(WaiverPullRequest());
-        var clocks = 0;
-        var switches = 0;
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
-                () => { clocks++; return WaiverExpiry.AddSeconds(seconds); },
-                name => { switches++; Assert.Equal("ARM64_WAIVER", name); return value; });
-            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Equal((1, 1), (clocks, switches));
+                () => new DateTimeOffset(2026, 11, 27, 8, 0, 0, TimeSpan.Zero).AddDays(days), _ => value);
+            Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
     }
@@ -1953,6 +2293,8 @@ public class MergeRuleTests
     [InlineData("app-installer (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("product (windows-11-arm)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("app (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("relay-image-sarif", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("pwa-e2e", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("app-installer (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("product (ubuntu-latest)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("lint", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
@@ -2181,8 +2523,9 @@ public class MergeRuleTests
     [InlineData("product (windows-11-arm)", -1, "success")]
     [InlineData("app (win-x64)", -1, "failure")]
     [InlineData("product (windows-latest)", -1, "failure")]
-    [InlineData("app (win-arm64)", 0, "failure")]
-    public void Main_green_waives_only_the_exact_failed_arm64_instances_while_active(string failed, int seconds, string state)
+    [InlineData("app (win-arm64)", 0, "success")]
+    [InlineData("product (ubuntu-latest)", -1, "failure")]
+    public void Main_green_waives_only_the_exact_failed_arm64_instances(string failed, int seconds, string state)
     {
         var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }
             .Distinct().Select((name, id) => new { id, name, status = "completed", conclusion = name == failed ? "failure" : "success", run_attempt = 1 }).ToArray();
@@ -2412,9 +2755,9 @@ public class MergeRuleTests
     [InlineData("deterministic-note", "success", "failure")]
     [InlineData("zero-jobs-cancelled", "success", "success")]
     [InlineData("arm-waiver-on", "failure", "success")]
-    [InlineData("arm-waiver-off", "failure", "failure")]
+    [InlineData("arm-waiver-off", "failure", "success")]
     [InlineData("arm-waiver-on-retried", "success", "success")]
-    [InlineData("arm-waiver-off-retried", "success", "failure")]
+    [InlineData("arm-waiver-off-retried", "success", "success")]
     public void A_newer_run_without_a_real_result_never_hides_an_older_failure_or_a_deterministic_one(string scenario, string older, string state)
     {
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
@@ -2472,7 +2815,7 @@ public class MergeRuleTests
             File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
                 "infra_steps: { product: [Set up job, Post Run actions/checkout@*], light: [Set up job], app: [Set up job] }, jobs: [light", StringComparison.Ordinal));
             var output = new StringWriter();
-            // The waiver is active only when its switch is on, as Green already honours it.
+            // The waiver ignores the switch: with the config present it is always on (off scenarios prove it).
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain,
                 () => WaiverExpiry.AddSeconds(-1), _ => scenario.StartsWith("arm-waiver-on", StringComparison.Ordinal) ? "on" : null);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
@@ -2500,6 +2843,32 @@ public class MergeRuleTests
     }
 
     // Main's CI runs as REST lists them, newest first: an id, then its status, conclusion and attempt.
+    // Runs created AgeMinutes before now, newest first as given.
+    static string MainRunsAged(DateTimeOffset now, params (long Id, string Status, string? Conclusion, int Attempt, int AgeMinutes)[] runs) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = runs.Length,
+            workflow_runs = runs.Select(r => new
+            {
+                id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt,
+                created_at = now.AddMinutes(-r.AgeMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+            }),
+        });
+
+    // A run with a status and conclusion as given (or none), for the values GitHub does not document.
+    static string MainRunsRaw(DateTimeOffset now, long id, string? status, string? conclusion, int ageMinutes, long olderId, string olderStatus, string? olderConclusion) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = 2,
+            workflow_runs = new object[]
+            {
+                status is null
+                    ? new { id, head_sha = $"c{id}".PadRight(40, '0'), conclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) }
+                    : (object)new { id, head_sha = $"c{id}".PadRight(40, '0'), status, conclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) },
+                new { id = olderId, head_sha = $"c{olderId}".PadRight(40, '0'), status = olderStatus, conclusion = olderConclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes - 60).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) },
+            },
+        });
+
     static string MainRuns(params (long Id, string Status, string? Conclusion, int Attempt)[] runs) =>
         JsonSerializer.Serialize(new
         {
@@ -2580,11 +2949,22 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]") : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
         public List<string> RestPaths { get; } = [];
+
+        readonly Dictionary<long, int> unreadableSeen = [];
+
+        // Whether this read of an unreadable run fails: always, or only the first few times (a blip).
+        bool Fails(long id)
+        {
+            if (unreadableTimes is null || !unreadableTimes.TryGetValue(id, out var times)) { return true; }
+            var seen = unreadableSeen.GetValueOrDefault(id);
+            unreadableSeen[id] = seen + 1;
+            return seen < times;
+        }
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
@@ -2633,6 +3013,18 @@ public class MergeRuleTests
             }
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
             {
+                // A run whose jobs gh can't give: a 404 or another non-2xx (gh exits 1 and says so), or a body that is empty or cut short.
+                if (unreadableRuns is not null)
+                    foreach (var (id, kind) in unreadableRuns)
+                        if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal)
+                            && Fails(id))
+                            throw kind switch
+                            {
+                                "404" => new InvalidOperationException($"gh api repos/danswett/agent-bridge/actions/runs/{id}/jobs failed (1): gh: Not Found (HTTP 404)"),
+                                "500" => new InvalidOperationException($"gh api repos/danswett/agent-bridge/actions/runs/{id}/jobs failed (1): gh: Internal Server Error (HTTP 500)"),
+                                "empty" => new JsonException("The input does not contain any JSON tokens."),
+                                _ => new JsonException("Expected depth to be zero at the end of the JSON payload."),
+                            };
                 if (jobsByRun is not null)
                     foreach (var (id, json) in jobsByRun)
                         if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal))

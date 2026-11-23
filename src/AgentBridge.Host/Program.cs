@@ -63,6 +63,8 @@ using AgentBridge.Transport;
 //                                               profile has taken over agent-ha-bridge's hook
 //                                               spool, its heartbeat, and the hooks' timings
 //                                               (docs/host-hooks.md)
+//   agent-bridge-host audit gate --since <time> [--messages <file>] [--host <id>] [--json]
+//                                               the windowed HA-fallback gate, one host (docs/design/ha-gate-counters.md)
 //   agent-bridge-host audit [--action <action>] [--outcome <outcome>] [--since <time>]
 //                                               read known audit metadata, without changing the profile
 //   agent-bridge-host migrate [--dry-run] | rollback [--dry-run] | migration status
@@ -996,6 +998,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var liteLink = new AgentBridge.Host.Lite.RelayLiteLink(service.LiteReceiver, identity.Key.Public, () => identity.Account?.AccountId ?? "");
     var fleetRoster = new AgentBridge.Host.Fleet.RelayFleetRoster(fleetTrust.Membership);
     var liteRegistry = new AgentBridge.Host.Fleet.RelayFleetRoster(accountGate: samePcPin.AccountGate);
+    liteRegistry.ShareReadWith(fleetRoster);
     var liteFleetRoster = new AgentBridge.Host.Fleet.LiteFleetRoster(liteRegistry.CaptureMessagingConnection, liteKill, () => identity.Account?.AccountId, samePcPin.AccountGate);
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     AgentPipeLaunch? grantPipe = null;
