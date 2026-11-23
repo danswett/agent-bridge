@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace AgentBridge.App.Core;
 
-/// <summary>Takes the dump when the UI thread is hung: the platform's job (Windows: WindowsMiniDump). Null when it could not.</summary>
+/// <summary>Takes the dump when the UI thread is hung: the platform's job (Windows: <see cref="WindowsMiniDump"/>). Null when it could not.</summary>
 public interface IHangDumpWriter
 {
     string? Write();
