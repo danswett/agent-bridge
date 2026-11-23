@@ -910,9 +910,10 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     foreach (var d in unseen.Where(d => !d.Wants(NoticeKind.Finished, id)))
                     {
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
-                        if (t.Replaced is { } answered && shownOn.GetValueOrDefault((d.Device, id)) == answered)
+                        // Whatever question it shows, not only the one just answered: a later one may have been held back.
+                        if (shownOn.TryGetValue((d.Device, id), out var shown))
                         {
-                            Enqueue(s, NoticeKind.Resolved, answered, [d], ended: t.Removed, queued: due.Queued);
+                            Enqueue(s, NoticeKind.Resolved, shown, [d], ended: t.Removed, queued: due.Queued);
                         }
                     }
                     break;

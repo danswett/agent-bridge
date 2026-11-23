@@ -80,7 +80,9 @@ internal static class GateAuditProjection
         long retained = 0;
         var (rows, complete) = Load(profile, fault => coverage |= fault == "coverage-break",
             boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
-        var launchesRetained = AgentAuditLog.RetainedThrough(Path.Combine(profile, AgentAuditLog.FolderName), launch: true);
+        // No audit folder, or no durable heads yet, means nothing was trimmed: read the launches head only when it exists.
+        var auditFolder = Path.Combine(profile, AgentAuditLog.FolderName);
+        var launchesRetained = Directory.Exists(auditFolder) && AgentAuditLog.HasHeads(auditFolder) ? AgentAuditLog.RetainedThrough(auditFolder, launch: true) : 0;
         var trimmedIntoWindow = TrimmedIntoWindow(rows, retained, launchesRetained, since);
         var report = Project(rows, complete && !adopted, Guid.Empty, coverage: coverage, retainedThrough: retained, since: since);
         // Trimmed evidence is missing evidence, not a proven break: INCOMPLETE. A coverage-break fault the heads report stays a FAIL.
