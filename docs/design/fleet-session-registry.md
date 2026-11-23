@@ -176,7 +176,9 @@ All members are required unless noted.
   truncated), `sessions` and `sig`, and per session `id`, `node`, `name` (optional), `state`,
   `since` today; the planned contract adds optional `startedAt`, omitted when unobservable.
   Today's relay refuses that field (`RosterFields.cs:26,68`); deploy the reviewed new
-  allow-list before its publisher. No other field becomes allowed. No `cwd`,
+  allow-list before its publisher. No other field becomes allowed, except the optional evidence members the relay already accepts and nothing yet
+  publishes (`attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`; see "Host-side
+  evidence producer", an owner proposal not in force). No `cwd`,
   `repository`, `branch`, `model`, `question`, `title`, summaries, counts of tokens, or anything
   from a prompt or a folder.
 * **name** (optional). Present only when the session has a name that came from an allowed source
@@ -625,6 +627,7 @@ alone, observe mode or roster library support is not evidence those gates are de
 | Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
 | Session owner principal, PR number, finished flag (#2643) | Never | Relay sees, only once known | Bounded closed shapes; unknown sent as absent; not stored, not logged |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
+| Attention kind, open-ask count, observed time; with option B also unsent length and a keyed hash (owner proposal, not in force) | Never | Relay sees, and agents with read scope through `fleet.list` | Closed shapes; no text; a per-host keyed hash only; none of it is published unless the owner approves |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
 | Logs and metrics | No account, device or name | Same | A test greps for a seeded name |
@@ -674,7 +677,7 @@ need their own approval; the owner decides S7 after Quality attests the evidence
 
 Stuck-prompt evidence needs no new field here. `fleet.list` already returns `attention`, `openAsks`, `unsentLength`, `unsentHash`,
 `observedAt` and `lastReplyAt` ([agent-operations.md](../protocol/agent-operations.md)); the fleet tools' relay roster projection
-(`Get-FleetRoster`) now carries them, so the stuck-prompt shadow reads them with HA off. The read scope is unchanged and an `approval`
+(`Get-FleetRoster`) now carries them when a host publishes them (none does yet; see "Host-side evidence producer"), so the stuck-prompt shadow can read them with HA off. The read scope is unchanged and an `approval`
 attention is passed through unmapped, so a reader refuses it rather than guessing.
 
 Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L/M, was one L);
@@ -773,7 +776,8 @@ from existing state) and **Option B here is A1b** (adds the composer read, the H
 `attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`, `owner`, `pr`,
 `finished`; [agent-operations.md](../protocol/agent-operations.md#fleetlist)). `FleetPublisher` produces only `owner`, `pr` and `finished`,
 so every reader gets the other members absent, and the stuck-prompt shadow reads that as `missing-evidence`. Absent means unknown, never
-defaulted. No signing change is needed: `hostSign` signs the whole record, so added evidence is tamper-evident automatically.
+defaulted. No signing change is needed, but records are unsigned today (see "Signing"; `hostSign` is #1776): until then the relay can forge or
+alter this evidence as it can any record, and a reader treats it as unverified. Once #1776 signs records, the whole record, evidence included, is covered.
 
 ### What the shadow needs (so that A can work)
 
@@ -787,12 +791,15 @@ session. Hence these rules, which apply to A and B:
   would make the content differ and defeat the 20 s suppression (a publish every 2 s).
 * **No `stale` from the host.** A host `stale` (the not-responding threshold) would make the shadow skip exactly the prompt that has waited
   longest. The host does not publish `stale`; the reader's own derivation for an offline machine is unchanged.
-* **Attention vocabulary.** The host can see `question`, `approval` and `permission` (and `trust` at launch). The shadow accepts
+* **Attention vocabulary.** The host's pending question is a `QuestionKind` of `Form` or `Approval` (`Sessions.cs`); `permission` and `trust` are
+  not `QuestionKind` values, so each needs a stated mapping (below). The shadow accepts
   `none`, `trust`, `permission`, `question` and `unknown` and refuses `approval` as invalid evidence. This note picks one resolution: the
   shadow gains `approval` as an owner-tap kind (a small fleet change in its own repository); there is no lossy mapping of approval to
   permission. Until that lands, an `approval` row is refused by the shadow, which is the safe direction.
-* **`trust` is mapped in A.** The tap planner acts only on `trust`, so A without a trust mapping plans no tap. The mapping comes from the
-  launch-trust state (`LaunchTrust`) and is confirmed in review before A is built.
+* **`trust` is mapped in A.** The tap planner acts only on `trust`, so A without a trust mapping plans no tap. The folder-trust prompt the host
+  already handles (`FolderTrustAnswers`) is the candidate source, and `permission` would be derived from an approval's nature; neither mapping
+  exists as a symbol today. Both are confirmed in review before A is built, and until then those kinds are `unknown` or omitted, so A alone
+  plans no tap until the trust mapping lands.
 
 ### Option A (= A1 in #1191): fields from state the host already holds (no new capture)
 
@@ -803,7 +810,11 @@ session. Hence these rules, which apply to A and B:
 | `observedAt` | the host's evaluation time for the row | Recomputed at each republish (the existing 20 s heartbeat); kept out of the identical-content check. |
 
 What Option A enables: detecting a session that waits on the person (`owner-tap-needed`: trust, permission, question, and approval once the
-shadow accepts it). What it does not: composer cases (see B). Cost: about 100 bytes per session; no new capture; no key; no screen read.
+shadow accepts it). What it does not: composer cases (see B). Cost: about 100 bytes per session (about 60 without `observedAt`, which is the
+figure #1191 quotes); no new capture; no key; no screen read.
+
+**What A leaks.** To the relay, and to agents with read scope through `fleet.list`: that a session is waiting on the person, the kind of wait, the
+count of pending asks, and the time the host last looked. No question text, prompt, path or token.
 
 ### Option B (= A1b in #1191): A plus a background composer read, a per-host HMAC key and a `lastReplyAt` source (new capture)
 
@@ -815,7 +826,15 @@ already in A.
   screen read the send path uses (no focus change, no typing). The text never leaves the host: only its length and a keyed hash do.
 * **New key.** `unsentHash` is HMAC-SHA256 under a dedicated per-host key, created and kept by the host, never a plain SHA-256 and never the
   answer-ledger key. Readers cannot compute or reverse it; equality across two observations shows "unchanged", nothing more.
-* **What B leaks to agents with read scope:** that a session has unsent text, its length, and whether it changed between observations.
+* **Key custody, rotation, theft.** Custody is an owner decision. Proposal: the key is created by the host, kept where only the host's own account
+  can read it, never sent to the relay, never logged; it rotates at each host restart, which costs one "changed" observation. A stolen key lets
+  whoever also holds the hashes (the relay, or an agent with read scope) guess short unsent text offline, so a theft means rotating the key and
+  treating recent hashes as exposed.
+* **What the read may capture.** Only the composer region, as the send path does; never the rest of the screen. A suggested-prompt placeholder can
+  look like unsent text (`LiteDeliver.ComposerEmptyAsync` has to tell them apart for a send), so the background read applies the same rule or
+  it would report unsent input that the person never typed.
+* **What B leaks to the relay and to agents with read scope:** that a session has unsent text, its length, and whether it changed between
+  observations.
 * **Who may consume it.** `unsentHash` feeds the `unsent-composer` class, which the fleet's clear and replace actions (built, dormant) act on.
   This proposal grants no consumer: those actions stay dormant until the owner enables them separately, and the only consumer named here is
   the read-only shadow. Enabling a consumer that changes a composer is its own owner decision.
@@ -830,9 +849,10 @@ is agreed.
 
 ### Limits that hold for both
 
-* **Size.** 16 KiB per record. A produces about 100 bytes and B about 300 bytes per session, so fewer than 64 sessions may fit; the existing
+* **Size.** 16 KiB per record. A produces about 100 bytes (60 without `observedAt`) and B about 300 bytes (250 without) per session, so fewer than 64 sessions may fit; the existing
   rule applies (drop the least recent, set `truncated`).
-* **Debounce.** At most one publish per 2 s; attention changes publish at once, and the existing 20 s republish keeps `observedAt` inside 60 s.
+* **Debounce.** At most one publish per 2 s; an attention change publishes within about 2 s (the debounce is bypassed only for a removed session or a forced first snapshot, `FleetPublisher.cs`), and
+  the existing 20 s republish keeps `observedAt` inside 60 s.
 * **Read gate: unchanged.** `fleet.list` needs an agent credential with a completed `agent.hello` and `read` scope, returns only the
   caller's own account, and is audited. The relay still refuses a record that carries prompt, question, path or token text.
 * **Older relays.** A relay without these members refuses the whole record, and there is no capability flag for evidence. Proposal: the
@@ -849,6 +869,9 @@ is agreed.
    any clear or replace action may ever consume `unsentHash`.
 3. A source for `lastReplyAt` (separate step, needed for composer cases).
 4. The evidence capability flag on the relay, and, in the fleet repository, accepting the `approval` kind.
+
+**If the owner does not answer:** nothing is built, the host keeps publishing none of these fields, and the stuck-prompt shadow stays at
+`missing-evidence` (its offline proof is fixture-only). Merging this note changes nothing in force.
 
 ## What Trust should review
 
