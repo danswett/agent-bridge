@@ -9,19 +9,21 @@ public static class SelfTestStages
 
     public const int MaxShards = 3;
 
-    // Rows are shard counts; a row's items are the stages of shards 1, 2 and 3 of that count.
+    // Rows are shard counts; a row lists the stages of every shard but the last, which takes the rest: a stage added to
+    // All and listed nowhere runs in the last shard, never in none.
     static readonly string[][][] Plans =
     [
-        [["layout", "launch", "approve", "themes", "signin", "progress", "contrast", "resize"]],
-        [["layout", "launch", "approve", "themes"], ["signin", "progress", "contrast", "resize"]],
-        [["layout", "launch", "approve"], ["themes", "signin", "progress"], ["contrast", "resize"]],
+        [],
+        [["layout", "launch", "approve", "themes"]],
+        [["layout", "launch", "approve"], ["themes", "signin", "progress"]],
     ];
 
     public static int ShardOf(string stage, int count)
     {
         if (!All.Contains(stage)) { throw new ArgumentException($"Unknown self-test stage '{stage}'.", nameof(stage)); }
         if (count is < 1 or > MaxShards) { throw new ArgumentOutOfRangeException(nameof(count), "Shard counts are 1 to 3."); }
-        return Array.FindIndex(Plans[count - 1], shard => shard.Contains(stage)) + 1;
+        var listed = Array.FindIndex(Plans[count - 1], shard => shard.Contains(stage));
+        return listed < 0 ? count : listed + 1;
     }
 }
 

@@ -92,7 +92,10 @@ $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).
 # The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
 # An array: one failed check, the arm64 case, would otherwise be a string with no .Count under strict mode.
 # A sharded run that wrote another shard, or none, did not run what it was asked: not a pass.
-$wrongShard = [bool]$Shard -and $wrote -and (try { (Get-Content $Result -Raw | ConvertFrom-Json).shard -ne $Shard } catch { $true })
+$wrongShard = $false
+if ($Shard -and $wrote) {
+    try { $wrongShard = (Get-Content $Result -Raw | ConvertFrom-Json).shard -ne $Shard } catch { $wrongShard = $true }
+}
 $failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
 $evidence = [ordered]@{
     processId = $p.Id; exitCode = $code; failedChecks = $failedChecks

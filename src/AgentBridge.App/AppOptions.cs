@@ -43,6 +43,7 @@ sealed record AppOptions
                 case "--self-test-shard" when i + 1 < args.Length:
                     o = SelfTestShard.TryParse(args[++i], out var shard) ? o with { SelfTestShard = shard } : o with { BadSelfTestShard = args[i] };
                     break;
+                case "--self-test-shard": o = o with { BadSelfTestShard = "(no value)" }; break;
                 case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
             }
         }

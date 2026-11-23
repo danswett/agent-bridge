@@ -57,6 +57,13 @@ try {
     $code = Join-Exit @($good[0], $good[1], (Join-Path $dir 'none.json'))
     Expect 'a result file that is not there is refused' $code ($code -ne 0)
 
+    $none = 0..2 | ForEach-Object { New-Result "$($_ + 1)/3" @() -StagesAll @() }
+    $code = Join-Exit $none
+    Expect 'three shards of no stages at all are refused' $code ($code -ne 0)
+
+    $code = Join-Exit @($good[0], $good[1], (New-Result '3/3' @() -StagesAll $plan[2]))
+    Expect 'a shard that ran no stage is refused' $code ($code -ne 0)
+
     $code = Join-Exit @((New-Result '1/1' $all)) 1
     Expect 'the whole run (1/1) joins' $code ($code -eq 0)
 }

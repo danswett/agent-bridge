@@ -31,6 +31,8 @@ foreach ($path in $Results) {
     $shards[$index] = $path
     $mine = @($r.stages)
     $theirAll = @($r.stagesAll)
+    if ($theirAll.Count -eq 0) { $problems.Add("shard $label lists no stagesAll: it proves nothing"); continue }
+    if ($mine.Count -eq 0) { $problems.Add("shard $label ran no stage"); continue }
     if ($null -eq $all) { $all = $theirAll }
     elseif (($all -join ',') -ne ($theirAll -join ',')) { $problems.Add("shard $label lists other stages than the rest: $($theirAll -join ', ')") }
     foreach ($stage in $mine) {
