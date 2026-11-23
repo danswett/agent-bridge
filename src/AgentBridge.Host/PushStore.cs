@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Protocol;
 using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
@@ -6,8 +7,11 @@ namespace AgentBridge.Host;
 // A device this host notifies: its browser's push subscription, which only that browser
 // can decrypt for, and where a tap should open the app.
 public sealed record PushSubscriber(string Device, string Name, string Endpoint, string P256dh, string Auth, string App, DateTimeOffset Since,
-    TrustedPeerLease? Grant = null)
+    TrustedPeerLease? Grant = null, PushNotify? Notify = null)
 {
+    // A device with no filters is told of everything, as before.
+    public bool Wants(NoticeKind kind, string session) => Notify?.Wants(kind, session) ?? true;
+
     public PushSubscription Subscription => new(Endpoint, P256dh, Auth);
 }
 
