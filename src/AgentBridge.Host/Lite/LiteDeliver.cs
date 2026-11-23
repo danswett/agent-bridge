@@ -127,13 +127,17 @@ public sealed class LiteDeliver(
         var store = busyQueue ? BusyStore : null;
         if (store is not null)
         {
-            switch (store.TryBegin(body.Request, Principal(body.Principal), id))
+            var begin = store.TryBegin(body.Request, Principal(body.Principal), id);
+            // A prompt Claude took after the report frees its slot (D2b-2b1, #3856): look at the transcript before refusing a held slot.
+            if (begin == BusyQueueStore.Begin.Held && LateTaken(store, id)) { begin = store.TryBegin(body.Request, Principal(body.Principal), id); }
+            switch (begin)
             {
                 case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
                 case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
-        }
-        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
+            var transcript = source.Files(id)?.Transcript;
+            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript));
+        }        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
         // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
@@ -248,6 +252,15 @@ public sealed class LiteDeliver(
         return source.Held is null ? found : null;
     }
 
+    // A relay prompt Claude took after its send was reported: the record becomes delivered and the slot frees. A held send whose transcript
+    // is unknown, or whose prompt has not been taken, stays held.
+    static bool LateTaken(BusyQueueStore store, string session)
+    {
+        var held = store.Holder(session);
+        if (held?.Transcript is not { } path || !ClaudeQueue.Taken(path, held.Offset, held.Request)) { return false; }
+        store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false);
+        return true;
+    }
     static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
 
     bool BusyQueueOn()
