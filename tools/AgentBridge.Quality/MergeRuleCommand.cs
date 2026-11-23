@@ -131,9 +131,8 @@ static partial class MergeRuleCommand
               origin/main's commit with no local changes to them: run it from a freshly
               fetched origin/main checkout, never a pull request's worktree, which would judge
               itself. --allow-non-main judges anyway, with a warning.
-              --if-changed (with --all, for the backstop): judges nothing when main's state and the
-              open pull requests are as the last full judgement left them (the sweep marker, a
-              status on main's head); an absent or unreadable marker judges as usual.
+              --if-changed (with --all, for the backstop): judges nothing while the sweep marker (a status
+              on main's head, under an hour old) matches main and the open pull requests; else judges.
         """;
 
     // Two reads (#524's review, GITHUB_TOKEN's GraphQL budget): the open list without checks or
@@ -297,7 +296,9 @@ static partial class MergeRuleCommand
 
         // The sweep marker: what the last full judgement saw. Absent, unreadable or malformed it fails open to judging.
         var mainReadable = session.Main.State != "error";
-        var (markerHead, marker) = mainReadable ? ReadSweepMarker(session) : (null, null);
+        // Read and written on the checkout's own head, only when it is origin/main's untouched commit (the evaluator that is judging).
+        var markerHead = mainReadable && origin.BaseCommit is not null && SameSha(origin.Head, origin.BaseCommit) && !origin.Dirty && !origin.OtherRules && IsCommitSha(origin.Head) ? origin.Head : null;
+        var (marker, markerAt) = markerHead is null ? (null, null) : ReadSweepMarker(session, markerHead);
         var mainPart = mainReadable ? MainPart(session.Main) : null;
         var markerCoversMain = marker is not null && marker.Main == mainPart;
         var scoped = options.ContainsKey("pr") || options.ContainsKey("sha");
@@ -305,12 +306,10 @@ static partial class MergeRuleCommand
         if (options.ContainsKey("if-changed") && options.ContainsKey("all") && mainReadable)
         {
             heads = ReadHeadsFingerprint(session);
-            if (heads is not null && markerCoversMain && marker!.Heads == heads)
+            if (heads is not null && markerCoversMain && marker!.Heads == heads && markerAt is { } at && now - at <= SweepMarkerMaxAge)
             {
                 output.WriteLine($"Nothing has changed since the last full judgement (main {MergeRule.Short(markerHead!)} is {session.Main.State}, the open pull requests are as they were): not judging.");
                 output.WriteLine($"API: {session.Cost}.");
-                if (options.TryGetValue("summary", out var quiet) && quiet.Length > 0)
-                    File.AppendAllText(quiet, "### merge-rule: nothing changed since the last full judgement, so nothing was judged" + Environment.NewLine);
                 return 0;
             }
         }
@@ -413,7 +412,7 @@ static partial class MergeRuleCommand
         }
         if (prs.Count == 0 && !(options.ContainsKey("pr") && !widened))
             output.WriteLine(options.TryGetValue("sha", out var s) ? $"No open pull request into {config.Base} has head {s}." : $"No open pull requests into {config.Base}.");
-        if (fullJudgement && post && mainReadable && heads is not null && markerHead is not null && problems == 0 && listCut is null)
+        if (fullJudgement && post && heads is not null && markerHead is not null && problems == 0 && listCut is null)
             WriteSweepMarker(session, markerHead, new SweepMarker(mainPart!, heads), marker, options.GetValueOrDefault("target-url"), output);
         output.WriteLine($"API: {session.Cost}.");
         // A run that can't read fails its heads with error, so say why before the budget runs out.

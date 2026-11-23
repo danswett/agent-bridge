@@ -2955,13 +2955,9 @@ public partial class MergeRuleTests
 
         // The sweep marker statuses on main's head, newest first (the real API's order): the seeded one, then each posted.
         public List<string> Markers { get; } = marker is null ? [] : [marker];
+        public DateTimeOffset? MarkerAt { get; set; } = DateTimeOffset.UtcNow;
+        public string MarkerCreator { get; set; } = "github-actions[bot]";
 
-        // Main's head as the ref read answers it; "" when the runs the fake was given can't say (a garbled body, none).
-        string MainSha(string? runs)
-        {
-            try { return mainHead ?? JsonDocument.Parse(runs ?? MainRuns((1, "completed", "success", 1))).RootElement.GetProperty("workflow_runs").EnumerateArray().FirstOrDefault().GetProperty("head_sha").GetString() ?? ""; }
-            catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return ""; }
-        }
         public List<string> RestPaths { get; } = [];
         readonly Dictionary<long, int> unreadableSeen = [];
 
@@ -2996,10 +2992,10 @@ public partial class MergeRuleTests
             RestPaths.Add(path);
             if (path.Contains("/pulls?state=open", StringComparison.Ordinal))
                 return JsonDocument.Parse(pulls ?? throw new InvalidOperationException("gh: HTTP 404"));
-            if (MainSha(mainRuns) is { Length: > 0 } mainSha && path.Contains($"/commits/{mainSha}/statuses", StringComparison.Ordinal))
+            if (path.Contains($"/commits/{MainCommit}/statuses", StringComparison.Ordinal))
             {
                 if (failMarker) throw new InvalidOperationException("gh: HTTP 502");
-                return JsonDocument.Parse(JsonSerializer.Serialize(Markers.Select(d => new { context = "merge-rule-sweep", state = "success", description = d })));
+                return JsonDocument.Parse(JsonSerializer.Serialize(Markers.Select(d => new { context = "merge-rule-sweep", state = "success", description = d, created_at = MarkerAt?.ToString("O"), creator = new { login = MarkerCreator } })));
             }
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
@@ -3072,8 +3068,7 @@ public partial class MergeRuleTests
 
         public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl)
         {
-            if (context == "merge-rule-sweep")
-                Markers.Insert(0, description);
+            if (context == "merge-rule-sweep") { Markers.Insert(0, description); MarkerAt = DateTimeOffset.UtcNow; }
             Posted.Add($"{sha} {state} {context} {description} {targetUrl}");
         }
     }

@@ -758,8 +758,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      full judgement (`--all`, or a scoped run that widened) posts the sweep marker, a `merge-rule-sweep`
      status on main's head whose description holds two digests, main's state (which finished CI run, red
      or green) and the open pull requests (heads, drafts, labels, last update, the statuses on them). While
-     the marker covers the current main state a scoped run stays scoped; the backstop's `--if-changed`
-     judges nothing when both digests are unchanged. An unreadable marker is never trusted. A scoped run costs about 3 points
+     the marker covers the current main state a scoped run stays scoped. The backstop's `--if-changed` judges
+     nothing while both digests match, the marker is the merge-rule App's and under 60 minutes old, and the
+     waivers are as they were; anything unreadable judges. Not in the digest, so at most an hour stale: check runs
+     and suites, Copilot's review. Digest limits: `updated_at` also moves on bot activity (an extra full judgement,
+     never a missed one), and only the newest 100 statuses per head and on main's head are read. A scoped run costs about 3 points
      (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
