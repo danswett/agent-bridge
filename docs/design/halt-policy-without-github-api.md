@@ -2,8 +2,9 @@
 
 Status: proposed, design only; Brief 257 (Engineering brief 256), Nov 21, 2026 PT.
 Sensitive: update trust, publication and discovery; two independent model families,
-including Claude, through Quality. This document changes no runtime behavior,
-signing configuration, workflow or relay deployment.
+including Claude, through Quality. This document changes no signing configuration, workflow or
+relay deployment, and no runtime behavior except the interim relay renewal (below, owner-approved
+Nov 22).
 
 Tracking: [rate-limit refusal](https://github.com/danswett/agent-bridge/issues/3553)
 and [release-list relay](https://github.com/danswett/agent-bridge/issues/927).
@@ -62,6 +63,33 @@ policy signatures. Its cache is per edge, with 300-second anonymous freshness
 (60 with its configured token) and up to 86400-second storage. It can serve stale
 bytes after refresh failure; `Age` is transport-controlled. A digest copied from
 that same unsigned response is not an independent trust root.
+
+## Interim: renew from the relay's list while GitHub refuses (owner-approved Nov 22)
+
+The signed anchor below is slices 2 and 3 and is not built. Until it is, the policy read has a
+second source so a rate-limited machine does not age out of protection (VM2 logged "GitHub policy
+unavailable; stored policy was not renewed" all day, and its release-list relay grace ends 24 hours
+after GitHub last answered).
+
+**Rule** (`ReleaseDiscovery.ReadHaltPolicyAsync`, `CdnPolicyList`): only when GitHub's policy read
+answers 403 or 429, and the release list's relay grace is open (the `RelayWindow` rule: GitHub
+answered here within `GithubRelayAtMost`, 24 hours), the same list is read from the relay
+(`releases.slipgates.com`, `per_page=100`). The relay's answer must be its own 200 for that page,
+say its `Age` (at most `CdnOldest`, one hour), and be no larger than a GitHub list. It then goes
+through the same verification as GitHub's: the highest canonical `v0.1.N` with `draft: false`, exactly
+one `halts.json` whose size and sha256 the list names, **downloaded from `github.com`**, and the
+strict body. The renewal is stamped as old as the relay's copy (`now - Age`). An older release than
+the one known is ignored, known halts are never dropped, and any failure leaves the policy
+unrenewed as before. GitHub's own answer always wins, and it is asked first every hour.
+
+**Accepted risk** (owner, Nov 22): the relay is unsigned transport, so a compromised or stale relay
+can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
+hidden for up to the 24-hour grace**. It can never forge a halt or clear a known one: the carrier's bytes
+come from `github.com` and must match the listed digest, and an older release never replaces a newer
+one. This is the same class of risk as the relay withholding an update. It relaxes this document's
+"a compromised CDN cannot renew freshness" rule only inside that grace, and only for refusals.
+
+**The signed anchor** (slices 2 and 3 below) stays the real fix and removes this path.
 
 ## Choice: A, signed browser-download policy, with a fixed current anchor
 

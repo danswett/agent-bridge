@@ -274,7 +274,9 @@ public sealed class ReleaseEligibilityTests : IDisposable
         var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var handler = new ReplyHandler(request =>
         {
-            Assert.NotEqual(new Uri(ReleaseDiscovery.CdnList).Host, request.RequestUri!.Host);
+            // The relay is down here: a refused policy read finds nothing there and stays unrenewed.
+            if (request.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnPolicyList) { return new(HttpStatusCode.ServiceUnavailable); }
+            Assert.NotEqual(ReleaseDiscovery.CdnList, request.RequestUri.AbsoluteUri);
             if (request.RequestUri.AbsoluteUri != GitHubHaltListSource.Releases)
             { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(request.RequestUri.Host == "api.github.com" ? Metadata("2349", body) : body) }; }
             return refuse ? new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromHours(8)) } }
@@ -364,6 +366,128 @@ public sealed class ReleaseEligibilityTests : IDisposable
         var eligibility = new ReleaseEligibility(Policy(new Handler(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases ? metadata : body)));
         var result = await eligibility.IsHalted("0.1.2349");
         Assert.Equal(corruptDigest || foreignUrl ? new HaltCheck(null, ReleaseBlockedReason.HaltListUnavailable) : new HaltCheck(false), result);
+    }
+
+    // A refused GitHub policy read renews from the relay's copy of the same list while the release
+    // list's relay grace is open (halt policy below; the signed anchor stays the real fix).
+    ReplyHandler HeldGitHub(byte[] halts, Func<byte[]> relayList, Func<TimeSpan?> relayAge, Func<bool>? limited = null, string githubRun = "2349") => new(request =>
+    {
+        var uri = request.RequestUri!.AbsoluteUri;
+        if (uri == GitHubHaltListSource.Releases)
+        {
+            return limited?.Invoke() == false ? new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata(githubRun, halts)) }
+                : new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromHours(1)) } };
+        }
+        if (uri == ReleaseDiscovery.GitHubList) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata(githubRun, halts)) }; }
+        if (uri == ReleaseDiscovery.CdnPolicyList)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(relayList()) };
+            if (relayAge() is { } age) { response.Headers.Age = age; }
+            return response;
+        }
+        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(halts) };
+    });
+
+    async Task GitHubAnswersTheReleaseList(ReplyHandler handler)
+    {
+        using var discovery = new ReleaseDiscovery(folder, handler, time, random: () => 0);
+        await discovery.ReleasesAsync(ReleaseDiscovery.GitHubList, b => b, default, "0.1.1", "win");
+    }
+
+    [Fact]
+    public async Task A_refused_policy_read_renews_from_the_relay_list_while_the_relay_grace_is_open()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.FromMinutes(5));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var source = Policy(handler);
+
+        await source.ReadAsync(default);
+
+        Assert.True(source.Snapshot.Fresh);
+        Assert.Contains("0.1.2349", source.KnownHalts);
+        Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(5), source.Snapshot.At);
+        Assert.Equal(1, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 25)]
+    public async Task A_refused_policy_read_does_not_ask_the_relay_without_an_open_grace(bool githubAnswered, int hoursLater)
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
+        if (githubAnswered) { await GitHubAnswersTheReleaseList(handler); }
+        time.Advance(TimeSpan.FromHours(hoursLater));
+        var source = Policy(handler);
+
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+
+        Assert.False(source.Snapshot.Fresh);
+        Assert.Equal(0, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
+    [Theory]
+    [InlineData(61, "age")]
+    [InlineData(-1, "no age")]
+    public async Task A_relay_policy_list_with_an_old_or_unknown_age_is_not_used(int minutes, string why)
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => minutes < 0 ? null : TimeSpan.FromMinutes(minutes));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var source = Policy(handler);
+
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+
+        Assert.False(source.Snapshot.Fresh, why);
+    }
+
+    [Fact]
+    public async Task A_relay_policy_older_than_the_known_one_or_failing_its_hash_renews_nothing_and_keeps_known_halts()
+    {
+        var known = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2350"]}""");
+        var older = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var (relay, limited) = (Metadata("2349", older), false);
+        var handler = HeldGitHub(known, () => relay, () => TimeSpan.Zero, () => limited, "2350");
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+        await source.ReadAsync(default);
+        time.Advance(TimeSpan.FromHours(7));
+        limited = true;
+
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+        Assert.Contains("0.1.2350", source.KnownHalts);
+        Assert.False(source.Snapshot.Fresh);
+
+        // A newer release whose asset bytes do not match its listed digest: the hash fails.
+        relay = Metadata("2351", Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}  """));
+        time.Advance(TimeSpan.FromHours(1));
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+        Assert.Contains("0.1.2350", source.KnownHalts);
+        Assert.False(source.Snapshot.Fresh);
+    }
+
+    [Fact]
+    public async Task A_later_GitHub_answer_replaces_a_relay_renewal()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+
+        var limited = true;
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero, () => limited, "2352");
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var source = Policy(handler);
+        await source.ReadAsync(default);
+        Assert.Contains("0.1.2349", source.KnownHalts);
+
+        limited = false;
+        time.Advance(TimeSpan.FromHours(1));
+        await source.ReadAsync(default);
+
+        Assert.Equal(time.GetUtcNow(), source.Snapshot.At);
+        Assert.Equal(2, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
     }
 
     sealed class Source(string? json) : IHaltListSource
