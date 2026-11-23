@@ -46,9 +46,9 @@ public class LiteReceiverTests
 
         public byte[] Point { get { var q = Key.ExportParameters(false).Q; return [0x04, .. q.X!, .. q.Y!]; } }
         public void Dispose() => Key.Dispose();
-        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, byte[]? point = null, long killEpoch = 0)
+        public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null, byte[]? point = null, long killEpoch = 0, string? session = null)
         {
-            var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
+            var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), session ?? "agent-a1",
                 Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
             var sealedBytes = LiteProfile.Seal(sender, new LiteTarget(target ?? Self, "agent-b2", Codec.Base64Url(new byte[12])), id ?? Id("1"),
                 Encoding.UTF8.GetBytes(signedText ?? text), Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
@@ -56,6 +56,17 @@ public class LiteReceiverTests
         }
 
         public Task<LiteAck> Send(JsonElement data) => Receiver.ReceiveAsync(Channel, data, default);
+
+        // A receipt lookup (#3875): a signed lite session.read envelope for an earlier request id, empty data.
+        public JsonElement Probe(string? id = null, byte[]? peerStatic = null, string text = "", string? session = null)
+        {
+            var stat = peerStatic ?? PeerStatic;
+            var sender = new LiteSender(Account, Wire.DeviceId(stat), Codec.Base64Url(SHA256.HashData(stat)), session ?? "agent-a1",
+                Codec.Base64Url(new byte[12]), Codec.Base64Url(new byte[16]), "copilot", "agent-bridge");
+            var sealedBytes = LiteProfile.SealReceipt(sender, new LiteTarget(Self, "agent-b2", Codec.Base64Url(new byte[12])), id ?? Id("1"),
+                Time.GetUtcNow().ToUnixTimeSeconds(), new EcdsaEnvelopeSigner(Key));
+            return JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(sealedBytes), text, killEpoch = 0, signPoint = Codec.Base64Url(Point) });
+        }
     }
 
     static string Id(string n) => new Guid(int.Parse(n), 0, 0, new byte[8]).ToString("D");
@@ -264,5 +275,169 @@ public class LiteReceiverTests
     {
         using var r = new Rig(); Assert.Equal("", (await r.Send(r.Request(text: "tampered", signedText: "hello"))).Request);
         Assert.Equal(Id("1"), (await r.Send(r.Request(target: new string('9', 32)))).Request);
+    }
+
+    sealed class Gated : ILiteDeliver
+    {
+        public readonly TaskCompletionSource<LiteDelivery> Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Calls++; return Gate.Task; }
+    }
+
+    static void Receipt(LiteAck ack, string outcome, string request)
+    {
+        Assert.Equal("receipt", ack.Status);
+        Assert.Equal(outcome, ack.Code);
+        Assert.Equal(request, ack.Request);
+        Assert.Equal(7, ack.KillEpoch);
+    }
+
+    [Fact]
+    public async Task A_probe_of_a_delivered_request_answers_its_outcome_and_types_nothing()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        Receipt(await r.Send(r.Probe()), "delivered", Id("1"));
+        Assert.Equal(1, r.Deliver.Calls);
+    }
+
+    [Theory]
+    [InlineData("busy")]
+    [InlineData("composerNotEmpty")]
+    [InlineData("noSuchSession")]
+    public async Task A_probe_of_a_refused_request_answers_the_refusal_code(string code)
+    {
+        using var r = new Rig(new LiteDelivery(false, code));
+        Assert.Equal("refused", (await r.Send(r.Request())).Status);
+        Receipt(await r.Send(r.Probe()), "refused:" + code, Id("1"));
+        Assert.Equal(1, r.Deliver.Calls);
+    }
+
+    [Fact]
+    public async Task A_probe_of_a_request_still_being_delivered_answers_in_flight_then_the_outcome()
+    {
+        var gated = new Gated();
+        using var r = new Rig(custom: gated);
+        var first = r.Send(r.Request());
+        Receipt(await r.Send(r.Probe()), "in-flight", Id("1"));
+        gated.Gate.SetResult(new LiteDelivery(true, null));
+        Assert.Equal("delivered", (await first).Status);
+        Receipt(await r.Send(r.Probe()), "delivered", Id("1"));
+        Assert.Equal(1, gated.Calls);
+    }
+
+    [Fact]
+    public async Task A_probe_of_a_lane_request_answers_its_pending_state()
+    {
+        using var r = new Rig(custom: new Querying());
+        Assert.Equal("pending", (await r.Send(r.Request())).Status);
+        Receipt(await r.Send(r.Probe()), "pending", Id("1"));
+    }
+
+    [Fact]
+    public async Task A_probe_of_an_id_never_seen_answers_unknown_types_nothing_and_does_not_use_the_id_up()
+    {
+        using var r = new Rig();
+        var ack = await r.Send(r.Probe(Id("9")));
+        Assert.Equal("unknown", ack.Status);
+        Assert.Null(ack.Code);
+        Assert.Equal(Id("9"), ack.Request);
+        Assert.Equal(0, r.Deliver.Calls);
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("9")))).Status);
+    }
+
+    [Fact]
+    public async Task Only_the_peer_that_made_a_request_can_read_its_outcome()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        byte[] other = [.. Enumerable.Range(40, 32).Select(i => (byte)i)];
+        r.Channel = new LiteChannel(Wire.DeviceId(other), "host", other, Self, Account, true);
+        Assert.Equal("unknown", (await r.Send(r.Probe(peerStatic: other))).Status);
+    }
+
+    [Fact]
+    public async Task A_probe_after_the_replay_memory_expired_answers_unknown()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        r.Time.Advance(ReplayStore.Lifetime + TimeSpan.FromSeconds(1));
+        Assert.Equal("unknown", (await r.Send(r.Probe())).Status);
+    }
+
+    [Fact]
+    public async Task A_probe_keeps_every_gate_off_an_untrusted_channel_and_data_that_is_not_empty()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        Refused(await r.Send(r.Probe(text: "x")), LiteReceiver.Malformed);
+        r.Channel = r.Channel with { InPresence = false };
+        Refused(await r.Send(r.Probe()), LiteReceiver.NotSameAccount);
+        r.Channel = r.Channel with { InPresence = true };
+        r.Mode.On = false;
+        Refused(await r.Send(r.Probe()), LiteReceiver.Off);
+    }
+
+    [Fact]
+    public async Task Probes_of_one_request_are_rate_limited_without_spending_the_pairs_delivery_budget()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        for (var i = 0; i < RateCap.PerMinute; i++) { Assert.Equal("receipt", (await r.Send(r.Probe())).Status); }
+        Refused(await r.Send(r.Probe()), LiteReceiver.Rate);
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("2")))).Status);
+    }
+
+    sealed class Throwing(Exception error) : ILiteDeliver
+    {
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw error;
+    }
+
+    sealed class Waiting : ILiteDeliver
+    {
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => Task.Delay(Timeout.Infinite, ct).ContinueWith<LiteDelivery>(_ => throw new InvalidOperationException(), ct);
+    }
+
+    [Fact]
+    public async Task Another_session_on_the_same_host_cannot_read_a_requests_outcome()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        Assert.Equal("unknown", (await r.Send(r.Probe(session: "agent-c3"))).Status);
+        Receipt(await r.Send(r.Probe()), "delivered", Id("1"));
+    }
+
+    [Fact]
+    public async Task A_delivery_that_throws_is_journaled_unconfirmed_never_refused()
+    {
+        using var r = new Rig(custom: new Throwing(new InvalidOperationException("boom")));
+        Refused(await r.Send(r.Request()), LiteReceiver.DeliveryFailed);
+        Receipt(await r.Send(r.Probe()), "unconfirmed:" + LiteReceiver.DeliveryFailed, Id("1"));
+    }
+
+    [Fact]
+    public async Task A_delivery_cancelled_part_way_is_journaled_unconfirmed()
+    {
+        using var r = new Rig(custom: new Waiting());
+        using var cancel = new CancellationTokenSource();
+        var pending = r.Receiver.ReceiveAsync(r.Channel, r.Request(), cancel.Token);
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Receipt(await r.Send(r.Probe()), "unconfirmed:cancelled", Id("1"));
+    }
+
+    [Fact]
+    public async Task A_tampered_probe_action_fails_its_signature_and_a_reply_is_never_taken_for_a_probe()
+    {
+        using var r = new Rig();
+        Assert.Equal("delivered", (await r.Send(r.Request())).Status);
+        var probe = r.Probe();
+        Assert.True(Codec.TryBase64Url(probe.GetProperty("envelope").GetString()!, out var raw));
+        var envelope = System.Text.Json.Nodes.JsonNode.Parse(raw)!.AsObject();
+        Assert.True(Codec.TryBase64Url((string)envelope["body"]!, out var body));
+        envelope["body"] = Codec.Base64Url(Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(body).Replace("session.read", "session.repla", StringComparison.Ordinal)));
+        var tampered = JsonSerializer.SerializeToElement(new { envelope = Codec.Base64Url(Encoding.UTF8.GetBytes(envelope.ToJsonString())), text = "", killEpoch = 0, signPoint = probe.GetProperty("signPoint").GetString() });
+        Assert.Equal("refused", (await r.Send(tampered)).Status);
+        Assert.Equal(1, r.Deliver.Calls);
     }
 }

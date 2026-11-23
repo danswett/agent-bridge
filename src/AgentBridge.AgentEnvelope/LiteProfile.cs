@@ -27,9 +27,18 @@ public static class LiteProfile
     public const string Generation = "00000000000000000000000000000000";
     public static readonly string Head = Codec.Base64Url(new byte[32]);
     public const string Action = "session.reply";
+    // The lookup of a request's outcome (docs/protocol/agent-lite.md "Receipt lookup", #3875): the same markers and signature as
+    // a reply, with the existing `session.read` action (nothing else uses it in the lite profile), empty data. A receiver answers it from its replay memory and never delivers anything.
+    public const string ReceiptAction = "session.read";
     public const int MaxClockSkewSeconds = 5;
 
-    public static byte[] Seal(LiteSender sender, LiteTarget target, string request, ReadOnlySpan<byte> data, long nowSeconds, IEnvelopeSigner signer, int lifetimeSeconds = EnvelopeBody.MaxLifetimeSeconds)
+    public static byte[] Seal(LiteSender sender, LiteTarget target, string request, ReadOnlySpan<byte> data, long nowSeconds, IEnvelopeSigner signer, int lifetimeSeconds = EnvelopeBody.MaxLifetimeSeconds) =>
+        SealAs(Action, sender, target, request, data, nowSeconds, signer, lifetimeSeconds);
+
+    public static byte[] SealReceipt(LiteSender sender, LiteTarget target, string request, long nowSeconds, IEnvelopeSigner signer, int lifetimeSeconds = EnvelopeBody.MaxLifetimeSeconds) =>
+        SealAs(ReceiptAction, sender, target, request, [], nowSeconds, signer, lifetimeSeconds);
+
+    static byte[] SealAs(string action, LiteSender sender, LiteTarget target, string request, ReadOnlySpan<byte> data, long nowSeconds, IEnvelopeSigner signer, int lifetimeSeconds)
     {
         if (lifetimeSeconds is < 1 or > EnvelopeBody.MaxLifetimeSeconds) { throw new EnvelopeException(Refusal.Lifetime, "expiresAt"); }
         var body = new EnvelopeBody(
@@ -37,7 +46,7 @@ public static class LiteProfile
             new AgentPrincipal(sender.Machine, sender.Add, sender.Session, sender.Instance, sender.Credential, sender.Agent, sender.Launcher, sender.Kind, sender.Identity),
             new AgentChain(request, nowSeconds, null, 1, 1, [new ChainSender(sender.Account, sender.Machine, sender.Kind == "script" ? sender.Identity ?? "" : sender.Session)]),
             new AgentProvenance(null, OEligible.No, null),
-            Action,
+            action,
             new AgentTarget(sender.Account, target.Machine, target.Session, target.Instance),
             EnvelopeBody.HashOf(data), nowSeconds, nowSeconds + lifetimeSeconds);
         return Envelope.Seal(body, signer);
@@ -46,12 +55,19 @@ public static class LiteProfile
     // What a receiver does with a lite envelope before acting on it. `senderPoint` is the
     // pinned key of the device the sender's `principal.add` names (the caller resolves it); `data`
     // is the text the signature must bind. Throws EnvelopeException on any refusal.
-    public static VerifiedEnvelope Check(UnverifiedEnvelope envelope, ReadOnlySpan<byte> senderPoint, string receiverAccount, ReadOnlySpan<byte> data, long nowSeconds)
+    public static VerifiedEnvelope Check(UnverifiedEnvelope envelope, ReadOnlySpan<byte> senderPoint, string receiverAccount, ReadOnlySpan<byte> data, long nowSeconds) =>
+        CheckAs(Action, envelope, senderPoint, receiverAccount, data, nowSeconds);
+
+    // The same checks for a receipt lookup: its own action, and data that must bind the empty string.
+    public static VerifiedEnvelope CheckReceipt(UnverifiedEnvelope envelope, ReadOnlySpan<byte> senderPoint, string receiverAccount, long nowSeconds) =>
+        CheckAs(ReceiptAction, envelope, senderPoint, receiverAccount, [], nowSeconds);
+
+    static VerifiedEnvelope CheckAs(string action, UnverifiedEnvelope envelope, ReadOnlySpan<byte> senderPoint, string receiverAccount, ReadOnlySpan<byte> data, long nowSeconds)
     {
         var b = envelope.Body;
         if (!IsLite(b)) { throw new EnvelopeException(LiteRefusal.Markers, "generation"); }
         if (b.Account != receiverAccount || b.Target.Account != receiverAccount) { throw new EnvelopeException(LiteRefusal.Account, "account"); }
-        if (b.Action != Action) { throw new EnvelopeException(LiteRefusal.Action, "action"); }
+        if (b.Action != action) { throw new EnvelopeException(LiteRefusal.Action, "action"); }
         if (b.Provenance.OEligible != OEligible.No || b.Provenance.Origins is not null) { throw new EnvelopeException(LiteRefusal.OEligible, "provenance"); }
         var verified = envelope.Verify(senderPoint, nowSeconds);
         if (b.IssuedAt > nowSeconds + MaxClockSkewSeconds) { throw new EnvelopeException(Refusal.Lifetime, "issuedAt"); }
