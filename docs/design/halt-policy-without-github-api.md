@@ -67,7 +67,7 @@ that same unsigned response is not an independent trust root.
 ## Interim: renew from the relay's list while GitHub refuses (owner-approved Nov 22)
 
 The signed anchor below is slices 2 and 3 and is not built. Until it is, the policy read has a
-second source so a rate-limited machine does not age out of protection (VM2 logged "GitHub policy
+second source so a rate-limited machine does not age out of protection (one machine logged "GitHub policy
 unavailable; stored policy was not renewed" all day, and its release-list relay grace ends 24 hours
 after GitHub last answered).
 
@@ -278,7 +278,7 @@ No later slice starts until this design is CLEAN and the Chief sends the go.
 4. **PR 3: refusal wording and retry metadata**, folding
    [the wording issue](https://github.com/danswett/agent-bridge/issues/3553).
    Synthetic host-to-app refusal proves code/retry preservation, not a guess about
-   VM4. Legacy rate-limit evidence reads "bad-release check unavailable: GitHub
+   a particular machine. Legacy rate-limit evidence reads "bad-release check unavailable: GitHub
    rate limit; try again after HH:MM PT"; new-source failures name that source and
    reason. Retry time comes from actual scheduled retry, formatted in Pacific
    including DST/date rollover; missing time is not invented. Test null/unknown
