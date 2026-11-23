@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Fleet;
@@ -212,6 +213,81 @@ public sealed class FleetPublisherTests
         time.Advance(TimeSpan.FromMilliseconds(1));
         Assert.True(await new FleetPublisher(source, "machine", time: time).PublishAsync(Put));
         Assert.NotEqual(sent[0].GetProperty("epoch").GetString(), sent[^1].GetProperty("epoch").GetString());
+    }
+
+    // Stuck-prompt evidence, owner decision A1 (fleet-session-registry.md, "Host-side evidence producer"): attention, openAsks and observedAt from
+    // state the host already holds, sent only to a relay that advertises it, never guessed.
+    static Question Ask(QuestionKind kind, int? waiting = null) => new()
+    { Id = "q1", Kind = kind, Message = "private question text", AskedAt = Fixture.T0, Waiting = waiting };
+
+    static JsonElement[] Published(JsonElement record) => record.GetProperty("sessions").EnumerateArray().ToArray();
+
+    [Fact]
+    public async Task Evidence_is_published_only_to_a_relay_that_advertises_it()
+    {
+        source.Sessions[0] = source.Sessions[0] with { Question = Ask(QuestionKind.Form) };
+        var publisher = new FleetPublisher(source, "machine", time: time);
+        Assert.True(await publisher.PublishAsync(Put));
+        Assert.All(Published(sent[^1]), s => Assert.All(new[] { "attention", "openAsks", "observedAt" }, n => Assert.False(s.TryGetProperty(n, out _), n)));
+        Assert.True(await publisher.PublishAsync(Put, force: true, relaySupportsEvidence: true));
+        Assert.All(Published(sent[^1]), s => Assert.All(new[] { "attention", "openAsks", "observedAt" }, n => Assert.True(s.TryGetProperty(n, out _), n)));
+    }
+
+    [Fact]
+    public async Task Attention_is_none_question_or_unknown_never_guessed_and_open_asks_count_the_waiting_prompts()
+    {
+        source.Sessions = Enumerable.Range(1, 5).Select(NewSession).ToList();
+        source.Sessions[0] = source.Sessions[0] with { Question = Ask(QuestionKind.Form) };
+        source.Sessions[1] = source.Sessions[1] with { Question = Ask(QuestionKind.Approval, waiting: 3) };
+        source.Sessions[2] = source.Sessions[2] with { Attention = new Attention { Kind = AttentionKind.SignInNeeded, Since = Fixture.T0 } };
+        source.Sessions[3] = source.Sessions[3] with { WaitingOn = "sub-agent" };
+        Assert.True(await new FleetPublisher(source, "machine", time: time).PublishAsync(Put, relaySupportsEvidence: true));
+        var byId = Published(sent[^1]).ToDictionary(s => s.GetProperty("id").GetString()!);
+        (string? Kind, int Asks) Of(int i)
+        {
+            var s = byId[HaContract.NodeId(source.Sessions[i].Id)["agent_bridge_".Length..]];
+            return (s.GetProperty("attention").GetProperty("kind").GetString(), s.GetProperty("openAsks").GetInt32());
+        }
+        Assert.Equal(("question", 1), Of(0));
+        // An approval is not mapped in this change: it is published as unknown, with its waiting count.
+        Assert.Equal(("unknown", 3), Of(1));
+        // A sign-in or error wait has no kind in the registry's vocabulary: unknown, not none.
+        Assert.Equal(("unknown", 0), Of(2));
+        Assert.Equal(("question", 1), Of(3));
+        Assert.Equal(("none", 0), Of(4));
+        Assert.DoesNotContain("private question text", sent[^1].GetRawText());
+        Assert.Equal(["kind"], Fields(Published(sent[^1])[0].GetProperty("attention")));
+    }
+
+    [Fact]
+    public async Task Observed_at_is_the_publish_time_and_is_refreshed_by_the_existing_twenty_second_republish_but_never_triggers_one()
+    {
+        var publisher = new FleetPublisher(source, "machine", time: time);
+        Assert.True(await publisher.PublishAsync(Put, relaySupportsEvidence: true));
+        var first = Published(sent[^1])[0].GetProperty("observedAt").GetString();
+        Assert.Equal(time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"), first);
+        time.Advance(TimeSpan.FromSeconds(10));
+        Assert.False(await publisher.PublishAsync(Put, relaySupportsEvidence: true));
+        time.Advance(TimeSpan.FromSeconds(10));
+        Assert.True(await publisher.PublishAsync(Put, relaySupportsEvidence: true));
+        var later = Published(sent[^1])[0].GetProperty("observedAt").GetString();
+        Assert.NotEqual(first, later);
+        Assert.Equal(time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"), later);
+    }
+
+    [Fact]
+    public async Task A_full_record_with_evidence_fits_the_limit_and_the_relay_accepts_it()
+    {
+        source.Sessions = Enumerable.Range(1, 64).Select(i => NewSession(i) with { Question = Ask(QuestionKind.Form) }).ToList();
+        var registry = new SessionRegistry(time);
+        Assert.True(await new FleetPublisher(source, "machine", _ => new string('+', 64), time).PublishAsync((record, _) =>
+        {
+            Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(record.GetRawText()), 1, 16 * 1024);
+            Assert.Null(registry.Put("account", "machine", record));
+            sent.Add(record);
+            return Task.CompletedTask;
+        }, relaySupportsEvidence: true));
+        Assert.All(Published(sent[^1]), s => Assert.Equal("question", s.GetProperty("attention").GetProperty("kind").GetString()));
     }
 
     [Fact]

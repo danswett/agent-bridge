@@ -591,6 +591,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             var accounted = sessions.Where(s => s.ProcessId is not null).Select(s => s.ProcessId!.Value).ToHashSet();
             // Scout's embedded `copilot --headless` is nobody's session and never will be.
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsEmbedded(p.CommandLine)).Select(p => p.Id));
+            // Nor is one that only prints information or runs a management command (#3933 option c).
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsNonSessionInvocation(AgentKind.Copilot, p.CommandLine)).Select(p => p.Id));
             Account(AgentKind.Copilot, observed, accounted, previous, holds);
             result.Add(new(AgentKind.Copilot, sessions, holds, observed));
         }
@@ -619,6 +621,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var observed = _processes.Observe(agent);
         var holds = new List<string>();
         var accounted = new HashSet<int>();
+        // An invocation that only prints information or runs a management command cannot open a session, so nothing is
+        // held for it (#3933 option c). Not for what it merely resembles: see CommandLine.IsNonSessionInvocation.
+        accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsNonSessionInvocation(agent, p.CommandLine)).Select(p => p.Id));
         var ended = new Dictionary<string, Registration>(StringComparer.Ordinal);
         var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
         IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
