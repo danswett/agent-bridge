@@ -1197,6 +1197,14 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **CI speed on main** (#4104): `pwsh quality/ci-speed.ps1 [-Runs 100] [-Csv runs.csv] [-DaysCsv days.csv]` measures, for the last N
+  `ci.yml` push runs on main, the merge gate's wall time **from the run's created_at** (what a merger waits, queue included) and
+  **from run_started_at** (labelled apart), the full run, the longest wait of a gate job for a runner, and the red rate per Pacific
+  day. The gate is the jobs matching `-GatePattern` (default `product` and `quality-gate`; give the fast lane's job names once it is
+  split out). Cancelled runs are left out of every median and counted apart, as are runs still going; red is the red-minutes rule.
+  It prints one summary line (median and p90) and writes the CSVs. Read-only: it reads run pages and each run's latest jobs, six
+  runs at a time, with an ETag cache (a 304 is free), and stops reading at `-MinRemaining` (100) rate limit left. Offline test:
+  `quality/test-ci-speed.ps1` (catalog suite `ci-speed-script`).
 - **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
   [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
   Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
