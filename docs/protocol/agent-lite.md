@@ -94,13 +94,15 @@ lives 120 s. What is missing is an answer: `replay` does not say what the first 
 1. **Receiver journal.** Beside the replay id the receiver records the first attempt's outcome and nothing else: `in-flight`, `delivered`
    (typed), `refused` with its code, or the lane's `pending`/`queued`/`unconfirmed`. The same 150 s and 4,096 bounds; no text, no name. A
    same-id offer from the same peer (the channel's static key, as today) is answered with that outcome as a `receipt`, still without typing.
-2. **A probe that never types.** A lookup is a re-offer of the same sealed envelope carrying a probe marker inside the signed body (a new,
-   versioned lite marker). A probe of an id the receiver has no record of is answered `unknown` and nothing is typed; without the marker
-   an unseen id is a first offer and would deliver (a late resend, which this design does not do).
-3. **Sender keeps the sealed envelope.** For a send that ends `unconfirmed`, the sender's host keeps the sealed bytes in memory until the
-   envelope expires (at most 120 s, at most 64 entries, dropped on expiry or restart) and serves them to a new agent pipe op,
-   `agent.receipt { request }`, which returns `delivered`, `refused:<code>`, `pending`, `queued`, `in-flight` (ask again shortly), or
-   `unknown` (the target has no record, the id is too old, or the host restarted). It never returns more than that.
+2. **A probe that never types.** A lookup is a new signed lite envelope with its own action, `session.receipt`, carrying the original
+   request id and empty data, sealed by the same device and agent signing key. The receiver checks it like any lite envelope, then
+   only looks the id up: it never reaches delivery. An id it has no record of is answered `unknown` and nothing is typed. Only the
+   peer that made the original request can read its outcome (the journal key includes the peer).
+3. **Sender keeps a small record, not the envelope.** For a send that ends `unconfirmed`, the sender's host keeps the request id and
+   target in memory until the original envelope would have expired (at most 120 s, at most 64 entries per credential, dropped on expiry
+   or restart) and serves them to a new agent pipe op, `agent.receipt { request }`, which seals and sends the probe and returns
+   `delivered`, `refused:<code>`, `pending`, `queued`, `in-flight` (ask again shortly), or `unknown` (the target has no record, the id is
+   too old, or the host restarted). An unknown request id is refused locally. It never returns more than that.
 4. **Fleet tool.** After `unconfirmed`, `reply-session` asks `agent.receipt` up to three times, 5 s apart, and prints one of: delivered
    (confirmed by receipt), not delivered with the refusal code, or still unknown with the sentence it prints today. It never resends the text.
 
@@ -111,8 +113,8 @@ the known rare limit above; a lookup is rate-limited with the pair's other offer
 **Who can ask.** Only the peer that sent the request, on the channel that authenticates it. The reply carries the request id, a state and
 a refusal code, so it exposes nothing about the target's sessions or text, and it grants no authority to type.
 
-**Slices** (each at most 400 lines, tests first): (1) receiver journal and `receipt` answer, with the probe marker; (2) the sender's
-sealed-envelope memory and `agent.receipt`; (3) `reply-session`.
+**Slices** (each at most 400 lines, tests first): (1) receiver journal, the `session.receipt` action and its answer; (2) the sender's
+request record and `agent.receipt`; (3) `reply-session`.
 
 **Decided (owner; recorded by the Chief on #3875).** (a) A **strict probe**: a lookup only reads the outcome and never types; an
 unseen id answers `unknown`. Exactly-once resend (a re-offer that delivers an unseen id late) is not part of this design. (b) The
