@@ -1,16 +1,16 @@
 diff --git a/.github/workflows/release-feed-deploy.yml b/.github/workflows/release-feed-deploy.yml
 new file mode 100644
-index 00000000..c7551c62
+index 00000000..f3740ad0
 --- /dev/null
 +++ b/.github/workflows/release-feed-deploy.yml
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,130 @@
 +name: Release feed deploy
 +
 +# Deploys the release feed Worker (infra/cloudflare/release-feed, #927) to Cloudflare, by hand and from main only, once
 +# SRE approves the release-feed-deploy environment. It replaces the owner's `wrangler login` / `wrangler deploy` (#3880).
 +# - test: the Worker's own tests, with no secret.
 +# - deploy: wrangler, pinned to an exact version, with the environment's Cloudflare API token; then the Worker's
-+#   optional GITHUB_TOKEN secret from the environment secret RELEASE_FEED_GITHUB_TOKEN, on stdin, never logged.
++#   GITHUB_TOKEN secret from the environment secret RELEASE_FEED_GITHUB_TOKEN (required), on stdin, never logged.
 +# - purge-check: purges the public list URL by URL and checks the next answer was fetched after the purge (#3870).
 +# There is no push or pull_request trigger: nothing a pull request can change deploys or reaches these secrets.
 +# docs/relay-deploy.md is the model: least permissions, SHA-pinned actions, one rollout at a time.
@@ -56,15 +56,25 @@ index 00000000..c7551c62
 +          node-version: '22'
 +      # wrangler.toml holds the name, the route releases.slipgates.com/* and workers_dev = false. A deploy sets no
 +      # secret and changes no DNS. An exact version: npm never changes a published version's contents.
++      # Before anything is deployed: without the token the run fails here and the Worker is untouched.
++      - name: RELEASE_FEED_GITHUB_TOKEN is set
++        env:
++          RELEASE_FEED_GITHUB_TOKEN: ${{ secrets.RELEASE_FEED_GITHUB_TOKEN }}
++        run: |
++          if [ -z "${RELEASE_FEED_GITHUB_TOKEN:-}" ]; then
++            echo "::error::RELEASE_FEED_GITHUB_TOKEN not set: add it to the release-feed-deploy environment's secrets. Nothing was deployed."
++            exit 1
++          fi
 +      - name: Deploy the Worker (wrangler 4.42.0)
 +        working-directory: infra/cloudflare/release-feed
 +        env:
 +          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 +          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
 +        run: npx --yes wrangler@4.42.0 deploy
-+      # The Worker's optional read-only GitHub token (README: 60-second freshness instead of 300). It goes from the
-+      # environment secret to wrangler on stdin only: never an argument, never echoed, no `set -x`. An empty or
-+      # absent secret skips this step, so the Worker keeps whatever secret it has and is never given an empty token.
++      # The Worker's read-only GitHub token (README: 60-second freshness instead of 300). worker.js sends it only as the
++      # Authorization of its release-list read (refresh()). It goes from the environment secret to wrangler on stdin
++      # only: never an argument, never echoed, no `set -x`. A missing or empty secret fails the run, so the Worker is
++      # never given an empty token and a deploy without it never looks complete.
 +      - name: Set the Worker's GITHUB_TOKEN secret
 +        working-directory: infra/cloudflare/release-feed
 +        env:
@@ -74,8 +84,8 @@ index 00000000..c7551c62
 +        run: |
 +          set -euo pipefail
 +          if [ -z "${RELEASE_FEED_GITHUB_TOKEN:-}" ]; then
-+            echo "::notice::RELEASE_FEED_GITHUB_TOKEN is not set: the Worker's GITHUB_TOKEN is left as it is"
-+            exit 0
++            echo "::error::RELEASE_FEED_GITHUB_TOKEN not set: add it to the release-feed-deploy environment's secrets. The Worker's GITHUB_TOKEN was not changed."
++            exit 1
 +          fi
 +          printf '%s' "$RELEASE_FEED_GITHUB_TOKEN" | npx --yes wrangler@4.42.0 secret put GITHUB_TOKEN > /dev/null
 +          echo "The Worker's GITHUB_TOKEN secret was set from RELEASE_FEED_GITHUB_TOKEN." >> "$GITHUB_STEP_SUMMARY"
@@ -162,7 +172,7 @@ index d291bee7..c2684b14 100644
      validation_plan: native
      kind: unit
 diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-index b71fb34e..11fd21fb 100644
+index f27382b6..dca037cb 100644
 --- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 @@ -1080,11 +1080,12 @@ public class MergeRuleTests
