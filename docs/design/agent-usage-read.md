@@ -142,6 +142,20 @@ estimated **about 250 changed lines (size M), under 400**:
 2. The ten-pair comparison above as a script or test tool that writes the pairs and a verdict.
    About 100 lines.
 
+### Status at main 0416b9d7b (S1 definition of the remaining slice)
+
+* **Part 1 landed:** `usage-read` in the rehearsal tool (`tools/AgentBridge.Rehearsal/UsageRead.cs`,
+  tests in `UsageReadTests.cs`; #2647, #2656). An MCP usage read also landed (#2824).
+* **Part 2 is the remaining slice, S2 (#1405):** the ten-pair comparison, about 100 lines with
+  tests-first RED then GREEN, as a rehearsal-tool command that writes the pairs and a verdict
+  under the rules in "How the governor's figures are compared". Part of #1405 and #1396.
+* **Correction to "Owner summary":** the fleet repo has no code that reads the HA usage sensors.
+  The budget governor reads spend from the F1 KPI snapshots (`governor/fleet_governor/core.py`,
+  `board_spend`), not from `usage_*` sensors, and the quota watch is fed from the machines
+  directly (fleet #63, #64, #69) and is not built. The sensors are named only in fleet
+  `docs/ha-retirement.md`. So row 14 needs the comparison and this correction, not a consumer
+  switch; a consumer is added later against `usage-read` when the quota watch is built.
+
 Not in the slice: changing what an agent credential may do, relay reads, new readings, spend,
 and the HA connector. It does not touch `sensitive_paths` (no protocol, relay, auth or token
 change) unless the owner narrows the scope above, which would make it sensitive.

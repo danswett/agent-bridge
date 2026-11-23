@@ -17,6 +17,14 @@ public sealed partial class DeliveryJournal
     readonly List<DeliveryJournalRecord> priorityRecords = [];
     bool priorityQuarantined;
     string priorityTail = "";
+    // The admission callback runs after the authority and quota decision is computed. A nested priority call
+    // (the lock is reentrant) could spend that quota or revoke the capability and leave the outer grant stale.
+    bool admitting;
+
+    void NoReentry()
+    {
+        if (admitting) { throw new InvalidOperationException("Priority journal is not reentrant during admission."); }
+    }
 
     // Only trusted ingress may supply the authenticated person and captured receiver binding.
     internal void IssuePriority(PriorityCapability capability, DeliverySender person, GrantAudience receiver,
@@ -24,6 +32,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             if (!person.Owner || !current() || !ValidPriority(capability) || capability.Issuer.Account != person.Id ||
                 priorityQuarantined ||
                 capability.Audience != receiver || capability.Issuer.IssuedAt > now ||
@@ -39,6 +48,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var cap = priorityRecords.FirstOrDefault(r => r.Reason == "issued" && r.Capability?.Id == capability)?.Capability;
             if (!person.Owner || !current() || cap is null || cap.Issuer.Account != person.Id || cap.Audience != receiver)
             { throw new InvalidOperationException("Priority revoke requires the authenticated issuing person and exact receiver."); }
@@ -51,20 +61,26 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var previous = priorityRecords.LastOrDefault(r => r.Header.Id == request.ToString("D"));
+            var binding = Binding(target, sender, receiver, body);
             if (previous is not null && (previous.Reason is not ("lane-full" or "missing-reason" or "invalid-priority") ||
-                previous.Session != target || previous.Header.From.Split(" (")[0] != new DeliverySender(sender.Id, Owner: sender.Owner).From))
+                previous.Session != target || previous.Header.From.Split(" (")[0] != new DeliverySender(sender.Id, Owner: sender.Owner).From ||
+                priorityRecords.LastOrDefault(r => r.Reason == "requested" && r.Header.Id == previous.Header.Id)?.PriorityBinding != binding))
             { return new(false, "normal", "priority request already considered; no renewed authority"); }
             PriorityRecord(request, target, sender, "requested", now,
-                reason: requested.Reason is { Length: <= 256 } ? requested.Reason : null);
+                reason: requested.Reason is { Length: <= 256 } ? requested.Reason : null,
+                priority: requested.Priority is "normal" or "fyi" or "urgent" ? requested.Priority : "normal", binding: binding);
             if (requested.Priority is not ("normal" or "fyi" or "urgent"))
             { PriorityRecord(request, target, sender, "invalid-priority", now); return new(false, "normal", "invalid-priority"); }
             if (requested.Priority != "urgent") { return Admit(requested.Priority); }
             if (string.IsNullOrWhiteSpace(requested.Reason) || requested.Reason.Length > 256)
             { PriorityRecord(request, target, sender, "missing-reason", now); return new(false, "normal", "missing-reason"); }
             if (sender.Owner) { return Admit("urgent"); }
+            // The smallest active limit governs, so a second, larger capability never widens the quota.
             var cap = priorityRecords.Where(r => r.Reason == "issued").Select(r => r.Capability!).ToArray()
-                .FirstOrDefault(c => c.Principal == sender.Id && c.Audience == receiver && ActivePriority(c, now));
+                .Where(c => c.Principal == sender.Id && c.Audience == receiver && ActivePriority(c, now))
+                .OrderBy(c => c.Hourly).FirstOrDefault();
             var spent = priorityRecords.Where(r => r.Reason == "granted" && r.Capability?.Principal == sender.Id &&
                 r.Capability.Audience == receiver && now - r.RecordedAt < TimeSpan.FromHours(1))
                 .Select(r => r.Header.Id).Distinct().Count();
@@ -73,7 +89,10 @@ public sealed partial class DeliveryJournal
 
             PriorityDecision Admit(string effective, PriorityCapability? capability = null, string? refused = null)
             {
-                if (!admit(effective))
+                bool admitted;
+                admitting = true;
+                try { admitted = admit(effective); } finally { admitting = false; }
+                if (!admitted)
                 { PriorityRecord(request, target, sender, "lane-full", now); return new(false, "normal", "lane-full"); }
                 if (refused is not null)
                 {
@@ -82,12 +101,18 @@ public sealed partial class DeliveryJournal
                 }
                 else if (effective == "urgent")
                 {
-                    PriorityRecord(request, target, sender, "granted", now, capability);
-                    if (capability is not null) { PriorityRecord(request, target, sender, "consumed", now, capability); }
+                    PriorityRecord(request, target, sender, "granted", now, capability, priority: "urgent");
+                    if (capability is not null) { PriorityRecord(request, target, sender, "consumed", now, capability, priority: "urgent"); }
                 }
                 return new(true, effective, refused);
             }
         }
+    }
+
+    // A runtime demotion (revoked, expired, displaced) must outlive the latest delivery record so Query keeps its reason.
+    internal void RecordDemotion(Guid request, string target, DeliverySender sender, string reason, DateTimeOffset now)
+    {
+        lock (gate) { PriorityRecord(request, target, sender, "demoted", now, reason: reason); }
     }
 
     internal bool PriorityCurrent(Guid request, string target, DeliverySender sender, GrantAudience? receiver,
@@ -95,10 +120,17 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var cap = priorityRecords.LastOrDefault(r => r.Reason == "consumed" && r.Header.Id == request.ToString("D") &&
                 r.Session == target && r.Capability?.Principal == sender.Id)?.Capability;
             if (cap is null || sender.Owner || cap.Audience != receiver || !ActivePriority(cap, now)) { return false; }
-            return !Uncertain && now >= priorityRecords[^1].RecordedAt;
+            if (Uncertain || now < priorityRecords[^1].RecordedAt) { return false; }
+            // Every successful check is observed time: persist it so a rolled-back clock is refused, even after replay.
+            // At most one append per second per receiver bounds the fsync rate; a rollback inside that second is accepted.
+            var lastCheck = priorityRecords.LastOrDefault(r => r.Reason == "checked" && r.Capability?.Audience == cap.Audience)?.RecordedAt;
+            if (now > priorityRecords[^1].RecordedAt && (lastCheck is null || now - lastCheck >= TimeSpan.FromSeconds(1)))
+            { PriorityRecord(request, target, sender, "checked", now, cap); }
+            return true;
         }
     }
 
@@ -145,15 +177,21 @@ public sealed partial class DeliveryJournal
     }
 
     static bool PriorityAction(string? action) => action is "issued" or "revoked" or "expired" or "requested" or
-        "granted" or "consumed" or "no-capability" or "quota" or "demoted" or "missing-reason" or "invalid-priority" or "lane-full";
+        "granted" or "consumed" or "checked" or "no-capability" or "quota" or "demoted" or "missing-reason" or "invalid-priority" or "lane-full";
+
+    // Keyed so the journal never stores a guessable digest of a payload.
+    string Binding(string target, DeliverySender sender, GrantAudience? receiver, string body) =>
+        Convert.ToBase64String(hmac.ComputeHash(StrictUtf8.GetBytes(JsonSerializer.Serialize(new string?[]
+            { "priority-binding", target, sender.Id, sender.Owner ? "owner" : "agent", receiver?.Device, receiver?.Profile,
+                DeliveryEnvelope.NormalizeBody(body) }))));
 
     bool RefusePriorityChain(DeliveryJournalRecord record, DeliveryJournalRecord[] facts)
     {
         if (facts.Length == 0) { return false; }
         var ordinary = record.State != "priority" && record.Capability is null && record.PriorityReason is null &&
-            record.PriorityPrevious is null && record.Header.N == 0 && Matches(record, "");
+            record.PriorityPrevious is null && record.PriorityBinding is null && record.Header.N == 0 && Matches(record, "");
         var linked = record.State == "priority" || record.Capability is not null || record.PriorityReason is not null ||
-            record.PriorityPrevious is not null || facts.Any(r => r.PriorityPrevious == record.Hmac || ordinary &&
+            record.PriorityPrevious is not null || record.PriorityBinding is not null || facts.Any(r => r.PriorityPrevious == record.Hmac || ordinary &&
                 r.Capability is { } c && (r.Header.Id == record.Header.Id || c.Id.ToString("D") == record.Header.Id));
         if (!linked && ordinary) { return false; }
         priorityQuarantined = true;
@@ -172,13 +210,13 @@ public sealed partial class DeliveryJournal
     }
 
     void PriorityRecord(Guid request, string target, DeliverySender sender, string action, DateTimeOffset now,
-        PriorityCapability? capability = null, string? reason = null)
+        PriorityCapability? capability = null, string? reason = null, string priority = "normal", string? binding = null)
     {
         if (Uncertain || priorityRecords.LastOrDefault() is { } previous && now < previous.RecordedAt)
         { throw new InvalidOperationException("Priority journal uncertain or clock moved backwards; no authority granted."); }
-        var header = DeliveryEnvelope.Prepare(new(sender.From, request.ToString("D"), null, now, "normal", 0), "").Header;
+        var header = DeliveryEnvelope.Prepare(new(sender.From, request.ToString("D"), null, now, priority, 0), "").Header;
         var record = new DeliveryJournalRecord(target, header, "priority", now, "", Reason: action)
-            { Capability = capability, PriorityReason = reason, PriorityPrevious = priorityTail };
+            { Capability = capability, PriorityReason = reason, PriorityPrevious = priorityTail, PriorityBinding = binding };
         record = record with { Hmac = Convert.ToBase64String(Mac(record, "")) };
         try { append(JsonSerializer.SerializeToUtf8Bytes(record, ProtocolJson.Options)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)

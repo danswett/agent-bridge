@@ -574,6 +574,25 @@ effect of this design; those have separate umbrella slices.
 No wrapper may synthesize a grant, click a person confirmation or auto-retry an
 unconfirmed request. Quality/SRE owns disposable-VM cutover evidence separately.
 
+### G9 wire and cutover rows (HA retirement, #1396)
+
+`FleetActionEnvelope v1` fields: `v`, `action` (`fleet.launch`; G10 adds `fleet.end`), `account`,
+`sourceDevice`, `subject`, `audience` (receiver node id), `grantId`, `generation`, `requestId`, `nonce`,
+`expiresAt` and `payloadSha256` (SHA-256 of the canonical launch request, base64url). It is signed by the
+source device key and never accepted as an EnvelopeBody v1 message. G9 limits: expiry at most 120 s, a
+128-bit random nonce, and a receiver replay cache keyed by (sourceDevice, nonce) kept until expiry plus
+clock skew. An offline target refuses with the local exit codes; it never queues and never falls back to HA.
+The G9 PR splits envelope (sign/verify, replay) from receiver (grant gate, launch) if over the PR cap.
+
+Cutover order, each step gated on Quality/SRE Host-transport evidence, never on this doc alone:
+
+1. G9 lands the remote launch path; `launch-remote.ps1 -Transport` default changes from `HA` to `Host`
+   in a separate small Fleet PR (HA remains selectable only until row 4).
+2. The Fleet dispatcher's FleetLaunch stops its three HA calls and calls the host verb.
+3. G10/G11 follow for end and wrappers.
+4. G12 removes the HA launch path: `launch-remote.ps1` HA/MQTT presses and the HA connector's
+   `launch_options` and `new_session_result` entities (HaConnector.Launch, HaContract.Launch), with tests.
+
 No open decision is required to brief G1. Remote acting requires existing own-peer
 messaging trust, a signed fleet-action envelope and the receiver-side grant, not a roster;
 remote issuance keeps its person-device/roster gates. G5 owns the Allow-all extension
