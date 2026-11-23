@@ -897,6 +897,17 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task Fleet_launch_is_never_served_on_this_machines_own_pipe()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var sessions = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"),
+            launcher: launcher) { FleetRemoteLaunch = r.Receiver };
+        Assert.Null(await sessions.HandleAsync(new Chan(), FleetRemoteLaunch.Op, r.Data()));
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
     public async Task A_freshly_started_receiver_refuses_every_envelope_until_the_replay_warm_up_has_passed()
     {
         using var key = P256KeyPair.Generate();
