@@ -311,6 +311,14 @@ reply. **Owner-approved CHANGE, Nov 23 (Part of #2568).** The probe is
 without Enter, read back from the screen and cleared; never another person's session. Claude's paste
 detection depends on timing, so a machine that still folds a chunked reply shows it there first.
 
+**Long text (Codex), probed Nov 23 on VM4 in an idle Codex session, synthetic text, no Enter, cleared:** it does
+not need chunking. A single burst of 400 characters shows as typed; of 1000, as typed; of 2500 and of 4500, as
+`[Pasted Content 2500 chars]` and `[Pasted Content 4500 chars]` with the whole count, which Codex shows only after
+its own paste buffering, two to four seconds later (nothing at 1.5 s). Chunked 100/40 ended the same. A reader of
+the box a second after typing therefore sees it empty. Codex also ignores a control character sent as a character
+(the injector's Ctrl+U, Backspace): only real key events (virtual-key code set) edit its box, so the probe clears it
+with those.
+
 **Enter again.** Claude takes a long burst as a paste and can swallow the Enter after it
 (the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
 the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
