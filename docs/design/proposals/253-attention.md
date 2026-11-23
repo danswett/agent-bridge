@@ -65,7 +65,7 @@ U2 (#165) gave the lane these properties. Every option below is measured against
    `QuestionViewModel` and `AnswerService` entry), so progress and outcomes (stale, busy,
    refused, Try again) show in both and a second press sends nothing.
 5. **Accessible and reachable:** each control is named for its session and machine ("Approve once:
-   Ship 0.1.691 prerelease on ULTRA"), 44 px tall on a phone, keeps focus while the lane redraws,
+   Ship 0.1.691 prerelease on Machine B"), 44 px tall on a phone, keeps focus while the lane redraws,
    says its outcome through a polite live region, and opening an entry moves focus into the card.
 6. **Honest when it can't:** an `answerAtMachine` question says so and offers nothing to press,
    and a delegate's question names the delegate after the word "Delegate" (§6.3).
@@ -202,7 +202,7 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
   - A question arriving adds its row where that row lives. It fades in (§5.3 *Arriving and
     leaving*), and its neighbours take their places at once.
   - **With a machine chosen,** the filter narrows that machine's rows. N is still every machine's,
-    and the toggle says "1 on ULTRA". When others wait elsewhere, the list ends with one secondary
+    and the toggle says "1 on Machine B". When others wait elsewhere, the list ends with one secondary
     button, "2 more on other machines", which chooses All. The global count is never hidden
     behind a machine.
   - Nothing left waiting: the toggle reads "Needs you · 0" with the `idle` glyph, the rows
@@ -262,7 +262,7 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
   - Tools' link to a question works for as long as its item is kept.
 - **Answer at the machine:**
   - the card shows the whole question with no controls, and one line in Needs you's text colour:
-    "Answer at the machine · DEV-VM1";
+    "Answer at the machine · Machine A";
   - leaving the session, or turning the filter off, never counts as an answer. The row keeps its
     glyph until the host clears the question.
 - **A delegate's question** is drawn the same way, under "Delegate *name* asks". A Copilot
@@ -362,13 +362,13 @@ Choosing the row already lands on the question, and the header isn't the place f
 
 - **The toggle:**
   - it is a button with a pressed state (`aria-pressed`; WinUI `ToggleButton`);
-  - its name is "Needs you, 3 on every machine", or "Needs you, 1 on ULTRA, 3 on every machine"
+  - its name is "Needs you, 3 on every machine", or "Needs you, 1 on Machine B, 3 on every machine"
     with a machine chosen;
   - the list region it narrows is named "Sessions, needing you" while the filter is on.
 - **Announcements:** a change in N is announced once through a polite live region ("3 need
   you"), at most every 5 seconds, so a burst of questions is one announcement. Nothing is
   announced while the person types in the reply box.
-- **Rows** read as today (§9): "Release notes for 0.1.691, waiting on you, DEV-VM1".
+- **Rows** read as today (§9): "Release notes for 0.1.691, waiting on you, Machine A".
 - **The question:**
   - its heading (level 3) is where focus lands, and its accessible description is the question's
     first line;
@@ -403,7 +403,7 @@ onto them. It is a design mapping only: #260 decides how, and nothing here is im
 | **The rows** | One per session, as today: the `needs` glyph, then "Waiting on you" or "Delegate *name* asks". #260's separate "Needs you · N" `Section` goes | The same, in the inset grouped list |
 | **Choosing a waiting row** | The detail scrolls to the question (`ScrollViewReader`), and focus moves to its heading (`@AccessibilityFocusState`) | The pushed session opens at the question, with VoiceOver focus on its heading |
 | **The count** | The Dock badge (#260's setting), and the menu bar extra's label | The app icon badge. Its number is N, not the unread notification count |
-| **Menu bar extra** | Its label is N. Its menu lists the waiting sessions by name ("ULTRA: Ship 0.1.691 prerelease", at most 8, oldest first, as #260 has it) and Open Slipgates. It is navigation, like the Windows tray: an item opens the session at its question, and never shows the question's words or offers an answer (question 8) | Not applicable |
+| **Menu bar extra** | Its label is N. Its menu lists the waiting sessions by name ("Machine B: Ship 0.1.691 prerelease", at most 8, oldest first, as #260 has it) and Open Slipgates. It is navigation, like the Windows tray: an item opens the session at its question, and never shows the question's words or offers an answer (question 8) | Not applicable |
 | **Notifications** | Clicking one opens the session at the question. Action buttons: question 7 | Tapping one opens the pushed session at the question. Actions: question 7 |
 | **The question card** | §4.3 and §4.4, including the per-line override, the escapes and the literal shape, all in SwiftUI `Text` | The same |
 | **Tools and the inspector** | §4.5. The inspector's Tools has the linked `ask_user` row | §4.5, in the session's Tools section |

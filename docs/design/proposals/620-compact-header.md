@@ -120,7 +120,7 @@ This replaces "At rest: unchanged" below. ui.md §6.2 has the spec.
   - A two-line limit is the only way to the owner's target. A title with no limit can run to
     four lines and 64 pt more.
 - **One meta line, never wrapped:** glyph · status · machine, plus the account only when it isn't
-  the person's own ("Delegating to 2 agents · DEV-VM2"). The status never shortens. The account,
+  the person's own ("Delegating to 2 agents · Machine C"). The status never shortens. The account,
   then the machine, give way with an ellipsis. The repository goes to Details.
 - **The tabs, on their own row of 48.** No delegate strip on a phone.
   - "Delegates 2" while two run, read "Delegates, 2 running". No count when none run.

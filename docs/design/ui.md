@@ -1055,8 +1055,8 @@ owner changes them too.
 - **Leading:** the status glyph, aligned to line 1.
 - **Line 1:** the title. Semibold means unread messages, and the 6 px Bridge dot appears at
   the trailing edge.
-- **Line 2:** at most two facts, for example "3 delegates · DEV-VM1", "Editing
-  LaunchView.xaml.cs · ULTRA" or "Driven by an agent · ULTRA" (in agent colour).
+- **Line 2:** at most two facts, for example "3 delegates · Machine A", "Editing
+  LaunchView.xaml.cs · Machine B" or "Driven by an agent · Machine B" (in agent colour).
 - **Trailing:** the age (tabular), when there's no unread dot.
 - **Never on a row:** the model, the repo SHA, turn and compaction counts, or the pid.
   Those live in session details. Nor a question's words: a waiting row says only its status
@@ -1116,7 +1116,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **The title:** 24/32 bold, between Back and More, **at most two lines** with an ellipsis.
     The full title is the h2's text, so it is read in full, and it is in Details.
   - **One meta line, never wrapped:** glyph · status (§2.2) · machine, and the account only
-    when it isn't the person's own ("Delegating to 2 agents · DEV-VM2"). The status is never
+    when it isn't the person's own ("Delegating to 2 agents · Machine C"). The status is never
     shortened. The account, then the machine, give way with an ending ellipsis, and their full
     text is still read. The repository is in Details.
   - **The tabs, on their own row of 48:** Conversation, Delegates, Tools.
@@ -4071,13 +4071,13 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
 ### 9.2 Names, keys and announcements by surface
 
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
-  Windows App, delegating to 3 agents, DEV-VM1": its parts (title, status, driver, machine;
+  Windows App, delegating to 3 agents, Machine A": its parts (title, status, driver, machine;
   a strip item's name, state, time and parent) are joined with commas, while the status's own
   facts keep " · ". So a delegate's name read aloud has no comma of its own: "," and the
   commas drawn like it (U+055D,
   U+060C, U+066B, U+07F8, U+1363, U+1802, U+1808, U+201A, U+2E41, U+2E4C, U+3001, U+A4FE,
   U+A60D, U+A6F5, U+FE10, U+FE11, U+FE50, U+FE51, U+FF0C, U+FF64) become a space, and a run of
-  spaces one. A name of "x, idle, DEV-VM2" reads "Delegate x idle DEV-VM2 asks", never as
+  spaces one. A name of "x, idle, Machine C" reads "Delegate x idle Machine C asks", never as
   facts of its own; what is drawn keeps them. The same goes for the title and for a semicolon
   or a sentence stop (". ", "! " or "? " and one at the end, as a run; a dot inside a word such
   as "v1.2" stays): each becomes a space, so a title of "Fix. Idle; done" reads "Fix Idle done"
@@ -4174,7 +4174,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   - The person chips and sheet, and the window segments ("Window"), are radio groups.
 - **Needs you (#253):**
   - The toggle reports its pressed state, and is named for its count and scope: "Needs you, 3
-    on every machine", or "Needs you, 1 on ULTRA, 3 on every machine" with a machine chosen.
+    on every machine", or "Needs you, 1 on Machine B, 3 on every machine" with a machine chosen.
   - A change in N is announced once, politely ("3 need you"), at most every 5 s, and not while
     the person types in the reply box.
   - The question's heading (level 3) is where focus lands, from a waiting row, a toast or a
