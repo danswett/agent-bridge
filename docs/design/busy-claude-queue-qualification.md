@@ -21,7 +21,7 @@ disposable sessions, before the owner turns `agentMessaging.claudeBusyQueue` on;
    the status store and depth cap (#3926), the late-taken check (#3952), the active watch (#3968), and the derived slot, Claude-restart
    release and arm keeper (#3973); the option-2 gate (#3901) and the receiver rate refund (#3937).
 2. The fleet tools have the exit-6 mapping and its caller fixes, and the sender cap (slipgates-fleet #1148, #1182).
-3. The Claude Code version under test is recorded (the verified signals were seen on 2.1.312). If it differs, cases H1 to H4 are run first.
+3. The Claude Code version under test is recorded (the verified signals were seen on 2.1.312). If it differs, cases H1 to H5 are run first.
 4. The disposable host is run with `laneDelivery` both off and on (cases are repeated for both; see F).
 
 ## Cases
@@ -29,7 +29,7 @@ disposable sessions, before the owner turns `agentMessaging.claudeBusyQueue` on;
 Each case lists the action, then the expected result. "Held" means the status store record has `held` true.
 
 **A. Admission and typing**
-- A1. Claude is in a long tool turn (at least 3 minutes). Send one message. Expect: exit 6 within 15 s, an `enqueue` row with the request
+- A1. Claude is in a long tool turn (at least 3 minutes). Send one message. Expect: exit 6 within 10 s (the sender's acknowledgement wait), an `enqueue` row with the request
   id in the transcript, record `queued`, no Home Assistant send.
 - A2. Claude idle, empty box. Send. Expect: exit 0, a `user` row, record `delivered`, slot free.
 - A3. Claude goes from busy to idle while the send is in flight. Expect: the message arrives once; the result is `queued` or `delivered`,
@@ -87,6 +87,7 @@ Each case lists the action, then the expected result. "Held" means the status st
   never frees the slot.
 - H3. Whether a Claude restart drops its queue (D2).
 - H4. Claude Code's own queue cap and TTL: how many messages queue, and whether one expires.
+- H5. How long Claude takes to record an `enqueue` row after the keys. The replier waits up to 60 s for it and returns as soon as it sees it, but the sender gives up at 10 s and reports exit 2. Record the distribution under a long tool turn and an idle one. If sends are often confirmed after 10 s, a message that was accepted is reported uncertain, and a shorter confirm window for this path or a longer sender wait needs its own slice.
 
 ## Pass bar
 
@@ -101,7 +102,7 @@ All of the following, on at least three runs of each case on at least two dispos
 6. **No stuck slot without a recovery path:** every held slot in C and D ends by consumption, a Claude restart, or a person emptying
    Claude's queue; record how long each took.
 7. **G1 to G4 clean.**
-8. **H1 to H4 each resolved:** proven with a fixture added to the repo, or the dependent rule stays as the design has it and the owner is
+8. **H1 to H5 each resolved:** proven with a fixture added to the repo, or the dependent rule stays as the design has it and the owner is
    told which one.
 
 Any duplicate delivery, any typing over a draft, or any misattribution is a **fail** that blocks the owner's decision; the flag stays off.
