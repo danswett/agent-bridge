@@ -307,7 +307,7 @@ send only. 4500 characters took about 3 s and arrived whole in the probe below. 
 typed as before, and a reply of 100 units or fewer is one send. Bracketed paste was not used: Claude
 would hold a `[Pasted text]` placeholder, and the recorded prompt could no longer be matched to the
 reply. **Owner-approved CHANGE, Nov 23 (Part of #2568).** The probe is
-`docs/runbooks/claude-typing-probe.ps1`: synthetic marker text typed into the builder's own session
+`ops/tools/claude-typing-probe.ps1`: synthetic marker text typed into the builder's own session
 without Enter, read back from the screen and cleared; never another person's session. Claude's paste
 detection depends on timing, so a machine that still folds a chunked reply shows it there first.
 

@@ -2,7 +2,7 @@
 # of your own, never the owner's or another agent's: nothing is submitted (no Enter), the box is read back
 # from the screen and then cleared (docs/host-replies.md, "Long text (Claude)").
 #
-#   pwsh -File docs/runbooks/claude-typing-probe.ps1 -TargetPid <your claude or codex pid> -Injector <agent-bridge-injector.exe>
+#   pwsh -NoProfile -Command "& ops/tools/claude-typing-probe.ps1 -TargetPid <your claude pid> -Injector <agent-bridge-injector.exe> -Sizes 400,1000,4500"
 #
 # Build the injector once: dotnet build src/AgentBridge.Injector -c Release. For each size it types the
 # marker text as one burst and as 100-unit chunks 40 ms apart, and prints whether the box shows a
