@@ -481,6 +481,15 @@ and the signed fleet-action envelope; the receiver-side grant is authority.
 No separate roster gate applies to launch/stop; the account-wide kill switch stays.
 Own-account only; no cross-account federation or HA launch/stop fallback.
 
+Remote subject attestation (G9b; owner approval requested before G9b2 code). The source host runs the AP1
+session-credential and process-tree check locally, then signs; the envelope `subject` is the SHA-256 digest of
+the canonical tuple (account, source host, session, credential, process instance). The receiver cannot inspect
+a remote process, so it matches that digest to a grant `subjects` entry, requires the tuple's account to be its
+own and its source host to equal the envelope's source device and differ from its own device, and never calls
+the local `IsLive` credential check for a remote subject. A local source host never takes this path. Trust is
+the existing own-peer trust (owner, Nov 21, 12:50 PT). The `hostSign` suspension is TEMPORARY (owner): own-account
+messaging trust applies now; a signed roster is built and turned on later, and this section is revisited then.
+
 Receiver order:
 
 1. Validate transport/account/audience and agent identity; reject replay,
