@@ -19,9 +19,14 @@ namespace AgentBridge.App;
 // session, saves a picture of each page beside the result file, writes what it saw and exits.
 static partial class SelfTest
 {
-    public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
+    public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit, SelfTestShard? shardOf = null)
     {
+        var shard = shardOf ?? SelfTestShard.Whole;
         var result = new Dictionary<string, object?>();
+        // A shard (#1755) runs the start below and then only its stages; the file says which, so a join can add them up.
+        List<string> ran = [];
+        result["shard"] = shard.ToString(); result["stages"] = ran; result["stagesAll"] = SelfTestStages.All;
+        bool Stage(string name) { if (!shard.Runs(name)) { return false; } ran.Add(name); return true; }
         var checks = new List<string>();
         var failures = new List<string>();
         var latestTiming = new LatestTiming(AppLog.Write);
@@ -286,6 +291,7 @@ static partial class SelfTest
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a session chosen again after the tabs change");
             Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
+            if (!Stage("layout")) { goto launch; }
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
@@ -305,6 +311,8 @@ static partial class SelfTest
             await CheckMessageTimes(window, main, Check);
             await CheckHistoryScrollBudget(window, main, demo, Check, result);
 
+        launch:
+            if (!Stage("launch")) { goto approve; }
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
             window.ShowPage("launch");
             var ready = await Until(() => launch.ShowForm && launch.Machines.Count == 2 && ById<Button>(window.RootElement, "LaunchButton") is { IsEnabled: true }, TimeSpan.FromSeconds(10));
@@ -353,6 +361,8 @@ static partial class SelfTest
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
             await CheckAgentRows(window, main, demo, Check, outFile, result);
 
+        approve:
+            if (!Stage("approve")) { goto late; }
             // Approve once from Needs you, as a person would: the card's own answer goes, and the
             // entry leaves with its question.
             window.ShowPage("sessions");
@@ -380,11 +390,14 @@ static partial class SelfTest
             Check(window.CurrentPage == "sessions" && main.Selected == sought && window.Sessions.Rows.SelectedItem == sought && window.Search.Text.Length == 0,
                 "opens a session chosen in the search box on the Sessions page, its row selected");
 
+        late:
+            if (!SelfTestStages.All.Skip(3).Any(shard.Runs)) { goto done; }
             // Every page, and every pane, in every theme: three panes, with a delegate in the strip and
             // the inspector, and the session's Details and Tools.
             Resize(window, 1440, 1000);
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             await Task.Delay(700);
+            if (!Stage("themes")) { goto signin; }
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckMachineHeld(window, main, remote, Check, outFile);
             await CheckResumeHeld(window, launch, remote, Check, outFile);
@@ -393,6 +406,8 @@ static partial class SelfTest
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
+        signin:
+            if (!Stage("signin")) { goto progress; }
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
@@ -400,8 +415,12 @@ static partial class SelfTest
             await CaptureUpdate(window, main, Check, outFile);
             // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
             // contrast's pass draws them too.
+        progress:
+            if (!Stage("progress")) { goto contrast; }
             await ProgressPasses(window, main, demo, Check, outFile, result);
             await CheckMoveStrip(window, main, demo, Check, outFile, result);
+        contrast:
+            if (!Stage("contrast")) { goto resize; }
             // The gallery's sessions are gone, and the one open with them: high contrast's pass
             // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
@@ -409,9 +428,12 @@ static partial class SelfTest
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
             await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
+        resize:
+            if (!Stage("resize")) { goto done; }
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
+        done:;
         }
         catch (Exception e)
         {
