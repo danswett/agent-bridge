@@ -258,6 +258,112 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(host.Sent(HostOps.Restart).Count == 0, because);
     }
 
+    // The files must be the APP's own release, not merely newer than the host: files newer than the app are a
+    // release nothing here has chosen to run (it may be a halted one), so the host is not restarted onto them.
+    [Theory]
+    [InlineData("0.1.7900", false)]
+    [InlineData("0.1.7900", true)]
+    [Trait("Category", "Network")]
+    public async Task The_host_is_not_restarted_onto_files_newer_than_the_app_halted_or_not(string files, bool halted)
+    {
+        await StartOldHostAsync(false, files);
+        if (halted) { updater.HaltPolicy = new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", [files]), time.GetUtcNow(), Fresh: true); }
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    // Settings' own install (it downloaded the release itself) goes through the host manager and holds no lock of the
+    // tick's: while it is under way, with the host still up for a usage probe to finish, no restart is sent over it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_sent_while_an_update_is_under_way_through_the_host_manager()
+    {
+        await StartOldHostAsync();
+        var probing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(probing, probing ? "a usage probe is finishing" : null));
+        var update = Task.Run(() => manager.StopAndApplyAsync(() => { }, () => { }, null, waitForFiles: false));
+        await Wait.UntilAsync(() => manager.UpdateUnderWay, "the update under way");
+        Assert.Equal(LinkState.Connected, connection.State);
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        probing = false;
+        await update;
+    }
+
+    // A press of Restart to update claims the install while the tick is still looking: the tick's host restart, which
+    // follows its look, does not go ahead over that claim (and goes ahead once the claim is gone).
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_sent_while_a_press_of_Restart_to_update_holds_the_install_claim()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync(1);
+        // The next look is a check that takes its time, with the tick holding its lock.
+        updater.CheckGate = new TaskCompletionSource();
+        time.Advance(AutoUpdater.CheckEvery);
+        var tick = auto.TickAsync();
+        await Wait.UntilAsync(() => updater.Checks > 1, "the check under way");
+        // The press claims the install, then waits for the tick's lock.
+        var press = auto.RestartToUpdateAsync();
+        updater.CheckGate.SetResult();
+        await tick;
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+        await press;
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    // Not connected: nothing is asked of a host that cannot answer, and nothing is counted against it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_asked_while_the_host_is_not_connected_and_none_is_counted_as_failed()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync(1);
+        await host.DisposeAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.DoesNotContain(log, l => l.Contains("did not restart", StringComparison.Ordinal) || l.Contains("restarting the host onto", StringComparison.Ordinal));
+    }
+    // The quiet is the existing settle rule: idle for SettleFor without a break, not a moment sooner.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_restart_waits_for_the_settle_time_to_the_second()
+    {
+        await StartOldHostAsync();
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor - TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+        Assert.Equal(TimeSpan.FromSeconds(5), AutoUpdater.SettleFor);
+    }
+
+    // "Download updates automatically" off is the person's word that nothing happens unasked: the host is left as it is
+    // (the banner still says the skew).
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task With_automatic_updates_turned_off_the_host_is_not_restarted()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartOldHostAsync();
+
+        await QuietTicksAsync(6);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_release_waiting_to_install_takes_the_install_path_not_this()

@@ -786,7 +786,9 @@ public sealed class AutoUpdater
     // a whole snapshot, settled for SettleFor) has come; once for a release, and a restart that fails
     // backs off as Decide says (an hour at most), and one that answers is the one for that release.
     // The halt policy still holds it, as it holds an install between turns: a stale policy, or the
-    // app's release halted.
+    // app's release halted; and "Download updates automatically" off, which is the person's word that nothing
+    // happens unasked. The host answered the restart but stays old: it is not asked again until the app restarts
+    // (what is remembered is this run's), since the files are then not what they were read as.
     public static readonly TimeSpan HealConfirmWithin = TimeSpan.FromMinutes(2);
 
     // Restarts that failed (the host did not answer, or refused) before it is left to the person for this release.
@@ -818,8 +820,11 @@ public sealed class AutoUpdater
         try
         {
             var now = time.GetUtcNow();
-            // A release waiting, or an install under way: that path is the one that restarts the host.
-            if (Pending is not null || installing || manager.UpdateUnderWay || Volatile.Read(ref claimed) == 1) { return; }
+            // A release waiting (an install in progress is one: Pending is cleared only after it ends), an install
+            // Settings began through the host manager, or one a press has claimed: those paths restart the host.
+            if (Pending is not null || manager.UpdateUnderWay || Volatile.Read(ref claimed) == 1) { return; }
+            // "Download updates automatically" off: nothing happens unasked, and this is unasked.
+            if (!prefs().AutoUpdate) { return; }
             if (updater.InstalledVersion is not { } app || host.State != LinkState.Connected || host.Status?.Version is not { } running) { return; }
             if (healApp != app) { (healApp, healSentFor, healSentAt, healLast, healFailures, healSaid) = (app, null, null, null, 0, false); }
             var identity = UpdateVersions.Identity(app);
@@ -827,7 +832,9 @@ public sealed class AutoUpdater
             var decision = VersionSkewHeal.Decide(app, running, HostFilesRelease(), healFailures, healLast, now);
             if (decision.Kind == SkewHealKind.Converged) { (healSentFor, healSentAt, healLast, healFailures, healSaid) = (null, null, null, 0, false); return; }
             // Only the host older than the app: a newer host is the app that is behind, which is not this.
-            if (decision.Kind != SkewHealKind.Heal || UpdateVersions.Identity(running) is not { } hostRelease
+            // The files are the APP's release, exactly: newer files are a release nothing here chose to run.
+            if (decision.Kind != SkewHealKind.Heal || !string.Equals(decision.Target, identity, StringComparison.OrdinalIgnoreCase)
+                || UpdateVersions.Identity(running) is not { } hostRelease
                 || !ReleaseVersions.TryRun(hostRelease, out var hostRun) || identity is null || !ReleaseVersions.TryRun(identity, out var appRun) || hostRun >= appRun) { return; }
             // Asked once for this release, and the host answered: that is the one restart. If it still runs the old
             // release after HealConfirmWithin the files are not what they were read as, and asking again would
