@@ -6,7 +6,7 @@ using AgentBridge.Host.Lite;
 using AgentBridge.Transport;
 using Xunit;
 
-public class AgentLiteSenderTests
+public partial class AgentLiteSenderTests
 {
     const string Account = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     static readonly byte[] OwnStatic = [.. Enumerable.Range(1, 32).Select(i => (byte)i)];
@@ -51,7 +51,7 @@ public class AgentLiteSenderTests
         public int Signed;
         public Deliver Deliver = new(new LiteDelivery(true, null));
         public (IEnvelopeSigner, byte[]) Signer { get { var q = Key.ExportParameters(false).Q; return (new EcdsaEnvelopeSigner(Key), [0x04, .. q.X!, .. q.Y!]); } }
-        public AgentLiteSender Sender() => new(Mode, Link, _ => Live, () => { Signed++; return Signer; }, OwnStatic, null, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(20));
+        public AgentLiteSender Sender(TimeProvider? time = null) => new(Mode, Link, _ => Live, () => { Signed++; return Signer; }, OwnStatic, time, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(20));
         public Task<LiteOutcome> Send(string text = "hello", string machine = Other) => Sender().SendAsync(Caller, new LiteSendInput(machine, "agent-b2", text), default);
         public void Dispose() => Key.Dispose();
     }

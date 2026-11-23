@@ -82,6 +82,7 @@ public sealed class ScriptCallerTests : IDisposable
     [InlineData("host.restart")]
     [InlineData("hello")]
     [InlineData("agent.hello")]
+    [InlineData("agent.receipt")]
     [InlineData("future.operation")]
     public async Task A_script_connection_never_falls_back_to_person_authority_even_after_expiry(string op)
     {

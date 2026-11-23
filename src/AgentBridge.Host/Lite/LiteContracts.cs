@@ -18,4 +18,8 @@ internal interface ILiteReplayQuery
     Task<LiteDelivery> QueryAsync(VerifiedEnvelope envelope, string text, CancellationToken ct);
 }
 public interface ILiteDeliver { Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct); } // L5 implements; L4 default stub returns (false, "notReplyTarget")
-public interface ILiteSender { Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct); }  // L3 implements; L7 calls
+public interface ILiteSender { Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct); }
+// A receipt lookup's answer (docs/protocol/agent-lite.md "Receipt lookup", #3875): the receiver's recorded outcome of the first attempt, or `unknown`
+// (no record, or the lookup itself failed: Code then starts "lookup:"). Only an answered receipt can say `refused`.
+public sealed record LiteReceiptReply(string Outcome, string? Code, string Request);
+public interface ILiteReceipts { Task<LiteReceiptReply?> ReceiptAsync(AgentCredential caller, string request, CancellationToken ct); }  // L3 implements; L7 calls

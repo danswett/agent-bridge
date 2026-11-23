@@ -25,10 +25,11 @@ public interface ILiteLink
 // one typed outcome. Never resends, and never reports delivered without the receiver's acknowledgement.
 public sealed class AgentLiteSender(
     ILiteMode mode, ILiteLink link, Func<AgentCredential, bool> credentialLive, Func<(IEnvelopeSigner Sign, byte[] Point)?> signer,
-    byte[] staticPublic, TimeProvider? time = null, TimeSpan? ackTimeout = null, TimeSpan? watchEvery = null) : ILiteSender
+    byte[] staticPublic, TimeProvider? time = null, TimeSpan? ackTimeout = null, TimeSpan? watchEvery = null) : ILiteSender, ILiteReceipts
 {
     public const string OfflineText = "that machine is offline; nothing was queued";
     public const string NoCredential = "credential", NoSigner = "no-sign-key", NotPeer = LiteReceiver.NotPeer, Malformed = LiteReceiver.Malformed, BadMachine = "badMachine", NoSuchMachine = "noSuchMachine";
+    public const int MaxReceiptRecords = 64;
     public const string TimedOut = "timeout", ModeSwitchedOff = "mode switched off", ChannelLost = "channel lost", BadAck = "unreadable acknowledgement";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
@@ -38,7 +39,40 @@ public sealed class AgentLiteSender(
     readonly string instance = Codec.Base64Url(RandomNumberGenerator.GetBytes(12));
     static readonly string Zero12 = Codec.Base64Url(new byte[12]);
 
+    // What a later receipt lookup needs (#3875): the request id and target of an unconfirmed send while its envelope could still arrive; no text.
+    sealed record Sent(string Request, string Machine, string Session, DateTimeOffset Until);
+    readonly object recordsGate = new();
+    readonly Dictionary<string, List<Sent>> records = new(StringComparer.Ordinal);
+
     public async Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct)
+    {
+        var outcome = await SendCoreAsync(caller, input, ct);
+        if (outcome.Kind == LiteKind.Unconfirmed && outcome.Request.Length > 0) { Remember(caller, outcome.Request, input); }
+        return outcome;
+    }
+
+    void Remember(AgentCredential caller, string request, LiteSendInput input)
+    {
+        lock (recordsGate)
+        {
+            var now = time.GetUtcNow();
+            if (!records.TryGetValue(caller.Id, out var list)) { records[caller.Id] = list = []; }
+            list.RemoveAll(s => s.Until <= now);
+            list.Add(new Sent(request, input.Machine, input.Session, now + TimeSpan.FromSeconds(EnvelopeBody.MaxLifetimeSeconds)));
+            while (list.Count > MaxReceiptRecords) { list.RemoveAt(0); }
+        }
+    }
+
+    Sent? Recorded(AgentCredential caller, string request)
+    {
+        lock (recordsGate)
+        {
+            var now = time.GetUtcNow();
+            return records.TryGetValue(caller.Id, out var list) ? list.FirstOrDefault(s => s.Request == request && s.Until > now) : null;
+        }
+    }
+
+    async Task<LiteOutcome> SendCoreAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct)
     {
         if (!mode.On) { return new LiteOutcome(LiteKind.Off, "off", ""); }
         var request = Guid.NewGuid().ToString("D");
@@ -112,6 +146,60 @@ public sealed class AgentLiteSender(
         catch (Exception e) when (e is not OperationCanceledException) { return Out(LiteKind.Unconfirmed, ChannelLost); }
         // The watcher must be finished before the sources are disposed, or its next tick would fault unobserved.
         finally { watching.Cancel(); await watcher; }
+    }
+
+    static readonly string[] ReceiptOutcomes = ["delivered", "refused", "pending", "queued", "unconfirmed", "in-flight"];
+
+    // Asks the target what an unconfirmed send's first attempt became, with a signed probe that never types (#3875). Null: no such record (nothing is sent).
+    // Only an answered receipt can say `refused`; any failure of the lookup itself is `unknown` ("lookup: ..."), so the send stays uncertain.
+    public async Task<LiteReceiptReply?> ReceiptAsync(AgentCredential caller, string request, CancellationToken ct)
+    {
+        if (Recorded(caller, request) is not { } sent) { return null; }
+        LiteReceiptReply Unknown(string? code) => new("unknown", code, request);
+        if (!mode.On) { return Unknown("lookup: off"); }
+        var script = caller.Kind == "script";
+        if ((script ? !AgentCredentials.ValidScript(caller, machine)
+            : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
+            || !credentialLive(caller)) { return Unknown("lookup: " + NoCredential); }
+        var account = link.Account;
+        var ids = sent.Machine == link.Self ? [link.Self]
+            : link.Presence.Where(p => p.Kind == "host" && p.Id == sent.Machine).Select(p => p.Id).Distinct().ToList();
+        if (string.IsNullOrEmpty(account) || ids.Count == 0) { return Unknown("lookup: offline"); }
+        var peerId = ids[0];
+        var signed = signer();
+        if (!mode.On) { return Unknown("lookup: off"); }
+        if (signed is not { } key) { return Unknown("lookup: " + NoSigner); }
+        if (!credentialLive(caller)) { return Unknown("lookup: " + NoCredential); }
+
+        var from = new LiteSender(account, link.Self, Codec.Base64Url(SHA256.HashData(staticPublic)), caller.Session, script ? "" : instance,
+            Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), script ? "" : "agent", script ? "" : "agent-bridge",
+            script ? "script" : "agent", script ? caller.Principal : null);
+        byte[] envelope;
+        try { envelope = LiteProfile.SealReceipt(from, new LiteTarget(peerId, sent.Session, Zero12), request, time.GetUtcNow().ToUnixTimeSeconds(), key.Sign); }
+        catch (EnvelopeException) { return Unknown("lookup: " + Malformed); }
+
+        using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        flight.CancelAfter(ackTimeout);
+        try
+        {
+            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = "", killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point) }, flight.Token);
+            if (ack.KillEpoch > mode.KillEpoch) { mode.RaiseEpoch(ack.KillEpoch); }
+            if (ack.Request != request) { return Unknown("lookup: " + BadAck); }
+            switch (ack.Status)
+            {
+                case "unknown": return Unknown(null);
+                case "refused": return Unknown("lookup: refused:" + (ack.Code ?? "refused"));
+                case "receipt" when ack.Code is { Length: > 0 } code:
+                    var colon = code.IndexOf(':');
+                    var outcome = colon < 0 ? code : code[..colon];
+                    return ReceiptOutcomes.Contains(outcome) ? new LiteReceiptReply(outcome, colon < 0 ? null : code[(colon + 1)..], request) : Unknown("lookup: " + BadAck);
+                default: return Unknown("lookup: " + BadAck);
+            }
+        }
+        catch (LitePeerOfflineException) { return Unknown("lookup: offline"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Unknown("lookup: " + TimedOut); }
+        catch (TimeoutException) { return Unknown("lookup: " + TimedOut); }
+        catch (Exception e) when (e is not OperationCanceledException) { return Unknown("lookup: " + ChannelLost); }
     }
 
     internal static string MachineRefusal(string? machine, string code, string reason)
