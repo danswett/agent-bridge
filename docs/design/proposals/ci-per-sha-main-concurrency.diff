@@ -1,0 +1,145 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2ab972da..c7d0a8a2 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -23,17 +23,17 @@ permissions:
+ 
+ # A newer push to a pull request cancels that pull request's older run: only the latest head's
+ # result counts, and a superseded run only holds runners other work is queued for. First attempts
+-# of pushes to main share one group, ci-main, and are never cancelled once running: at most one of
+-# them runs and one waits, a newer waiting push run cancelling the one waiting before it starts
+-# (re-runs, below, run beside them). GitHub promises no order
+-# between them, so nothing here relies on one: each run plans from the last commit main's CI
++# of pushes to main each have a group of their own, ci-main-<sha>, and are never cancelled: every
++# merge gets its full run, and a merge never cancels another's (one shared group kept one running and
++# one waiting run, a newer waiting push run cancelling the one waiting before it started: 3 of 10 main
++# runs on Nov 22; quality/README.md, "CI: speed, runners and what gates main"). GitHub promises no
++# order between them, so nothing here relies on one: each run plans from the last commit main's CI
+ # passed on and the latest published release, so untested and unpaid app changes reach a later run, merge-rule
+ # ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
+-# releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
+-# ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
+-# own run id, never cancelled.
++# releases in version and commit order (publish-gate). A re-run (attempt 2 on) has a group of
++# its own too, its run id, never cancelled.
+ concurrency:
+-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
++  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
+ env:
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index 3342c562..4dd8dc91 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -980,9 +980,8 @@ connector's Install button on a machine the dashboard drives.
+   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
+   `publish-prerelease`), and publishes each version once, never one older than any already
+   out and never from a commit that doesn't hold the latest release's commit, so release order
+-  doesn't rest on the order main's CI runs go in (first attempts share
+-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+-  its own): a run publishes even after `main` has moved on, unless main's head has since
++  doesn't rest on the order main's CI runs go in (each push has a group of its
++  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
+   changed the app (main's own selector, under the lock, says so; main's later run publishes
+   both, where publishing this first could leave that one's lower version refused), and
+   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+@@ -1125,7 +1124,7 @@ A second way to publish, apart from merging: `.github/workflows/release-train.ym
+ (and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
+ Merging never waits for it and it never blocks a merge.
+ 
+-**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
++**Why.** Until per-commit groups (`ci-main-<sha>`, above) a push to `main` cancelled the run waiting before it, and a
+ superseded run that went green still publishes nothing when `main`'s head has since changed the
+ app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
+ 15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
+diff --git a/quality/README.md b/quality/README.md
+index 11f2d013..afefbd83 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -281,12 +281,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+    (`-FastRing`: ring 0, Linux only, §2). Its `tiers` output and the summary's Tier column give
+    each gated job's tier, blocking or post-merge, and each post-merge leg by exact name (item 9).
+ 
+-   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
+-   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
+-   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
+-   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
+-   so it runs beside them and can't take a waiting push run's place and leave that push's commit
+-   untested (#938's review). GitHub promises no
++   **Main: every push runs, nothing is cancelled.** Each push to `main` has the concurrency group
++   `ci-main-<sha>`, which never cancels a run in progress, so every merge gets its full run (a single
++   shared group kept one running and one waiting run, and a newer push cancelled the one waiting:
++   3 of 10 main runs on Nov 22). A re-run (attempt 2 on) gets its own run-id group, like a run by hand,
++   so it runs beside the first attempt and can't take its place (#938's review). GitHub promises no
+    order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
+    over unfinished product evidence, and judges the newest usable named-job result.
+    So a main run's change is everything since the last commit main's CI
+@@ -497,8 +496,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
+      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
+      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
+-     never cancel a run in progress either, but a first attempt still waiting can be replaced in
+-     `ci-main` (item 7). A named test job cancelled after its tests or build started holds
++     never cancel a run in progress either, and none is replaced: each has its own group
++     `ci-main-<sha>` (item 7). A named test job cancelled after its tests or build started holds
+      merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
+ 
+    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
+@@ -612,7 +611,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      started, and a step that failed before it is judged like any other; a never-assigned runner
+      also needs a nonempty step manifest. Cancelled runs are
+      inspected rather than hiding a test failure behind older green evidence; a cancelled run
+-     with no jobs (displaced in `ci-main`) is passed over.
++     with no jobs (cancelled before it started: only runs from before per-commit groups) is passed over.
+      An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
+      merge-rule description (after any blocking reason, compacted) and to the detailed log;
+      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index a7c7aeb7..d7bb6f10 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -5,7 +5,7 @@ public class CiPlanTests
+     // ci.yml's wiring to the plan as the repository has it, cut down to two gated jobs.
+     const string Wired = """
+         concurrency:
+-          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
++          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+           cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+         jobs:
+           plan:
+@@ -65,17 +65,18 @@ public class CiPlanTests
+     [Theory]
+     [InlineData(" && github.run_attempt == '1'", "", false)]
+     [InlineData("github.run_attempt == '1'", "github.run_attempt != ''", false)]
+-    [InlineData("'ci-main' ||", "'ci-main-' ||", false)]
++    [InlineData("format('ci-main-{0}', github.sha) ||", "format('ci-main-{0}', github.run_id) ||", false)]
++    [InlineData("format('ci-main-{0}', github.sha) ||", "'ci-main' ||", false)]
+     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: true", false)]
+     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: false", false)]
+     [InlineData("concurrency:", "x-concurrency:", false)]
+-    [InlineData("'1' && 'ci-main'", "'1'   &&  'ci-main'", true)]
++    [InlineData("'1' && format('ci-main-{0}', github.sha)", "'1'   &&  format('ci-main-{0}', github.sha)", true)]
+     public void Ci_concurrency_keeps_reruns_out_of_ci_main_and_never_cancels_its_runs(string from, string to, bool fine)
+     {
+         Assert.Contains(from, Wired, StringComparison.Ordinal);
+         var problems = Check(Wired.Replace(from, to, StringComparison.Ordinal));
+         string[] expected = fine ? [] : [
+-            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
++            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
+             + " with cancel-in-progress ${{ github.event_name == 'pull_request' }}"];
+ 
+         Assert.Equal(expected, problems);
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 4d0eaabf..ec05fc81 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -53,7 +53,7 @@ static partial class CiPlan
+     private static partial Regex AppBuilt();
+     const string AppResult = "${{ needs.app.result }}";
+     const string ConcurrencyGroup =
+-        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
++        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
+     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
+     // publish's own group, keeping every waiting publish (queue: max) where the default lets the
+     // next to arrive replace the one waiting: a re-run of an old run could otherwise replace a
