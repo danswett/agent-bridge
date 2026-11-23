@@ -1032,6 +1032,41 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Single(Received(), r => r.Device == Phone);
     }
 
+    // The pump's return value is how long the host's loop sleeps before looking again. A trust question raises no session event, so the loop must wake
+    // on its own, every half minute, but only while this host can launch (the hook is set): otherwise an idle notifier sleeps until something happens.
+    [Fact]
+    public async Task The_pump_asks_to_be_woken_within_half_a_minute_only_while_the_trust_hook_is_set()
+    {
+        Start();
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+        notifier.TrustQuestions = () => [];
+        Assert.Equal(TimeSpan.FromSeconds(30), await notifier.PumpAsync());
+        notifier.TrustQuestions = null;
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+    }
+
+    [Fact]
+    public async Task A_trust_question_that_raises_no_session_event_is_told_by_a_loop_that_sleeps_only_as_long_as_the_pump_asks()
+    {
+        Start();
+        Subscribe(Phone);
+        var asks = new List<TrustQuestion>();
+        notifier.TrustQuestions = () => asks;
+        var wait = await notifier.PumpAsync();
+        asks.Add(TrustAsk("t1", time.GetUtcNow()));
+        var asked = time.GetUtcNow();
+        // The host's loop, on the fake clock: sleep what the pump says, pump again, with no session event at all.
+        while (sender.Sent.Count == 0 && time.GetUtcNow() - asked < TimeSpan.FromMinutes(5))
+        {
+            Assert.InRange(wait, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+            time.Advance(wait);
+            wait = await notifier.PumpAsync();
+        }
+        Assert.Single(sender.Sent);
+        // Not before two minutes, and no later than the two minutes plus one sleep.
+        Assert.InRange(time.GetUtcNow() - asked, TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(150));
+    }
+
     [Fact]
     public async Task Once_every_session_is_signed_in_again_a_waiting_sign_in_notice_is_withdrawn_and_the_next_failure_notifies_at_once()
     {
