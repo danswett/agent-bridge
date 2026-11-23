@@ -85,7 +85,7 @@ public sealed class BusyQueueStoreTests
         var s = Store(); var r = Req();
         Assert.Null(s.Holder("sess1"));
         s.TryBegin(r, "p", "sess1"); s.Track(r, "/t/a.jsonl", 42);
-        Assert.Equal(new BusyQueueStore.Holding(r, "/t/a.jsonl", 42), s.Holder("sess1"));
+        Assert.Equal(new BusyQueueStore.Holding(r, "/t/a.jsonl", 42, null, "p"), s.Holder("sess1"));
         Assert.Null(s.Holder("sess2"));
         s.KeysWent(r); s.Settle(r, BusyQueueStore.Queued, null, held: true);
         Assert.Equal(r, s.Holder("sess1")!.Request);
@@ -93,6 +93,38 @@ public sealed class BusyQueueStoreTests
         Assert.Null(s.Holder("sess1"));
         var q = Req(); s.TryBegin(q, "p", "sess1"); s.Track(q, null, 0); s.Release(q);
         Assert.Null(s.Holder("sess1"));
+    }
+
+    // #3926 review P2: the store is keyed by peer + request, as the receiver's replay store is, so one peer reusing another's live request id is
+    // neither refused for it nor able to touch its record. A lookup with no peer acts only when exactly one record has that request id.
+    [Fact]
+    public void Two_peers_may_use_the_same_request_id_and_each_record_is_its_own()
+    {
+        var s = Store(); var r = Req();
+        Assert.Equal(BusyQueueStore.Begin.Started, s.TryBegin(r, "agent:m/a", "sess1"));
+        Assert.Equal(BusyQueueStore.Begin.Started, s.TryBegin(r, "agent:m/b", "sess2"));
+        Assert.Equal(BusyQueueStore.Begin.Held, s.TryBegin(r, "agent:m/a", "sess3"));   // the same peer and request never begins twice
+        s.KeysWent(r, "agent:m/a"); s.Settle(r, BusyQueueStore.Delivered, null, held: false, "agent:m/a");
+        Assert.Equal(BusyQueueStore.Delivered, s.Get(r, "agent:m/a")!.State);
+        Assert.False(s.SlotHeld("sess1"));
+        Assert.Equal(BusyQueueStore.InFlight, s.Get(r, "agent:m/b")!.State);
+        Assert.True(s.SlotHeld("sess2"));
+        s.Release(r, "agent:m/b");
+        Assert.False(s.SlotHeld("sess2")); Assert.Null(s.Get(r, "agent:m/b")); Assert.NotNull(s.Get(r, "agent:m/a"));
+        Assert.Single(s.Records());
+    }
+
+    [Fact]
+    public void A_lookup_with_no_peer_acts_only_when_one_record_has_that_request_id()
+    {
+        var s = Store(); var r = Req();
+        s.TryBegin(r, "agent:m/a", "sess1");
+        Assert.Equal("agent:m/a", s.Get(r)!.Principal);
+        s.TryBegin(r, "agent:m/b", "sess2");
+        Assert.Null(s.Get(r));
+        s.Settle(r, BusyQueueStore.Delivered, null, held: false);   // ambiguous: touches neither record
+        Assert.Equal((BusyQueueStore.InFlight, BusyQueueStore.InFlight), (s.Get(r, "agent:m/a")!.State, s.Get(r, "agent:m/b")!.State));
+        Assert.True(s.SlotHeld("sess1") && s.SlotHeld("sess2"));
     }
 
     // Every settle is a compare-and-set (#4125, #4129): a late settle never overwrites a record another path already settled.

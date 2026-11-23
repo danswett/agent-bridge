@@ -35,6 +35,7 @@ public sealed class AgentLiteDeliveryTests
         public Action? OnSnapshot, OnReadScreen, OnReply;
         // KeysGo: the keys would go (a refusal before them leaves it false); OnWait: what the owner does while the typing slot is awaited.
         public bool KeysGo = true;
+        public bool InjectorStops;   // the replier ran KeysGoing, then the injector's own fence or screen check stopped before any key (ReplyService AgentAsync)
         public Action<string>? OnWait;
         public Action? AfterKeys;
         public Exception? ThrowAfterKeys;
@@ -100,6 +101,7 @@ public sealed class AgentLiteDeliveryTests
             OnWait?.Invoke(request.Text!);
             if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
+            if (InjectorStops) { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
@@ -689,7 +691,8 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
         Assert.Single(f.Typed);
     }
-        // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
+
+    // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
     // second is refused queueHeld (never busy, which would trigger the HA fallback), and a full store is refused statusFull. Flag off: unused.
     static Task<LiteDelivery> SendNew(LiteDeliver lite, string text = "hi") => lite.DeliverAsync(Envelope(text, Guid.NewGuid().ToString()), text, default);
     Fixture BusyClaude(ReplyStage? stage = null, AnswerOutcome outcome = AnswerOutcome.Delivered)
@@ -779,6 +782,28 @@ public sealed class AgentLiteDeliveryTests
         refused.Outcome = AnswerOutcome.Delivered; refused.KeysGo = true;
         Assert.True((await SendNew(l2)).Typed);
     }
+    // #3926 review (receipt 7110190967). P1-1: the slot is taken before the per-minute rate token is spent, so refusing a held slot never burns it
+    // and never turns into busy (which would allow the one HA fallback and bypass the cap).
+    [Fact]
+    public async Task Repeated_queueHeld_refusals_stay_queueHeld_and_never_turn_into_busy_by_spending_the_rate_window()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        for (var i = 0; i < 12; i++) { Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite)); }
+        Assert.Single(f.Typed);
+    }
+    // P1-2: the replier ran KeysGoing, then its injector stopped before any key (a screen change or a failed fence). It reports NoKeysSent, so the
+    // slot is freed and no record is left, whatever KeysGoing did first.
+    [Fact]
+    public async Task A_send_the_injector_stopped_after_keys_going_types_nothing_and_leaves_no_held_slot()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); f.InjectorStops = true; var lite = f.Build();
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await SendNew(lite));
+        Assert.Empty(f.Store.Records());
+        Assert.False(f.Store.SlotHeld(Target));
+        f.InjectorStops = false; f.Outcome = AnswerOutcome.Delivered;
+        Assert.True((await SendNew(lite)).Typed);
+    }
     [Fact]
     public async Task A_refusal_after_keys_went_is_held_unconfirmed_not_freed()
     {
@@ -865,7 +890,8 @@ public sealed class AgentLiteDeliveryTests
             Assert.Single(f.Typed);
         }
         finally { File.Delete(path); }
-    }    // D2b-2b2 (#3856): with the active watch on, a prompt Claude takes is noticed without another send; a silent one is reported watchEnded and stays held.
+    }
+    // D2b-2b2 (#3856): with the active watch on, a prompt Claude takes is noticed without another send; a silent one is reported watchEnded and stays held.
     static async Task Tick(Fixture f, Func<bool> done, TimeSpan limit)
     {
         for (var spent = TimeSpan.Zero; spent <= limit && !done(); spent += BusyQueueWatcher.Poll) { f.Clock.Advance(BusyQueueWatcher.Poll); await Task.Delay(5); }
@@ -892,7 +918,8 @@ public sealed class AgentLiteDeliveryTests
             Assert.True(silent.Store.SlotHeld(Target));
         }
         finally { File.Delete(path); }
-    }    // D2b-2c (#3856): the slot survives a host restart (derived from the transcript), a Claude restart frees it, and a held send keeps its arm.
+    }
+    // D2b-2c (#3856): the slot survives a host restart (derived from the transcript), a Claude restart frees it, and a held send keeps its arm.
     static string FramedEarlier(string request) => $"[Slipgates · from an agent on SENDER · session sess-9 · request {request} · not typed by your user] earlier message";
     static string EnqueueRowAt(string framed, string at) => System.Text.Json.JsonSerializer.Serialize(new { type = "queue-operation", operation = "enqueue", timestamp = at, content = framed });
     [Fact]
@@ -931,7 +958,8 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(LiteKind.Unconfirmed, (await SendNew(f.Build())).Outcome);
         d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
         Assert.True(d.PromptIsAgents);
-    }    // D2b-3 (#3856): a session that ends releases its held slot (sessionEnded); the record is unconfirmed, not held, and no timer is left for it.
+    }
+    // D2b-3 (#3856): a session that ends releases its held slot (sessionEnded); the record is unconfirmed, not held, and no timer is left for it.
     [Fact]
     public async Task With_the_watch_on_a_session_that_ends_while_a_send_is_held_releases_its_slot_as_sessionEnded()
     {
@@ -943,7 +971,8 @@ public sealed class AgentLiteDeliveryTests
         var rec = f.Store.Records().Single();
         Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
         Assert.False(f.Store.SlotHeld(Target));
-    }    // NoKeysSent (#3856, reply-deduplication.md "Preserve delivery outcomes"): a refusal whose keys may have gone is unconfirmed, never a refusal code
+    }
+    // NoKeysSent (#3856, reply-deduplication.md "Preserve delivery outcomes"): a refusal whose keys may have gone is unconfirmed, never a refusal code
     // the sender could answer with a fallback; a refusal that proves no key went stays a refusal.
     [Theory]
     [InlineData(false)]
@@ -959,7 +988,8 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Outcome = AnswerOutcome.Refused, Refusal = ReplyRefusal.Busy, KeysGo = false }; f.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(false, "busy"), await Send(f));
-    }    [Fact]
+    }
+    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
         var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working }; busy.Launch(LaunchProtocol.Ask);
