@@ -98,6 +98,30 @@ public sealed partial class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Equal((KeyPlan.Escape, false, Prompt.Length), (send.Text, send.Enter, send.Expect!.Count));
     }
 
+    // HA retirement row 5: a deny stays a deny. Once it is delivered, an approve of the same prompt under a new
+    // request does not go through, and the only key ever typed was the deny's lone Escape: no digit and no Enter
+    // that could have approved it. (The agent's own action is outside this host's reach; this is the host's part.)
+    [Fact]
+    public async Task A_delivered_deny_is_never_followed_by_an_approve_of_the_same_prompt_and_only_Escape_was_typed()
+    {
+        var asked = Question;
+        Completes("denied-interactively-by-user");
+        var answerer = Answerer();
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await answerer.AnswerAsync(Request("deny")));
+
+        var opposite = await answerer.AnswerAsync(new AnswerRequest
+        {
+            Id = Id,
+            Question = asked,
+            Request = Guid.NewGuid().ToString(),
+            Fields = new Dictionary<string, JsonElement> { ["decision"] = JsonSerializer.SerializeToElement("approve") },
+        });
+
+        Assert.NotEqual(AnswerOutcome.Delivered, opposite.Outcome);
+        var send = Assert.Single(Assert.Single(injector.Plans).Plan.Sends);
+        Assert.Equal((KeyPlan.Escape, false), (send.Text, send.Enter));
+    }
+
     [Fact]
     public async Task Deny_is_delivered_when_Copilot_records_the_request_cancelled_and_then_stops_the_turn()
     {
