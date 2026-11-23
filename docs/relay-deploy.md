@@ -6,8 +6,7 @@ probe) is in [ops/](../ops/README.md).
 The relay runs on Azure Container Apps (Linux, consumption) as one regional **stamp**
 (design §5.8, size `lean`). `infra/` describes the stamp in Bicep; `.github/workflows/relay.yml`
 builds an image per commit, rolls it onto **staging**, smoke-tests it there, and offers it to
-**production**, which waits for the environment approval. The owner does not approve deploys
-([Who approves](#who-approves-a-production-deploy)).
+**production**, which waits for a person to approve.
 
 | | Production | Staging |
 |---|---|---|
@@ -18,7 +17,7 @@ builds an image per commit, rolls it onto **staging**, smoke-tests it there, and
 | Identity (ACR pull, Key Vault) | `id-agent-bridge-relay` | `id-agent-bridge-relay-staging` |
 | Key Vault (`token-key`, `vapid-key`) | `kv-abrelay-prod-wus2` | `kv-abrelay-stg-wus2` |
 | Blob store ([below](#blob-store)) | `abblobprodwus2` (made by the first `deploy.ps1 -Production` after it was added) | `abblobstgwus2` |
-| Deploys from | `main`, after SRE's approval | `main` and pull requests touching the relay |
+| Deploys from | `main`, after approval | `main` and pull requests touching the relay |
 | GitHub environment / OIDC principal | `production` / `agent-bridge-relay-deploy-production` | `staging` / `agent-bridge-relay-deploy-staging` |
 
 Shared in the stamp: the Container Apps environment `cae-agent-bridge-relay-wus2`, the Log
@@ -115,8 +114,8 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    fetched, checked and deleted the same way. The two-device step also checks the machine
    roster ([protocol/roster.md](protocol/roster.md)): the host that left is listed as offline in
    the app's presence, and the app (kind `app`, a person's device) forgets it.
-6. **production** (`main` only, environment `production`): waits for the environment approval
-   ([who approves](#who-approves-a-production-deploy)). `infra/roll-production.sh` refuses an app `infra/` has not adopted,
+6. **production** (`main` only, environment `production`): waits for approval by the
+   required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
    runs again without a token.
 7. **rollback**: run the workflow by hand with `rollback_to=<image digest>` (`sha256:…`); see
@@ -137,8 +136,7 @@ client secret anywhere. Each environment has its own principal:
 | `agent-bridge-relay-deploy-production` | Contributor on the production app; Managed Identity Operator on its identity; Reader on the resource group |
 
 Each has one federated credential for its environment. GitHub now presents subjects with the owner's and repository's numeric ids, `repo:danswett@3709749/agent-bridge@1436251473:environment:<name>`, so a renamed or recreated repository of the same name cannot sign in; the plain `repo:danswett/agent-bridge:…` form is refused (AADSTS700213). The
-`production` environment allows only `main` and its required reviewer is `danswett`, whose account SRE
-uses to press the approval ([Who approves](#who-approves-a-production-deploy)). Repository
+`production` environment allows only `main` and requires `danswett`'s approval. Repository
 variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` (the stamp's subscription), and each environment's
 `AZURE_CLIENT_ID`, are ids, not secrets. The repository variable `RELAY_DEPLOY=true` turns
 the Azure jobs on; without it (a fresh clone) the workflow only compiles `infra/`. A fork's
@@ -265,7 +263,7 @@ and PWA already installed) keep working with no re-pairing. Do not put a redirec
 The relay's Content-Security-Policy follows the request's Host, so it needs no change. DNS for
 `relay.slipgates.com` (DNS-only CNAME to the app, `asuid.relay` TXT) is done; `slipgates.com` has no CAA records.
 
-Rollout, staging first, production approved by SRE after the gates, by someone with Azure access:
+Rollout, staging first, production on the owner's approval, by someone with Azure access:
 
 1. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <running sha>` and read the diff (production is only included with `-Production`): only the new hostname is added;
    `relay.bad-duck.com`'s binding is unchanged.
@@ -427,27 +425,23 @@ Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only th
 
 ## Who approves a production deploy
 
-Owner decision Nov 23, typed to Chief: "Deploying never needs me" (fleet `docs/owner-decisions.md`, Nov 23, and the
-production-deploys row of `docs/pipeline-rules.md`). A production deploy needs no per-deploy owner approval. The
-environment still has a required reviewer, `danswett`, and **SRE** presses that approval through the owner's account
-route ("OK: SRE approves via my account"), only after the normal gates:
+The owner decided on Nov 23, typing to Chief: "Deploying never needs me". Production deploys, for example the `production`
+environment approval for `relay.yml`, no longer need the owner. This supersedes any per-deploy owner approval elsewhere on
+this page. The conditions, in Chief's wording as recorded in fleet `docs/owner-decisions.md` (Nov 23):
 
-1. the change is merged on `main` through Quality;
-2. the staging deploy and its smoke test are green;
-3. only the newest run is approved;
-4. a health check follows the deploy;
-5. if the deploy is bad, the runbook [rollback](#rollback) is used;
-6. SRE reports to Chief.
+> SRE approves them through the per-command danswett route, after the normal gates (the change is merged on main through
+> Quality, the staging deploy and smoke test are green, only the newest run is approved, a health check follows, the runbook
+> rollback is used if the deploy is bad, and SRE reports to Chief).
 
-This does **not** cover turning on enforce flags or kill switches, changing repository settings or variables, or
-touching credentials. Those still need the owner. It also does not change the environment's branch rule (`main` only).
-Where this page says "approve", it means this route.
+Where the environment's required reviewer is danswett, the owner answered "OK: SRE approves via my account".
+
+> It does NOT cover turning on enforce flags, kill switches, repository settings or variables, or credentials.
 
 ## Rollback
 
 - **A bad build:** run `relay.yml` (Actions, *Relay deploy*, *Run workflow* on `main`) with
   `rollback_to=<digest>`, the `sha256:…` the production job's summary gives under "roll back"
-  for the image it replaced, and SRE approves the `production` environment as for any deploy.
+  for the image it replaced, and approve the `production` environment as for any deploy.
   `infra/rollback-target.sh` accepts only a digest that a revision of the production app has
   run, and takes the commit that revision ran as the version the smoke test expects; anything
   else is refused before production is touched. To see what production has run:
