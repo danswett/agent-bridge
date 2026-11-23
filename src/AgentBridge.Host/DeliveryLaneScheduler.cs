@@ -5,7 +5,7 @@ namespace AgentBridge.Host;
 
 internal enum DeliveryClass { Owner, System, Agent }
 internal enum LaneResult { Waiting, HandedOff, Unconfirmed }
-internal sealed record LaneNotice(string Target, DeliveryHeader Item, string Reason) { public string From => "system"; }
+internal sealed record LaneNotice(string Target, DeliveryHeader Item, string Reason, DeliveryNoticeCause Cause = DeliveryNoticeCause.Unknown) { public string From => "system"; }
 
 // Host-only scheduler; the dispatch adapter lets ReplyService own its claim and typing slot.
 internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, DeliveryGate gate,
@@ -50,14 +50,14 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                 !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
                 Record(session, header, body, DeliveryState.Dropped, "overflow");
-                notices.Add(new(session, header, $"Target {session}: dropped overflow."));
+                notices.Add(new(session, header, $"Target {session}: dropped overflow.", DeliveryNoticeCause.Overflow));
                 return false;
             }
             if (urgent && lanes.Urgent.Count == 10 && displaced is null ||
                 !urgent && lanes.Queueable.Count == 50 &&
                     !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
-                notices.Add(new(session, header, $"Target {session}: lane full; refused."));
+                notices.Add(new(session, header, $"Target {session}: lane full; refused.", DeliveryNoticeCause.LaneFull));
                 return false;
             }
             if ((!urgent || displaced is not null) && lanes.Queueable.Count == 50 &&
@@ -66,7 +66,7 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                 var drop = lanes.Queueable.First(i => i.Header.Priority == "fyi");
                 Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
                 lanes.Queueable.Remove(drop);
-                notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
+                notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow.", DeliveryNoticeCause.Overflow));
             }
             if (displaced is not null)
             {
@@ -76,13 +76,13 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                 {
                     Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");
                     lanes.Urgent.Remove(displaced);
-                    notices.Add(new(session, moved.Header, $"Target {session}: dropped overflow."));
+                    notices.Add(new(session, moved.Header, $"Target {session}: dropped overflow.", DeliveryNoticeCause.Overflow));
                 }
                 else
                 {
                     lanes.Urgent.Remove(displaced);
                     lanes.Queueable.Add(moved);
-                    notices.Add(new(session, moved.Header, $"Target {session}: demoted to queueable for owner."));
+                    notices.Add(new(session, moved.Header, $"Target {session}: demoted to queueable for owner.", DeliveryNoticeCause.DemotedForOwner));
                 }
             }
             Record(session, header, body, DeliveryState.Enqueued);
@@ -122,14 +122,14 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                     lock (sync) { uncertain = true; }
                     gate.MarkWorkerUncertain(null);
                     journal.Write(session, item.Header, item.Body, DeliveryState.Unconfirmed);
-                    notice(new(session, item.Header, $"Target {session}: handoff unconfirmed; no retry."));
+                    notice(new(session, item.Header, $"Target {session}: handoff unconfirmed; no retry.", DeliveryNoticeCause.Unconfirmed));
                     throw;
                 }
                 if (journal.Write(session, item.Header, item.Body, DeliveryState.Typed) == DeliveryState.Unconfirmed)
                 {
                     lock (sync) { uncertain = true; }
                     gate.MarkJournalUncertain();
-                    notice(new(session, item.Header, $"Target {session}: handoff unconfirmed; no retry."));
+                    notice(new(session, item.Header, $"Target {session}: handoff unconfirmed; no retry.", DeliveryNoticeCause.Unconfirmed));
                     return LaneResult.Unconfirmed;
                 }
                 return LaneResult.HandedOff;

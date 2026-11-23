@@ -47,6 +47,7 @@ public enum JournalKind
     HostStarted,
     HostStopped,
     UnhandledException,
+    DeliveryLaneNotice,
 }
 
 // What a record had to leave out, so a missing field never reads as a field that was empty.
@@ -117,7 +118,7 @@ public static partial class JournalContract
     {
         JournalKind.RelayConnected or JournalKind.RelayConnectFailed => JournalFamily.RelayConnect,
         JournalKind.RelayClosed => JournalFamily.RelayDrop,
-        JournalKind.DeliveryStage or JournalKind.DeliveryRefused => JournalFamily.Delivery,
+        JournalKind.DeliveryStage or JournalKind.DeliveryRefused or JournalKind.DeliveryLaneNotice => JournalFamily.Delivery,
         JournalKind.HookPassFailed or JournalKind.HookSpoolRetry or JournalKind.HookSpoolDropped
             or JournalKind.HookIntakePaused or JournalKind.HookIntakeResumed => JournalFamily.HookIntake,
         JournalKind.LaunchRequested => JournalFamily.Launch,

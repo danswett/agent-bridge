@@ -7,6 +7,23 @@ using Xunit;
 
 public sealed class DeliveryLaneSchedulerTests
 {
+    [Fact]
+    public async Task Offer_notices_run_outside_the_outer_scheduler_lock()
+    {
+        using var f = new Fake(dispatch: true);
+        for (var i = 0; i < 50; i++) { f.Add($"fyi-{i}", priority: "fyi"); }
+        var request = Guid.NewGuid();
+        var sender = new DeliverySender("a");
+        Task<DeliveryOfferStatus>? query = null;
+        f.Noticing = () =>
+        {
+            query = Task.Run(() => f.Scheduler.Query(request, "target", sender));
+            Assert.True(query.Wait(TimeSpan.FromSeconds(5)), "Query was blocked by the emitting Offer.");
+        };
+        Assert.Equal(DeliveryOfferState.Pending, f.Scheduler.Offer(request, "target", sender, "body", () => true).State);
+        Assert.Equal(DeliveryOfferState.Pending, (await (query ?? throw new InvalidOperationException("Missing notice callback."))).State);
+    }
+
     sealed class Fake : IDisposable
     {
         public readonly FakeTimeProvider Clock = new();

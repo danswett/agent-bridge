@@ -83,6 +83,12 @@ public enum DiagnosticsRelayState { Unknown, Off, SignedOut, Connecting, Connect
 [UnknownAs(Unknown)]
 public enum DiagnosticsCheck { Unknown, Missing, NeedsAction, Working, Blocked, Failed }
 
+[UnknownAs(Unknown)]
+public enum DeliveryNoticeCause { Unknown, Overflow, LaneFull, DemotedForOwner, Unconfirmed, RevokedAuthority }
+
+public sealed record LaneNoticeStatus(DeliveryNoticeCause Cause, int Count, bool CountLimited,
+    bool JournalUncertain, bool DiagnosticsRejected, DateTimeOffset? AtUtc);
+
 // A launcher id is configurable; one not in this list is Other.
 [UnknownAs(Other)]
 public enum DiagnosticsAgentId { Other, Copilot, Claude, Codex }

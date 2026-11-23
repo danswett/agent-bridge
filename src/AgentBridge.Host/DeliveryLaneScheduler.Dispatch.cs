@@ -15,6 +15,14 @@ internal sealed partial class DeliveryLaneScheduler
     public DeliveryOfferStatus Offer(Guid request, string target, DeliverySender sender, string body, Func<bool> current,
         Func<bool>? revoked = null)
     {
+        List<LaneNotice> notices = [];
+        try { return OfferCore(request, target, sender, body, current, revoked, notices); }
+        finally { foreach (var n in notices) { notice(n); } }
+    }
+
+    DeliveryOfferStatus OfferCore(Guid request, string target, DeliverySender sender, string body, Func<bool> current,
+        Func<bool>? revoked, List<LaneNotice> notices)
+    {
         if (request == Guid.Empty || string.IsNullOrWhiteSpace(target) ||
             string.IsNullOrWhiteSpace(sender.Id) || string.IsNullOrWhiteSpace(body))
         { return new(DeliveryOfferState.Refused, $"Target {target}: invalid offer."); }
@@ -35,7 +43,7 @@ internal sealed partial class DeliveryLaneScheduler
             { return new(DeliveryOfferState.Refused, $"Target {target}: no dispatcher or revoked authority."); }
             var header = new DeliveryHeader(sender.From, id, null, time.GetUtcNow(), "normal", 0);
             fences[(target, id)] = (sender, current, Revoked);
-            if (!Enqueue(target, header, body, sender.Owner ? DeliveryClass.Owner : DeliveryClass.Agent))
+            if (!EnqueueCore(target, header, body, sender.Owner ? DeliveryClass.Owner : DeliveryClass.Agent, notices))
             { fences.Remove((target, id)); return new(DeliveryOfferState.Refused, $"Target {target}: lane full."); }
             return Query(request, target, sender);
         }
@@ -63,7 +71,8 @@ internal sealed partial class DeliveryLaneScheduler
                 _ => DeliveryOfferState.Pending,
             };
             return new(state, record.Reason ?? (state == DeliveryOfferState.Pending ? "Memory only; not durable acceptance." :
-                state == DeliveryOfferState.Dropped ? "Restart: pending payload unavailable." : null));
+                state == DeliveryOfferState.Dropped ? "Restart: pending payload unavailable." :
+                state == DeliveryOfferState.Unconfirmed ? "Handoff unconfirmed; no retry." : null));
         }
     }
 
@@ -102,7 +111,7 @@ internal sealed partial class DeliveryLaneScheduler
                 {
                     Record(session, head.Header, head.Body, DeliveryState.Dropped, "revoked authority");
                     RemoveItem(session, head.Header.Id); fences.Remove((session, head.Header.Id));
-                    notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority."));
+                    notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority.", DeliveryNoticeCause.RevokedAuthority));
                     return LaneResult.Waiting;
                 }
                 var box = screen(session);
@@ -145,6 +154,8 @@ internal sealed partial class DeliveryLaneScheduler
                 var state = result.Outcome == AnswerOutcome.Delivered ? DeliveryState.Delivered : DeliveryState.Unconfirmed;
                 var written = journal.Write(session, handedOff, item.Body, state, reason: result.Reason);
                 if (journal.Uncertain) { uncertain = true; gate.MarkJournalUncertain(); }
+                if (written != DeliveryState.Delivered)
+                { notices.Add(new(session, handedOff, $"Target {session}: handoff unconfirmed; no retry.", DeliveryNoticeCause.Unconfirmed)); }
                 return written == DeliveryState.Delivered ? LaneResult.HandedOff : LaneResult.Unconfirmed;
             }
         }
@@ -153,9 +164,14 @@ internal sealed partial class DeliveryLaneScheduler
             if (handedOff is not null)
             {
                 lock (sync) { uncertain = true; gate.MarkWorkerUncertain(null); journal.Write(session, handedOff, item.Body, DeliveryState.Unconfirmed); }
+                notices.Add(new(session, handedOff, $"Target {session}: handoff unconfirmed; no retry.", DeliveryNoticeCause.Unconfirmed));
             }
             throw;
         }
-        finally { lock (sync) { dispatching.Remove(session); if (handedOff is not null) fences.Remove((session, item.Header.Id)); } }
+        finally
+        {
+            lock (sync) { dispatching.Remove(session); if (handedOff is not null) fences.Remove((session, item.Header.Id)); }
+            foreach (var n in notices) { notice(n); }
+        }
     }
 }

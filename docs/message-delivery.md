@@ -15,6 +15,18 @@ Relayed by Engineering R7 from the recheck plan; not yet in owner-decisions.md. 
 - **No S8:** the disposable-VM acceptance slice is dropped. Once S1-S6 land through their gates, `laneDelivery` is enabled on the fleet directly. That enabling is a separate act; the default stays off in code. Load and stress tests still never run on live machines.
 - **Priority, Option A:** authority lives in memory per host run. The journal is audit and subtract only. A restart voids every capability and the person re-issues it. Slice 3a is respun to this after #3721 lands.
 - **Journal cannot open:** with the flag on, delivery refuses and fails closed. There is no legacy idle-only typing fallback.
+### S5 observation seam
+`DeliveryLaneNotices` observes `LaneComposition.Notices`, never builds a lane, and
+projects only closed cause codes as `DeliveryLaneNotice` diagnostics records. No target,
+request ID, header, body or Reason text enters that projection. Local `host.status`
+can read its immutable `LaneNotices` snapshot and receive change notifications;
+counts saturate at 500 with `CountLimited`, and journal uncertainty or a rejected
+diagnostics record remains explicit. A count is observations, not acceptance or
+delivery. Off, disposed or not yet observed is null (unknown), not healthy.
+S4 must construct the observer with the existing journal/version and supply it as
+`HostControlOptions.LaneNotices`; this slice does not wire Program/LiteDeliver.
+Authenticated Query keeps Pending memory-only and Unconfirmed no-retry reasons.
+No notice sends a reply, grants authority, wakes a pump or retries a handoff.
 ## Inactive qualification source (A-ii-1)
 The source-only producer remains unwired: no launch, reply, submit planner, hooks
 verification or API invokes it. The later authorized controller/SRE control entry

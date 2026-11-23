@@ -163,6 +163,12 @@ public sealed record DevBoxStatus(bool KeepAwake, int IntervalMinutes, DevBoxPas
 
 public sealed record DevBoxPass(DateTimeOffset At, string Outcome, string Detail, bool Alarming = false);
 
+public interface ILaneNoticeStatusSource
+{
+    LaneNoticeStatus? Snapshot { get; }
+    event Action? Changed;
+}
+
 public sealed record HostStatus
 {
     public required string Version { get; init; }
@@ -176,6 +182,7 @@ public sealed record HostStatus
     public HostAccount? Account { get; init; }
     public required RelayStatus Relay { get; init; }
     public FleetPublicationStatus? FleetPublication { get; init; }
+    public LaneNoticeStatus? LaneNotices { get; init; }
     public HostSigningStatus? HostSigning { get; init; }
     public required SignInStatus SignIn { get; init; }
     // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it

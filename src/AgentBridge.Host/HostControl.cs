@@ -32,6 +32,7 @@ public sealed class HostControlOptions
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
     public Func<string?> HomeAssistant { get; init; } = () => null;
     public Func<FleetPublicationStatus?> FleetPublication { get; init; } = () => null;
+    public ILaneNoticeStatusSource? LaneNotices { get; init; }
     // GitHub's device flow through a relay: (relay, show(code, uri), ct) -> the account.
     public required Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> SignIn { get; init; }
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
@@ -117,6 +118,7 @@ public sealed class HostControl
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
         if (options.AgentInstall is { } install) { install.Changed += Changed; }
         if (options.AgentVerification is { } verification) { verification.Changed += Changed; }
+        if (options.LaneNotices is { } notices) { notices.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -177,6 +179,7 @@ public sealed class HostControl
             Account = options.Account(),
             Relay = relay,
             FleetPublication = options.FleetPublication(),
+            LaneNotices = options.LaneNotices?.Snapshot,
             HostSigning = HostSignCustody.Read(options.Folder),
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
