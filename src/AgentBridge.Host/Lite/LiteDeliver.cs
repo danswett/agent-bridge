@@ -34,6 +34,8 @@ public sealed class LiteDeliver(
     internal DeliveryLaneScheduler? Lane { get; init; }
     // claudeBusyQueue (docs/message-delivery.md, #3828): read afresh per send; null or throwing means off.
     internal Func<bool>? ClaudeBusyQueue { get; init; }
+    // Memory-only status of busy-Claude sends and the depth cap; used only with ClaudeBusyQueue on.
+    internal BusyQueueStore? BusyStore { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 

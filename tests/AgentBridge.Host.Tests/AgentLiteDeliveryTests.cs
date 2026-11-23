@@ -50,6 +50,8 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        BusyQueueStore? busyStore;
+        public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
         public LiteDeliver Build(DeliveryLaneScheduler? lane = null) => new([
             new ForcedAskGate(Launches),
@@ -64,7 +66,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue };
+            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -684,7 +686,68 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
         Assert.Single(f.Typed);
     }
+        // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
+    // second is refused queueHeld (never busy, which would trigger the HA fallback), and a full store is refused statusFull. Flag off: unused.
+    static Task<LiteDelivery> SendNew(LiteDeliver lite, string text = "hi") => lite.DeliverAsync(Envelope(text, Guid.NewGuid().ToString()), text, default);
+    Fixture BusyClaude(ReplyStage? stage = null, AnswerOutcome outcome = AnswerOutcome.Delivered)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Stage = stage, Outcome = outcome }; f.Launch(LaunchProtocol.Ask);
+        return f;
+    }
     [Fact]
+    public async Task An_accepted_busy_claude_send_holds_the_slot_and_a_second_is_refused_queueHeld_with_no_keys_not_busy()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Queued, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task An_unconfirmed_busy_claude_send_keeps_the_slot_held()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Unconfirmed); var lite = f.Build();
+        Assert.Equal(LiteKind.Unconfirmed, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, "noRow", true), (held.State, held.Reason, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task A_delivered_send_and_a_refusal_before_any_key_free_the_slot()
+    {
+        var delivered = BusyClaude(); var lite = delivered.Build();
+        Assert.True((await SendNew(lite)).Typed);
+        Assert.Equal((BusyQueueStore.Delivered, false), (delivered.Store.Records().Single().State, delivered.Store.Records().Single().Held));
+        Assert.True((await SendNew(lite)).Typed);
+        var refused = BusyClaude(outcome: AnswerOutcome.Refused); refused.KeysGo = false; var l2 = refused.Build();
+        Assert.False((await SendNew(l2)).Typed);
+        Assert.Empty(refused.Store.Records());
+        refused.Outcome = AnswerOutcome.Delivered; refused.KeysGo = true;
+        Assert.True((await SendNew(l2)).Typed);
+    }
+    [Fact]
+    public async Task A_refusal_after_keys_went_is_held_unconfirmed_not_freed()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); var lite = f.Build();
+        Assert.False((await SendNew(lite)).Typed);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+    }
+    [Fact]
+    public async Task A_full_store_refuses_statusFull_before_any_key_and_the_flag_off_never_touches_the_store()
+    {
+        var f = BusyClaude(); var lite = f.Build();
+        for (var i = 0; i < BusyQueueStore.MaxRecords; i++) { f.Store.TryBegin(Guid.NewGuid().ToString(), "p", "other" + i); }
+        Assert.Equal(new LiteDelivery(false, "statusFull"), await SendNew(lite));
+        Assert.Empty(f.Typed);
+        var off = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; off.Launch(LaunchProtocol.Ask); var l2 = off.Build();
+        Assert.True((await SendNew(l2)).Typed); Assert.True((await SendNew(l2)).Typed);
+        Assert.Empty(off.Store.Records());
+    }
+[Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
         var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working }; busy.Launch(LaunchProtocol.Ask);
