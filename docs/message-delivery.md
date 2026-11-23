@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: slice 3a standalone priority journal core; delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
+Status: slice 3a standalone priority journal core and Phase 1 S3 source-only dispatch pump; delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -134,6 +134,15 @@ past the stale item. Missing evidence stays pending. Authenticated node-history
 queries retain the UUID's recorded full target without new routing or admission.
 State stays node-bound injector evidence; protected cross-node recoverable payloads remain held.
 The dispatcher must not hold ReplyService's shared claim/typing slot across its callback.
+Phase 1's source-only dispatch pump wakes on every Offered event, filtered on lane.HasPending, and on session/idle changes, with one
+flight and one 250 ms-to-2 s capped retry timer per pending session; drained sessions have no timer.
+It refreshes the bounded-age screen before dispatch and retains the existing shared gate and fences.
+An Unconfirmed result latches that session until host restart only; removal, re-offer, flag toggles
+and pump recreation never clear the latch. Journal/dispatch uncertainty (notice.JournalUncertain or any
+pump exception) stops the whole pump. A second pump on one ISessionSource throws: the host owns one.
+Removing a session cancels its timers and drops its pending state.
+BeginStop cancels retries and new wakes, never an admitted injector; S6 owns its shutdown wiring.
+The laneDelivery flag stays default off; this adds no agent urgent or cross-node queued acceptance.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
@@ -176,8 +185,18 @@ except that a never-handed-off `Enqueued` or `Demoted` record replays as Dropped
 otherwise all bindings are quarantined regardless of record position. Unrelated handoffs stay Unconfirmed and need body-MAC evidence.
 Known pre-activation limitation: genuine nonempty history in a journal with any priority record permanently quarantines on restart; whole-design review must resolve this with a body-free authenticated-history design ([#3720](https://github.com/danswett/agent-bridge/issues/3720)).
 no missing-body guess, new replay-body resolver, UI, live adapter or migration is introduced.
-Policy facts link their previous MAC; whole-file rollback still requires the held
-[external/keyed anchor (#3720)](https://github.com/danswett/agent-bridge/issues/3720) before activation.
+Policy facts link their previous MAC. **Journal-only rollback anchor ([#3720](https://github.com/danswett/agent-bridge/issues/3720), owner-approved option A, [approval](https://github.com/danswett/agent-bridge/issues/3720#issuecomment-7092662644)):**
+after every priority append the journal seals `{count, tail MAC}` of the authenticated chain in `delivery.head`, a DPAPI CurrentUser blob beside the journal.
+On open, the chain must contain the sealed tail at index `count-1`; a missing head over existing priority records, a damaged or mismatching head,
+or a journal that is shorter or older than the head quarantines priority, so agent priority is refused with no repair, reset, refund or revival (owner priority is unchanged).
+A crash between append and seal leaves the journal ahead of the head: accepted and resealed. A failed seal marks the journal uncertain and grants nothing.
+Journals that hold priority records but no head (pre-anchor) refuse. Where it runs, what happens when the node leaves, where state lives: the host node, whose
+journal is already node-bound; the head is Windows user and machine bound, so if the node or its user is lost the head is gone and priority refuses (fail closed).
+**Documented gap:** rewinding the journal and the head together (a VM snapshot revert, or a restore of both files) is not detected; a TPM or relay-held head (options B, C) stay held.
+A quarantined journal never reseals the head, so appends on a refused chain cannot move the head onto it and a second restart stays refused.
+**Documented gaps:** DPAPI CurrentUser has no per-process isolation, so any process running as the same Windows user can forge or delete `delivery.head` and can equally read the DPAPI-protected journal key: the head detects a journal-only rollback, not a hostile same-user process (a deleted head over existing priority records does refuse);
+a malformed or out-of-range head quarantines rather than throwing. Cost: every priority append now adds one DPAPI protect and one fsynced file replace on top of the journal fsync; the `checked` coalescing (one per second per receiver) bounds the rate, and slice 3b owns any wider bound.
+Agent priority stays unactivated, and the crash window above (one record appended but not yet sealed) can be rolled back unnoticed.
 Every distinct authenticated grant spends quota; no unauthenticated fact refunds it. No refund writer exists in this slice.
 Max three grants per principal/receiver rolling hour spans all its capabilities, and the smallest active `Hourly` limit governs; stricter caps,
 expiry, revocation and observed clock high-water survive replay. No capability/quota decides normal,
