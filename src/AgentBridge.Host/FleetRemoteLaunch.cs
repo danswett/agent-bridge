@@ -12,12 +12,13 @@ namespace AgentBridge.Host;
 // request binding, replay, then the receiving host's own grant is the authority through the shared launch pipeline.
 // signPoint is believed only because it arrived on this channel, which the sender's device key authenticates (as in lite);
 // the hostSign suspension is temporary, and a signed roster replaces this later.
-public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, TimeProvider? clock = null)
+public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
 {
     public const string Op = "fleet.launch";
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly RateCap rates = new(clock ?? TimeProvider.System);
-    readonly FleetActionReplayCache replays = new(4096, TimeSpan.FromSeconds(30));
+    // Warm-up: for about 2.5 minutes after a start nothing is accepted, so an envelope sealed before a restart cannot replay.
+    readonly FleetActionReplayCache replays = new(4096, TimeSpan.FromSeconds(30), startedAt ?? (clock ?? TimeProvider.System).GetUtcNow());
 
     public async Task<FleetLaunchReceipt> ReceiveAsync(LiteChannel channel, JsonElement data)
     {
@@ -38,9 +39,9 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
 
         var now = time.GetUtcNow();
         FleetActionBody action;
-        try { action = FleetActionEnvelope.Verify(signed, point, channel.Account, channel.Self, now); }
+        try { action = FleetActionEnvelope.Verify(signed, point, channel.Account, channel.PeerId, channel.Self, now); }
         catch (InvalidDataException) { return Refuse("policy", input); }
-        if (action.SourceDevice != channel.PeerId || action.GrantId != input.Grant.ToString("D") || action.Request != input.Request
+        if (action.GrantId != input.Grant.ToString("D") || action.Request != input.Request
             || action.PayloadSha256 != FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options))
             || !replays.TryAdd(action, now)) { return Refuse("policy", input); }
 
