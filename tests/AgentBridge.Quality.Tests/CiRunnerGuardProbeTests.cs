@@ -64,7 +64,8 @@ public sealed class CiRunnerGuardProbeTests
     [Theory]
     [InlineData("${{ vars.R }}", true)]
     [InlineData("${{ inputs.r }}", true)]
-    [InlineData("${{ steps.pick.outputs.r }}", false)]
+    // #3835: no job output is a literal label set, even one fed from steps (only ci.yml's pinned product-os is).
+    [InlineData("${{ steps.pick.outputs.r }}", true)]
     public void A_runner_from_another_jobs_output_is_flagged_when_that_output_reads_a_variable_or_input(string output, bool flagged)
     {
         var yaml = $$$"""
@@ -177,10 +178,11 @@ public sealed class CiRunnerGuardProbeTests
         Assert.Empty(Check(Caller("windows-latest")));
         Assert.Contains(Check(Caller(guarded, "on: [pull_request_target]")), v => v.Contains("pull_request_target", StringComparison.Ordinal));
 
-        // The callee picks the literal pool behind its own guard; an input may name any runner, so taking the runner from
-        // one fails closed even behind the guard (R4zzB226 P1-1).
-        Assert.Empty(Check(Workflow("${{ " + Guard + " && 'ab-ci' || 'windows-latest' }}", triggers: "on: { workflow_call: {} }")));
-        Assert.NotEmpty(Check(Workflow("${{ " + Guard + " && inputs.runner || 'windows-latest' }}", triggers: "on: { workflow_call: { inputs: { runner: { type: string } } } }")));
+        // The callee: a pool handed over as an input is never a literal (R8b), so even guarded it fails. A callee that
+        // wants the pool names it itself.
+        var callee = Workflow("${{ " + Guard + " && inputs.runner || 'windows-latest' }}", triggers: "on: { workflow_call: { inputs: { runner: { type: string } } } }");
+        Assert.NotEmpty(Check(callee));
+        Assert.Empty(Check(Workflow(guarded, triggers: "on: { workflow_call: {} }")));
         Assert.NotEmpty(Check(Workflow("${{ inputs.runner }}", triggers: "on: { workflow_call: {} }")));
     }
 
@@ -189,7 +191,8 @@ public sealed class CiRunnerGuardProbeTests
     {
         const string strategy = "strategy: { matrix: { os: [windows-latest, ab-ci] } }";
 
-        Assert.Empty(Check(Workflow("${{ " + Guard + " && matrix.os || 'windows-latest' }}", strategy: strategy)));
+        // The pool value is a literal (R8b): a matrix that may hold the pool is never it, even guarded.
+        Assert.NotEmpty(Check(Workflow("${{ " + Guard + " && matrix.os || 'windows-latest' }}", strategy: strategy)));
         Assert.Single(Check(Workflow("${{ " + Guard + " && " + Pool + " || matrix.os }}", strategy: strategy)));
     }
 
