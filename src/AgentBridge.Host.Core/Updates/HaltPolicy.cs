@@ -98,7 +98,7 @@ public sealed partial class ReleaseDiscovery
                             state = state with { RelayVerifiedAt = now };
                             // Stale a revalidation period before the relay grace ends, so the 6 hours of freshness never run
                             // past its end (the grace now counts from the later of GitHub's last answer and this).
-                            var graceEnd = RelayAnchor(state)!.Value + GithubRelayAtMost;
+                            var graceEnd = RelayGraceEnd(state)!.Value;
                             policy = policy with { Policy = verified, At = Earlier(now - relayed.Age, graceEnd - GithubRevalidateEvery), ETag = null, Verified = policy.Attempt };
                             Renewed($"the relay's list, its copy {Span(relayed.Age)} old; {GitHubSaid(answer)}", policy);
                         }

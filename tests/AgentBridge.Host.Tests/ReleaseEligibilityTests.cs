@@ -639,6 +639,40 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal(30, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
     }
 
+    // Owner decision (Nov 23): the extensions above stop once GitHub has not answered here for 72 hours, so a newer halt a relay hides is
+    // hidden for at most 72 hours since GitHub last answered; a GitHub answer starts them again.
+    [Fact]
+    public async Task The_relay_extensions_stop_72_hours_after_GitHub_last_answered_and_resume_after_a_GitHub_answer()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var limited = true;
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero, () => limited);
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+
+        for (var hour = 1; hour <= 71; hour++)
+        {
+            time.Advance(TimeSpan.FromHours(1));
+            await source.ReadAsync(default);
+            Assert.True(source.Snapshot.Fresh, $"not fresh at hour {hour}");
+        }
+
+        // Hour 72: GitHub last answered 72 hours ago. The relay is no longer asked and the policy is not renewed.
+        time.Advance(TimeSpan.FromHours(1));
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+        Assert.False(source.Snapshot.Fresh);
+        Assert.Equal(71, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+        Assert.Contains("0.1.2349", source.KnownHalts);
+
+        // GitHub answers again (after the shared backoff its refusals set has lapsed): the relay's extensions resume.
+        time.Advance(TimeSpan.FromHours(2));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        await source.ReadAsync(default);
+        Assert.True(source.Snapshot.Fresh);
+        Assert.Equal(72, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
     [Theory]
     [InlineData("older")]
     [InlineData("omits a known halt")]

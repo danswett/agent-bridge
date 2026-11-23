@@ -115,11 +115,18 @@ in `release-discovery.json`; the grace counts from the later of `gitHubAnsweredA
 `gitHubAnsweredAt` stays GitHub's alone. An older list, one that omits a known halt, one over its `Age`, or one that fails
 verification moves nothing. It still never removes a known halt.
 
-**Residual, recorded (Nov 23):** because each verified read now moves the grace, the 24-hour bound on a hidden halt no longer holds
-while the relay keeps answering. A compromised or stale relay that keeps serving an older but still verified list (the same release as the
-one known, its `Age` within the hour) keeps the grace open, and a NEWER halt stays hidden from this machine until GitHub's own policy read
-answers again, the relay stops, or the compromise is removed. It can never forge a halt or clear a known one. The signed anchor below
-remains the real fix.
+**The 72-hour cap (owner decision, Chief, Nov 23):** the relay's verified lists extend the grace only until 72 hours after GitHub last
+answered here (`gitHubAnsweredAt`, GitHub's answer to the release list, which the update check makes). The grace therefore ends at the
+earlier of 24 hours after its anchor and 72 hours after `gitHubAnsweredAt` (`ReleaseDiscovery.GithubRelayExtendedAtMost`, `RelayGraceEnd`);
+when it ends, the relay is not asked and the policy goes stale, as before. A GitHub answer to the release list restarts both clocks and the
+extensions resume (the shared refusal backoff must lapse first). A GitHub answer to the *policy* read renews the policy itself but does not
+restart these 72 hours, so the cap is measured against the same `gitHubAnsweredAt` the update check's relay rules use.
+
+**Residual, recorded (Nov 23):** the verification is a digest check, not a signature (the signed anchor below is not built). A
+compromised or stale relay that keeps serving an older but still verified list (the same release as the one known, its `Age` within the
+hour) keeps the grace open, and a NEWER halt stays hidden from this machine, but **for at most 72 hours since GitHub last answered the
+release list here**; after that the policy goes stale and the machine holds unasked installs until GitHub answers. It can never forge a halt or
+clear a known one. A follow-up issue for real signing is Quality's to file; the signed anchor below remains the real fix.
 
 **Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay

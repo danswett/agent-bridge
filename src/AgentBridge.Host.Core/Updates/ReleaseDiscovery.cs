@@ -56,6 +56,9 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // GitHub is asked at least this often, whatever the relay says.
     public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
     public static readonly TimeSpan GithubRelayAtMost = TimeSpan.FromHours(24);
+    // The relay's verified policy extends the grace only until this long after GitHub last answered here (owner decision, Chief, Nov 23):
+    // a newer halt a relay hides is hidden at most this long.
+    public static readonly TimeSpan GithubRelayExtendedAtMost = TimeSpan.FromHours(72);
     static readonly TimeSpan CdnWait = TimeSpan.FromSeconds(10);
     // GitHub's page of ten releases is tens of KiB.
     const int CdnLargest = 4 * 1024 * 1024;
@@ -302,7 +305,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     {
         var sane = Sane(state, now);
         if (sane != state) { Write(sane); }
-        return !unsaved && !sane.RelayExpired && RelayAnchor(sane) is { } start && start <= now && now - start < GithubRelayAtMost;
+        return !unsaved && !sane.RelayExpired && RelayAnchor(sane) is { } start && start <= now && RelayGraceEnd(sane) is { } end && now < end;
     }
 
     // What the relay grace counts from: the later of when GitHub last answered here (or the rate-limit bootstrap) and when the relay last
@@ -311,6 +314,15 @@ public sealed partial class ReleaseDiscovery : IDisposable
     {
         var github = state.GitHubAnsweredAt ?? state.RelayBootstrapAt;
         return github is { } g && state.RelayVerifiedAt is { } v ? (g > v ? g : v) : github ?? state.RelayVerifiedAt;
+    }
+
+    // The end of the relay grace: 24 hours after the anchor, but never later than 72 hours after GitHub last answered here, so the relay's own
+    // verified lists cannot keep it open for ever.
+    static DateTimeOffset? RelayGraceEnd(State state)
+    {
+        if (RelayAnchor(state) is not { } anchor) { return null; }
+        var end = anchor + GithubRelayAtMost;
+        return (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } github && github + GithubRelayExtendedAtMost < end ? github + GithubRelayExtendedAtMost : end;
     }
 
     State BackedOff(State state, Answer answer, DateTimeOffset now, string url)
@@ -343,7 +355,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
         RelayBootstrapAt = state.RelayBootstrapAt > now || state.GitHubAnsweredAt > now ? DateTimeOffset.MinValue : state.RelayBootstrapAt,
         GitHubAnsweredAt = state.GitHubAnsweredAt > now ? null : state.GitHubAnsweredAt,
         RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt,
-        RelayExpired = state.RelayExpired || RelayAnchor(state with { RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt }) is { } start && now - start >= GithubRelayAtMost,
+        RelayExpired = state.RelayExpired || RelayGraceEnd(state with { RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt }) is { } end && now >= end,
     };
 
     internal sealed record Quota(int Remaining, DateTimeOffset At);
