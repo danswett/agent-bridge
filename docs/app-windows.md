@@ -1141,7 +1141,7 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   refuses a version already out, an older one, or a commit behind the latest release, so the
   train and `ci.yml`'s `publish` job can run side by side without publishing twice.
 * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
-  as `ci.yml` does. When `APP_SIGNING` is `true` it refuses and fails the run, never publishing
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
   unsigned, until it gains the sign step.
 * **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
   so a train release carries neither until they are added.

@@ -41,6 +41,8 @@ Check 'nothing selected says why' ((Select-ReleaseCommit -Runs @((Run 'sha103' 1
 function Signed([string]$v) { try { Assert-TrainMayPublish $v; "published" } catch { "refused" } }
 Check "signing on refuses" (Signed "true") "refused"
 Check "signing unset may publish" (Signed "") "published"
+foreach ($v in "True", "TRUE", " true", "true ", "yes", "1") { Check "signing $v refuses" (Signed $v) "refused" }
+foreach ($v in "false", "False", " FALSE ", $null) { Check "signing $v may publish" (Signed $v) "published" }
 
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'all passed'

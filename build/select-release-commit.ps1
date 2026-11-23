@@ -36,7 +36,10 @@ function Select-ReleaseCommit {
 # The train refuses while the app is signed: it has no sign step yet, and an unsigned release
 # where signing is on would reach every installed copy (docs/app-windows.md, "The release train").
 function Assert-TrainMayPublish([string]$AppSigning) {
-    if ($AppSigning -ceq 'true') { throw 'APP_SIGNING is true and the release train has no sign step; refusing to publish unsigned' }
+    $value = if ($null -eq $AppSigning) { '' } else { $AppSigning.Trim() }
+    # Publish unsigned only when signing is plainly off: unset or false. Anything else (true in any
+    # case, or a value this does not know) fails closed, as ci.yml reads true case-insensitively.
+    if ($value -ne '' -and $value -ine 'false') { throw "APP_SIGNING is '$value' and the release train has no sign step; refusing to publish unsigned" }
 }
 
 # Main's push CI runs for the selector, newest first (gh, GH_TOKEN): one list of runs, and per
