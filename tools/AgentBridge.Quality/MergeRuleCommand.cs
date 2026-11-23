@@ -295,8 +295,7 @@ static partial class MergeRuleCommand
         if (session.Main.State == "error")
             problems++;
 
-        // The sweep marker: what the last full judgement saw (main's state, the open pull requests). Absent, unreadable or
-        // malformed it is simply not there, and nothing is skipped or narrowed because of it: it fails open to judging.
+        // The sweep marker: what the last full judgement saw. Absent, unreadable or malformed it fails open to judging.
         var mainReadable = session.Main.State != "error";
         var (markerHead, marker) = mainReadable ? ReadSweepMarker(session) : (null, null);
         var mainPart = mainReadable ? MainPart(session.Main) : null;
@@ -323,9 +322,8 @@ static partial class MergeRuleCommand
         // run for another pull request or head may have been displaced (GitHub keeps one waiting
         // run per concurrency group), and its success, posted while main was green, mustn't stand
         // while main is red. Posts that wouldn't change a verdict are skipped, so this is cheap.
-        // That widening is once per main state: a full judgement posts the sweep marker, and while the marker covers this main
-        // state a scoped run stays scoped, since every other pull request was judged for it. Without the marker (the sweep
-        // that went red or green again was lost, failed or hasn't run yet) it widens, and the widened run posts the marker.
+        // Once per main state: a full judgement posts the sweep marker, and while it covers this main state a scoped run stays
+        // scoped (every other pull request was judged for it). Without it (that sweep was lost or hasn't run) it widens and posts it.
         var widened = scoped && session.Main.State != "success" && !markerCoversMain;
         if (widened)
             output.WriteLine($"Main isn't green ({session.Main.State}): judging every open pull request, not only the one asked for.");

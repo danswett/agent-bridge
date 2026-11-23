@@ -6,26 +6,20 @@ using System.Text.RegularExpressions;
 namespace AgentBridge.Quality;
 
 /// <summary>
-/// The sweep marker: a commit status on main's head that says what the last FULL judgement (--all, or a scoped run that
-/// widened) saw, as two digests: main's state (which finished CI run, red or green) and the open pull requests (their
-/// heads, drafts, labels, last update and the statuses on them). Two things read it:
-///  - a scoped run while main isn't green widens to every open pull request only when no full judgement is on record for
-///    this main state, so a red main costs one full judgement per main state change, not one per event;
-///  - the backstop's --if-changed judges nothing when both digests are as they were.
-/// An absent, unreadable or malformed marker is never trusted: it means "judge".
+/// The sweep marker: a commit status on main's head with two digests of what the last FULL judgement saw, main's state and
+/// the open pull requests. A scoped run under a red main widens only without it; --if-changed judges nothing with it unchanged.
+/// An absent, unreadable or malformed marker is never trusted: the run judges.
 /// </summary>
 static partial class MergeRuleCommand
 {
     internal const string SweepContext = "merge-rule-sweep";
 
-    /// <summary>What a full judgement saw: <c>Main</c> is the digest of main's state, <c>Heads</c> of the open pull requests.</summary>
     internal sealed record SweepMarker(string Main, string Heads);
 
     static readonly Regex MarkerText = new(@"^main=(?<main>[0-9a-f]{16}) heads=(?<heads>[0-9a-f]{16})$", RegexOptions.CultureInvariant);
 
     static string Digest(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
 
-    /// <summary>Main's state as the judge saw it: red or green and the finished run it came from.</summary>
     internal static string MainPart(MainFact main) => Digest($"{main.State}|{main.Evidence ?? main.Reason}");
 
     internal static string MarkerDescription(SweepMarker marker) => $"main={marker.Main} heads={marker.Heads}";
@@ -33,10 +27,7 @@ static partial class MergeRuleCommand
     internal static SweepMarker? ParseMarker(string? description) =>
         description is not null && MarkerText.Match(description) is { Success: true } m ? new(m.Groups["main"].Value, m.Groups["heads"].Value) : null;
 
-    /// <summary>
-    /// Main's head commit and the newest marker on it. A marker on an older head is not read: a new commit on main is a
-    /// new main state. Null for anything unreadable, so the caller judges.
-    /// </summary>
+    // Main's head and the newest marker on it (none on an older head: a new commit is a new state); null when unreadable.
     static (string? MainHead, SweepMarker? Marker) ReadSweepMarker(Session session)
     {
         try
@@ -58,12 +49,8 @@ static partial class MergeRuleCommand
         }
     }
 
-    /// <summary>
-    /// A digest of everything about the open pull requests that can change a verdict and is cheap to read (REST, no GraphQL):
-    /// each one's number, head, draft flag, labels and last update, and the statuses on its head except merge-rule's own
-    /// verdict and this marker (receipts arrive as statuses). Null when anything can't be read, or there are too many to
-    /// read cheaply: the caller then judges.
-    /// </summary>
+    // A digest, from REST only, of what can change a verdict about the open pull requests: number, head, draft, labels, last update
+    // and the statuses on the head except merge-rule's own verdict and this marker. Null when unreadable or too many.
     static string? ReadHeadsFingerprint(Session session)
     {
         try
@@ -106,10 +93,7 @@ static partial class MergeRuleCommand
         }
     }
 
-    /// <summary>
-    /// Records what this full judgement saw, unless the newest marker already says so. A marker that can't be posted costs
-    /// the next run one more full judgement, nothing else, so it warns and carries on.
-    /// </summary>
+    // A marker that cannot be posted only costs the next run one more full judgement.
     static void WriteSweepMarker(Session session, string mainHead, SweepMarker marker, SweepMarker? existing, string? targetUrl, TextWriter output)
     {
         if (existing == marker)

@@ -2959,13 +2959,10 @@ public partial class MergeRuleTests
         // Main's head as the ref read answers it; "" when the runs the fake was given can't say (a garbled body, none).
         string MainSha(string? runs)
         {
-            if (mainHead is not null) return mainHead;
-            try { return JsonDocument.Parse(runs ?? MainRuns((1, "completed", "success", 1))).RootElement.GetProperty("workflow_runs").EnumerateArray().FirstOrDefault().GetProperty("head_sha").GetString() ?? ""; }
+            try { return mainHead ?? JsonDocument.Parse(runs ?? MainRuns((1, "completed", "success", 1))).RootElement.GetProperty("workflow_runs").EnumerateArray().FirstOrDefault().GetProperty("head_sha").GetString() ?? ""; }
             catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return ""; }
         }
-
         public List<string> RestPaths { get; } = [];
-
         readonly Dictionary<long, int> unreadableSeen = [];
 
         // Whether this read of an unreadable run fails: always, or only the first few times (a blip).
