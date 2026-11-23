@@ -93,7 +93,7 @@ come from `github.com` and must match the listed digest, and an older release ne
 one. This is the same class of risk as the relay withholding an update. It relaxes this document's
 "a compromised CDN cannot renew freshness" rule only inside that grace, and only for refusals.
 
-**The signed anchor** (slices 2 and 3 below) stays the real fix and removes this path.
+**The signed anchor** (slices 2 and 3 below) stays the real fix and removes this path. [halt-list-signing.md](halt-list-signing.md) (#3893) designs the signing itself: a pinned public key and a signed `issuedAt` instead of the relay's unsigned `Age`, key rotation and revocation, and the owner decisions on key custody it needs before any code.
 
 ## Choice: A, signed browser-download policy, with a fixed current anchor
 
