@@ -138,7 +138,9 @@ self.addEventListener('fetch', (e) => {
 // signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
 // group (#913): one notice for several questions on a machine, tagged <machine>:~needsyou and
 // withdrawn by a resolved under that tag; it alerts unless the host says silent.
-const KINDS = ['question', 'finished', 'resolved', 'signIn', 'group'];
+// failures (S2b): a count of messages the machine's lane could not deliver, tagged <machine>:~failures; it alerts,
+// and its tap opens the machine. Kept as its own kind: read as a question, the app would close it as stale.
+const KINDS = ['question', 'finished', 'resolved', 'signIn', 'group', 'failures'];
 const CLASSES = ['needsYou', 'done', 'fyi'];
 const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
 
@@ -186,6 +188,7 @@ function notice(message) {
   // How many questions a group stands for, and a question's one reminder (#913): kept for the page.
   if (cls) { options.data.class = cls; }
   if (Number.isInteger(d.sessions) && d.sessions > 0) { options.data.sessions = d.sessions; }
+  if (Number.isInteger(d.failures) && d.failures > 0) { options.data.failures = d.failures; }
   if (d.reminder === true) { options.data.reminder = true; }
   if (tag) {
     // Every notice about a session replaces the one before it, never beside it. A newer question
