@@ -57,6 +57,29 @@ not shipped runtime; its S8 implementation is not a new prerequisite for HA reti
 Legacy connector evidence is kept separate from that proposed component.
 The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but is parked last under [#1882](https://github.com/danswett/agent-bridge/issues/1882), per Engineering's supplied complete issue text on November 12, 2026, and does not block the HA-off gate until Product reopens #1882 or rules otherwise; fleet inventory row 13 says "Two Apple machines on HA; out for now (Mac and iOS clients are in scope under 1a)", a disagreement whose gate wording Product or the Chief must confirm.
 
+## At a glance, in the parity legend words
+
+This grid is read off the per-row tables below and uses the status words of the [parity legend](../parity.md) exactly. The tables govern if the two ever disagree. It adds no evidence and no new claim: no cell is `Verified`, because no cell has a current recorded live run.
+
+* `Implemented, untested live`: the grid's "Built" with no client-specific live receipt (tests and fixture runs are not a live run; live runs are tracked by [#39](https://github.com/danswett/agent-bridge/issues/39)).
+* `Verified (historical)`: only where the live column cites an earlier observation that covers the row's main behavior (it is not current all-platform proof). Anything narrower stays `Implemented, untested live`.
+* `Partial` and `Missing` follow the cell text: Partial names a missing behavior, Missing is explicit in the cited source. MCP cells follow M, the completed inventory.
+* Unknown is not a legend word. It marks a cell the sources do not establish (the host CLI entry points are not inventoried, [#2402](https://github.com/danswett/agent-bridge/issues/2402)); it never means the feature is absent.
+
+| Row | PWA | Windows | Apple | MCP agent | Host CLI | Optional HA |
+|---|---|---|---|---|---|---|
+| 4 stop | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 5 approvals | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 8 owner-only updates | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 15 forget machine | `Implemented, untested live` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 16 finished-turn and question push | `Verified (historical)` | `Implemented, untested live` | `Missing` | `Partial` | Unknown | `Missing` |
+| 17 native forms | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Partial` | Unknown | `Missing` |
+| 27 dashboard views | `Verified (historical)` | `Verified (historical)` | `Implemented, untested live` | `Partial` | Unknown | `Missing` |
+| 28 push opens the question | `Verified (historical)` | `Implemented, untested live` | `Partial` | `Missing` | Unknown | `Missing` |
+| 29 images in replies | `Verified (historical)` | `Verified (historical)` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+
+Rows 5 and 17 also have offline Home Assistant-off tests (a person approves, denies and is refused when stale or unpinned; one form of each field type). Those show the behavior is built and independent of Home Assistant; they do not change a status here, because the live runs, three per client and the row minimums below, are still open.
+
 ## Row 4: stop, idle one press; non-idle confirmation
 
 | Client | Built evidence | Live evidence | Gap keys |
