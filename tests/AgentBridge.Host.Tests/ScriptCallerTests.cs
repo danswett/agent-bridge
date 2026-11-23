@@ -32,7 +32,7 @@ public sealed class ScriptCallerTests : IDisposable
     }
 
     [Fact]
-    public void A_registered_script_authenticates_without_a_session_process_and_advertises_read_only()
+    public void A_registered_script_authenticates_without_a_session_process_and_advertises_read_and_reply()
     {
         var store = Store((_, _) => false);
         var minted = Mint(store);
@@ -40,7 +40,7 @@ public sealed class ScriptCallerTests : IDisposable
         var channel = new Chan();
         var hello = store.Accept(channel, credential);
         Assert.Equal("script:machine1/dispatcher", hello.Principal);
-        Assert.Equal(AgentProtocol.ScopeRead, hello.Scope);
+        Assert.Equal(AgentProtocol.ScopeReadReply, hello.Scope);
         Assert.Equal(credential, store.Of(channel));
         Assert.True(store.IsLive(credential));
         Assert.NotNull(Store((_, _) => false).Check(minted.Token, Outside).Accepted);
@@ -72,7 +72,6 @@ public sealed class ScriptCallerTests : IDisposable
     }
 
     [Theory]
-    [InlineData("agent.send")]
     [InlineData("session.launch")]
     [InlineData("session.answer")]
     [InlineData("session.reply")]
@@ -95,7 +94,7 @@ public sealed class ScriptCallerTests : IDisposable
         {
             clock.Now = now;
             var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, op, Empty));
-            Assert.Contains("fleet.list and fleet.find", refusal.Message);
+            Assert.Contains("fleet.list, fleet.find and agent.send", refusal.Message);
         }
         Assert.All(lines, line => Assert.Contains("script:machine1/dispatcher", line));
     }
@@ -143,7 +142,7 @@ public sealed class ScriptCallerTests : IDisposable
         Assert.Equal(1, Store().Count);
         Assert.Null(store.Of(oldChannel));
         var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture app")), credentials: store);
-        Assert.Contains("fleet.list and fleet.find", (await Assert.ThrowsAsync<InvalidOperationException>(
+        Assert.Contains("fleet.list, fleet.find and agent.send", (await Assert.ThrowsAsync<InvalidOperationException>(
             () => handler(oldChannel, "session.launch", Empty))).Message);
         Assert.Null(Store().Check(old.Token, Outside).Accepted);
         Assert.NotNull(Store().Check(newer.Token, Outside).Accepted);
@@ -152,14 +151,15 @@ public sealed class ScriptCallerTests : IDisposable
     }
 
     [Fact]
-    public async Task A_script_cannot_send_through_the_direct_entry_point()
+    public async Task A_revoked_script_cannot_send_through_the_direct_entry_point()
     {
         var store = Store();
         var channel = new Chan();
         store.Accept(channel, Mint(store).Credential);
+        store.RevokeScript("dispatcher");
         var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(store, null, channel, Empty, windows: true));
-        Assert.Contains("fleet.list and fleet.find", refusal.Message);
+        Assert.Contains("no longer live", refusal.Message);
     }
 
     [Theory, InlineData(false), InlineData(true)]

@@ -197,6 +197,7 @@ jobs:
           ARM64_WAIVER: ${{ vars.ARM64_WAIVER }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAST: ${{ vars.FLEET_MERGERULE != 'off' }}
+          CODEX_WAIVER: ${{ vars.CODEX_WAIVER }}
           EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           STATUS_SHA: ${{ github.event.sha }}
