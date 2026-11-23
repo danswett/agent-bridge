@@ -403,6 +403,28 @@ public class BackgroundTests
         Assert.Null(source.Get(Id)!.Activity.Background);
     }
 
+    [Fact]
+    public async Task A_shell_dropped_for_age_counts_again_when_the_wall_clock_steps_back_with_no_new_events()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var clock = new SteppableClock(Fixture.T0.AddHours(1));
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, clock);
+        Fixture.Append(events, Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        await source.RefreshAsync();
+
+        clock.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(1));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.Background); // dropped: nothing shown counts it now
+
+        // The wall clock is corrected backwards: the mark is young again by it, and the shell counts, rebuilt without any event.
+        clock.Step(TimeSpan.FromHours(-3));
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
+        Assert.Null(source.Get(Id)!.BackgroundUnaged);
+    }
+
     // A wall clock and a monotonic one kept apart: time passing moves both (Advance), a clock step moves only the wall clock (Step).
     sealed class SteppableClock(DateTimeOffset start) : TimeProvider
     {

@@ -134,9 +134,10 @@ internal sealed class SessionTracker
         }
         // A shell that never reported back stops counting once it is older than Limits.BackgroundShellStale (#1108):
         // the clock alone changes the answer, with nothing written to the transcript, so ask again with what the
-        // last build counted, as for Stalled above.
-        if (!changed && _built?.Activity.Background is { Shells: > 0 } counted
-            && _state.Background.Running(Discovered.ProcessStartedAt, _time).Shells != counted.Shells)
+        // last build SHOWED, as for Stalled above. Against what is shown, not only when something is: a shell dropped for
+        // age counts again if the wall clock is put back, and nothing shown would ask for it.
+        if (!changed && _built is { } shown
+            && _state.Background.Running(Discovered.ProcessStartedAt, _time).Shells != (shown.Activity.Background?.Shells ?? 0))
         {
             changed = true;
         }
