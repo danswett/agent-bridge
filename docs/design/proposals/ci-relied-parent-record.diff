@@ -1,0 +1,19 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 76a9f418..2104c856 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -215,6 +215,14 @@ jobs:
+           "whole-ring=$($whole.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+           "base=$base" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+           "base-known=$($known.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
++          if ($env:EVENT -eq 'push') {
++            # What the judges read (merge rule, main_green, the train selector): the commit this run diffed from, and the in-flight parent
++            # run it relied on to test only its own change. None yet: every main run diffs from a passed base. An annotation, because the
++            # judges already read a plan job's annotations through the API and a job output isn't served.
++            $recorded = git rev-parse $base
++            if ($LASTEXITCODE -ne 0) { throw "git rev-parse $base failed ($LASTEXITCODE)" }
++            "::notice title=plan-base::base=$recorded relied-parent=none"
++          }
+           if ($known -and $touched.Count -gt 0) {
+             $shown = ($touched | Select-Object -First 10 | ForEach-Object { '`' + ($_ -replace '[\x00-\x1f\x7f`]', '?') + '`' }) -join ', '
+             if ($touched.Count -gt 10) { $shown += " (+$($touched.Count - 10) more)" }
