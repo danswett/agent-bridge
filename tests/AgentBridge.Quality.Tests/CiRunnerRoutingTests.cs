@@ -60,7 +60,9 @@ public sealed class CiRunnerRoutingTests
         var spaced = Workflow("${{ vars.AB_CI_SELF_HOSTED   ==  'true' &&   (github.event_name == 'push'    ||   github.event.pull_request.head.repo.full_name == github.repository) && 'ab-ci' || 'windows-latest' }}");
         Assert.Empty(RunnerRouting.Violations(spaced, "ci.yml"));
 
-        var inner = Workflow($"${{{{ (matrix.os == 'windows-latest' && {Guard}) && fromJSON('[\"self-hosted\",\"windows\",\"x64\",\"ab-ci\"]') || matrix.os }}}}");
+        // The fallback matrix.os must resolve to hosted labels (fail closed), so this matrix is spelled out.
+        var inner = Workflow($"${{{{ (matrix.os == 'windows-latest' && {Guard}) && fromJSON('[\"self-hosted\",\"windows\",\"x64\",\"ab-ci\"]') || matrix.os }}}}",
+            extra: "strategy: { matrix: { os: [ubuntu-latest, windows-latest] } }");
         Assert.Empty(RunnerRouting.Violations(inner, "ci.yml"));
     }
 

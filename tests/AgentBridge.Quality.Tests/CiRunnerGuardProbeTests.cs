@@ -119,9 +119,11 @@ public sealed class CiRunnerGuardProbeTests
         Assert.Empty(Check(Caller("windows-latest")));
         Assert.Contains(Check(Caller(guarded, "on: [pull_request_target]")), v => v.Contains("pull_request_target", StringComparison.Ordinal));
 
-        // The callee: its runner comes from an input, so it guards that too.
+        // The callee: a pool handed over as an input is never a literal (R8b), so even guarded it fails. A callee that
+        // wants the pool names it itself.
         var callee = Workflow("${{ " + Guard + " && inputs.runner || 'windows-latest' }}", triggers: "on: { workflow_call: { inputs: { runner: { type: string } } } }");
-        Assert.Empty(Check(callee));
+        Assert.NotEmpty(Check(callee));
+        Assert.Empty(Check(Workflow(guarded, triggers: "on: { workflow_call: {} }")));
         Assert.NotEmpty(Check(Workflow("${{ inputs.runner }}", triggers: "on: { workflow_call: {} }")));
     }
 
@@ -130,7 +132,8 @@ public sealed class CiRunnerGuardProbeTests
     {
         const string strategy = "strategy: { matrix: { os: [windows-latest, ab-ci] } }";
 
-        Assert.Empty(Check(Workflow("${{ " + Guard + " && matrix.os || 'windows-latest' }}", strategy: strategy)));
+        // The pool value is a literal (R8b): a matrix that may hold the pool is never it, even guarded.
+        Assert.NotEmpty(Check(Workflow("${{ " + Guard + " && matrix.os || 'windows-latest' }}", strategy: strategy)));
         Assert.Single(Check(Workflow("${{ " + Guard + " && " + Pool + " || matrix.os }}", strategy: strategy)));
     }
 
