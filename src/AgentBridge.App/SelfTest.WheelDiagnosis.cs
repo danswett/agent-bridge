@@ -13,6 +13,7 @@ static unsafe partial class SelfTest
     static nint wheelHook;
     static int wheelTaken;
     static nint wheelTakenBy;
+    static nint wheelAimed;
 
     // Before the wheel is posted, on the UI thread: WH_GETMESSAGE sees each message this thread removes from its queue.
     static void WatchWheel()
@@ -41,10 +42,10 @@ static unsafe partial class SelfTest
     }
 
     /// <summary>What a posted wheel met: where it was aimed, what was there, and what took it.</summary>
-    sealed record WheelDiagnosis(string Window, string Focus, string FocusClass, string AtPoint, string AtPointClass,
+    sealed record WheelDiagnosis(string Aimed, bool AimedIsFocus, string Window, string Focus, string FocusClass, string AtPoint, string AtPointClass,
         bool AtPointIsFocus, bool AtPointInWindow, int PointX, int PointY, int CursorX, int CursorY, int Taken, string TakenBy, string TakenClass)
     {
-        public string Line => $"native wheel: window {Window}; focus {Focus} ({FocusClass}); at point ({PointX},{PointY}): {AtPoint} ({AtPointClass}), " +
+        public string Line => $"native wheel: window {Window}; aimed {Aimed} (is focus: {AimedIsFocus}); focus {Focus} ({FocusClass}); at point ({PointX},{PointY}): {AtPoint} ({AtPointClass}), " +
             $"is focus: {AtPointIsFocus}, in window: {AtPointInWindow}; cursor ({CursorX},{CursorY}); taken: {Taken}x by {TakenBy} ({TakenClass})";
     }
 
@@ -56,7 +57,7 @@ static unsafe partial class SelfTest
         var focus = GetFocus();
         var at = WindowFromPoint(new WheelPoint { X = x, Y = y });
         GetCursorPosition(out var cursor);
-        lastWheel = new(Hex(window), Hex(focus), ClassOf(focus), Hex(at), ClassOf(at), at == focus,
+        lastWheel = new(Hex(wheelAimed), wheelAimed == focus, Hex(window), Hex(focus), ClassOf(focus), Hex(at), ClassOf(at), at == focus,
             at != 0 && GetAncestor(at, 2) == window, x, y, cursor.X, cursor.Y, 0, "", "");
     }
 

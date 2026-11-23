@@ -959,7 +959,9 @@ static partial class SelfTest
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
         // #3982: watch which window this thread takes the wheel for, and record what it was aimed at (diagnosis only).
         WatchWheel();
-        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        // Aimed at the window a real wheel hits (the one at the point, if it is the app's), the focus window otherwise (#3982).
+        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff),
+            focus => wheelAimed = NativeWheelTarget.Choose(window.Handle, WindowFromPoint(mouse), focus, h => GetAncestor(h, 2)))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
         DiagnoseWheel(window.Handle, mouse.X, mouse.Y);
     }
 
