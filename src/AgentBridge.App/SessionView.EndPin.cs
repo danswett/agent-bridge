@@ -204,8 +204,12 @@ public sealed partial class SessionView
         return scroll.ChangeView(null, to, null, disableAnimation: disableAnimation);
     }
 
+    // Counts the corrections that moved the view (#3782, #3842); OnConversationLaidOut skips them in a storm.
+    readonly LayoutStormGuard layoutStorm = new(TimeProvider.System);
+
     void Anchoring(ScrollViewer scroll, double to)
     {
+        layoutStorm.Run();
         anchoring = to;
         anchorAt = to;
         if (!ChangeConversationView(scroll, to)) { anchoring = null; }
