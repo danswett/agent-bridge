@@ -13,7 +13,9 @@ using Xunit;
 public sealed class RemoteAuthorizationTests : IAsyncLifetime
 {
     const string SessionId = "88888888-8888-4888-8888-888888888888";
-    static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    // The bound on every wait for the channel, a peer or a feed here. Nothing in this class expects it to run out, so it is only a
+    // deadlock guard; 10 s failed a healthy request in a full parallel run on one CPU (#2558).
+    static readonly TimeSpan Patience = TimeSpan.FromMinutes(1);
     readonly Fixture fixture = new();
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 3, 0, 0, 0, TimeSpan.Zero));
     readonly SessionDrivers drivers = new();
