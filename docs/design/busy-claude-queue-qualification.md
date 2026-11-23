@@ -9,8 +9,7 @@ disposable sessions, before the owner turns `agentMessaging.claudeBusyQueue` on;
 - **Disposable sessions only.** Launched by the host for this test, on a host with `agentMessaging.remote` set to `own-account`. No live
   session is a target. Load and stress tests never run on live machines (Phase 1 owner decision); this plan has none: the heaviest case is
   one long turn and a handful of sends.
-- **The flag is the only switch.** Turning it on is the owner's act after this plan passes. SRE sets it on the disposable host only, with
-  `config set agentMessaging.claudeBusyQueue true`; it is read afresh, no restart.
+- **The flag is the only switch.** Turning it on is the owner's act after this plan passes. It is set on the disposable host only, by the owner or a person at that machine, never from inside an agent session: host management, config changes included, is refused there (AGENTS.md guard #67, exit 4). The setting is `agentMessaging.claudeBusyQueue` true, with `agentMessaging.remote` set to `own-account` the same way ([host-config.md](../host-config.md)); it is read afresh, no restart. The later arming act is made the same way, at the machine.
 - **Evidence, not impressions.** Every case records the sender's exit code, the host status record, and the relevant transcript rows
   (request id, never message text beyond the test words). A case with no evidence is not a pass.
 - **No machine names, tokens or message text** go in the report; use ids and "host A", "session 1".
@@ -19,7 +18,7 @@ disposable sessions, before the owner turns `agentMessaging.claudeBusyQueue` on;
 
 1. These have landed on the disposable host's build: the composer rule (#3865), the unconfirmed mapping (#3869), the queued stage (#3876),
    the status store and depth cap (#3926), the late-taken check (#3952), the active watch (#3968), and the derived slot, Claude-restart
-   release and arm keeper (#3973); the option-2 gate (#3901) and the receiver rate refund (#3937).
+   release and arm keeper (#3973); the session-end release (#3977), the option-2 gate (#3901) and the receiver rate refund (#3937).
 2. The fleet tools have the exit-6 mapping and its caller fixes, and the sender cap (slipgates-fleet #1148, #1182).
 3. The Claude Code version under test is recorded (the verified signals were seen on 2.1.312). If it differs, cases H1 to H5 are run first.
 4. The disposable host is run with `laneDelivery` both off and on (cases are repeated for both; see F).
@@ -52,7 +51,7 @@ Each case lists the action, then the expected result. "Held" means the status st
   one taken row, and the slot frees. No resend at any point.
 - C4. Hold past 10 minutes (a 15-minute turn). Expect: the message Claude finally takes is shown by the host as the agent's, not the
   person's (the arm keeper). Record the shown driver.
-- C5. A full status store (`statusFull`) is not run live; the unit tests cover it.
+- C5. A full status store (`statusFull`) is not run live: it refuses before any key and is never `busy`, and the unit tests cover it, so there is no live fail condition.
 
 **D. Restarts**
 - D1. Restart the host while a message is held. Expect: the next send is refused `queueHeld` (derived from the transcript), nothing is
@@ -60,8 +59,8 @@ Each case lists the action, then the expected result. "Held" means the status st
   record it.
 - D2. Restart Claude while a message is held (it must be re-registered as a launch). Expect: the next send is admitted; the old record is
   `unconfirmed` with reason `claudeRestart`. This also proves or disproves "a restart drops Claude's queue" (H3).
-- D3. End the session while a message is held. Record what the host status shows afterwards. Expect: no further sends can reach it. (A
-  held record for an ended session is a known gap; see the audit in the PR body.)
+- D3. End the session while a message is held. Expect: the record becomes `unconfirmed` with reason `sessionEnded` and is not held, no timer is left for it (the arm keeper stopped), and no further sends can reach the session. Fail: a record still held after the session is gone.
+- D4. A person empties Claude's queue at the machine while a relay message is held. Expect: the message is never taken, the slot stays held, a second send is `queueHeld`, and only a Claude restart or the session ending (D2, D3) frees it. Record the transcript rows the clearing writes (`dequeue`/`remove`): that is H2. Fail: the slot frees on a `remove` that has not been proven.
 
 **E. Sender behaviour**
 - E1. Exit 6 is not resent by the stall alarm or the wake pump (dry run): they record it and move on.
@@ -79,6 +78,7 @@ Each case lists the action, then the expected result. "Held" means the status st
   times only.
 - G2. Never an Esc or ctrl+c from the relay: check the injector's recorded keys for every case.
 - G3. The kill switch (`liteKill`) while a message is held: sends stop at once; the held record is unaffected.
+- G5. Turn the flag off while a message is held, with no restart (the rollback). Expect, as the Rollback section says: new sends to Claude take the old busy refusal and never touch the status store; the held message is still taken by Claude once; its record stays held (nothing looks for the taken entry without a send); turning the flag back on and sending finds the slot still held until that send's check sees the prompt taken or Claude restarted, then admits. Record the shown driver of the message taken while the flag was off.
 - G4. A person types the plain words of a relay message (without the sender line) into an idle Claude: it is not shown as the agent's.
 
 **H. Assumptions to prove (add a real-transcript fixture for each, or keep the conservative rule)**
@@ -99,8 +99,7 @@ All of the following, on at least three runs of each case on at least two dispos
 4. **No wrong attribution:** a person's words are never shown as the agent's; a late-taken relay message is shown as the agent's while the
    host has not restarted (C4), and as the person's after a restart (D1), as the design says.
 5. **No `rate` lockout** in E3, and no refusal code other than the ones named.
-6. **No stuck slot without a recovery path:** every held slot in C and D ends by consumption, a Claude restart, or a person emptying
-   Claude's queue; record how long each took.
+6. **Every held slot is accounted for:** each held slot in C and D ends by consumption (the taken entry), a Claude restart or the session ending, and the report records how long each took. A person emptying Claude's queue is **not** a recovery: the relay does not see a `remove` as freeing the slot until H2 proves it, so case D4 is run and its result, a slot that stays held, is reported plainly to the owner as a known limit.
 7. **G1 to G4 clean.**
 8. **H1 to H5 each resolved:** proven with a fixture added to the repo, or the dependent rule stays as the design has it and the owner is
    told which one.
@@ -110,7 +109,7 @@ Any duplicate delivery, any typing over a draft, or any misattribution is a **fa
 ## Rollback
 
 `config set agentMessaging.claudeBusyQueue false` (read afresh, no restart). Lite then refuses a busy Claude `busy` again and senders behave
-as today. The status store is in memory and goes with the host run; there is nothing to migrate or replay. A relay message already in
+as today. The status store is in memory and goes with the host run; there is nothing to migrate or replay. **With the flag off and no restart:** new sends take the old busy refusal and never use the store; a watch already running ends at its 120 s deadline; the arm keeper of a held send keeps running, because neither it nor the watcher reads the flag, until the record is no longer held; nothing looks for a taken prompt without a send, so a held record stays held until the session ends, or Claude restarts and the flag is on for the next send, or the host restarts. Turning the flag back on finds those slots still held. A message taken in the meantime is still shown as the agent's while its keeper runs (the arm lapses only after a host restart). Case G5 runs this. A relay message already in
 Claude's queue stays there (the relay never removes it); the person at the machine can clear it. The report says which messages those were.
 
 ## Reporting
