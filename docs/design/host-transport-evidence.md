@@ -73,9 +73,13 @@ and refusals decide, and a busy or uncertain result is exit 7 or a refusal, neve
 
 ### Flip scope: launch only
 
-The flip changes the **launch** default only. `-End`, `-List`, `-Options`, `-Resolve` and `-EndWhenIdle` stay on
-HA (the Host transport refuses them and throws), so they are not part of this gate and the `HA` value stays
-selectable for them. Their replacement is G10 and G11 B, and removal is E4.
+The flip changes the **launch** default only. Under `-Transport Host` today, `-List`, `-Options`, `-Resolve`, `-EndWhenIdle`
+and `-EndStaleShell` throw and send nothing, so they stay on HA (or Slipgates for `-EndStaleShell`). Plain `-End` is different: it
+**runs `fleet end`** on the Host transport (`launch-remote.ps1`, the `-Transport Host` branch). A bare default flip would therefore move
+ends to Host before G10 and G11 B are proven, so **the flip PR must route plain `-End` to HA explicitly** (an end keeps the HA
+default until its own gate, E3). Host launches also need `-TargetNode` (omit for local), `-Grant`, and `-Permissions 'Allow all'`
+(the Host branch refuses anything else), and never `-Machine`. The `HA` value stays selectable for everything not launch;
+the replacement is G10 and G11 B and removal is E4.
 
 ### Which cases have an HA twin, and how a pair is compared
 
@@ -149,7 +153,7 @@ Quality sets these floors:
   reconnect. Each induced event needs the owner's approval **at run time**; this document grants none.
 - **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request id.
 2. **0 double launches**: for each request (its unique launch name), at most one session exists on the target, and the live-session, started-row and counter-rise counts agree.
-3. **0 HA fallbacks**: the HA fallback counter stays at zero. That counter is the windowed count of HA launch calls made by a Host-path request, as built by `ha-gate-counters.md` (#3813); it is read before and after each request and for the whole window. Unreadable is INCONCLUSIVE. (It counts zero for
+3. **0 HA fallbacks**: the HA fallback counter stays at zero. Source: the owner-only #1401 audit log (`launches-*.jsonl`, `ha-gate-counters.md`, #3813), whose rows carry a `path` of `relay`, `local` or `legacy-ha`. Reader: Quality/SRE's windowed reader over those files (the run adds no counter of its own). The `legacy-ha` rows are attributed by request id: a row whose id is one of the plan's HA twin ids is the comparison and is expected; every other `legacy-ha` row in the run window, for a target and name of the plan, is a fallback and fails the run. It is read before and after each request and for the whole window. Unreadable is INCONCLUSIVE. (It counts zero for
    Host-path requests.)
 4. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
 5. No token, key, credential or prompt text appears in any receipt, log or output the run keeps.
@@ -204,8 +208,9 @@ live count are planned, not left to chance.
 
 ## Out of scope
 
-The end path (G10, G11 B), the session-registry dual run (slice 11), the load proof, the HA-off rehearsal,
-parity rows and the windowed HA-fallback count belong to E3 and E4 in the G12 inventory, not here.
+The end path (G10, G11 B), the session-registry dual run (slice 11), the load proof, the HA-off rehearsal and the parity rows
+belong to E3 and E4 in the G12 inventory, not here. So does the **windowed** HA-fallback count of E4 (f), which reads the audit log
+over a longer window (ha-gate-counters.md). This run only reads the fallback counter for its own Host-path requests, as defined above.
 
 ## Doc status
 
