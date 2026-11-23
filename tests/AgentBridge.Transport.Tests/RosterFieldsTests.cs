@@ -261,6 +261,7 @@ public sealed class RosterFieldsTests
         for (var i = 1; i < RegistryReadLimit.SocketBurst; i++) { await host.Relay.RegistryGetAsync(CancellationToken.None); }
         var e = await Assert.ThrowsAsync<InvalidOperationException>(() => host.Relay.RegistryGetAsync(CancellationToken.None));
         Assert.StartsWith("refused:", e.Message);
+        Assert.Contains("the relay allows one registry read every", e.Message); // the fleet tools match this text
         Assert.Contains("try again in a few seconds", e.Message);
     }
 
