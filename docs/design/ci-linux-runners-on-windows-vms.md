@@ -9,7 +9,7 @@ lint, the cache rule, the fork-PR controls, the capacity check) applies unchange
 ## Recommendation
 
 **(B), a nested Hyper-V Linux VM, on VM6 and VM7, one per host**, if SRE's read-only check confirms nested
-virtualisation on both (VM7 was read; VM6 is **unverified**; see the next section):
+virtualisation on both (**VM6 + VM7 read: both `Standard_D32s_v5`**; see the next section):
 - each with fixed caps of 12 vCPU and 24 GB, and 3 runners;
 - routing only `pwa-ui`'s Chromium legs (after item B, the only browser legs left on main's push runs);
 - turned on only once a busy-hour capacity check passes on both the hosts and the new pool.
@@ -38,14 +38,16 @@ Why B over A:
   - `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent` = `True`;
   - `Get-Service vmms` (Hyper-V's management service) = Running, start type Automatic;
   - the size from Azure's metadata service (IMDS) = `Standard_D32s_v5`.
-- **VM6: UNVERIFIED.** I could not read it, so I don't know its Azure size, and nothing here shows nested
-  virtualisation is enabled or supported on it. SRE confirms it (and rechecks VM7 if wanted),
-  read-only, before anything else:
+- **VM6: read (Nov 23, read-only, by builder 205e98bd, as relayed by R8b).** The same three readings:
+  `HypervisorPresent` = `True`; `vmms` = Running, Automatic; size = `Standard_D32s_v5`.
+- **VM6 + VM7 read: both `Standard_D32s_v5`.** Azure's Dsv5-series page lists "Nested Virtualization: Supported"
+  (https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dsv5-series, Feature support; page
+  updated 2026-07-27).
+- SRE may recheck either host before the elevated steps, still read-only:
   - `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`;
   - `Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All, VirtualMachinePlatform` (elevated);
   - the size, from `Invoke-RestMethod -Headers @{Metadata='true'} 'http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01'`.
-  - Then check that size's Azure documentation page for nested-virtualisation support. I did not read it, so no
-    support claim for any size is made here.
+  - If a host is ever resized, check the new size's Azure page for nested-virtualisation support first.
   - Both options need it: WSL2 is itself a lightweight Hyper-V VM.
 
 ## What would move, and the queue win
