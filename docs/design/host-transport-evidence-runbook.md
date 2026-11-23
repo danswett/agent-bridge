@@ -27,12 +27,12 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, the warm-up restarts, and the restart that ends the established relay connection in every relay drop at S5 and S8) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop the **drop host's** relay connection, then restore it (S5, S8; the one host only) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
+| Drop the **drop host's** relay connection, then restore it (S5, S8; the one host only) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses read for this event>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **There is no disposable HA and the HA comparison is waived by the owner**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says "no HA comparison" |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 
-Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real
+Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real Home Assistant (there is no disposable HA: the HA-fallback checks are NOT COVERED and the HA comparison is waived by the owner).
 
 ### The elevated relay-drop session
 
@@ -49,18 +49,20 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
 - **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the command block below (arm the dead-man, drop, scope check, restore, disarm), in order, with the
   event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
   any setting, trust, credential, key or ACL.
-- **Owner's OK (about 09:20 PT).** The owner presses **Restart host** in the app right after each relay-drop block is in place; that restart is what ends the  established relay connection. **No relay-link restart command is added**: none is supported, and this run does not create one.
-- **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on  TCP 443, so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action  change. Every rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
+- **Owner's OK (about 09:20 PT).** The owner presses **Restart host** in the app right after each relay-drop block is in place; that restart is what ends the
+  established relay connection. **No relay-link restart command is added**: none is supported, and this run does not create one.
+- **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on TCP 443,
+  so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action change. Every
+  rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
   that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
-Home Assistant (there is no disposable HA: the HA-fallback checks are NOT COVERED and the HA comparison is waived by the owner).
 
 #### The final command block (what the owner sees)
 
-The values come from the frozen plan: **the address list** is the set of remote addresses the AgentBridge host process is connected to on TCP 443 at S0,
+The values come from the frozen plan, except the address list: **the address list** is the set of remote addresses the AgentBridge host process is connected to on TCP 443, read at S0 **and re-read for every event, immediately before step 1**, with that event's own read used for its rule and recorded with the event (the relay's addresses can change between events),
 read by SRE (a read, no elevation: `Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 | Select-Object -ExpandProperty RemoteAddress -Unique`);
-**N = 10 minutes**; **the dead-man task name is `SG-relay-drop-revert`**. Nothing else is in the block.
+**the dead-man N = 20 minutes**, long enough that it cannot fire before the owner's restart and the proofs are done; **the dead-man task name is `SG-relay-drop-revert`**. Nothing else is in the block.
 
 Pre-check, reads only, recorded before the first event on each host, and the RDP access path (inbound 3389 or Azure Bastion) confirmed up:
 
@@ -72,11 +74,12 @@ Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-
 Per event, in this order, by the elevated session, after the owner approves that event:
 
 ```powershell
+# 0. Re-read the relay addresses for THIS event (read, before anything else; use this event's own result in step 2, and record it):Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique
 # 1. Arm the dead-man FIRST: it deletes the whole group after N minutes whatever happens to the session.
 $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
-Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(10)) -User 'SYSTEM' -RunLevel Highest
+Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -User 'SYSTEM' -RunLevel Highest
 # 2. Drop: outbound only, host program AND the relay addresses on TCP 443, in the one group.
-New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>
+New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses read for this event>
 # 3. Scope check (read): must show only Outbound, the host program, TCP 443, and no 3389.
 Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ | Get-NetFirewallApplicationFilter).Program; ($_ | Get-NetFirewallPortFilter) | Select-Object Protocol, LocalPort, RemotePort }
 # 3b. END the existing relay connection (the owner pressing Restart host right after each block was approved by the owner, about 09:20 PT). A block rule is checked when a connection is SET UP, so it does not cut a socket that is already established.
@@ -85,7 +88,7 @@ Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ 
 #     connection, and the rule blocks it. Without this press the drop does not happen and the step is not runnable.
 # 3c. PROOF the drop happened (read, after the restart, new host process id): no Established connection from the host to a relay address. It must return
 #     nothing; if it returns a row, the drop did not happen: restore (step 4) and void the event.
-Get-NetTCPConnection -OwningProcess <new host process id> -RemotePort 443 -State Established | Where-Object { $_.RemoteAddress -in '<relay addresses from the frozen plan>' }
+Get-NetTCPConnection -OwningProcess <new host process id> -RemotePort 443 -State Established | Where-Object { $_.RemoteAddress -in '<relay addresses read for this event>' }
 # 4. Restore, one command:
 Remove-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue    # tolerant: the dead-man may already have deleted the group
 # 4b. PROOF of the reconnect (read): the host sets up a new connection by itself (it reconnects with backoff); the same read as 3c now returns a relay address.
@@ -114,9 +117,9 @@ the dead-man task runs that removal after N minutes.
    reads in S0 to S11, and the stop condition on an HA fallback cannot be observed without one. The evidence and the receipt say **NOT COVERED** for each,
    in those words, so the lead's approval of the flip reads it. Nothing is improvised and the real Home Assistant is never used. **The HA twin comparison is
    WAIVED by the owner (about 09:10 PT).** With no HA there is nothing to compare against, so the run proves the **Slipgates launch path on its own bars** and
-   claims no parity with HA: the receipt says **"no HA comparison"**, makes **no parity claim**, and the 100 compared pairs and the mismatch bar are not claimed.
+   claims no parity with HA: the receipt says **"no HA comparison"**, makes **no parity claim**, and no compared pairs, no 100-pair count and no mismatch bar are claimed. **Quality R9 ruled this reduced bar** (HA comparison waived by the owner): the run is judged on the Slipgates launch path alone and makes no parity claim.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
-5. **The run plan is frozen before request 1** (it names the drop host) and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
+5. **The run plan is frozen before request 1** (it names the drop host) and attached to the receipt: **50 consecutive Host launches** (the HA comparison is waived: no "compared" launches and no pairs),
    every coverage floor, the live-session cap, the unique launch names (from the fixed `SG Builder <n>` / `SG Worker <n>` list), the batch
    sizes, the window, and the exact controls named per host. A number chosen or changed after a request is sent voids the run.
 6. An evidence folder exists **off the repository**, with a sha256 recorded for every raw record, and no name, token, URL, path or
