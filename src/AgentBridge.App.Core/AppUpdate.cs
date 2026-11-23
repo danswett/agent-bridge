@@ -48,8 +48,9 @@ public static class RestartWarning
 }
 
 // The app and the host on different releases (#2869 G2, #2833), said in the update banner and nothing
-// more: the owner chose "banner only", so the skew is shown and never repaired by itself, and the
-// person's own press is the only action: Restart to update, which a release that is ready already has
+// more: the owner chose "banner only", so this shows the skew and never repairs it (the one thing done
+// unasked is AutoUpdater's restart of the host onto files already installed, once quiet, #2869), and the
+// person's own press is the other action: Restart to update, which a release that is ready already has
 // (or Settings' host Restart) (the Ready words
 // take the banner then). This is the other case: no release downloaded to install, so no button, only
 // what differs and where the next step is. VersionSkewHeal decides what is skew; a version that is not
