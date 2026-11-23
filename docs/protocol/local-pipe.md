@@ -373,7 +373,7 @@ sender, which answers
 | `delivered` | the target host typed it into the session | done |
 | `refused` | the target or device selector refused; identity diagnostics name the ID, other receiver reasons include `notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ... | identity or rate refusal is final, no HA fallback; legacy fallback on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
-| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
+| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived, and a queued prompt may still be taken later | terminal: never resent, no Home Assistant fallback (docs/message-delivery.md, "Busy sends to Claude") |
 | `off` | the mode is off, killed, or no sender is wired; no channel was opened | legacy fallback to Home Assistant |
 
 A script's credential is checked against the host's stable machine ID even while the
@@ -569,6 +569,13 @@ or ownership records, or another profile's record). Unknown future values read a
 With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
 `hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
 With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
+
+`hookMigrated` (optional boolean; absent reads as `false`; owner-approved additive field, #783) is
+`true` when `hookSetup` is `completed` because agent-ha-bridge's migration re-pointed this
+agent's hooks in this agent home (recorded in `migration.json`), not because this profile
+wrote an ownership record. Such an agent is Not tested yet until a hook is handled; clients
+offer neither Set up nor Remove for it, since the host has no owned record to remove. Older
+hosts omit it.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.

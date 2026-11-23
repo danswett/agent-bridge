@@ -143,8 +143,10 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [InlineData("scripts.revoke", true)]
     public async Task A_credential_cannot_mint_or_revoke_even_with_host_cli_classification(string op, bool session)
     {
-        var grant = session ? credentials.Check(credentials.Mint("session1", "launch1", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead),
-            new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!
+        // One start time for the credential and the caller's process: Check refuses them more than 1 s apart (#2558).
+        var started = DateTimeOffset.UtcNow;
+        var grant = session ? credentials.Check(credentials.Mint("session1", "launch1", 100, started, AgentProtocol.ScopeRead),
+            new ProcessAncestry([new PeerProcess(100, started, "agent.exe")], true)).Accepted!
             : credentials.MintScript("pump-wake").Credential;
         credentials.Accept(channel, grant);
         var count = credentials.Count;
