@@ -750,8 +750,14 @@ public static class ProtocolVectors
         var keys = new PushKeys("BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48", Attachments.Base64Url([.. Enumerable.Range(16, 16).Select(i => (byte)i)]));
         f.Record<PushSubscribeRequest>(Client)
             .Valid("full", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Device = "iPhone · Agent Bridge" })
-            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" });
+            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" })
+            .Valid("with-notify-filters", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { PinnedSessions = [SessionId] } })
+            .Valid("notify-every-turn-no-questions", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { Questions = false, All = true } });
         f.Record<PushKeys>(Client).Valid("keys", keys);
+        f.Record<PushNotify>(Client)
+            .Valid("defaults", new PushNotify())
+            .Valid("pinned-set", new PushNotify { PinnedSessions = [SessionId] })
+            .Reads("only-the-flags-sent", """{"all":true}""");
         f.Record<PushSubscribeResult>(Host).Valid("subscribed", new PushSubscribeResult(true, 2));
         f.Record<PushUnsubscribeRequest>(Client)
             .Valid("this-device", new PushUnsubscribeRequest())
