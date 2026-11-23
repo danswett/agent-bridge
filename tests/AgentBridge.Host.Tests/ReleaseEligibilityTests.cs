@@ -268,6 +268,71 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal((2, 1), (handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases), handler.Requests.Count(uri => uri.Host != "api.github.com")));
     }
 
+    // A positive signal for the fleet: ONE info line on every successful renewal, from GitHub (a new list or a 304) and from the relay,
+    // saying where it came from and the time the policy now counts from, so a log read says the policy is being renewed, not only that it is not.
+    (GitHubHaltListSource Source, List<string> Logged) PolicyWithLog(HttpMessageHandler handler)
+    {
+        var logged = new List<string>();
+        var http = new HttpClient(handler);
+        var discovery = new ReleaseDiscovery(folder, handler, time, random: () => 0, log: logged.Add);
+        clients.AddRange([http, discovery]);
+        return (new(http, discovery), logged);
+    }
+
+    [Fact]
+    public async Task A_policy_renewed_from_GitHub_logs_one_line_for_a_new_list_and_one_for_a_304()
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = new ReplyHandler(request =>
+        {
+            if (request.RequestUri!.AbsoluteUri != GitHubHaltListSource.Releases) { return new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) }; }
+            return request.Headers.IfNoneMatch.Any() ? new(HttpStatusCode.NotModified)
+                : new(HttpStatusCode.OK) { Content = new ByteArrayContent(Metadata("2349", body)), Headers = { ETag = new("\"policy\"") } };
+        });
+        var (source, logged) = PolicyWithLog(handler);
+
+        await source.ReadAsync(default);
+        var first = Assert.Single(logged, line => line.StartsWith("update policy: renewed from GitHub", StringComparison.Ordinal));
+        Assert.Contains($"At={source.Snapshot.At!.Value:O}", first);
+        Assert.Contains("0.1.2349", first);
+
+        time.Advance(TimeSpan.FromHours(1));
+        await source.ReadAsync(default);
+        var renewals = logged.Where(line => line.StartsWith("update policy: renewed from GitHub", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, renewals.Count);
+        Assert.Contains("not modified", renewals[1]);
+        Assert.Contains($"At={source.Snapshot.At!.Value:O}", renewals[1]);
+    }
+
+    [Fact]
+    public async Task A_policy_renewed_from_the_relay_logs_one_line_with_the_time_it_counts_from()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.FromMinutes(5));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var (source, logged) = PolicyWithLog(handler);
+
+        await source.ReadAsync(default);
+
+        var line = Assert.Single(logged, l => l.StartsWith("update policy: renewed from the relay's list", StringComparison.Ordinal));
+        Assert.Contains($"At={source.Snapshot.At!.Value:O}", line);
+    }
+
+    [Fact]
+    public async Task A_policy_that_is_not_renewed_logs_no_renewal_line()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => null, policyFailure: () => new(HttpStatusCode.ServiceUnavailable));
+        await GitHubAnswersTheReleaseList(handler);
+        time.Advance(TimeSpan.FromHours(1));
+        var (source, logged) = PolicyWithLog(handler);
+
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+
+        Assert.DoesNotContain(logged, line => line.Contains("renewed from", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Refusals_respect_NotBefore_and_stale_policy_keeps_known_halts_without_becoming_readable()
     {

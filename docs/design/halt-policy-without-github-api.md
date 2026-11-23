@@ -94,6 +94,16 @@ downloaded from `github.com`, never clears a halt, stamped inside the grace), an
 answered (an HTTP status, or that nothing came back). The relay window itself is unchanged: it opens from GitHub having answered the
 release list here, or from a rate-limit bootstrap, so a machine GitHub has never answered still gets no relay renewal.
 
+**Where it is stored, and the positive signal (so a fleet read can tell a renewing machine from a stale one).** The stored policy
+is in the shared state file `%LOCALAPPDATA%\AgentBridge\app\release-discovery.json` (the app folder under the product's data root,
+beside its lock file), under the key `haltPolicy`: `policy` (the verified release and its `halted` list), `at` (the time the policy
+counts from; fresh for six hours after it, never past the relay grace), `notBefore` (the next ask), `attemptedAt`, `attempt`,
+`verified` and `eTag`; `gitHubAnsweredAt` beside it is when GitHub last answered the release list here. Every successful renewal
+also logs ONE line: `update policy: renewed from GitHub, release 0.1.N, At=<ISO time>` (`GitHub (not modified)` for a 304, and
+`the relay's list, its copy <age> old; <what GitHub answered>` for the relay path). A read that renews nothing logs the
+`GitHub policy unavailable (<what GitHub answered>); stored policy was not renewed` line instead, so a machine that is renewing
+shows the first and never the second.
+
 **Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
 hidden for up to the 24-hour grace**. It can never forge a halt or clear a known one: the carrier's bytes

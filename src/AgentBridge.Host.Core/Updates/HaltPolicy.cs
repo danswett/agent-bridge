@@ -55,11 +55,19 @@ public sealed partial class ReleaseDiscovery
             now = time.GetUtcNow();
             try
             {
-                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null && policy.ETag is not null) { policy = policy with { At = now, Verified = policy.Attempt }; }
+                if (answer.Status == HttpStatusCode.NotModified && policy.Policy is not null && policy.ETag is not null)
+                {
+                    policy = policy with { At = now, Verified = policy.Attempt };
+                    Renewed("GitHub (not modified)", policy);
+                }
                 else if (answer.Status == HttpStatusCode.OK && answer.Body is { } body)
                 {
                     var verified = await verify(body, cancellationToken);
-                    if (policy.Policy is null || verified.Release >= policy.Policy.Release) { policy = policy with { Policy = verified, At = now, ETag = answer.ETag, Verified = policy.Attempt }; }
+                    if (policy.Policy is null || verified.Release >= policy.Policy.Release)
+                    {
+                        policy = policy with { Policy = verified, At = now, ETag = answer.ETag, Verified = policy.Attempt };
+                        Renewed("GitHub", policy);
+                    }
                     else { log?.Invoke("update policy: older GitHub policy ignored; known halts retained"); }
                 }
                 else
@@ -88,7 +96,7 @@ public sealed partial class ReleaseDiscovery
                             // longer than the grace (the 6 hours of freshness never run past its end).
                             var graceEnd = (state.GitHubAnsweredAt ?? state.RelayBootstrapAt)!.Value + GithubRelayAtMost;
                             policy = policy with { Policy = verified, At = Earlier(now - relayed.Age, graceEnd - GithubRevalidateEvery), ETag = null, Verified = policy.Attempt };
-                            log?.Invoke($"update policy: renewed from the relay's list, its copy {Span(relayed.Age)} old; {GitHubSaid(answer)}");
+                            Renewed($"the relay's list, its copy {Span(relayed.Age)} old; {GitHubSaid(answer)}", policy);
                         }
                         else { log?.Invoke("update policy: older relay policy ignored; known halts retained"); }
                     }
@@ -143,6 +151,11 @@ public sealed partial class ReleaseDiscovery
     }
 
     static DateTimeOffset Earlier(DateTimeOffset a, DateTimeOffset b) => a < b ? a : b;
+
+    // The fleet's positive signal: ONE info line on every successful renewal, with where it came from, the release the policy
+    // names and the time it now counts from (At; it is fresh for six hours from it).
+    void Renewed(string from, HaltPolicyCache policy) =>
+        log?.Invoke($"update policy: renewed from {from}, release 0.1.{policy.Policy?.Release}, At={policy.At:O}");
 
     // What GitHub really did, for the log: the status it sent, or that nothing came back (a timeout, a broken connection or a body past the cap).
     static string GitHubSaid(Answer answer) => answer.Status == 0 ? "GitHub gave no answer"
