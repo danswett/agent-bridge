@@ -83,6 +83,21 @@ public sealed partial class CiRunnerResolutionTests
     [InlineData("${{ " + Guard + " && matrix.os || 'windows-latest' }}")]
     public void The_pool_value_must_be_a_literal(string runsOn) => Assert.NotEmpty(Check(Workflow(runsOn, "{ os: [windows-latest, ab-ci] }")));
 
+    // R8b: a run by hand on main with use_ab_ci may take the pool before AB_CI_SELF_HOSTED flips, as the one alternative
+    // to the guard, exactly: (guard) || dispatch on main && inputs.use_ab_ci.
+    const string Dispatch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci";
+
+    [Theory]
+    [InlineData("${{ (" + Guard + " || " + Dispatch + ") && 'ab-ci' || 'windows-latest' }}", true)]
+    [InlineData("${{ (matrix.os == 'windows-latest' && (" + Guard + " || " + Dispatch + ")) && fromJSON('[\"self-hosted\",\"ab-ci\"]') || 'windows-latest' }}", true)]
+    [InlineData("${{ " + Dispatch + " && 'ab-ci' || 'windows-latest' }}", false)]
+    [InlineData("${{ (" + Guard + " || github.event_name == 'workflow_dispatch' && inputs.use_ab_ci) && 'ab-ci' || 'windows-latest' }}", false)]
+    [InlineData("${{ (" + Guard + " || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') && 'ab-ci' || 'windows-latest' }}", false)]
+    [InlineData("${{ (" + Guard + " || inputs.use_ab_ci) && 'ab-ci' || 'windows-latest' }}", false)]
+    [InlineData("${{ (" + Guard + " || " + Dispatch + " || true) && 'ab-ci' || 'windows-latest' }}", false)]
+    public void A_dispatch_on_main_with_use_ab_ci_is_the_one_alternative_to_the_guard(string runsOn, bool allowed)
+        => Assert.Equal(allowed, Check(Workflow(runsOn)).Count == 0);
+
     // The named key's chain: ci.yml product's matrix and plan's product-os binding are pinned by CiPlan; the binding's
     // literals are CiPlan.ProductRunners, and the rest comes from plan.ps1's $runners map. All of it must be hosted.
     [Fact]
