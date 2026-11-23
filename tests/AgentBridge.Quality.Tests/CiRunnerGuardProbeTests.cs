@@ -64,7 +64,8 @@ public sealed class CiRunnerGuardProbeTests
     [Theory]
     [InlineData("${{ vars.R }}", true)]
     [InlineData("${{ inputs.r }}", true)]
-    [InlineData("${{ steps.pick.outputs.r }}", false)]
+    // #3835: no job output is a literal label set, even one fed from steps (only ci.yml's pinned product-os is).
+    [InlineData("${{ steps.pick.outputs.r }}", true)]
     public void A_runner_from_another_jobs_output_is_flagged_when_that_output_reads_a_variable_or_input(string output, bool flagged)
     {
         var yaml = $$$"""
