@@ -717,11 +717,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      When the open list itself stops partway, no head gets success from that run: a held pull
      request on it could be among the unread.
    - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
-     about one point per page of the open list plus one per pull request that isn't already
+     about one point per page of the open list (twenty-five to a page; a scoped run reads it light,
+     a number and a head each, a hundred to a page) plus one per pull request that isn't already
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), plus one REST call for
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
      Below 200 points left, a run warns in its log.
+   - Reads are made together where they don't depend on each other: once main's newest CI run has not
+     answered, the runs below it are read four at a time (the newest alone: a read is a point); and a
+     sweep reads four heads' pull requests at a time. The answers are used in order, so the verdicts
+     and what is posted are what reading one after another gave: a sweep of about 110 pull requests
+     took 205 s one call at a time and 70 s this way, for the same points and calls (2026-11-23).
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
@@ -763,7 +769,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      waivers are as they were; anything unreadable judges. Not in the digest, so at most an hour stale: check runs
      and suites, Copilot's review. Digest limits: `updated_at` also moves on bot activity (an extra full judgement,
      never a missed one), and only the newest 100 statuses per head and on main's head are read. A scoped run costs about 3 points
-     (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
+     plus one per hundred open pull requests (the light open list, which finds the pull requests
+     on the head; those pull requests, each read in full; a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
      CI, up to 15 points each with 25 pull requests open, 315). Those are historical estimates,
