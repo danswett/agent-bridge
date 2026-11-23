@@ -42,13 +42,13 @@ public sealed class BusyQueueStore(TimeProvider time)
     }
 
     // The keys went: from now the prompt may sit in Claude's own queue.
-    public void KeysWent(string request)
+    public void KeysWent(string request, string? principal = null)
     {
         lock (gate) { if (records.TryGetValue(request, out var r)) { records[request] = r with { Held = true }; } }
     }
 
     // A later state. held false frees the slot; queued sets until to the watch after now.
-    public void Settle(string request, string state, string? reason, bool held)
+    public void Settle(string request, string state, string? reason, bool held, string? principal = null)
     {
         lock (gate)
         {
@@ -59,12 +59,12 @@ public sealed class BusyQueueStore(TimeProvider time)
     }
 
     // Nothing was typed: the record and the slot go.
-    public void Release(string request)
+    public void Release(string request, string? principal = null)
     {
         lock (gate) { records.Remove(request); FreeSlot(request); }
     }
 
-    public Record? Get(string request)
+    public Record? Get(string request, string? principal = null)
     {
         lock (gate) { return records.TryGetValue(request, out var r) ? r : null; }
     }
