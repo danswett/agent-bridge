@@ -92,10 +92,10 @@ index 20cf6d13..d291bee7 100644
      kind: unit
 diff --git a/quality/merge-rule-sweep.ps1 b/quality/merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..a447a309
+index 00000000..8d4b9ada
 --- /dev/null
 +++ b/quality/merge-rule-sweep.ps1
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,179 @@
 +#Requires -Version 7
 +<#
 +.SYNOPSIS
@@ -118,7 +118,8 @@ index 00000000..a447a309
 +    newer head (one GraphQL read for all of them); plain cancel only.
 +  A run past twice its limit, or one that refuses a plain cancel, is force-cancelled. A run GitHub says was never
 +  queued (the Nov 11 ghosts) or already completed is a warning, never retried or failed; a run older than 7 days is
-+  skipped with no call. Only other errors fail the sweep. Budget: at most 15 runs acted on and 20 jobs read a sweep:
++  skipped with no call. Only other errors fail the sweep. If the first read's x-ratelimit-remaining is under 150, the
++  sweep does nothing but print one warning: it never starves the merge-rule judge. Budget: at most 15 runs acted on and 20 jobs read a sweep:
 +  5 lists + 1 query + 20 jobs reads + 30 posts = 56 calls at most, 224 an hour at 4 sweeps, of the token's 1000. It
 +  cancels, never deletes, and never touches another workflow's runs. A listing it can't read stops it with an error:
 +  unread is never "nothing to do". -DryRun lists only what it would cancel, and why.
@@ -148,16 +149,30 @@ index 00000000..a447a309
 +function Invoke-SweepGh { $out = & $script:GhCommand @args; [pscustomobject]@{ Ok = $LASTEXITCODE -eq 0; Output = $out } }
 +
 +function Invoke-MergeRuleSweep([string]$Repository, [int]$WaitingMaxMinutes, [int]$RunningMaxMinutes, [DateTimeOffset]$Now, [switch]$DryRun,
-+    [int]$NewestWaitingMaxMinutes = 120, [int]$NewestRunningMaxMinutes = 45, [int]$MaxActions = 15, [int]$MaxJobReads = 20, [int]$IgnoreOlderThanDays = 7) {
++    [int]$NewestWaitingMaxMinutes = 120, [int]$NewestRunningMaxMinutes = 45, [int]$MaxActions = 15, [int]$MaxJobReads = 20, [int]$IgnoreOlderThanDays = 7, [int]$MinRateRemaining = 150) {
 +    if ($Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give owner/repository.' }
 +    $acted = 0; $failed = 0; $skipped = 0; $deferred = 0; $jobReads = 0; $old = 0; $lines = @()
 +    # Every unfinished run first (all of them are read before anything is cancelled), so the newest run per pull
 +    # request, or per head when it has none, is known across statuses: that one is never cancelled, however old.
 +    $all = @()
 +    foreach ($status in 'queued', 'in_progress', 'waiting', 'pending', 'requested') {
-+        $read = Invoke-SweepGh api "repos/$Repository/actions/workflows/merge-rule.yml/runs?status=$status&per_page=100"
++        # The first read also returns the token's rate headers (gh api -i): the sweep never starves the merge-rule judge.
++        $first = $status -eq 'queued'
++        $read = if ($first) { Invoke-SweepGh api -i "repos/$Repository/actions/workflows/merge-rule.yml/runs?status=$status&per_page=100" }
++            else { Invoke-SweepGh api "repos/$Repository/actions/workflows/merge-rule.yml/runs?status=$status&per_page=100" }
 +        if (-not $read.Ok) { throw "could not list $status Merge rule runs; nothing was cancelled" }
-+        $page = ($read.Output -join "`n") | ConvertFrom-Json
++        $body = @($read.Output)
++        if ($first) {
++            $blank = [Array]::FindIndex([string[]]$body, [Predicate[string]] { param($l) $l -eq '' })
++            $headers = if ($blank -ge 0) { $body[0..$blank] } else { @() }
++            $body = if ($blank -ge 0 -and $blank + 1 -lt $body.Count) { $body[($blank + 1)..($body.Count - 1)] } else { $body }
++            $remaining = $headers | Where-Object { $_ -match '^x-ratelimit-remaining:\s*(\d+)' } | ForEach-Object { [int]$Matches[1] } | Select-Object -First 1
++            if ($null -ne $remaining -and $remaining -lt $MinRateRemaining) {
++                return [pscustomobject]@{ Acted = 0; Failed = 0; Lines = @("warning: only $remaining API calls left this hour (rate limit; under $MinRateRemaining): the sweep did nothing, so the merge-rule judge keeps them") }
++            }
++            if ($null -eq $remaining) { $lines += 'warning: no x-ratelimit-remaining header on the first read; sweeping within the caps' }
++        }
++        $page = ($body -join "`n") | ConvertFrom-Json
 +        if ($page.total_count -gt 100) { $lines += "warning: more than 100 $status runs; only the first page is swept this time" }
 +        foreach ($run in @($page.workflow_runs)) {
 +            if ($run.path -cne $script:Workflow) { continue }
@@ -262,10 +277,10 @@ index 00000000..a447a309
 +if ($result.Failed -gt 0) { Write-Host "::error title=merge-rule sweep::$($result.Failed) stuck Merge rule run(s) could not be stopped"; exit 1 }
 diff --git a/quality/test-merge-rule-sweep.ps1 b/quality/test-merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..a5786fea
+index 00000000..f361c30d
 --- /dev/null
 +++ b/quality/test-merge-rule-sweep.ps1
-@@ -0,0 +1,221 @@
+@@ -0,0 +1,234 @@
 +#Requires -Version 7
 +# Offline only: every GitHub request must match this stand-in.
 +$ErrorActionPreference = 'Stop'
@@ -281,7 +296,7 @@ index 00000000..a5786fea
 +function Reset-Scenario {
 +    # $s.runs: status -> runs; each run's age in minutes. $s.refuse: run ids whose plain cancel answers a 409 conflict;
 +# $s.completed: run ids GitHub says already completed (409 on either cancel); $s.ghost: never queued (409 on either).
-+    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @(); ghost = @(); completed = @()
++    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @(); ghost = @(); completed = @(); remaining = 900
 +        prs = @{}; prQueryFails = $false; jobs = @{}; jobsFail = @() }
 +}
 +function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '', [double]$RunningMinutes = -1, [string]$PrHead = 'current', [switch]$JudgeQueued) {
@@ -305,10 +320,12 @@ index 00000000..a5786fea
 +    $a = $args -join ' '
 +    $s.calls += $a
 +    switch -Regex ($a) {
-+        '^api repos/o/r/actions/workflows/merge-rule\.yml/runs\?status=(\w+)&per_page=100$' {
++        '^api (-i )?repos/o/r/actions/workflows/merge-rule\.yml/runs\?status=(\w+)&per_page=100$' {
 +            if ($s.listFails) { $global:LASTEXITCODE = 1; return }
-+            $runs = @($s.runs[$Matches[1]] | Where-Object { $_ })
++            $runs = @($s.runs[$Matches[2]] | Where-Object { $_ })
 +            $global:LASTEXITCODE = 0
++            # gh api -i prints the status line and headers, a blank line, then the body, as the real one does.
++            if ($Matches[1]) { 'HTTP/2.0 200 OK'; 'Content-Type: application/json; charset=utf-8'; 'X-Ratelimit-Limit: 1000'; "X-Ratelimit-Remaining: $($s.remaining)"; 'X-Ratelimit-Resource: core'; '' }
 +            @{ total_count = $runs.Count; workflow_runs = $runs } | ConvertTo-Json -Depth 5; return
 +        }
 +        '^api -X POST repos/o/r/actions/runs/(\d+)/cancel$' {
@@ -484,6 +501,17 @@ index 00000000..a5786fea
 +$granted = @([regex]::Matches($jobPerms, '(?m)^      ([\w-]+): (\w+)') | ForEach-Object { "$($_.Groups[1].Value)=$($_.Groups[2].Value)" })
 +Assert ($norm -match '(?m)^permissions: \{\}$' -and ($granted -join ',') -eq 'actions=write,contents=read,pull-requests=read') 'permissions: {} at the top; the job gets actions: write, contents: read, pull-requests: read only'
 +Assert ($norm -match '(?m)^  group: merge-rule-sweep\n  cancel-in-progress: false$' -and $norm -match '(?m)^          ref: main$' -and $norm -match '(?m)^          persist-credentials: false$' -and $norm -notmatch 'secrets\.') 'its own group, never cancelling a sweep in flight; main''s own checkout, no credentials kept, no secrets'
++
++# Never starve the merge-rule judge: under 150 calls left this hour (x-ratelimit-remaining on the sweep's first call),
++# the sweep does nothing but say so.
++Reset-Scenario
++$s.runs = @{ queued = @((Run 80 45), (Keeper)); in_progress = @((Run 81 50)) }; $s.remaining = 149
++$out = Sweep
++Assert (@($s.calls).Count -eq 1 -and $s.calls[0] -match '^api -i ' -and $s.cancelled.Count -eq 0 -and $s.forced.Count -eq 0 -and $out.Failed -eq 0 -and @($out.Lines).Count -eq 1 -and $out.Lines[0] -match '^warning: .*149 .*rate limit') 'under 150 calls left this hour, one read and one warning line, nothing else'
++Reset-Scenario
++$s.runs = @{ queued = @((Run 82 45), (Keeper)) }; $s.remaining = 150
++$null = Sweep
++Assert (($s.cancelled -join ',') -eq '82') 'at 150 left, the sweep goes on'
 +
 +if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 +"merge-rule-sweep: $script:checks checks passed"
