@@ -74,7 +74,7 @@ public sealed class DeafPolicy
         s.Agent != AgentKind.Copilot ? "not a Copilot session"
         : s.Status != SessionStatus.Idle ? "the session is not idle"
         : s.Activity.CurrentTool is { Status: ToolStatus.Running } ? "a tool is running"
-        : s.Activity.Background is not null ? "background work is running"
+        : (s.BackgroundUnaged ?? s.Activity.Background) is not null ? "background work is running" // unaged: a shell past Limits.BackgroundShellStale may still run (#1396)
         : s.Subagents?.Any(a => !a.Finished) == true ? "a sub-agent is running"
         : s.Question is not null ? "the session is asking a question"
         : null;

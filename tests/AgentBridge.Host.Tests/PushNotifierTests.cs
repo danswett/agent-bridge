@@ -64,7 +64,7 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/")
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/", object? notify = null)
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
@@ -73,6 +73,7 @@ public sealed class PushNotifierTests : IDisposable
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
             app,
             device = name ?? (device == Phone ? "iPhone" : "Laptop"),
+            notify,
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
     }
@@ -292,6 +293,40 @@ public sealed class PushNotifierTests : IDisposable
         var n = Received()[^1].Notification;
         Assert.Equal(("resolved", "DEV · session ended"), (Kind(n), n.GetProperty("body").GetString()));
         Assert.Equal(2, sender.Sent.Count);
+    }
+
+    // Parity row 16: "reconnect never reannounces old work". A relay that drops and comes back, or a new connection, re-reads the
+    // same sessions in the same state; what the phone was already shown is not pushed again.
+    [Fact]
+    public async Task After_a_relay_reconnect_a_question_and_a_finished_turn_already_shown_are_not_pushed_again()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(["finished", "question"], Received().Select(r => Kind(r.Notification)).Order());
+        var shown = sender.Sent.Count;
+
+        // The connection drops and comes back: the same sessions, the same state.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromMinutes(2));
+        sender.Connected = true;
+        await After(TimeSpan.FromMinutes(2));
+        Assert.Equal(shown, sender.Sent.Count);
+
+        // A new connection to the relay takes over, and the host reads the sessions again.
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromMinutes(5));
+        Assert.Empty(next.Sent);
+        Assert.Equal(shown, sender.Sent.Count);
     }
 
     [Fact]
@@ -2282,6 +2317,284 @@ public sealed class PushNotifierTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void Upsert(Session s) => Changed?.Invoke(this, new SessionChange(SessionChangeKind.Upserted, s.Id, s, 0));
         public void Remove(string id) => Changed?.Invoke(this, new SessionChange(SessionChangeKind.Removed, id, null, 0));
+    }
+
+    // Per-device notification filters (push.subscribe notify): the host filters when it sends, so the
+    // service worker never has to drop a push. Absent notify means no filtering.
+    static object Filters(bool questions = true, bool pinned = true, bool all = false, string[]? pins = null, bool failures = false) =>
+        new { questions, pinned, all, deliveryFailures = failures, pinnedSessions = pins ?? [] };
+
+    async Task Finish(string id)
+    {
+        source.Upsert(S(id, SessionStatus.Working, turns: 0));
+        source.Upsert(S(id, SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Questions_off_also_withholds_the_grouped_notice_of_a_burst_of_questions()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false, all: true));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+        Assert.DoesNotContain(Received(), r => r.Device == Phone);
+        Assert.Contains(Received(), r => r.Device == Laptop && Kind(r.Notification) == "group");
+    }
+
+    // S2b acceptance (#3969): a sender of the Failures kind reuses PushSubscriber.Wants, so it must hold the rule first.
+    [Fact]
+    public void A_device_that_sent_no_notify_is_told_everything_as_before_except_failures_which_are_off()
+    {
+        var legacy = new PushSubscriber("d", "iPhone", "https://web.push.apple.com/x", "p", "a", "https://app/", T);
+        Assert.False(legacy.Wants(NoticeKind.Failures, ""));
+        Assert.All([NoticeKind.Question, NoticeKind.Finished, NoticeKind.Resolved, NoticeKind.SignIn, NoticeKind.Restored, NoticeKind.Group],
+            kind => Assert.True(legacy.Wants(kind, "s1"), kind.ToString()));
+        Assert.False((legacy with { Notify = new PushNotify() }).Wants(NoticeKind.Failures, ""));
+        Assert.True((legacy with { Notify = new PushNotify { DeliveryFailures = true } }).Wants(NoticeKind.Failures, ""));
+    }
+
+    [Fact]
+    public async Task A_device_without_notify_is_told_of_questions_and_every_finished_turn_as_before()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await Finish("s2");
+        Assert.Equal(["question", "finished"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task Questions_off_sends_that_device_no_question_notice_while_another_device_still_gets_it()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal([Laptop], Received().Select(r => r.Device));
+        // Its answer withdraws the notice only where it was shown: nothing goes to the filtered device.
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.DoesNotContain(Phone, Received().Select(r => r.Device));
+    }
+
+    // S2b-2a: the machine's delivery-failure notice. A count only, one per machine per 60 s window sent at the window's end,
+    // to a device that turned it on, always alerting (docs/protocol/v1-sessions.md, the failures notice).
+    [Fact]
+    public async Task Delivery_failures_in_a_window_go_as_one_count_at_its_end_to_a_device_that_turned_them_on()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(20));
+        notifier.NoteDeliveryFailure(2);
+        await After(TimeSpan.FromSeconds(39));
+        Assert.Empty(sender.Sent);  // 59 s in: the window is still open
+        await After(TimeSpan.FromSeconds(2));
+        var (device, n, ttl, urgency, topic) = Assert.Single(Received());
+        Assert.Equal(Phone, device);
+        Assert.Equal("Messages not delivered", n.GetProperty("title").GetString());
+        Assert.Equal("DEV · 3 messages not delivered", n.GetProperty("body").GetString());
+        Assert.Equal($"{Machine}:~failures", n.GetProperty("tag").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        var d = n.GetProperty("data");
+        Assert.Equal(("failures", 3, ""), (d.GetProperty("kind").GetString(), d.GetProperty("failures").GetInt32(), d.GetProperty("session").GetString()));
+        Assert.False(n.TryGetProperty("silent", out _));  // always a visible notification, never silent
+        Assert.Equal((21600, "normal", PushNotice.Topic(Machine, PushNotice.FailuresKey)), (ttl, urgency, topic));
+        // A count only: no message id, no text.
+        Assert.DoesNotContain("id=", n.GetRawText());
+    }
+
+    [Fact]
+    public async Task Delivery_failures_go_to_no_device_that_did_not_ask_for_them()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        Subscribe(Laptop);  // sent no notify at all
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal([Phone], Received().Select(r => r.Device));
+        // A device with the other flags on and failures off gets none either.
+        Subscribe(Laptop, notify: Filters(all: true));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal([Phone, Phone], Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task A_failure_after_a_window_closes_opens_the_next_with_only_its_own_count()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        notifier.NoteDeliveryFailure(4);
+        await After(TimeSpan.FromSeconds(60));
+        await After(TimeSpan.FromSeconds(30));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(59));
+        Assert.Single(Received());  // the second window has not closed
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["DEV · 4 messages not delivered", "DEV · 1 message not delivered"],
+            Received().Select(r => r.Notification.GetProperty("body").GetString()));
+    }
+
+    [Fact]
+    public async Task Delivery_failures_ignore_a_count_below_one_and_a_window_nobody_wants_leaves_no_count_behind()
+    {
+        Start();
+        notifier.NoteDeliveryFailure(0);
+        notifier.NoteDeliveryFailure(-3);
+        await After(TimeSpan.FromMinutes(2));
+        Assert.Empty(sender.Sent);
+        Subscribe(Laptop);  // wants none
+        notifier.NoteDeliveryFailure(5);
+        await After(TimeSpan.FromSeconds(61));
+        // A device that turns them on afterwards is not told of the failures of the window that passed.
+        Subscribe(Phone, notify: Filters(failures: true));
+        await After(TimeSpan.FromMinutes(5));
+        Assert.Empty(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_delivery_failure_notice_goes_even_to_a_device_in_use_and_is_not_collapsed_with_a_session_notice()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true, questions: false, pinned: false));
+        notifier.Watching = device => device == Phone;
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal("failures", Kind(Assert.Single(Received()).Notification));
+    }
+
+    [Fact]
+    public async Task A_device_that_filters_finished_turns_still_has_the_answered_question_withdrawn_when_the_turn_ends_at_once()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "question"], Received().Select(r => Kind(r.Notification)));
+        // Answered and finished inside the resolved delay: the finished notice replaces the question on the
+        // laptop, so the phone, which is sent none, must be told it is no longer waiting.
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        var phone = Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)).ToList();
+        Assert.Equal(["question", "resolved"], phone);
+        Assert.Equal(["question", "finished"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_filtering_device_has_the_question_it_was_shown_withdrawn_even_when_a_later_one_was_held_back_and_answered()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+        // The relay goes down: the second question's notice is held, and it is answered and the turn finishes.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        sender.Connected = true;
+        await notifier.PumpAsync();
+        // What it still shows (the first question) is withdrawn; the held second question never goes.
+        var kinds = Received().Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("question", out var q) ? q.GetString() : null)).ToList();
+        Assert.Equal([("question", "q1"), ("resolved", "q1")], kinds);
+    }
+
+    [Fact]
+    public async Task A_question_still_waiting_to_go_never_goes_to_a_device_that_filters_the_finished_turn_that_follows_it()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        Subscribe(Laptop);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+        Assert.DoesNotContain(next.Sent, p => p.Endpoint.EndsWith(Phone, StringComparison.Ordinal));
+        Assert.Contains(next.Sent, p => p.Endpoint.EndsWith(Laptop, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Pinned_on_notifies_finished_turns_of_the_pinned_sessions_only()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["s1"]));
+        await Finish("s2");
+        Assert.Empty(sender.Sent);
+        await Finish("s1");
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("finished", Kind(n));
+        Assert.Equal("s1", n.GetProperty("data").GetProperty("session").GetString());
+    }
+
+    [Fact]
+    public async Task All_covers_pinned_and_both_off_sends_no_finished_notice()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(all: true));
+        Subscribe(Laptop, notify: Filters(pinned: false, pins: ["s1"]));
+        await Finish("s1");
+        Assert.Equal([Phone], Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task Subscribing_again_replaces_the_filters_so_a_new_pin_takes_effect()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["s1"]));
+        await Finish("s2");
+        Assert.Empty(sender.Sent);
+        Subscribe(Phone, notify: Filters(pins: ["s1", "s3"]));
+        await Finish("s3");
+        Assert.Single(Received());
+    }
+
+    [Fact]
+    public async Task Filters_survive_a_restart_with_the_subscription()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false, pins: ["s1"]));
+        Assert.Equal(Phone, store.Get(Phone)!.Device);
+        Start();
+        var kept = store.Get(Phone)!.Notify!;
+        Assert.False(kept.Questions);
+        Assert.Equal(["s1"], kept.PinnedSessions);
+    }
+
+    [Fact]
+    public void A_notify_with_too_many_or_empty_pinned_ids_is_refused()
+    {
+        Start();
+        var tooMany = Filters(pins: [.. Enumerable.Range(0, PushNotify.MaxPinned + 1).Select(i => $"s{i}")]);
+        Assert.Throws<ArgumentException>(() => Subscribe(Phone, notify: tooMany));
+        Assert.Throws<ArgumentException>(() => Subscribe(Phone, notify: Filters(pins: [""])));
+        Assert.Null(store.Get(Phone));
+        Subscribe(Phone, notify: Filters(pins: [.. Enumerable.Range(0, PushNotify.MaxPinned).Select(i => $"s{i}")]));
+        Assert.NotNull(store.Get(Phone));
     }
 
     sealed class FakeSender(string account) : IPushSender

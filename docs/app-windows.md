@@ -406,6 +406,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -1155,6 +1160,11 @@ starvation lasts until the train lands.
     publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
     reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.

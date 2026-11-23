@@ -63,20 +63,84 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
-  uses, and text goes only into an idle session with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
+  uses, and text goes only into an idle session (a working Claude too, only with `agentMessaging.claudeBusyQueue`, proposed, off by default; see [message-delivery.md](../message-delivery.md#busy-sends-to-claude-let-claude-code-queue-part-of-2568-proposed-owner-decision-pending)) with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: with explicit `remote: "own-account"`, a session receives only if this host launched it in allow-all mode and either the existing `agentMessaging.allowAllTargets` plus exact `agentMessaging.allowAllTargetSessions` list grants it, or the owner has enabled `agentMessaging.allowAllLaunchedTargets` on this machine. The new boolean switch defaults false, invalid/non-boolean is false, and it is read afresh per message. It is independent of the unchanged list path; display names and wildcards never grant access.
 - Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it and session discovery is not held (a held pass may miss a second one); none or several is refused as `noSuchSession`, and a hold as `sessionResolutionIncomplete` (the session may be live but not listed yet: retry), never guessed. A full session id is not affected by a hold. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
 - Which sessions receive: only sessions this host launched in forced-ask mode, or allow-all mode with the grants above. On `SessionStarted`, the host atomically saves session id, permission mode, pid and exact process start time to device-key-authenticated, same-user-only `lite-launches.bin` beside `config.json`. After discovery at host startup, only entries still matching the live session's pid and process start time count; dead or changed entries are pruned, also during serving. An unreadable, corrupt, tampered or oversized file loads empty (safe); a failed save grants no recorded target. Sessions started by hand never qualify, even if listed. A host restart alone no longer requires relaunching an otherwise live, recorded session.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
-  receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
-- The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
+  receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final. **The receiver's budget counts deliveries that may have typed.** A refusal that typed nothing (`busy`, `notReplyTarget`, `composerNotEmpty` and the other plain refusals that carry a code) gives back exactly the hit its own request took, so a sender that retries a `busy` target cannot lock its pair out with `rate` (#1117); `delivered`, `queued`, `pending`, `unconfirmed`, a failed delivery (keys may have gone) and a result with no code stay spent, and a replay query never counts and never refunds. Because a refused send now costs no budget, the rate cap no longer bounds refused work: only the replay table (4,096 request ids, 150 seconds) does. **In place** (slipgates-fleet #1182, merged): the sender side keeps busy retries under the same 6 a minute per pair, with retries spaced at least 10 seconds apart and `reply-session.ps1` sending nothing, before its first attempt, to a pair that already has 6 Slipgates attempts in the last minute in its send log; a `rate` refusal from the receiver already stops the call.
+- The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so a resend over the other route could deliver the same message twice. That is why there is no Home Assistant fallback after an `unconfirmed` relay send (it is terminal and never resent); the separate stores matter only for the fallbacks that remain (offline, `undeliverable`, and one send after a clean `busy` or `notReplyTarget` refusal). A shared store comes after the cut-over.
   The duplicate memory is in memory only, so a host restart inside the 2 minute window can also deliver one message twice.
 - A remote-host device ID absent from presence fails at once as `refused: noSuchMachine`, naming the ID. Nothing is signed or queued, and identity refusals hold without HA fallback.
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-   could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
+   could message his sessions, and any message from a present own host is typed into a session there that is idle (or a working Claude with the proposed flag on), has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
+
+## Receipt lookup for an unconfirmed send (design; slices 1 to 3)
+
+When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
+cannot say whether the text was typed, and `reply-session` prints "Delivery is uncertain; Receipt lookup is unavailable; do not
+resend automatically". On one machine that was 190 of 1,384 sends in about twelve hours (14%). This section is the lookup. It changes
+no behavior until its slices land, and adds no envelope action: the vectors in `docs/protocol/vectors/agent-envelope.json` do not change.
+
+**What already holds.** The envelope id is the request id. The receiver remembers `peer/request` for 150 s (in memory, at most 4,096
+ids, a restart forgets them), and a same-id offer from the same peer never types a second time: it is refused `replay` (or, with the
+lane, answered from the lane's own same-id query). An envelope lives 120 s. What is missing is an answer: `replay` does not say what the
+first attempt became, and the sender keeps nothing about what it sent.
+
+**Two different things, never mixed (a, b).** A lookup can fail in two ways that look alike and mean opposite things.
+
+* **(a) The journaled outcome of the first attempt.** Only an answered receipt (`status: "receipt"`) carries it, in `code`. If that code
+  is `refused:<code>`, the first attempt really was refused and nothing was typed: this is the only case a sender may call "not delivered".
+* **(b) Anything that goes wrong with the lookup itself.** A `refused` acknowledgement to the probe (`off` or killed, `rate`,
+  `notPeer`, `notSameAccount`, `malformed`, `busy` (the replay memory is full), `peerError`, `lite-action` from a host that does not know the probe, any envelope code), a timeout, a lost
+  channel, an offline host, an unreadable answer, or `status: "unknown"`. Nothing was learned and the text may have been typed: the send
+  stays uncertain. A lookup result never feeds `reply-session`'s busy retry or the Home Assistant fallback, and never invites a resend.
+
+**The design.**
+
+1. **Receiver journal.** Beside the replay id the receiver records what the first attempt became, exactly as it acknowledged it and
+   nothing stronger: `in-flight`, `delivered`, `refused` with its code, or the lane's `pending`/`queued`/`unconfirmed`. If delivery throws
+   or is cancelled after keys may have gone, the journal records `unconfirmed` (code `deliveryFailed`), never `refused`. The same 150 s
+   and 4,096 bounds; no text, no name. A refusal at the door, before an id is remembered (mode, channel, signature, lifetime), is not
+   recorded, and a probe of it answers `unknown`. The journal entry also keeps the signed principal of the original request (the session,
+   or a script's identity), so only the same sender on the same peer host can read it, not another session on that host.
+2. **A probe that never types.** A lookup is a new signed lite envelope carrying the existing `session.read` action (in the lite profile
+   it means only this; `LiteProfile.Check` still accepts only `session.reply`, and the probe check accepts only `session.read`, so
+   neither is taken for the other), the original request id in the signed `request` field, and empty data, sealed by the same device
+   and agent signing key. A probe with text is refused `malformed`. The receiver checks it like any lite envelope, then only looks the
+   id up: it never reaches delivery, and never adds the id to the replay memory (a replayed probe only reads again). Probes have their
+   own budget, 6 a minute per asking peer and request id, apart from the pair's delivery budget. An old host refuses the probe as
+   `lite-action` (case b). A later change to the probe is a different action or answer status, never a silent reinterpretation.
+3. **The answer.** `status: "receipt"` with `code` the recorded outcome (`delivered`, `refused:<code>`, `pending`, `queued`,
+   `unconfirmed`, `in-flight`), or `status: "unknown"` with no code; `request` is the asked id. A receipt tells the same sender nothing the
+   original acknowledgement did not already, and exposes no session or text.
+4. **Sender keeps a small record, not the envelope.** For a send that ends `unconfirmed`, the sender's host keeps the request id, the target
+   machine and the credential in memory until the original envelope would have expired (at most 120 s, at most 64 entries per
+   credential, dropped on expiry or restart) and serves them to a new agent pipe op, `agent.receipt { request }`. Caller rules are
+   `agent.send`'s: an agent connection with its session credential, the same scope, the same refusals; script connections are
+   refused; an audit entry like `agent.send`'s. A request id that is unknown, or was made by another credential, is refused locally as
+   unknown and sent nowhere. Rows for the op go in `agent-operations.md` and `local-pipe.md` when it lands.
+5. **Fleet tool.** After `unconfirmed`, `reply-session` asks `agent.receipt` up to three times, 5 s apart (about 40 s with each ask up to
+   10 s, while it holds its send lock; the whole lookup is capped at 45 s), and prints: delivered (confirmed by receipt); accepted when
+   the receipt is `queued` (exit 6, #3828); not delivered, with the code, only for a receipt `refused:<code>` (a); and for everything else
+   (`in-flight`, `pending`, `unconfirmed`, `unknown`, no answer, any lookup failure, b) uncertain, exit 2, with today's sentence. `unknown`
+   never means not delivered: the original may still arrive inside its 120 s. After 150 s, a host restart or no answer the send stays
+   uncertain and is never resent. This is not an exactly-once guarantee.
+
+**Limits that stay.** The journal is memory only (a restart forgets it, so a lookup after one is `unknown`); beyond the envelope's 120 s
+a lookup cannot be made; the Home Assistant fallback keeps its own separate memory, so a double delivery across the two routes remains
+the known rare limit above. A lookup is refused when the mode is off or killed.
+
+**Slices** (each at most 400 lines, tests first): (1) receiver journal, the probe check and the answer, with spy tests that a probe never
+reaches delivery, a reply is not accepted as a probe and the reverse, and a tampered action fails the signature (an empty reply is
+also refused by `LiteDeliver`); (2) the sender's request record and `agent.receipt`; (3) `reply-session`.
+
+**Decided (owner; recorded by the Chief on #3875).** (a) A **strict probe**: a lookup only reads the outcome and never types; an
+unseen id answers `unknown`. Exactly-once resend (a re-offer that delivers an unseen id late) is not part of this design. (b) The
+journal is **memory only, 150 s**: a restart forgets it, and a lookup after one is `unknown`.
 
 ## Turn it on (a person at each machine, in the agreed order)
 
@@ -125,6 +189,8 @@ Receiver refusals, in the order they are checked:
 | `notReplyTarget` | the target is not a session this host can type into. Lite types into Copilot and Claude Code sessions only (**owner-approved CHANGE, ~15:20 PT Nov 22**: Claude was refused before); Codex and unknown agents stay refused, and the lane (`laneDelivery`) still takes Copilot targets only. A Claude session is held to the same gates, idle, rate, signed account and process-incarnation fences as Copilot, and the fence is asked again before the first key and before each Enter pressed again when Claude took the first as part of the paste (a lost grant, kill switch or account stops the keys); its input box is read as the replier reads it (on screen, no `/` or `!` command waiting). Claude shows a suggested prompt in an empty box that a screen read cannot tell from typed words, so only a box that is off screen or holds a command is `composerNotEmpty` for Claude |
 | `busy` | the target is not idle (a working Claude too, unless `agentMessaging.claudeBusyQueue` is on, default off), or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
+| `queueHeld` | a relay message to this session is still held in Claude's own queue (proposed, with `agentMessaging.claudeBusyQueue`); nothing was typed. Final: not retried and never sent over Home Assistant, which `busy` would allow |
+| `statusFull` | the host's status store for busy-Claude sends is full (proposed, same flag); nothing was typed. Final, as `queueHeld` |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, (discovery held is `sessionResolutionIncomplete`, below). A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |
 | `sessionResolutionIncomplete` | the target is a node id and session discovery is held, so a live session may not be listed yet. Nothing was typed; retry after a few seconds. Final for the sender's HA fallback, as `noSuchSession` is (docs/design/reply-deduplication.md; #1396) |
 
@@ -136,9 +202,11 @@ resolve names. The ID-first refusal contract above takes precedence for identity
 | --- | --- |
 | `delivered` | success; the only success |
 | `refused` with `badMachine` or `noSuchMachine` | final identity failure naming the device ID; no name, fragment or HA fallback |
-| `off` (including the mode turned off while the signing key was made; nothing sent), `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
-| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant, once, only when nothing was typed (`NoKeysSent`); never after Accepted or Unconfirmed |
+| `off` (including the mode turned off while the signing key was made; nothing sent) or `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name) | falls back to Home Assistant once |
+| `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | no fallback over any transport: the first message may already have been typed, so a resend could deliver it twice. It is meant to be reported from the host's memory-only status store, which the sender would pull by request id (**planned**: the store is #3926, still open, and the lookup op `agent.receipt` of the receipt-lookup design, #3875, is not built, so today the sender's last word is `unconfirmed`; after a host restart the lookup would answer unknown, reported as unconfirmed) |
+| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant once; such a refusal means nothing was typed: Lite refuses before any key goes, which is its own proof until the planned `KeyDisposition.NoKeysSent` exists (reply-deduplication.md, cut 3), after which the fallback requires it. Never after a queued (Accepted) or `unconfirmed` result |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
+| `refused` with `queueHeld` or `statusFull` | final failure shown to the sender; never retried and never sent over Home Assistant (a `busy` code here would bypass the depth cap) |
 | any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
 
 ## Acceptance tests (tick before cut-over)
@@ -148,11 +216,11 @@ Run on staging, then production, with two approved machines first and the other 
 - [ ] 12 ordered pairs of the four machines, 50 messages each: all delivered once and acknowledged within 30 seconds; fallbacks counted, and more than about 2 percent on a healthy relay fails.
 - [ ] Relay duplicates: the same message id sent twice over the relay inside 2 minutes is delivered once; 20 races from two machines at once lose nothing and duplicate nothing on the relay route. Not tested for once-only across relay and Home Assistant (known limit above).
 - [ ] Relay unreachable: messages arrive through Home Assistant. Target offline: a fast, clear failure.
-- [ ] Busy target and non-empty input box: refused, nothing typed. Other account, absent host and wrong static key: refused, nothing typed.
+- [ ] Busy target (a working Claude too, with the proposed flag off) and non-empty input box: refused, nothing typed. Other account, absent host and wrong static key: refused, nothing typed.
 - [ ] A fresh install has the mode on only when signed in with a present same-account peer; signed out it sends and receives nothing; after a kill it stays off across restarts; a malformed or unreadable setting is off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
 - [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message. A host restart keeps recorded forced-ask targets; a changed pid, reused pid with another start time, or corrupt launch file refuses them. Hand-started sessions are always `notReplyTarget`.
-- [ ] Delivered text carries the prefix line. A live recorded allow-all session receives only when idle, explicit remote is on, and the existing master-plus-list grant or the owner-set all-launched switch is on. Restart preserves it; default/invalid/off preserves the list path. The receiver rechecks its kill switch, remote setting, grant, process generation and signed-in account (the envelope's account) on admission, after waiting for the shared typing slot and immediately before injection; remote off, a revoked grant, kill, or an account switch meanwhile, or no account at all (including during a same-host send), types nothing, and the account case is refused as `notSameAccount`.
+- [ ] Delivered text carries the prefix line. A live recorded allow-all session receives only when idle (a working Claude too, only with `agentMessaging.claudeBusyQueue` on, after the [qualification plan](../design/busy-claude-queue-qualification.md)), explicit remote is on, and the existing master-plus-list grant or the owner-set all-launched switch is on. Restart preserves it; default/invalid/off preserves the list path. The receiver rechecks its kill switch, remote setting, grant, process generation and signed-in account (the envelope's account) on admission, after waiting for the shared typing slot and immediately before injection; remote off, a revoked grant, kill, or an account switch meanwhile, or no account at all (including during a same-host send), types nothing, and the account case is refused as `notSameAccount`.
 - [ ] Fleet switch off: every messenger is back on Home Assistant within 60 seconds. Per-machine kill: that machine stops using the relay at once (it refuses with `off`) and messengers fall back to Home Assistant.
 
 ## Home Assistant retirement checklist (tick after the 24 hour soak of all four machines)

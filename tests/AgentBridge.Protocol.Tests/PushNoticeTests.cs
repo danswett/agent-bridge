@@ -23,6 +23,42 @@ public class PushNoticeTests
     };
 
     [Fact]
+    public void A_failures_notice_is_a_machine_count_with_its_own_tag_and_no_session_id_or_text()
+    {
+        var message = new PushMessage
+        {
+            Notification = new PushNotification
+            {
+                Title = "Messages not delivered", Body = "DEV · 3 messages not delivered", Tag = PushNotice.Tag(Machine, PushNotice.FailuresKey),
+                Navigate = PushNotice.NavigateMachine("https://danswett.github.io/agent-bridge/app/", Machine),
+                Data = new PushNoticeData { Kind = NoticeKind.Failures, Machine = Machine, Session = "", Failures = 3, At = At },
+            },
+        };
+        var n = JsonDocument.Parse(PushNotice.Serialize(message)).RootElement.GetProperty("notification");
+        Assert.Equal($"{Machine}:~failures", n.GetProperty("tag").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        var d = n.GetProperty("data");
+        Assert.Equal(("failures", 3, ""), (d.GetProperty("kind").GetString(), d.GetProperty("failures").GetInt32(), d.GetProperty("session").GetString()));
+        Assert.False(d.TryGetProperty("question", out _));
+        // A client that predates the kind reads it as a question (UnknownAs), shown and alerting, and opens the machine.
+        Assert.Equal(NoticeKind.Question, JsonSerializer.Deserialize<PushNoticeData>("""{"v":1,"kind":"brandnew","machine":"m","at":"2026-10-28T04:22:43.182Z"}""", ProtocolJson.Options)!.Kind);
+        Assert.NotEqual(PushNotice.Topic(Machine, PushNotice.FailuresKey), PushNotice.Topic(Machine, "~needsyou"));
+    }
+
+    [Fact]
+    public void Failures_are_wanted_only_when_the_device_turned_them_on_and_never_by_default()
+    {
+        // The doc's rule (v1-sessions.md, Notification filters): off by default, and not decided by any other flag.
+        Assert.False(new PushNotify().Wants(NoticeKind.Failures, ""));
+        Assert.False(new PushNotify { Questions = true, Pinned = true, All = true }.Wants(NoticeKind.Failures, ""));
+        Assert.True(new PushNotify { DeliveryFailures = true }.Wants(NoticeKind.Failures, ""));
+        Assert.False(new PushNotify { DeliveryFailures = true, Questions = false, Pinned = false }.Wants(NoticeKind.Question, "s1"));
+        // The kinds it already filtered, and the ones it never filters, are as before.
+        Assert.True(new PushNotify().Wants(NoticeKind.Question, "s1"));
+        Assert.True(new PushNotify().Wants(NoticeKind.SignIn, ""));
+    }
+
+    [Fact]
     public void A_notice_is_a_declarative_web_push_message_carrying_the_machine_session_and_question()
     {
         var json = JsonDocument.Parse(PushNotice.Serialize(PushNotice.Fit(Message("Fix the login", "DEV · waiting on you\nWhich one?")))).RootElement;

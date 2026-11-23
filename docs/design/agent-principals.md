@@ -2098,9 +2098,14 @@ unchanged. Only the principal and its source change.
   generation check under the driver lock), so an owner who types the same words later is still the
   owner and a newer arm is never overwritten. Lane deliveries (the queueable lane) are not armed:
   their prompts show as typed. Nothing in the text sets or clears the mark, and the prompt's text is
-  kept as typed, header included. Missing provenance means no field, and clients show the owner's
-  text as typed. The mark is held in memory with the session's turns, as for Home Assistant replies:
-  after a host restart, earlier relayed prompts carry no mark and show as typed.
+  kept as typed, header included. Clients use the host's `from`/`label` for the agent-coloured
+  sender chip, never the text's claimed sender. Explicit person or untrusted provenance leaves the
+  owner's text unchanged. With both fields absent, only a strict legacy envelope gets a neutral chip
+  explicitly labelled **unverified** (including tooltip and accessible name); its full original text,
+  header included, remains available. That hint is never identity, an agent colour, or an input to
+  scheduling or notification decisions. The mark is held in memory with the session's turns, as for
+  Home Assistant replies: after a host restart, earlier relayed prompts carry no mark and can show
+  only this unverified hint, not verified attribution.
 * **Which display fields are trusted.** Only names from a verified source are shown as identity:
   * the machine name from the receiving host's own roster;
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the

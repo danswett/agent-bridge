@@ -132,6 +132,15 @@ internal sealed class SessionTracker
         {
             changed = true;
         }
+        // A shell that never reported back stops counting once it is older than Limits.BackgroundShellStale (#1108):
+        // the clock alone changes the answer, with nothing written to the transcript, so ask again with what the
+        // last build SHOWED, as for Stalled above. Against what is shown, not only when something is: a shell dropped for
+        // age counts again if the wall clock is put back, and nothing shown would ask for it.
+        if (!changed && _built is { } shown
+            && _state.Background.Running(Discovered.ProcessStartedAt, _time).Shells != (shown.Activity.Background?.Shells ?? 0))
+        {
+            changed = true;
+        }
         // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
         // shows as asked (#780), though nothing it reads did.
         // The hook status a restored Claude session's registration carries when the boundary is
@@ -325,7 +334,7 @@ internal sealed class SessionTracker
         };
         var (response, responseCut) = Limits.KeepEnd(_state.Response, Limits.Response);
         var history = _state.Tools.Count > 0 ? _state.Tools.Latest(Limits.History) : null;
-        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt);
+        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt, _time);
         var (subagents, more) = _state.Background.Entries(d.ProcessStartedAt, Waiting());
         var source = _state.ResponseBy is null && _state.ReasoningBy is null ? null
             : new ActivitySource { Response = _state.ResponseBy, Reasoning = _state.ReasoningBy };
@@ -341,8 +350,11 @@ internal sealed class SessionTracker
         var background = agents + shells > 0;
         _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
+        // What an agent's End must still see (StopService): the shells counted without the stale limit, only when it dropped one.
+        var rawShells = _state.Background.Running(d.ProcessStartedAt).Shells;
         return new Session
         {
+            BackgroundUnaged = rawShells != shells ? Protocol.Background.Of(agents, rawShells) : null,
             Id = d.Id,
             Machine = _hostId,
             Owner = _hostId is null ? null : new(),
