@@ -949,6 +949,12 @@ controls consume that same contract; this extraction does not disable or remove 
 
 ### Releases and updates: every merge to main is a pre-release
 
+**Planned change (owner decision, Nov 23; lands with #3769).** The `publish` job and the app installer leave `ci.yml`: main is
+green on build and test only, and a release train builds, verifies the installer and publishes after the merge, so a bad
+installer blocks the release, not a merge. Release order is then the train's, and the `ci-main` group and `publish-prerelease`
+queue described below go with the job. Until #3769 lands, what follows is what runs. The speed plan and the main concurrency
+change (one group per commit, nothing cancelled) are in quality/README.md, "CI: speed, runners and what gates main".
+
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
 app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
 select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by

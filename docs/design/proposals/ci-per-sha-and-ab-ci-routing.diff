@@ -1,0 +1,73 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2ab972da..071eec05 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -33,7 +33,7 @@ permissions:
+ # ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
+ # own run id, never cancelled.
+ concurrency:
+-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
++  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
+ env:
+@@ -271,7 +271,10 @@ jobs:
+       fail-fast: false
+       matrix:
+         os: ${{ fromJSON(needs.plan.outputs.product-os) }}
+-    runs-on: ${{ matrix.os }}
++    # Windows x64 runs on the ab-ci pool for a push or a pull request from this repository, and on a hosted runner
++    # otherwise (a fork never reaches a persistent runner); the variable flips the pool off without a workflow change.
++    # quality/README.md, "CI: speed, runners and what gates main"; CiRunnerRoutingTests holds the guard.
++    runs-on: ${{ (matrix.os == 'windows-latest' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
+     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
+     # (#129); this caps what a hang can cost.
+     timeout-minutes: 30
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index a7c7aeb7..d7bb6f10 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -5,7 +5,7 @@ public class CiPlanTests
+     // ci.yml's wiring to the plan as the repository has it, cut down to two gated jobs.
+     const string Wired = """
+         concurrency:
+-          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
++          group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+           cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+         jobs:
+           plan:
+@@ -65,17 +65,18 @@ public class CiPlanTests
+     [Theory]
+     [InlineData(" && github.run_attempt == '1'", "", false)]
+     [InlineData("github.run_attempt == '1'", "github.run_attempt != ''", false)]
+-    [InlineData("'ci-main' ||", "'ci-main-' ||", false)]
++    [InlineData("format('ci-main-{0}', github.sha) ||", "format('ci-main-{0}', github.run_id) ||", false)]
++    [InlineData("format('ci-main-{0}', github.sha) ||", "'ci-main' ||", false)]
+     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: true", false)]
+     [InlineData("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", "cancel-in-progress: false", false)]
+     [InlineData("concurrency:", "x-concurrency:", false)]
+-    [InlineData("'1' && 'ci-main'", "'1'   &&  'ci-main'", true)]
++    [InlineData("'1' && format('ci-main-{0}', github.sha)", "'1'   &&  format('ci-main-{0}', github.sha)", true)]
+     public void Ci_concurrency_keeps_reruns_out_of_ci_main_and_never_cancels_its_runs(string from, string to, bool fine)
+     {
+         Assert.Contains(from, Wired, StringComparison.Ordinal);
+         var problems = Check(Wired.Replace(from, to, StringComparison.Ordinal));
+         string[] expected = fine ? [] : [
+-            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
++            "ci.yml's concurrency isn't group ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}"
+             + " with cancel-in-progress ${{ github.event_name == 'pull_request' }}"];
+ 
+         Assert.Equal(expected, problems);
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 4d0eaabf..ec05fc81 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -53,7 +53,7 @@ static partial class CiPlan
+     private static partial Regex AppBuilt();
+     const string AppResult = "${{ needs.app.result }}";
+     const string ConcurrencyGroup =
+-        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
++        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
+     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
+     // publish's own group, keeping every waiting publish (queue: max) where the default lets the
+     // next to arrive replace the one waiting: a re-run of an old run could otherwise replace a
