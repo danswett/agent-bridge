@@ -43,8 +43,13 @@ internal sealed partial class DeliveryLaneScheduler
                 // A malformed offer must fail before the decision can spend a grant.
                 var (prepared, text) = DeliveryEnvelope.Prepare(header, body);
                 _ = DeliveryEnvelope.Format(prepared with { Seq = "q1" }, text);
-                var decision = journal.DecidePriority(request, target, sender, body, priority, receiver, header.At,
-                    effective => HasRoom(target, effective));
+                PriorityDecision decision;
+                try
+                {
+                    decision = journal.DecidePriority(request, target, sender, body, priority, receiver, header.At,
+                        effective => HasRoom(target, effective));
+                }
+                finally { LatchJournalUncertainty(); }
                 if (!decision.Accepted) { return new(DeliveryOfferState.Refused, $"Target {target}: priority {decision.Reason}."); }
                 header = header with { Priority = decision.Priority };
                 if (decision.Priority == "urgent") { granted = receiver; }
@@ -78,8 +83,11 @@ internal sealed partial class DeliveryLaneScheduler
                 _ => DeliveryOfferState.Pending,
             };
             var demoted = journal.PriorityOutcome(request) is { } outcome ? $"Priority demoted to normal: {outcome}. " : "";
-            return new(state, record.Reason ?? (state == DeliveryOfferState.Pending ? demoted + "Memory only; not durable acceptance." :
-                state == DeliveryOfferState.Dropped ? demoted + "Restart: pending payload unavailable." : demoted.Length > 0 ? demoted.TrimEnd() : null));
+            // The demotion reason sits beside, never instead of, the delivery reason; a demoted record's own reason repeats it.
+            var latest = demoted.Length > 0 && record.State == "demoted" ? null : record.Reason;
+            var text = (demoted + (latest ?? (state == DeliveryOfferState.Pending ? "Memory only; not durable acceptance." :
+                state == DeliveryOfferState.Dropped ? "Restart: pending payload unavailable." : null))).Trim();
+            return new(state, text.Length > 0 ? text : null);
         }
     }
 
@@ -96,6 +104,7 @@ internal sealed partial class DeliveryLaneScheduler
         if (item.Sender != DeliveryClass.Agent || item.Header.Priority != "urgent") { return false; }
         try { return !journal.PriorityCurrent(Guid.Parse(item.Header.Id), session, sender, item.Receiver, time.GetUtcNow()); }
         catch (InvalidOperationException) { return true; }
+        finally { LatchJournalUncertainty(); }
     }
 
     static bool SameSender(DeliveryJournalRecord record, string target, DeliverySender sender) =>

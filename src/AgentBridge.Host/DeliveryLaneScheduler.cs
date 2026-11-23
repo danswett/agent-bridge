@@ -20,6 +20,12 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
     readonly Dictionary<string, Lanes> sessions = new(StringComparer.Ordinal);
     bool uncertain;
 
+    // Propagates the journal's real uncertainty (never a mere clock refusal) to the scheduler and the shared gate.
+    void LatchJournalUncertainty()
+    {
+        if (journal.Uncertain) { uncertain = true; gate.MarkJournalUncertain(); }
+    }
+
     void Record(string session, DeliveryHeader header, string body, DeliveryState state, string? reason = null)
     {
         try { journal.Write(session, header, body, state, reason: reason); }
@@ -51,7 +57,8 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
             _ = DeliveryEnvelope.Format(header with { Seq = "q1" }, body);
             if (!sessions.TryGetValue(session, out var lanes)) { sessions[session] = lanes = new(); }
             var displaced = urgent && lanes.Urgent.Count == 10 && sender == DeliveryClass.Owner
-                ? lanes.Urgent.LastOrDefault(i => i.Sender != DeliveryClass.Owner) : null;
+                ? lanes.Urgent.LastOrDefault(i => i.Sender == DeliveryClass.Agent) ??
+                    lanes.Urgent.LastOrDefault(i => i.Sender == DeliveryClass.System) : null;
             if (!urgent && header.Priority == "fyi" && lanes.Queueable.Count == 50 &&
                 !lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
             {
@@ -66,14 +73,7 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
                 notices.Add(new(session, header, $"Target {session}: lane full; refused."));
                 return false;
             }
-            if ((!urgent || displaced is not null) && lanes.Queueable.Count == 50 &&
-                lanes.Queueable.Any(i => i.Header.Priority == "fyi"))
-            {
-                var drop = lanes.Queueable.First(i => i.Header.Priority == "fyi");
-                Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
-                lanes.Queueable.Remove(drop);
-                notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
-            }
+            if (!urgent || displaced is not null) { EvictOldestFyi(session, lanes, notices); }
             if (displaced is not null) { Demote(session, lanes, displaced, "owner overflow", "owner", notices); }
             Record(session, header, body, DeliveryState.Enqueued);
             (urgent ? lanes.Urgent : lanes.Queueable).Add(new(header, body, sender, sender == DeliveryClass.Agent ? granted : null));
@@ -81,11 +81,27 @@ internal sealed partial class DeliveryLaneScheduler(DeliveryJournal journal, Del
         }
     }
 
+    void EvictOldestFyi(string session, Lanes lanes, List<LaneNotice> notices)
+    {
+        if (lanes.Queueable.Count != 50 || lanes.Queueable.FirstOrDefault(i => i.Header.Priority == "fyi") is not { } drop) { return; }
+        Record(session, drop.Header, drop.Body, DeliveryState.Dropped, "overflow");
+        lanes.Queueable.Remove(drop);
+        notices.Add(new(session, drop.Header, $"Target {session}: dropped overflow."));
+    }
+
     void Demote(string session, Lanes lanes, Item item, string reason, string noticeFor, List<LaneNotice> notices)
     {
         var moved = item with { Header = item.Header with { Priority = "normal" }, Receiver = null };
         Record(session, moved.Header, moved.Body, DeliveryState.Demoted, reason);
+        if (item.Receiver is not null && fences.TryGetValue((session, item.Header.Id), out var authority))
+        {
+            // Best effort while the journal stays certain (a clock refusal); a real append failure latches and propagates.
+            try { journal.RecordDemotion(Guid.Parse(item.Header.Id), session, authority.Sender, reason, time.GetUtcNow()); }
+            catch (InvalidOperationException) when (!journal.Uncertain) { }
+            finally { LatchJournalUncertainty(); }
+        }
         lanes.Urgent.Remove(item);
+        EvictOldestFyi(session, lanes, notices);
         if (lanes.Queueable.Count == 50)
         {
             Record(session, moved.Header, moved.Body, DeliveryState.Dropped, "overflow");

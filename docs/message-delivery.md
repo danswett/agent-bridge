@@ -188,7 +188,10 @@ Offer takes an optional `DeliveryPriorityRequest` and receiver binding; only a n
 `DecidePriority`, whose admission predicate checks the effective lane before any grant is consumed (a full lane refuses
 `lane-full`, spends nothing and permits a same-UUID retry). Agent urgent exists only for a journaled grant; Query reports a
 demotion and its reason. The scheduler rechecks `PriorityCurrent` at preflight and in the final fence: a lapsed grant is
-journaled `demoted` and waits as normal, never typed urgent. Nothing calls this yet: no wiring or activation.
+journaled `demoted` and waits as normal, never typed urgent, evicting the oldest fyi if the normal lane is full. A priority append
+failure latches the scheduler and the shared gate, so no later owner or lifecycle step proceeds; a clock refusal does not. The demotion
+is a journal fact: Query keeps it after handoff, beside any delivery reason. Owner overflow demotes the newest agent, then system.
+Nothing calls this yet: no wiring or activation.
 No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.
 Canonical Fleet flags remain [#651](https://github.com/danswett/slipgates-fleet/issues/651), owned by Fleet Quality.
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.
