@@ -411,6 +411,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
   request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
   (`LocalChannel.RequestOrderedAsync`).
+  On the host's end (#4134), the action a client asked for and the host accepted (Stop, Restart, a remote restart's Leave: a `ChannelReply` marked
+  `RunsIfUnsent`) runs once the request is accepted, whether or not the answer reached the client: a client that reads the answer and hangs up
+  at once, or is gone before it is sent, no longer leaves a host that said "stopping" running. The send failure is logged
+  (`local pipe: the reply to host.stop could not be sent ... its action runs anyway`); a follow-up that is not such an action (a subscribe's
+  snapshot) still needs its answer on the wire first. Stop's lease on deliveries is therefore not given back when its answer fails.
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
