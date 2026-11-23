@@ -603,6 +603,20 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: host-shards-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The deterministic split of tests/AgentBridge.Host.Tests into class-level shards (#2454, #2225): no test
+    # lost or run twice, the same split every time, balanced by the committed per-class seconds. Offline.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/host-shards.ps1, quality/test-host-shards.ps1, quality/baselines/host-test-class-seconds.json]
+    command: pwsh -NoProfile -File quality/test-host-shards.ps1
+    where: ci.yml light
+    status: exists
+
   - id: rerun-known-flakes
     validation_plan: native
     kind: unit
