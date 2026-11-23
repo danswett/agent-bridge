@@ -15,6 +15,9 @@ public static class LiteCodes
     public const string Busy = "busy";
     public const string ComposerNotEmpty = "composerNotEmpty";
     public const string NoSuchSession = "noSuchSession";
+    // A node id could not be resolved because session discovery is held (docs/design/reply-deduplication.md): the
+    // session may be live but not listed yet. Nothing was typed; a retry may deliver.
+    public const string SessionResolutionIncomplete = "sessionResolutionIncomplete";
 }
 
 public sealed record GateDecision(bool Allowed, string? Code, string? Reason)

@@ -157,6 +157,22 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_reply_calls_KeysGoing_once_just_before_its_first_keys_and_not_for_a_refusal_before_them()
+    {
+        console.Rows = ClaudeIdle();
+        var calls = new List<int>();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", KeysGoing = () => calls.Add(console.Plans.Count) };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(typed, Peer)).Outcome);
+        Assert.Equal([0], calls); // before any key went, and only once
+
+        var refused = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true, KeysGoing = () => calls.Add(-1) };
+        Assert.Equal(AnswerOutcome.Refused, (await replier.ReplyAsync(refused, Peer)).Outcome);
+        Assert.Equal([0], calls);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_that_requires_an_idle_session_is_refused_as_busy_while_it_works()
     {
         console.Rows = ClaudeIdle(); // the fixture's transcript ends on the person's prompt: the turn is still running

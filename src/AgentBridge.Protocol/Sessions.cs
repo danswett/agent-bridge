@@ -866,6 +866,9 @@ public sealed record ReplyRequest
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
+    // Host-only: called once, with the typing slot held and every fence passed, just before the keys go.
+    [JsonIgnore]
+    public Action? KeysGoing { get; init; }
     [JsonIgnore]
     public Func<string>? HandoffText { get; init; }
     [JsonIgnore]
