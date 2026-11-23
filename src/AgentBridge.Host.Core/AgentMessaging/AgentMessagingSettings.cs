@@ -77,6 +77,11 @@ public sealed record AgentMessagingSettings
             if (lane.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { LaneDelivery = lane.ValueKind == JsonValueKind.True }; }
             else { problems.Add("agentMessaging.laneDelivery is not true or false, so lane delivery is off"); }
         }
+        if (s.TryGetProperty("claudeBusyQueue", out var busyQueue))
+        {
+            if (busyQueue.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { ClaudeBusyQueue = busyQueue.ValueKind == JsonValueKind.True }; }
+            else { problems.Add("agentMessaging.claudeBusyQueue is not true or false, so busy sends to Claude stay refused"); }
+        }
         if (s.TryGetProperty("allowAllTargetSessions", out var targets) && targets.ValueKind != JsonValueKind.Null)
         {
             if (targets.ValueKind != JsonValueKind.Array) { problems.Add("agentMessaging.allowAllTargetSessions is not a list, so no allow-all sessions are enabled"); }
@@ -100,7 +105,7 @@ public sealed record AgentMessagingSettings
         // explicit own-account keeps its list problems as before. allow-all counts only with remote set to own-account.
         if (!settings.RemoteSet && problems.Count > 0) { settings = settings with { Remote = Off }; }
         if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllTargets = false }; }
-        if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllLaunchedTargets = false, LaneDelivery = false }; }
+        if (!settings.RemoteEnabled || !settings.RemoteSet) { settings = settings with { AllowAllLaunchedTargets = false, LaneDelivery = false, ClaudeBusyQueue = false }; }
         return (settings, problems);
     }
 }
