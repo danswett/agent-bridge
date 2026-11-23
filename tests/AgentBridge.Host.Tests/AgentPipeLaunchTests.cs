@@ -1149,13 +1149,13 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_peer_reply_with_a_reason_outside_the_fixed_codes_is_unconfirmed_not_trusted()
+    public async Task A_peer_reply_with_a_reason_outside_the_fixed_codes_is_a_refusal_with_one_generic_code()
     {
         using var key = P256KeyPair.Generate();
         var s = OpenSender(key, serve: data => Task.FromResult(JsonSerializer.SerializeToElement(
             FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), data.GetProperty("launch").Deserialize<FleetLaunchInput>(ProtocolJson.Options), "made-up-code"), ProtocolJson.Options)));
         var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
-        Assert.Equal((LaunchOutcome.Unconfirmed, 1), (receipt.Result.Outcome, s.Link.Calls));
+        Assert.Equal((LaunchOutcome.Refused, "policy", 1), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
     }
 
     // G9c2: a present host that is not a trusted own-account peer is peer-not-trusted (CLI doc refusal table), not target-offline.

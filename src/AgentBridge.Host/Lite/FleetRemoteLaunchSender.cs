@@ -114,7 +114,7 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
     static FleetLaunchReceipt? Normalize(FleetLaunchReceipt? r, FleetLaunchInput input)
     {
         if (r is null || r.Request != input.Request || r.Grant != input.Grant || r.Result is null || !Enum.IsDefined(r.Result.Outcome) || r.Generation < 0
-            || r.Permissions is not (null or "ask" or "allowAll") || r.Reason is { } reason && !FleetLaunchCommands.Reasons.Contains(reason, StringComparer.Ordinal)) { return null; }
+            || r.Permissions is not (null or "ask" or "allowAll")) { return null; }
         string? session = null;
         if (r.Result.Session is { } full)
         {
@@ -124,7 +124,9 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
         if (r.Registered && (r.Result.Outcome != LaunchOutcome.Started || session is null || r.Permissions is null)) { return null; }
         var caps = r.Caps is { } c && c.Hourly is > 0 and <= 1000 && c.Daily is > 0 and <= 5000 && c.Live is > 0 and <= 100 ? c : null;
         var usage = r.Usage is { } u && u.Hourly >= 0 && u.Daily >= 0 && u.Live >= 0 ? u : null;
-        return new(input.Request, input.Grant, r.Generation, new(r.Result.Outcome) { Session = session }, r.Permissions, r.Registered, usage, caps, r.Reason);
+        // A reason outside the fixed refusal codes is never shown: any unknown one becomes the one generic code, "policy".
+        var code = r.Reason is null ? null : FleetLaunchCommands.Reasons.Contains(r.Reason, StringComparer.Ordinal) ? r.Reason : "policy";
+        return new(input.Request, input.Grant, r.Generation, new(r.Result.Outcome) { Session = session }, r.Permissions, r.Registered, usage, caps, code);
     }
 
     // A 32-hex device id, or the 29-character node id (agent_bridge_ + first 16 hex) resolved against present hosts only.
