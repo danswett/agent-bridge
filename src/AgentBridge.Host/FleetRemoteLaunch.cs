@@ -12,7 +12,8 @@ namespace AgentBridge.Host;
 // request binding, replay, then the receiving host's own grant is the authority through the shared launch pipeline.
 // signPoint is believed only because it arrived on this channel, which the sender's device key authenticates (as in lite);
 // the hostSign suspension is temporary, and a signed roster replaces this later.
-public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
+public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, TimeProvider? clock = null, DateTimeOffset? startedAt = null,
+    ILiteMode? mode = null, AgentAuditLog? audit = null)
 {
     public const string Op = "fleet.launch";
     readonly TimeProvider time = clock ?? TimeProvider.System;
@@ -22,6 +23,8 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
 
     public async Task<FleetLaunchReceipt> ReceiveAsync(LiteChannel channel, JsonElement data)
     {
+        // The lite kill (ILiteMode.On, the same switch as lite messaging) turns remote launch off, before any parse or side effect.
+        if (mode is { On: false }) { return Refuse("kill-switch"); }
         if (channel.Untrusted is not null || !rates.Allow(channel.PeerId, Op)) { return Refuse("policy"); }
         FleetActionSigned signed; FleetLaunchInput input; byte[] point = [];
         try
@@ -46,14 +49,21 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
             || !replays.TryAdd(action, now)) { return Refuse("policy", input); }
 
         var found = grants.TryGetUsable(input.Grant);
-        if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input); }
+        if (!found.Usable) { return RefuseAudited(FleetGrantLaunch.StoreReason(found.Problem), input, action.SourceDevice); }
         // The envelope's generation is diagnostic only. As for a local launch (G5), the generation is the one this host's own
         // store holds when the launch is prepared, and dispatch rechecks that same generation, so revoke or reissue refuses.
         var subject = found.Grant!.Subjects.FirstOrDefault(s => s.Account == action.Account && s.SourceHost == action.SourceDevice
             && FleetActionEnvelope.SubjectDigest(s.Account, s.SourceHost, s.Session, s.Credential, s.ProcessInstance.Pid,
                 s.ProcessInstance.StartedAt.UtcTicks) == action.Subject);
-        return subject is null ? Refuse("scope", input) : await launch.LaunchGrantedRemoteAsync(subject, input);
+        return subject is null ? RefuseAudited("scope", input, action.SourceDevice) : await launch.LaunchGrantedRemoteAsync(subject, input);
     }
+
+    // A verified caller's refusal before the shared pipeline is audited like any refused use (fleet-grants.md): the row names the source host,
+    // not a session (none is matched yet). If the row cannot be written, nothing proceeds and the refusal says so.
+    FleetLaunchReceipt RefuseAudited(string reason, FleetLaunchInput input, string sourceDevice) =>
+        audit is null || audit.Append(new AgentAuditEntry("relay", input.Request.ToString("D"), AgentProtocol.Principal(sourceDevice, "unmatched"), [],
+            LaunchProtocol.Launch, "remote", "refused", reason) { Grant = input.Grant.ToString("D") })
+            ? Refuse(reason, input) : Refuse("audit-unavailable", input);
 
     static FleetLaunchReceipt Refuse(string reason, FleetLaunchInput? input = null) =>
         FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);

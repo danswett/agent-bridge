@@ -807,7 +807,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public string Request = "";
     }
 
-    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "", bool warm = true)
+    sealed class Mode(bool on) : ILiteMode
+    { public bool On => on; public long KillEpoch => 0; public void TurnOff(string why) { } public void RaiseEpoch(long epoch) { } }
+
+    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "", bool warm = true, bool? on = null, bool audited = false)
     {
         var statik = RandomNumberGenerator.GetBytes(32);
         var peer = Wire.DeviceId(statik);
@@ -815,8 +818,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(grantKey: key, grantOnly: true);
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
-        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
-            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store)) { Request = request };
+        var mode = on is { } o ? new Mode(o) : null; var auditLog = audited ? new AgentAuditLog(folder) { DeviceKey = key } : null;
+        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null, mode: mode, audit: auditLog), channel, grant,
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode: mode, audit: auditLog)) { Request = request };
     }
 
     [Fact]
@@ -831,6 +835,32 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var replayed = await r.Receiver.ReceiveAsync(r.Channel, data);
         Assert.Equal((LaunchOutcome.Refused, "policy"), (replayed.Result.Outcome, replayed.Reason));
         Assert.Equal(1, launcher.Launches);
+    }
+
+    // G9c2 (Quality R4zzB536 P2): the lite kill switches remote launch off; a verified caller's refusal is audited like any refused use.
+    [Fact]
+    public async Task A_receiver_whose_lite_kill_is_off_refuses_a_valid_signed_launch_before_any_side_effect()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key, on: false);
+        var receipt = await r.Receiver.ReceiveAsync(r.Channel, r.Data());
+        Assert.Equal((LaunchOutcome.Refused, "kill-switch"), (receipt.Result.Outcome, receipt.Reason));
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_verified_callers_refusal_for_a_revoked_grant_or_an_unnamed_subject_writes_an_audit_row()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key, audited: true);
+        var other = FleetActionEnvelope.SubjectDigest("123", r.Channel.PeerId, Guid.NewGuid().ToString(), "AQEBAQEBAQEBAQEBAQEBAQ", 1, 1);
+        Assert.Equal("scope", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason);
+        Assert.Contains(AuditRows(), row => row.Contains(r.Request) && row.Contains("scope") && row.Contains("relay"));
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
+        Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
+        Assert.Contains(AuditRows(), row => row.Contains("grant-revoked") && row.Contains(r.Grant.Id.ToString()));
+        Assert.Equal(0, launcher.Launches);
     }
 
     [Fact]

@@ -511,7 +511,7 @@ The sender's envelope `generation` is diagnostic only: the receiver fences on it
 Wire operation (G9c2). `fleet.launch` is listed in `RemoteAuthorization.HostOperations`, so it is served only to a
 host peer of the same account, over the relay channel, and never on this machine's own pipe. A launch that is
 accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
-documented reasons and has no side effect.
+documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse. Every refused use is audited on the `relay` path, including a verified caller's refusal before the shared pipeline (grant missing or revoked, subject not named): the row names the source host and the grant; if it cannot be written the refusal is `audit-unavailable`.
 
 Receiver order:
 
