@@ -78,43 +78,65 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
-## Receipt lookup for an unconfirmed send (design, not implemented)
+## Receipt lookup for an unconfirmed send (design; slices 1 to 3)
 
 When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
 cannot say whether the text was typed, and `reply-session` prints "Delivery is uncertain; Receipt lookup is unavailable; do not
-resend automatically". On one machine that was 190 of 1,384 sends in about twelve hours (14%). This section designs the lookup. It
-changes no code and no wire format until its slices land.
+resend automatically". On one machine that was 190 of 1,384 sends in about twelve hours (14%). This section is the lookup. It changes
+no behavior until its slices land, and adds no envelope action: the vectors in `docs/protocol/vectors/agent-envelope.json` do not change.
 
 **What already holds.** The envelope id is the request id. The receiver remembers `peer/request` for 150 s (in memory, at most 4,096
-ids, a restart forgets them), and a same-id offer from the same peer never types a second time: it is refused `replay`. An envelope
-lives 120 s. What is missing is an answer: `replay` does not say what the first attempt became, and the sender keeps no copy of what it sent.
+ids, a restart forgets them), and a same-id offer from the same peer never types a second time: it is refused `replay` (or, with the
+lane, answered from the lane's own same-id query). An envelope lives 120 s. What is missing is an answer: `replay` does not say what the
+first attempt became, and the sender keeps nothing about what it sent.
+
+**Two different things, never mixed (a, b).** A lookup can fail in two ways that look alike and mean opposite things.
+
+* **(a) The journaled outcome of the first attempt.** Only an answered receipt (`status: "receipt"`) carries it, in `code`. If that code
+  is `refused:<code>`, the first attempt really was refused and nothing was typed: this is the only case a sender may call "not delivered".
+* **(b) Anything that goes wrong with the lookup itself.** A `refused` acknowledgement to the probe (`off` or killed, `rate`,
+  `notPeer`, `notSameAccount`, `malformed`, `busy` (the replay memory is full), `peerError`, `lite-action` from a host that does not know the probe, any envelope code), a timeout, a lost
+  channel, an offline host, an unreadable answer, or `status: "unknown"`. Nothing was learned and the text may have been typed: the send
+  stays uncertain. A lookup result never feeds `reply-session`'s busy retry or the Home Assistant fallback, and never invites a resend.
 
 **The design.**
 
-1. **Receiver journal.** Beside the replay id the receiver records the first attempt's outcome and nothing else: `in-flight`, `delivered`
-   (typed), `refused` with its code, or the lane's `pending`/`queued`/`unconfirmed`. The same 150 s and 4,096 bounds; no text, no name. A
-   same-id offer from the same peer (the channel's static key, as today) is answered with that outcome as a `receipt`, still without typing.
-2. **A probe that never types.** A lookup is a new signed lite envelope with its own action, `session.receipt`, carrying the original
-   request id and empty data, sealed by the same device and agent signing key. The receiver checks it like any lite envelope, then
-   only looks the id up: it never reaches delivery. An id it has no record of is answered `unknown` and nothing is typed. Only the
-   peer that made the original request can read its outcome (the journal key includes the peer).
-3. **Sender keeps a small record, not the envelope.** For a send that ends `unconfirmed`, the sender's host keeps the request id and
-   target in memory until the original envelope would have expired (at most 120 s, at most 64 entries per credential, dropped on expiry
-   or restart) and serves them to a new agent pipe op, `agent.receipt { request }`, which seals and sends the probe and returns
-   `delivered`, `refused:<code>`, `pending`, `queued`, `in-flight` (ask again shortly), or `unknown` (the target has no record, the id is
-   too old, or the host restarted). An unknown request id is refused locally. It never returns more than that.
-4. **Fleet tool.** After `unconfirmed`, `reply-session` asks `agent.receipt` up to three times, 5 s apart, and prints one of: delivered
-   (confirmed by receipt), not delivered with the refusal code, or still unknown with the sentence it prints today. It never resends the text.
+1. **Receiver journal.** Beside the replay id the receiver records what the first attempt became, exactly as it acknowledged it and
+   nothing stronger: `in-flight`, `delivered`, `refused` with its code, or the lane's `pending`/`queued`/`unconfirmed`. If delivery throws
+   or is cancelled after keys may have gone, the journal records `unconfirmed` (code `deliveryFailed`), never `refused`. The same 150 s
+   and 4,096 bounds; no text, no name. A refusal at the door, before an id is remembered (mode, channel, signature, lifetime), is not
+   recorded, and a probe of it answers `unknown`. The journal entry also keeps the signed principal of the original request (the session,
+   or a script's identity), so only the same sender on the same peer host can read it, not another session on that host.
+2. **A probe that never types.** A lookup is a new signed lite envelope carrying the existing `session.read` action (in the lite profile
+   it means only this; `LiteProfile.Check` still accepts only `session.reply`, and the probe check accepts only `session.read`, so
+   neither is taken for the other), the original request id in the signed `request` field, and empty data, sealed by the same device
+   and agent signing key. A probe with text is refused `malformed`. The receiver checks it like any lite envelope, then only looks the
+   id up: it never reaches delivery, and never adds the id to the replay memory (a replayed probe only reads again). Probes have their
+   own budget, 6 a minute per asking peer and request id, apart from the pair's delivery budget. An old host refuses the probe as
+   `lite-action` (case b). A later change to the probe is a different action or answer status, never a silent reinterpretation.
+3. **The answer.** `status: "receipt"` with `code` the recorded outcome (`delivered`, `refused:<code>`, `pending`, `queued`,
+   `unconfirmed`, `in-flight`), or `status: "unknown"` with no code; `request` is the asked id. A receipt tells the same sender nothing the
+   original acknowledgement did not already, and exposes no session or text.
+4. **Sender keeps a small record, not the envelope.** For a send that ends `unconfirmed`, the sender's host keeps the request id, the target
+   machine and the credential in memory until the original envelope would have expired (at most 120 s, at most 64 entries per
+   credential, dropped on expiry or restart) and serves them to a new agent pipe op, `agent.receipt { request }`. Caller rules are
+   `agent.send`'s: an agent connection with its session credential, the same scope, the same refusals; script connections are
+   refused; an audit entry like `agent.send`'s. A request id that is unknown, or was made by another credential, is refused locally as
+   unknown and sent nowhere. Rows for the op go in `agent-operations.md` and `local-pipe.md` when it lands.
+5. **Fleet tool.** After `unconfirmed`, `reply-session` asks `agent.receipt` up to three times, 5 s apart (about 40 s with each ask up to
+   10 s, while it holds its send lock; the whole lookup is capped at 45 s), and prints: delivered (confirmed by receipt); accepted when
+   the receipt is `queued` (exit 6, #3828); not delivered, with the code, only for a receipt `refused:<code>` (a); and for everything else
+   (`in-flight`, `pending`, `unconfirmed`, `unknown`, no answer, any lookup failure, b) uncertain, exit 2, with today's sentence. `unknown`
+   never means not delivered: the original may still arrive inside its 120 s. After 150 s, a host restart or no answer the send stays
+   uncertain and is never resent. This is not an exactly-once guarantee.
 
 **Limits that stay.** The journal is memory only (a restart forgets it, so a lookup after one is `unknown`); beyond the envelope's 120 s
 a lookup cannot be made; the Home Assistant fallback keeps its own separate memory, so a double delivery across the two routes remains
-the known rare limit above; a lookup is rate-limited with the pair's other offers and refused when the mode is off or killed.
+the known rare limit above. A lookup is refused when the mode is off or killed.
 
-**Who can ask.** Only the peer that sent the request, on the channel that authenticates it. The reply carries the request id, a state and
-a refusal code, so it exposes nothing about the target's sessions or text, and it grants no authority to type.
-
-**Slices** (each at most 400 lines, tests first): (1) receiver journal, the `session.receipt` action and its answer; (2) the sender's
-request record and `agent.receipt`; (3) `reply-session`.
+**Slices** (each at most 400 lines, tests first): (1) receiver journal, the probe check and the answer, with spy tests that a probe never
+reaches delivery, a reply is not accepted as a probe and the reverse, and a tampered action fails the signature (an empty reply is
+also refused by `LiteDeliver`); (2) the sender's request record and `agent.receipt`; (3) `reply-session`.
 
 **Decided (owner; recorded by the Chief on #3875).** (a) A **strict probe**: a lookup only reads the outcome and never types; an
 unseen id answers `unknown`. Exactly-once resend (a re-offer that delivers an unseen id late) is not part of this design. (b) The
