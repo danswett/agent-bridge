@@ -39,6 +39,10 @@ public static class UpdateApplyRetry
     // UpdateBackoff's 10, 20 and 40 minutes this tries for about 70.
     public const int MaxAttempts = 4;
 
+    // E2 WIRING CONTRACT (#2869): `checksumVerified` is the caller's say-so, true only if E2 has just re-verified the cached package by the same checksum
+    // check the install uses (never a remembered result); `holder` is who the caller's own bounded holder scan found holding a file in the installation
+    // (null if the scan found none or could not run), never guessed from the result, which carries no holder. This function compares no versions: whether
+    // the target is the right release is decided before an apply is attempted, with ReleaseVersions, not here.
     public static ApplyRetryDecision Decide(UpdateApplyResult result, bool checksumVerified, ApplyHolder? holder, int failedBefore, DateTimeOffset firstAttemptAt, DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(result);
