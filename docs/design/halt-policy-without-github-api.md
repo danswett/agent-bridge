@@ -296,7 +296,9 @@ No key rotation/new key or relay deployment is authorized by this design.
 
 **Where sequences live.** The client's highest accepted sequence lives in its
 installation state beside `release-discovery.json`, under the same lock. Lost or
-replaced state is a new install: no anchor, at most six hours of exposure. The
+replaced state is a new install: no anchor, at most six hours of exposure. Malformed state counts as lost, a
+state file with the same property twice (two `win/prerelease` floors) included, rejected as the policy body's parser rejects it: the
+verdict is `Unavailable` and a later verified policy starts the install over, never an exception out of the check (#3701). The
 publisher's sequence is the anchor's own verified sequence plus one, never a
 counter reset, so clients that reject lower sequences cannot be locked out.
 
