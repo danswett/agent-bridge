@@ -95,8 +95,9 @@ public class RosterEnforceTests
         public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => inner.DeleteAsync(name, etag, ct);
     }
 
-    // Enforce does not fail open: when the store cannot say, an account that was last seen in enforce, or never seen, is Unavailable
-    // (the device is told to try again), never Open. Only an account last seen in observe stays Open, which is what it was.
+    // Enforce does not fail open: an account latched in enforce (in memory, once the relay has seen it or switched it) is Unavailable
+    // when the store cannot say (an error, a malformed body, a roster that has gone missing, a mode that went back), and the device
+    // is told to try again. An account never seen in enforce is Open through an outage, which is what it always was.
     [Fact]
     public async Task A_store_that_cannot_be_read_never_opens_an_account_that_is_or_may_be_in_enforce()
     {
@@ -105,9 +106,9 @@ public class RosterEnforceTests
         var roster = Make(w, store);
         await roster.AppendAsync(Account, [Wire(w, "G")]);
 
-        // Cold: nothing known of the account yet, and the store is down.
+        // Never seen in enforce: an outage changes nothing for it, cold or not.
         store.Broken = true;
-        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync("cold", w.Id("X")));
+        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync("cold", w.Id("X")));
         store.Broken = false;
 
         // Seen in observe: it stays as it was through an outage.
@@ -116,7 +117,7 @@ public class RosterEnforceTests
         Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("X")));
         store.Broken = false;
 
-        // Seen in enforce: an outage never turns a stranger back into an open device.
+        // Latched in enforce: an outage never turns a stranger back into an open device.
         Assert.True(await roster.EnforceAsync(Account, w.Id("G")));
         Assert.Equal(DeviceRoster.Admission.Pending, await roster.AdmissionAsync(Account, w.Id("X")));
         store.Broken = true;
@@ -125,7 +126,7 @@ public class RosterEnforceTests
     }
 
     [Fact]
-    public async Task A_garbled_stored_roster_is_unavailable_not_open()
+    public async Task A_garbled_or_missing_stored_roster_is_unavailable_for_a_latched_account_and_open_for_one_that_is_not()
     {
         var w = Scenario();
         var inner = new MemoryRosterStore();
@@ -136,6 +137,11 @@ public class RosterEnforceTests
         var current = await inner.ReadAsync(name, CancellationToken.None);
         Assert.NotNull(await inner.WriteAsync(name, "not json"u8.ToArray(), current!.ETag, CancellationToken.None));
         Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("X")));
+        // Missing: the roster is gone from the store, and a latched account does not read that as "no roster".
+        Assert.True(await inner.DeleteAsync(name, (await inner.ReadAsync(name, CancellationToken.None))!.ETag, CancellationToken.None));
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("X")));
+        // An account this relay never latched, with no roster, is open as before.
+        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync("other", w.Id("X")));
     }
 
     // In enforce a connected stranger (a key the roster does not hold) is pending: it sees nothing of the account, its control
