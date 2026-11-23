@@ -1127,7 +1127,8 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
   - `quality-gate` and both `app` jobs (x64 and Arm64) succeeded; a cancelled or superseded run
-    counts only if those all did;
+    counts only if those all did, and a failed, timed-out or unfinished run never counts, even with
+    those jobs green (`ci.yml` lets quality-gate pass around a failed Arm64 job);
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.

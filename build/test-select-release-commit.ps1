@@ -27,6 +27,9 @@ Check 'newest passing commit wins' (Pick @((Run 'sha103' 103), (Run 'sha102' 102
 Check 'a red newest run is skipped for the next passing one' (Pick @((Run 'sha103' 103 -gate failure), (Run 'sha102' 102))) 'sha102'
 Check 'a missing arm64 app job is not a pass' (Pick @((Run 'sha103' 103 -arm failure), (Run 'sha102' 102))) 'sha102'
 Check 'a cancelled run counts when quality-gate and both apps succeeded' (Pick @((Run 'sha103' 103 -conclusion cancelled))) 'sha103'
+Check 'a failed run is red even when quality-gate and both apps passed' (Pick @((Run 'sha103' 103 -conclusion failure), (Run 'sha102' 102))) 'sha102'
+Check 'a timed-out run is not eligible' (Pick @((Run 'sha103' 103 -conclusion timed_out))) $null
+Check 'an unfinished run is not eligible' (Pick @((Run 'sha103' 103 -conclusion ''))) $null
 Check 'a cancelled run with an app job cancelled does not count' (Pick @((Run 'sha103' 103 -x64 cancelled -conclusion cancelled))) $null
 Check 'expired artifacts skip to the next commit' (Pick @((Run 'sha103' 103 -fresh $false), (Run 'sha102' 102))) 'sha102'
 Check 'a commit already released publishes nothing' (Pick @((Run 'sha100' 100), (Run 'sha099' 99))) $null

@@ -23,6 +23,10 @@ function Select-ReleaseCommit {
         if ($Latest -and $run.Sha -ceq $Latest.Commit) { $why.Add("$($run.Sha) is already released"); break }
         $failed = @('quality-gate', 'app-x64', 'app-arm64' | Where-Object { $run.Jobs[$_] -cne 'success' })
         if ($failed) { $why.Add("$($run.Sha) run $($run.Number): $($failed -join ', ') did not succeed"); continue }
+        # A failed run is red even when quality-gate and both app jobs passed (ci.yml lets
+        # quality-gate pass around a failed Arm64 job): only success, or a cancelled or superseded
+        # run whose required jobs all succeeded (above), is eligible.
+        if ($run.Conclusion -cnotin 'success', 'cancelled') { $why.Add("$($run.Sha) run $($run.Number): the run's conclusion is '$($run.Conclusion)'"); continue }
         if (-not $run.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
