@@ -1059,8 +1059,9 @@ connector's Install button on a machine the dashboard drives.
   or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
   higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
   merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
-  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. And
-  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. There is no
+  minimum spacing between releases and no release window: the owner decided "As often as green" (Nov 23, ~13:30 PT, relayed
+  by Chief S18). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
