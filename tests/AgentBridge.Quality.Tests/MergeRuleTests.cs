@@ -1078,11 +1078,13 @@ public class MergeRuleTests
     // or the backstop (the named residual; each of these is an operations job, not a pull request check):
     //   Pages (schedule every 5 min, CI-on-main workflow_run, dispatch), Revert culprit (schedule every 5 min, dispatch),
     //   Ops probe, Flake hunt (daily schedule, dispatch), Update gap, Beta acceptance, ARM64 self-test loop (dispatch only),
-    //   Lab nightly and Lab release verification (dispatch / workflow_call; held).
+    //   Lab nightly and Lab release verification (dispatch / workflow_call; held),
+    //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
+    //   verdict and a finished one needn't re-judge anything, #2454).
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Ops probe", "Pages", "Revert culprit", "Update gap",
+        "Merge rule sweep", "Ops probe", "Pages", "Revert culprit", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
