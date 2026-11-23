@@ -154,8 +154,11 @@ revoke (script-credentials.md 5). A grant for one name cannot mint a different n
   rather than evicting an id (fails closed).
 * **Lost, unreadable, or restored from a backup.** The store carries a `notBefore` time and a generation. A new,
   missing or unreadable store is created with `notBefore` = now, and **any grant whose signed `issuedAt` is before
-  `notBefore` is refused**: a lost store can never make a used grant usable again. A restored-from-backup store is treated the same
-  when it is older than the evidence the host has of later activity (the latest audit line or minted credential
+  `notBefore` is refused, and so is any grant whose expiry is not later than `notBefore` plus the longest lifetime**
+  (24 hours): such a grant could have been signed before the loss, whatever its `issuedAt` says (a signer's clock may
+  be wrong). The second rule applies itself only for the first 24 hours after `notBefore`: after that every unexpired
+  grant expires later than `notBefore` plus 24 hours. A refused grant is simply signed again by the person. So a lost
+  store can never make a used grant usable again. A restored-from-backup store is treated the same when it is older than the evidence the host has of later activity (the latest audit line or minted credential
   record): the host then replaces it with a new one (`notBefore` = now) and **turns provisioning off** until a person
   turns it on again on that host. The credential store records the grant id each credential came from, so a store
   rolled back alone is also caught by the other. If both were restored together from the same backup, the one-day
@@ -188,6 +191,7 @@ Both parts refuse, with a stated reason, and never fall back to HA, a bearer tok
 | Grant expired | expired |
 | Grant id already consumed (a replay), or revoked before use | already used or revoked |
 | Grant whose signed `issuedAt` is before the store's `notBefore` (a lost or restored store) | refused, fails closed |
+| Grant whose expiry is not later than the store's `notBefore` plus 24 hours (it could predate the loss) | refused, fails closed |
 | Grant with no `issuedAt`, one in the future, or an expiry more than 24 hours after it | refused |
 | Signer no longer an active person device at consumption, or any signed field altered | not authorized |
 | Grant delivered from outside the host's own account | refused |
@@ -212,7 +216,8 @@ Evidence is recorded in the epic (#1396) per row, every client the parity rule r
 * **Part B (only if approved).** All of Part A, and: a provisioning grant consumed once mints the credential with no
   person at the machine and no HA present; replaying it, an expired one and one for another machine are each
   refused; a revoked unconsumed grant (also one revoked before it reached the host) is refused; a grant signed before a lost or restored store's `notBefore` is
-  refused (and provisioning turns off after a restore), as is one with no `issuedAt` or too long a lifetime; a grant asking for `launch`, or naming anything but a `script`, is refused;
+  refused, as is one whose expiry is not later than `notBefore` plus 24 hours, one with no `issuedAt` and one with too long a lifetime
+  (and provisioning turns off after a restore); a grant asking for `launch`, or naming anything but a `script`, is refused;
   with the verifier off, or the consumed-id store unreadable, the grant is refused, not accepted.
 * **Row 11, the pairing itself** (a new machine joins only after a matching code is approved) is the device-approval
   build (#55), checked in the clean-VM release-gate harness (#736); this note adds no step to it.
