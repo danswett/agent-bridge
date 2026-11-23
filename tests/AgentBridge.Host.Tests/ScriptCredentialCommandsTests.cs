@@ -61,7 +61,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [Fact]
     public async Task Add_places_a_protected_secret_once_and_only_returns_safe_metadata()
     {
-        var result = JsonSerializer.SerializeToElement(await Handler()(channel, "scripts.add", Name()), ProtocolJson.Options);
+        var result = JsonSerializer.SerializeToElement(await Do("scripts.add"), ProtocolJson.Options);
         Assert.Equal("script:machine1/pump-wake", result.GetProperty("principal").GetString());
         Assert.Equal(AgentProtocol.ScopeReadReply, result.GetProperty("scope").GetString());
         Assert.InRange(result.GetProperty("expiresAt").GetDateTimeOffset() - DateTimeOffset.UtcNow, TimeSpan.FromDays(29), TimeSpan.FromDays(30));
@@ -94,7 +94,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
             // A live authenticated channel must lose the grant in this same store, not only after reload.
             credentials.Accept(channel, first.Credential);
             Assert.NotNull(credentials.Of(channel));
-            await Handler()(new Channel(), "scripts.revoke", Name());
+            await Do("scripts.revoke", on: new Channel());
             Assert.Null(credentials.Of(channel));
             Assert.False(credentials.IsLive(first.Credential));
             Assert.Contains("no live credential", credentials.Check(Encoding.ASCII.GetString(clear), ProcessAncestry.Unknown).Refusal);
@@ -103,7 +103,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         }
         finally { CryptographicOperations.ZeroMemory(clear); }
         Assert.Equal("scripts.revoke", Assert.Single(Audit()).GetProperty("action").GetString());
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(new Channel(), "scripts.revoke", Name()));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Do("scripts.revoke", on: new Channel()));
         Assert.Contains("no script credential", error.Message);
     }
 
@@ -166,7 +166,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     {
         credentials.MintScript("pump-wake");
         File.WriteAllText(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "blocked");
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler()(channel, op, Name()));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Do(op));
         Assert.Contains("audit", error.Message);
         Assert.Equal(1, credentials.Count);
         Assert.Equal(1, new AgentCredentials(fixture.Root, "machine1").Count);
@@ -175,15 +175,14 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     [Fact]
     public async Task Invalid_names_and_a_third_rotation_fail_without_echoing_input_or_replacing_the_secret()
     {
-        var handler = Handler();
-        await handler(channel, "scripts.add", Name());
-        var second = JsonSerializer.SerializeToElement(await handler(channel, "scripts.add", Name()), ProtocolJson.Options);
+        await Do("scripts.add");
+        var second = JsonSerializer.SerializeToElement(await Do("scripts.add"), ProtocolJson.Options);
         var path = second.GetProperty("path").GetString()!;
         var before = File.ReadAllBytes(path);
-        var third = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Name()));
+        var third = await Assert.ThrowsAsync<InvalidOperationException>(() => Do("scripts.add"));
         Assert.Contains("two", third.Message);
         const string privateInput = "abat1_private-input-not-a-script-name\n";
-        var invalid = await Assert.ThrowsAsync<ArgumentException>(() => handler(channel, "scripts.add", Name(privateInput)));
+        var invalid = await Assert.ThrowsAsync<ArgumentException>(() => Do("scripts.add", privateInput));
         Assert.DoesNotContain(privateInput, invalid.Message + string.Join("\n", logs));
         Assert.Equal(before, File.ReadAllBytes(path));
         Assert.Equal(2, credentials.Count);
@@ -209,25 +208,46 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
     }
 
-    [Fact]
-    [Trait("Category", "Network")]
-    public async Task The_cli_changes_the_serving_hosts_store_and_prints_only_safe_results()
+    // P3: the app path exists, so the terminal no longer changes script credentials (owner Nov 19 rule: no terminal step).
+    [Theory]
+    [InlineData("add")]
+    [InlineData("revoke")]
+    [InlineData("grant-fleet")]
+    [InlineData("revoke-fleet")]
+    public async Task The_cli_points_at_the_app_and_changes_nothing_without_opening_a_store(string verb)
     {
-        if (!OperatingSystem.IsWindows()) { return; }
-        await using var source = new AgentBridge.Host.Core.SessionSource(fixture.Options(), fixture.Processes);
-        await source.RefreshAsync();
-        var service = new SessionService(source, new MachineInfo("machine1", "Test", "windows", "0.1.0"));
-        await using var server = LocalServer.Start(LocalEndpoint.For(fixture.Root), LocalApi.Handler(service, null!,
-            new FixedCallerGuard(new Caller(CallerKind.HostCli, "fixture")), credentials: credentials, audit: new AgentAuditLog(fixture.Root)));
         var output = new StringWriter();
         var error = new StringWriter();
-        foreach (var verb in new[] { "add", "revoke" })
-        { Assert.Equal(0, await Cli.ScriptCredentialCommands.RunAsync(["scripts", verb, "pump-wake", "--profile", Path.GetFileName(fixture.Root)],
-            Path.GetDirectoryName(fixture.Root)!, output, error)); }
-        Assert.Equal(0, credentials.Count);
-        Assert.DoesNotContain(AgentProtocol.TokenPrefix, output.ToString() + error);
-        Assert.Empty(error.ToString());
-        Assert.Equal(2, Audit().Length);
+        Assert.Equal(4, await Cli.ScriptCredentialCommands.RunAsync(["scripts", verb, "pump-wake"], fixture.Root, output, error));
+        Assert.Empty(output.ToString());
+        Assert.Contains("Settings", error.ToString());
+        Assert.Contains("Slipgates app", error.ToString());
+        Assert.Empty(Directory.GetFileSystemEntries(fixture.Root));
+    }
+
+    [Theory]
+    [InlineData("scripts.add")]
+    [InlineData("scripts.revoke")]
+    [InlineData("scripts.grant-fleet")]
+    [InlineData("scripts.revoke-fleet")]
+    [InlineData("scripts.confirm")]
+    public async Task The_host_refuses_the_command_line_even_with_a_valid_confirmation_and_changes_nothing(string op)
+    {
+        credentials.MintScript("pump-wake");
+        var confirm = await Confirm(op == "scripts.confirm" ? "scripts.add" : op);
+        var data = op == "scripts.confirm" ? JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" }) : Press(confirm);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.HostCli)(channel, op, data));
+        Assert.Contains("Slipgates app", error.Message);
+        Assert.Equal(1, credentials.Count);
+        Assert.All(credentials.ListScripts(), s => Assert.False(s.FleetLaunch));
+    }
+
+    [Fact]
+    public async Task The_command_line_can_still_read_the_list_which_changes_nothing()
+    {
+        credentials.MintScript("pump-wake");
+        var list = JsonSerializer.SerializeToElement(await Handler(CallerKind.HostCli)(channel, "scripts.list", JsonSerializer.SerializeToElement(new { })), ProtocolJson.Options);
+        Assert.Equal("pump-wake", Assert.Single(list.GetProperty("scripts").EnumerateArray()).GetProperty("name").GetString());
     }
 
     [Theory]
@@ -257,6 +277,15 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         JsonSerializer.SerializeToElement(await Handler(kind)(channel, "scripts.confirm", JsonSerializer.SerializeToElement(new { op, name })),
             ProtocolJson.Options).GetProperty("confirm").GetString()!;
     static JsonElement Press(string confirm, string name = "pump-wake") => JsonSerializer.SerializeToElement(new { name, confirm });
+    // One app press, as the app does it: the host's confirmation for the action, then the press.
+    async Task<object?> Do(string op, string name = "pump-wake", IProtocolChannel? on = null)
+    {
+        // Both calls on the connection the press comes from, as the app's one pipe connection does.
+        var from = on ?? channel;
+        var asked = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(from, "scripts.confirm",
+            JsonSerializer.SerializeToElement(new { op, name })), ProtocolJson.Options);
+        return await Handler(CallerKind.App)(from, op, Press(asked.GetProperty("confirm").GetString()!, name));
+    }
 
     [Theory]
     [InlineData("scripts.add")]

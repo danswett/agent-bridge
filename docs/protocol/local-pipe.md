@@ -156,7 +156,7 @@ in, or migrate the machine or roll it back (not a dry run), refuse in the same c
 full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
 too, which survives a process started detached from its parent
 ([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
-The same person-only CLI guard applies to `scripts add|revoke`.
+Script credential changes are app-only: the host refuses `scripts.add|revoke|grant-fleet|revoke-fleet` from a command-line caller.
 
 The app does not go round this. Asked to stop or restart a host that answers no, it reports the
 refusal and ends nothing (it ends a host only when the host does not answer at all). Its install,
@@ -179,7 +179,7 @@ host, and there is no app there to do it.
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add` and `scripts.revoke` (below),
+agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke` (below),
 but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
@@ -229,13 +229,14 @@ setting a name here does not yet make it discoverable through `fleet.find`.
 
 ## Script credential management (`scripts.add`, `scripts.revoke`)
 
-Host CLI only, with fresh ancestry checks; a same-user safety rail, not a security boundary.
+The local app only, with fresh ancestry checks and the host's confirmation bound to the action, script and state (`scripts.confirm`);
+a same-user safety rail, not a security boundary. The host command line is refused (it may only read `scripts.list`).
 An agent or credentialed connection, including a revoked one, is never person authority.
 Both take `{ "name": "<script name>" }`; see [host-config.md](../host-config.md#script-credentials-at-the-machine)
 for names, limits and exit codes. Add returns `{ "id", "principal", "scope", "expiresAt", "path" }`,
 never a token. Revoke returns `{ "name", "revoked": true }` after removing both rotations from
 the running and persisted store; an unknown name is an error. An `attempted` audit entry
-precedes each mutation; an audit failure refuses it. Neither op is offered over relay or to the app.
+precedes each mutation; an audit failure refuses it. Neither op is offered over relay.
 
 ## Agent principals: `agent.hello`
 

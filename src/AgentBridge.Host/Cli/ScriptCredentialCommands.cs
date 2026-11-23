@@ -10,14 +10,19 @@ public static class ScriptCredentialCommands
 {
     public const string Usage = "agent-bridge-host scripts add|revoke|grant-fleet|revoke-fleet <name> [--profile <name>]";
 
+    // P3 (HA retirement row 1, owner option 1): the app path exists, so the terminal no longer changes script credentials.
+    public const string AppOnly = $"script credentials are managed in the {Product.App} (Settings > Script credentials), not the host command line";
+
     public static object Handle(IProtocolChannel channel, string op, JsonElement data, ICallerGuard callers,
         AgentCredentials? credentials, AgentAuditLog? audit)
     {
-        // The person's host command line (until the app path replaces it), or the local app's press. An app press also needs the
-        // host's confirmation bound to the action, the script and the current state (grants G4/G7b/G8 pattern, ruling A).
+        // The local app's press, with the host's confirmation bound to the action, the script and the current state (grants
+        // G4/G7b/G8 pattern, ruling A). The host command line may only read the list; it no longer changes anything.
         var kind = callers.Classify(channel, fresh: true).Kind;
         if (kind is not (CallerKind.HostCli or CallerKind.App) || credentials?.IsCredentialed(channel) == true)
-        { throw new InvalidOperationException("refused: only a person at the machine, using the host command line or the app, may change script credentials"); }
+        { throw new InvalidOperationException($"refused: only a person at the machine, using the {Product.App}, may change script credentials"); }
+        if (kind == CallerKind.HostCli && op != "scripts.list")
+        { throw new InvalidOperationException($"refused: {AppOnly}"); }
         if (credentials is null || credentials.Problem is not null)
         { throw new InvalidOperationException("refused: script credentials are unavailable on this host"); }
         if (op == "scripts.list")
@@ -69,27 +74,15 @@ public static class ScriptCredentialCommands
         return true;
     }
 
-    public static async Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
+    public static Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
     {
         var profile = args.Count == 5 && args[3] == "--profile" ? args[4] : "default";
         if (args.Count is not (3 or 5) || args[0] != "scripts" || args[1] is not ("add" or "revoke" or "grant-fleet" or "revoke-fleet")
             || !AgentCredentials.ValidScriptPart(args[2]) || !Identity.IsValidProfile(profile)
             || args.Count == 5 && args[3] != "--profile")
-        { error.WriteLine($"usage: {Usage}"); return 2; }
-        if (!OperatingSystem.IsWindows())
-        { error.WriteLine("agent-bridge-host: script credential management is available only on Windows"); return 2; }
-        try
-        {
-            await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(Path.Combine(root, profile)));
-            await local.HelloAsync();
-            var result = await local.CallAsync("scripts." + args[1], new { name = args[2] });
-            output.WriteLine(result.GetRawText());
-            return 0;
-        }
-        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException)
-        {
-            error.WriteLine($"agent-bridge-host scripts: {e.Message}");
-            return 1;
-        }
+        { error.WriteLine($"usage: {Usage}"); return Task.FromResult(2); }
+        // Said before any connection or store is opened: nothing here changes a credential any more.
+        error.WriteLine($"agent-bridge-host: {AppOnly}");
+        return Task.FromResult(4);
     }
 }
