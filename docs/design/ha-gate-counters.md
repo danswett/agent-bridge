@@ -55,9 +55,10 @@ Checked against source and commit subjects only; not a live run.
   #2596, #2629).
 * **Not verified as landed:** the gate reader/view (slices 1 and 7) and A6-rest continuity
   (slice 9). The S3 landed-state check for #1401 covers these; no qualifying run starts first.
-* **Proposed, not decided:** using the #1401 audit log as the counter source for launches,
-  approvals and stops. Engineering confirms it. The owner is asked through the Chief; until
-  the owner answers, this stays a proposal and the counters are not claimed as evidence.
+* **Confirmed (owner, relayed by Engineering, Nov 22):** the #1401 audit log is the counter
+  source for launches, approvals and stops (S4). A counter is still not evidence until the
+  reader/gate view runs in a qualifying run. S8 stays: HA remains possible as an optional
+  client, and the slice 11 dual run is still the gate.
 * **Row 25 gap in fleet:** fleet `ops/ha-retirement` has the PowerShell-only no-new-call-site
   gate; it misses `.psm1`-only changes and the Python caller `pump/fleet_pump/wake.py`. That is
   fleet slice S5, defined in fleet `docs/ha-retirement.md`.
