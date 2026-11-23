@@ -659,6 +659,19 @@ public sealed class AgentLiteDeliveryTests
         Assert.True((await Send(f)).Typed);
         Assert.False(Assert.Single(f.Typed).RequireEmptyBox);
     }
+    // D2a (#3828, #3856): an Unconfirmed replier result is not Delivered. Keys went but nothing was recorded, so the sender must be told unconfirmed.
+    [Theory]
+    [InlineData(AgentKind.Copilot)]
+    [InlineData(AgentKind.Claude)]
+    public async Task An_unconfirmed_reply_is_reported_unconfirmed_not_typed_and_delivered_stays_delivered(AgentKind agent)
+    {
+        var rows = agent == AgentKind.Claude ? ClaudeBox : EmptyBox;
+        var unconfirmed = new Fixture { Agent = agent, Rows = rows, Outcome = AnswerOutcome.Unconfirmed }; unconfirmed.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed }, await Send(unconfirmed));
+        Assert.Single(unconfirmed.Typed);
+        var delivered = new Fixture { Agent = agent, Rows = rows }; delivered.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(true, null), await Send(delivered));
+    }
     [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
