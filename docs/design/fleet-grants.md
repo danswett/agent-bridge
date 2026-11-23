@@ -498,6 +498,11 @@ retry with a fresh request. No store or new file is added. Noted alternative, no
 file that survives restart and removes the pause, at the cost of a private atomic store and its recovery rules.
 The sender's envelope `generation` is diagnostic only: the receiver fences on its own grant generation (as local launches do).
 
+Wire operation (G9c2). `fleet.launch` is listed in `RemoteAuthorization.HostOperations`, so it is served only to a
+host peer of the same account, over the relay channel, and never on this machine's own pipe. A launch that is
+accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
+documented reasons and has no side effect.
+
 Receiver order:
 
 1. Validate transport/account/audience and agent identity; reject replay,
