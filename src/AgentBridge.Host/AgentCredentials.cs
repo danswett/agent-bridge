@@ -11,7 +11,7 @@ namespace AgentBridge.Host;
 
 // What a credential is bound to (design/agent-principals.md §3.3). Id names the grant in logs and
 // audit and is never the secret.
-public sealed record ScriptInfo(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch);
+public sealed record ScriptInfo(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch, DateTimeOffset? LastUse = null);
 
 public sealed record AgentCredential(string Id, string Session, string LaunchId, int RootPid, DateTimeOffset RootStartUtc,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
@@ -113,6 +113,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     internal FleetLaunchGrant FleetGrant { get; }
     internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
 
+    // When each script last authenticated, since this host started (not stored: the list says so, never claims more).
+    readonly Dictionary<string, DateTimeOffset> lastUse = [];
     public int Count { get { lock (gate) { return records.Count; } } }
 
     internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
@@ -448,6 +450,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
+        if (credential.Kind == "script") { lock (gate) { lastUse[principal] = time.GetUtcNow(); } }
         return new AgentHelloResult(principal, credential.Scope);
     }
 
@@ -549,7 +552,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             return records.Where(r => r.Credential.Kind == "script" && r.Credential.ExpiresAt > now && r.Credential.Principal!.StartsWith(prefix, StringComparison.Ordinal))
                 .GroupBy(r => r.Credential.Principal!)
                 .Select(g => new ScriptInfo(g.Key[prefix.Length..], g.First().Credential.Scope, g.Max(r => r.Credential.ExpiresAt), g.Count(),
-                    g.Any(r => r.Credential.FleetLaunch)))
+                    g.Any(r => r.Credential.FleetLaunch), lastUse.TryGetValue(g.Key, out var used) ? used : null))
                 .OrderBy(i => i.Name, StringComparer.Ordinal).ToList();
         }
     }

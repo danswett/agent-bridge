@@ -6,11 +6,11 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
+**Status: the library (R1a to R1c) and the host's observe side are built. Not built: the gate, relay enforce and any client screen** (the build status of each slice is under §12 of [device-approval.md](../design/device-approval.md)). R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
-(slices R2 to R5).
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). The relay stores the roster in `observe` mode, and the host reads and verifies it in
+`off` and `observe` and can enroll over its local pipe; nothing enforces it (slices R2 to R5, R3b).
 
 | Implementation | Where |
 |---|---|
