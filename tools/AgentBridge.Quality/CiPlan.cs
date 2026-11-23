@@ -52,6 +52,12 @@ static partial class CiPlan
     [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
     private static partial Regex AppBuilt();
     const string AppResult = "${{ needs.app.result }}";
+    // The waiver-adjusted form (#2454): the same result, read after the gate's waiver step, so a red Arm64 leg does not read as an unbuilt app.
+    const string AppStepResult = "${{ steps.app.outputs.result }}";
+    const string AppStepNeeds = "${{ steps.waiver.outputs.needs || toJSON(needs) }}";
+    // The step's whole command, compared exactly: a shell comment or another command in the script that
+    // merely mentions the expression is not it (YAML comments never reach the parsed scalar).
+    const string AppStepRun = "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"";
     const string ConcurrencyGroup =
         "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
@@ -257,8 +263,13 @@ static partial class CiPlan
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
             // What publish-gate reads to tell the app was built and checked in this run.
             var gateOutputs = Child(gate, "outputs") as YamlMappingNode;
-            if (Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "") != AppResult)
-                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult}, so {PublishGate} can't tell this run built the app");
+            var appOutput = Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "");
+            // The step form is accepted only when its step reads the app's own result from the waiver-adjusted needs.
+            var appStep = Steps(gate).FirstOrDefault(s => Scalar(s, "id") == "app");
+            var stepReadsApp = appStep is not null && Child(appStep, "env") is YamlMappingNode appEnv && Normalize(Scalar(appEnv, "NEEDS") ?? "") == AppStepNeeds
+                && Normalize(Scalar(appStep, "run") ?? "") == AppStepRun;
+            if (appOutput != AppResult && !(appOutput == AppStepResult && stepReadsApp))
+                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult} (or {AppStepResult} with a step id app), so {PublishGate} can't tell this run built the app");
             // The jobs a pull request skips aren't selected there, or the gate would wait on them.
             var offs = Steps(gate).Select(s => Child(s, "env") as YamlMappingNode).OfType<YamlMappingNode>()
                 .Select(e => Scalar(e, "PR_OFF")).OfType<string>().ToList();
