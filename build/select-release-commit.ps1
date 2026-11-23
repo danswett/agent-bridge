@@ -25,7 +25,7 @@ function Select-ReleaseCommit {
         if ($failed) { $why.Add("$($run.Sha) run $($run.Number): $($failed -join ', ') did not succeed"); continue }
         if (-not $run.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
-        if ($Latest -and -not (& $IsDescendant $run.Sha $Latest.Commit)) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
+        if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
         if ($Explain) { return "selected $($run.Sha)" }
         return $run
     }
@@ -42,21 +42,32 @@ function Assert-TrainMayPublish([string]$AppSigning) {
     if ($value -ne '' -and $value -ine 'false') { throw "APP_SIGNING is '$value' and the release train has no sign step; refusing to publish unsigned" }
 }
 
+function Invoke-ReleaseGh {
+    # gh reports a failure on stderr and a nonzero exit; unchecked, it would read as no runs, and a
+    # broken token would look like nothing new.
+    $output = & gh @args
+    if ($LASTEXITCODE) { throw "gh $($args[0]) $($args[1]) failed ($LASTEXITCODE)" }
+    $output
+}
+
 # Main's push CI runs for the selector, newest first (gh, GH_TOKEN): one list of runs, and per
-# run its jobs and its artifacts. Not covered by the fixture test; a dispatch run checks it.
+# run its jobs (the latest attempt, so a successful re-run counts) and its artifacts. The version
+# is read off the artifact names, so a minor bump (0.2.n) needs no change here. Not covered by the
+# fixture test; a dispatch run checks it.
 function Get-ReleaseRuns([string]$Repository, [int]$Count = 20) {
-    $list = gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=$Count" --jq '.workflow_runs[] | [.id, .head_sha, .run_number, .run_attempt, .conclusion] | @tsv'
+    $list = Invoke-ReleaseGh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=$Count" --jq '.workflow_runs[] | [.id, .head_sha, .run_number, .conclusion] | @tsv'
     foreach ($row in $list) {
-        $id, $sha, $number, $attempt, $conclusion = $row -split "`t"
+        $id, $sha, $number, $conclusion = $row -split "`t"
         $jobs = @{}
-        foreach ($job in (gh api "repos/$Repository/actions/runs/$id/jobs?per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
+        foreach ($job in (Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/jobs?filter=latest&per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
             $name, $result = $job -split "`t"
             $key = switch ($name) { 'quality-gate' { 'quality-gate' } 'app (win-x64)' { 'app-x64' } 'app (win-arm64)' { 'app-arm64' } default { $null } }
             if ($key) { $jobs[$key] = $result }
         }
-        $version = "0.1.$number"
-        $names = gh api "repos/$Repository/actions/runs/$id/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name'
-        [pscustomobject]@{ Id = $id; Sha = $sha; Number = [int]$number; Attempt = [int]$attempt; Conclusion = $conclusion; Jobs = $jobs
-            ArtifactsUnexpired = (@($names) -contains "agent-bridge-windows-$version") -and (@($names) -contains "agent-bridge-windows-arm64-$version") }
+        $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
+        $prefix = ($names | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$number$") { $Matches[1] } } | Select-Object -First 1)
+        $both = $prefix -and ($names -contains "agent-bridge-windows-$prefix.$number") -and ($names -contains "agent-bridge-windows-arm64-$prefix.$number")
+        [pscustomobject]@{ Id = $id; Sha = $sha; Number = [int]$number; Conclusion = $conclusion; Jobs = $jobs
+            Version = $(if ($both) { "$prefix.$number" } else { '' }); ArtifactsUnexpired = [bool]$both }
     }
 }

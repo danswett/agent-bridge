@@ -1121,7 +1121,7 @@ Merging never waits for it and it never blocks a merge.
 **Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
 superseded run that went green still publishes nothing when `main`'s head has since changed the
 app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 on Nov 22. The train publishes what was verified, whatever has merged since.
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
@@ -1130,7 +1130,7 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
     counts only if those all did;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (7 days).
+  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
@@ -1139,7 +1139,10 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
-  train and `ci.yml`'s `publish` job can run side by side without publishing twice.
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
+  `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
+  (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+  change is the next verified commit's to publish.
 * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
   unsigned, until it gains the sign step.

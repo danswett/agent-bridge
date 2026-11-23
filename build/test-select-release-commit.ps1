@@ -15,8 +15,8 @@ $failures = 0
 function Check([string]$name, $actual, $expected) {
     if ($actual -ceq $expected) { Write-Host "PASS $name" } else { $script:failures++; Write-Host "FAIL ${name}: expected '$expected', got '$actual'" }
 }
-function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [int]$attempt = 1) {
-    [pscustomobject]@{ Sha = $sha; Number = $number; Attempt = $attempt; Conclusion = $conclusion
+function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true) {
+    [pscustomobject]@{ Sha = $sha; Number = $number; Conclusion = $conclusion
         Jobs = @{ 'quality-gate' = $gate; 'app-x64' = $x64; 'app-arm64' = $arm }; ArtifactsUnexpired = $fresh }
 }
 $out = [pscustomobject]@{ Tag = 'v0.1.100'; Commit = 'sha100' }
@@ -34,12 +34,16 @@ Check 'nothing newer than the latest release publishes nothing' (Pick @((Run 'sh
 Check 'a commit that does not follow the latest release is skipped' (Pick @((Run 'stray' 104), (Run 'sha102' 102))) 'sha102'
 Check 'a run number not above every published version is skipped' (Pick @((Run 'sha099b' 99), (Run 'sha102' 102))) 'sha102'
 Check 'no release yet takes the newest passing run' (Pick @((Run 'sha001' 1)) $null) 'sha001'
-Check 'a rerun is judged by its own result' (Pick @((Run 'sha103' 103 -attempt 2), (Run 'sha102' 102))) 'sha103'
 $none = Select-ReleaseCommit -Runs @((Run 'sha103' 103 -gate failure)) -Latest $out -IsDescendant $follows
 Check 'nothing selected says why' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -gate failure)) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*quality-gate') $true
 
 function Signed([string]$v) { try { Assert-TrainMayPublish $v; "published" } catch { "refused" } }
+function Stops { try { Select-ReleaseCommit -Runs @((Run "sha103" 103)) -Latest $out -IsDescendant { throw "gh failed" } | Out-Null; "went on" } catch { "stopped" } }
+Check "a throwing descendant check stops the selection" (Stops) "stopped"
 Check "signing on refuses" (Signed "true") "refused"
+Check "a run missing a job key is not a pass" (Pick @(([pscustomobject]@{ Sha = "sha103"; Number = 103; Conclusion = "success"; Jobs = @{ "quality-gate" = "success"; "app-x64" = "success" }; ArtifactsUnexpired = $true }), (Run "sha102" 102))) "sha102"
+Check "a truthy non-boolean descendant answer is not a yes" ((Select-ReleaseCommit -Runs @((Run "sha103" 103)) -Latest $out -IsDescendant { "ahead" })) $null
+Check "a null descendant answer is not a yes" ((Select-ReleaseCommit -Runs @((Run "sha103" 103)) -Latest $out -IsDescendant { $null })) $null
 Check "signing unset may publish" (Signed "") "published"
 foreach ($v in "True", "TRUE", " true", "true ", "yes", "1") { Check "signing $v refuses" (Signed $v) "refused" }
 foreach ($v in "false", "False", " FALSE ", $null) { Check "signing $v may publish" (Signed $v) "published" }
