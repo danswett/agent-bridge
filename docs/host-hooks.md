@@ -588,3 +588,5 @@ connector's own guards. Discovery needs no notice: it watches the registration f
   * The hook event comes through the spool, which is not authenticated (a local process
     that can write the folder can write an event; on Windows the folder has no ACL). So a
     hook-known question is never answered by typing: it is shown, and answered at the machine.
+    Accepted risk: a local process can inject a card (display only, no keys typed); hardening
+    the spool's authentication is tracked in #3847.
