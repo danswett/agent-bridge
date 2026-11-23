@@ -400,6 +400,11 @@ public sealed class SessionFinishedEvidence
 
 public sealed record Session
 {
+    // Host-only, never sent: the background work counted WITHOUT the stale-shell limit (Limits.BackgroundShellStale),
+    // set only when that limit dropped a shell from activity.background. What is shown, relayed and busy-checked is aged;
+    // what an AGENT's End asks (StopService) stays the unaged count, so a silent command that still runs is never read as idle (#1396).
+    [JsonIgnore]
+    public Background? BackgroundUnaged { get; init; }
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     [Strict(Strictness.Identity)]

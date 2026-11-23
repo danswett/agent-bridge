@@ -560,11 +560,31 @@ internal sealed class BackgroundWork
         since is null || processStartedAt is not { } start || since >= start - Slack;
 
     // What is still running and could still report back to the session's current process.
-    // now: when given, a shell whose latest start or "still running" mark is Limits.BackgroundShellStale or more
-    // behind it no longer counts (#1108); a shell with no recorded time still does.
-    public (int Agents, int Shells) Running(DateTimeOffset? processStartedAt, DateTimeOffset? now = null) =>
-        (_agents.Values.Count(a => a.Background && a.Working && Live(a.Since, processStartedAt)),
-         _shells.Values.Count(s => Live(s, processStartedAt) && (now is not { } at || s is not { } since || at - since < Limits.BackgroundShellStale)));
+    // time: when given, a shell stops counting (#1108) only when BOTH clocks say its latest start or "still running"
+    // mark is Limits.BackgroundShellStale old: the wall clock against the mark, and this host's own monotonic clock
+    // against when it first saw that mark. A clock step moves only the first, so it can never end a running shell;
+    // a host that starts late counts a shell until it has itself watched the limit pass. Fails toward counted.
+    public (int Agents, int Shells) Running(DateTimeOffset? processStartedAt, TimeProvider? time = null)
+    {
+        var agents = _agents.Values.Count(a => a.Background && a.Working && Live(a.Since, processStartedAt));
+        var shells = 0;
+        foreach (var (id, since) in _shells)
+        {
+            if (Live(since, processStartedAt) && CountsShell(id, since, time)) { shells++; }
+        }
+        if (time is not null && _shellSeen.Count > _shells.Count) { foreach (var id in _shellSeen.Keys.Where(k => !_shells.ContainsKey(k)).ToList()) { _shellSeen.Remove(id); } }
+        return (agents, shells);
+    }
+
+    readonly Dictionary<string, (DateTimeOffset Mark, long Seen)> _shellSeen = new(StringComparer.Ordinal);
+
+    bool CountsShell(string id, DateTimeOffset? since, TimeProvider? time)
+    {
+        if (time is null || since is not { } mark) { return true; }
+        var stamp = time.GetTimestamp();
+        if (!_shellSeen.TryGetValue(id, out var seen) || seen.Mark != mark) { _shellSeen[id] = (mark, stamp); return true; }
+        return time.GetUtcNow() - mark < Limits.BackgroundShellStale || time.GetElapsedTime(seen.Seen, stamp) < Limits.BackgroundShellStale;
+    }
 
     // The entries as listed: running first (newest start first), then the most recently
     // finished, at most Limits.Subagents, with the number left out. Waiting: the agents with

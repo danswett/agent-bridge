@@ -136,7 +136,7 @@ internal sealed class SessionTracker
         // the clock alone changes the answer, with nothing written to the transcript, so ask again with what the
         // last build counted, as for Stalled above.
         if (!changed && _built?.Activity.Background is { Shells: > 0 } counted
-            && _state.Background.Running(Discovered.ProcessStartedAt, _time.GetUtcNow()).Shells != counted.Shells)
+            && _state.Background.Running(Discovered.ProcessStartedAt, _time).Shells != counted.Shells)
         {
             changed = true;
         }
@@ -333,7 +333,7 @@ internal sealed class SessionTracker
         };
         var (response, responseCut) = Limits.KeepEnd(_state.Response, Limits.Response);
         var history = _state.Tools.Count > 0 ? _state.Tools.Latest(Limits.History) : null;
-        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt, _time.GetUtcNow());
+        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt, _time);
         var (subagents, more) = _state.Background.Entries(d.ProcessStartedAt, Waiting());
         var source = _state.ResponseBy is null && _state.ReasoningBy is null ? null
             : new ActivitySource { Response = _state.ResponseBy, Reasoning = _state.ReasoningBy };
@@ -349,8 +349,11 @@ internal sealed class SessionTracker
         var background = agents + shells > 0;
         _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
+        // What an agent's End must still see (StopService): the shells counted without the stale limit, only when it dropped one.
+        var rawShells = _state.Background.Running(d.ProcessStartedAt).Shells;
         return new Session
         {
+            BackgroundUnaged = rawShells != shells ? Protocol.Background.Of(agents, rawShells) : null,
             Id = d.Id,
             Machine = _hostId,
             Owner = _hostId is null ? null : new(),
