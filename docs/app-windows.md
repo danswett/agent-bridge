@@ -1136,6 +1136,8 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
+
+  **Policy (Chief, Nov 22):** the selector is strict: the train never publishes a run with any failed job. The Arm64 waiver is a merge-gate matter only, and an Arm64 installer flake is fixed as a test, not released around.
 * **How.** The train downloads that run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
