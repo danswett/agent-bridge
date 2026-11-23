@@ -354,9 +354,10 @@ legacy text (text, tool, text of one message), duplicate records, an unreadable 
 whose prompt was not read, or more than 4,096 assistant records in a turn. A window that opens
 inside a turn whose prompt was read (a long turn) keeps identity for each text record whose message
 id first appears in the window, because the id is the record's hash and its index in that record,
-which unread earlier records cannot change. The first message in such a window may have begun
-before it, and tool calls in an unread record may be repeated (history dedupes them), so that
-message and text after a tool in the same record stay without identity. A readable new prompt
+which unread earlier records cannot change. History skips a repeated tool call without a part, so
+the doubt stays open through tool-only records until the first record with text or thinking: every
+message seen up to and including that record may continue an earlier response, and those messages,
+and text after a tool in the same record, stay without identity. A readable new prompt
 reestablishes identity; text never supplies an id.
 Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
 the first record's part id across both streams and updates. Distinct ids retain equal

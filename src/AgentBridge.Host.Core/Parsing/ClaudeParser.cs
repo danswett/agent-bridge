@@ -125,17 +125,19 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     // A window that opens inside a turn (the skim saw its prompt, not the records after it). A part id
     // is the record's hash and its index in that record, so unread earlier records cannot change it,
-    // except through the message the window opens in, which may have begun before it, and through
-    // tool calls an unread record repeated, which history dedupes. Both stay without identity.
+    // except through a message that may have begun before it, and through tool calls an unread record
+    // repeated, which history dedupes. Both stay without identity. History skips a repeated call without
+    // a part, so a tool-only record does not end the doubt: it stays open, and every message seen in it,
+    // until a record that certainly adds a part (text or thinking).
     bool _replyGap;
-    string? _edgeMessage;
-    bool _edgeSeen;
+    bool _edgeOpen;
+    readonly HashSet<string> _edgeMessages = new(StringComparer.Ordinal);
 
     void ResetReplyIdentity(bool known, bool gap = false)
     {
         _replyGap = gap;
-        _edgeMessage = null;
-        _edgeSeen = false;
+        _edgeOpen = gap;
+        _edgeMessages.Clear();
         _replyIdentityKnown = known;
         _responseContiguous = false;
         _replyRecords.Clear();
@@ -488,10 +490,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // Without an id, the entry itself is the message.
         var messageId = Json.Str(message, "id");
         var key = messageId ?? Guid.NewGuid().ToString("N");
-        if (_replyGap && !_edgeSeen)
+        if (_edgeOpen)
         {
-            _edgeSeen = true;
-            _edgeMessage = messageId;
+            if (messageId is not null) { _edgeMessages.Add(messageId); }
+            if (_edgeMessages.Count >= MaxReplyRecords) { _replyIdentityKnown = false; S.ResponseId = null; }
+            if (Blocks(message).Any(b => (Json.Str(b, "type") == "text" && Text.NonBlank(Json.Str(b, "text")) is not null)
+                || (Json.Str(b, "type") == "thinking" && Text.NonBlank(Json.Str(b, "thinking")) is not null))) { _edgeOpen = false; }
         }
         var toolBeforeText = false;
         foreach (var block in Blocks(message))
@@ -514,7 +518,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                         // Legacy text can span several history parts. Never give that
                         // composite a single part id, or guess through an unread window.
                         S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
-                            && (_edgeMessage is null || messageId != _edgeMessage)
+                            && (messageId is null || !_edgeMessages.Contains(messageId))
                             ? Conversation.TurnIds.Part(record, part) : null;
                         part++;
                     }
