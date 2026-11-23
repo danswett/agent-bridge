@@ -48,19 +48,23 @@ inputs in the same window, for comparison only.
 
 ## Pass bar
 
-A run passes only if **all** of the following hold. Quality/SRE sets the number of requests and the
-window; this document sets what each one must satisfy.
+A run passes only if **all** of the following hold. Quality/SRE sets the numbers and writes them into the
+**run plan before the first request is sent**; a number chosen or changed after a request is sent voids the run.
+Quality sets these floors:
 
-1. Every case above ends as expected, for N consecutive requests with no hidden retry (N and the window are
-   Quality's number, recorded in the receipt).
-2. Zero double launches: for each request id, at most one session exists on the target.
-3. Zero HA presses made as a fallback on any Host-path request (the HA fallback counter stays at zero for
+1. **N = 50 consecutive compared launches**: 50 launches, each issued on the Host path and compared with the same
+   inputs on the HA transport, with no hidden retry and no gaps. Fewer than 50 compared launches is
+   **INCONCLUSIVE**, not a pass, and the run is repeated.
+2. **0 double launches**: for each request id, at most one session exists on the target.
+3. **0 HA fallbacks**: zero HA presses made as a fallback on any Host-path request (the HA fallback counter stays at zero for
    Host-path requests).
-4. For each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
+4. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
 5. No token, key, credential or prompt text appears in any receipt, log or output the run keeps.
 6. The receipts carry the request id, so any case can be read back with `launches status`.
 
-A failure, or a result the run cannot classify, fails the gate. A new run starts from the beginning; a
+A failure fails the gate. A run **below any floor** (fewer than 50 compared launches, a case that never ran, a counter
+that was not read) is **INCONCLUSIVE** and is repeated from the start; silence or no activity is never a pass. A result
+the run cannot classify is also a failure. A new run starts from the beginning; a
 failed request is never excused as load or retried until it passes.
 
 ## Witness and receipt
