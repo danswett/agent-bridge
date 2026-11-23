@@ -33,6 +33,11 @@ public sealed class AgentLiteDeliveryTests
         public readonly List<string> Others = [];
         public bool HideOthersFromSnapshot;
         public Action? OnSnapshot, OnReadScreen, OnReply;
+        // KeysGo: the keys would go (a refusal before them leaves it false); OnWait: what the owner does while the typing slot is awaited.
+        public bool KeysGo = true;
+        public Action<string>? OnWait;
+        public Action? AfterKeys;
+        public Exception? ThrowAfterKeys;
         public DiscoveryHeld? Held { get; set; }
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
@@ -86,8 +91,10 @@ public sealed class AgentLiteDeliveryTests
         {
             // As ReplyService: the fence is run once the typing slot is held, and a stale one types nothing.
             OnReply?.Invoke();
+            OnWait?.Invoke(request.Text!);
             if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
             if (request.HandoffText is { } handoff) { request = request with { Text = handoff() }; }
+            if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
             Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
@@ -499,7 +506,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { HideOthersFromSnapshot = true }; f.Launch(LaunchProtocol.Ask);
         f.Others.Add(Sibling);
         if (duringScan) { f.OnSnapshot = () => f.Held = Hold; } else { f.Held = Hold; }
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
 
@@ -509,7 +516,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await SendTo(f, Target)).Typed);
         Assert.True(Assert.Single(f.Typed).StillCurrent!());
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
         f.Held = null;
         Assert.True((await SendTo(f, Node)).Typed);
         Assert.All(f.Typed, t => Assert.Equal(Target, t.Id));
@@ -526,7 +533,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
         Action change = () => { if (hold) { f.Held = Hold; } else { f.Others.Add(Sibling); } };
         if (inSlot) { f.OnReply = change; } else { f.OnReadScreen = change; }
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(hold ? new LiteDelivery(false, "sessionResolutionIncomplete") : new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
     [Fact]
@@ -824,12 +831,76 @@ public sealed class AgentLiteDeliveryTests
     [Fact]
     public async Task A_refused_relay_is_unmarked_so_the_owner_typing_the_same_framed_words_inside_the_window_stays_the_owners()
     {
-        var f = new Fixture { Drivers = new SessionDrivers(), Outcome = AnswerOutcome.Busy }; f.Launch(LaunchProtocol.Ask);
+        var f = new Fixture { Drivers = new SessionDrivers(), Outcome = AnswerOutcome.Busy, KeysGo = false }; f.Launch(LaunchProtocol.Ask);
         var d = f.Drivers.For(Target);
         d.Observe(Shown(1, SessionStatus.Idle, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
         Assert.False((await Send(f)).Typed);
         var framed = Assert.Single(f.Typed).Text;
         d.Observe(Shown(2, SessionStatus.Working, framed), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        Assert.False(d.PromptIsAgents);
+        Assert.Null(d.Shown.Kind);
+    }
+
+    [Theory]
+    [InlineData(AnswerOutcome.Refused, true)]     // refused as the keys were to go
+    [InlineData(AnswerOutcome.Unconfirmed, true)] // keys went, nothing recorded: the owner's words 30 s later are the owner's
+    [InlineData(AnswerOutcome.Delivered, false)]  // a signed resend answered without typing
+    public async Task A_delivery_not_confirmed_as_typed_leaves_no_arm_for_the_owner_to_wear(AnswerOutcome outcome, bool keysGo)
+    {
+        var f = new Fixture { Drivers = new SessionDrivers(), Outcome = outcome, KeysGo = keysGo }; f.Launch(LaunchProtocol.Ask);
+        var d = f.Drivers.For(Target);
+        d.Observe(Shown(1, SessionStatus.Idle, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        await Send(f);
+        d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
+        Assert.False(d.PromptIsAgents);
+        Assert.Null(d.Shown.Kind);
+    }
+
+    [Fact]
+    public async Task The_owner_typing_the_framed_words_while_the_typing_slot_is_awaited_is_not_marked_by_an_arm_not_yet_made()
+    {
+        var f = new Fixture { Drivers = new SessionDrivers() }; f.Launch(LaunchProtocol.Ask);
+        var d = f.Drivers.For(Target);
+        d.Observe(Shown(1, SessionStatus.Idle, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        f.OnWait = text => d.Observe(Shown(2, SessionStatus.Working, text), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        Assert.True((await Send(f)).Typed);
+        Assert.False(d.PromptIsAgents);
+    }
+
+    [Fact]
+    public async Task A_newer_arm_made_before_the_refusal_is_not_overwritten_by_putting_back_the_old_one()
+    {
+        var f = new Fixture { Drivers = new SessionDrivers(), Outcome = AnswerOutcome.Refused }; f.Launch(LaunchProtocol.Ask);
+        var d = f.Drivers.For(Target);
+        f.AfterKeys = () => d.ArmDriver(SessionDrivers.Agent, DateTimeOffset.UnixEpoch, "agent:other/x", "other words", label: "x on other");
+        await Send(f);
+        Assert.Equal("x on other", d.Save().Label);
+        Assert.Equal("agent:other/x", d.Save().Principal);
+    }
+
+    [Fact]
+    public async Task A_delivery_that_throws_after_the_keys_went_puts_the_arm_back_for_the_owner()
+    {
+        var f = new Fixture { Drivers = new SessionDrivers(), ThrowAfterKeys = new IOException("injector") }; f.Launch(LaunchProtocol.Ask);
+        var d = f.Drivers.For(Target);
+        d.Observe(Shown(1, SessionStatus.Idle, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        await Assert.ThrowsAsync<IOException>(() => Send(f));
+        d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
+        Assert.False(d.PromptIsAgents);
+        Assert.Null(d.Shown.Kind);
+    }
+
+    [Fact]
+    public async Task A_lane_delivery_is_not_armed_so_its_prompt_shows_as_typed()
+    {
+        var f = new Fixture { Status = SessionStatus.Working, Drivers = new SessionDrivers() }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        var d = f.Drivers.For(Target);
+        d.Observe(Shown(1, SessionStatus.Working, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        Assert.Equal(LiteKind.Pending, (await r.Send()).Outcome);
+        f.Status = SessionStatus.Idle;
+        await r.Lane.DeliverNextAsync(Target);
+        d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
         Assert.False(d.PromptIsAgents);
         Assert.Null(d.Shown.Kind);
     }
