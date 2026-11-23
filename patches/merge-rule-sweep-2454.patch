@@ -15,10 +15,10 @@ index 5f4466c4..0291072f 100644
          shell: pwsh
 diff --git a/.github/workflows/merge-rule-sweep.yml b/.github/workflows/merge-rule-sweep.yml
 new file mode 100644
-index 00000000..43003c46
+index 00000000..d741069c
 --- /dev/null
 +++ b/.github/workflows/merge-rule-sweep.yml
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +name: Merge rule sweep
 +
 +# Cancels stuck Merge rule runs (#2454, merge-rule follow-up b; Quality's spec). merge-rule.yml's evaluate job times out
@@ -39,9 +39,10 @@ index 00000000..43003c46
 +
 +permissions: {}
 +
++# One sweep at a time; a dry-run dispatch never cancels a real sweep in flight, or the reverse.
 +concurrency:
 +  group: merge-rule-sweep
-+  cancel-in-progress: true
++  cancel-in-progress: false
 +
 +jobs:
 +  sweep:
@@ -49,15 +50,16 @@ index 00000000..43003c46
 +    runs-on: ubuntu-latest
 +    timeout-minutes: 5
 +    permissions:
-+      actions: write # cancel and force-cancel Merge rule runs; nothing else
++      actions: write # read Merge rule runs and their jobs, cancel and force-cancel them; nothing else
 +      contents: read
++      pull-requests: read # one GraphQL read: is a waiting run's pull request merged, closed or moved on
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
 +          ref: main
 +          persist-credentials: false
 +          sparse-checkout: quality
-+      - name: Cancel Merge rule runs waiting over 30 minutes or running over 15
++      - name: Cancel Merge rule runs waiting over 30 minutes, judging over 15, or dead weight
 +        shell: pwsh
 +        env:
 +          GH_TOKEN: ${{ github.token }}
@@ -65,19 +67,6 @@ index 00000000..43003c46
 +          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 +        run: |
 +          & ./quality/merge-rule-sweep.ps1 -Repository $env:REPOSITORY -WaitingMaxMinutes 30 -RunningMaxMinutes 15 -DryRun:($env:DRY_RUN -eq 'true')
-diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
-index 15fdf7a6..9f49b268 100644
---- a/.github/workflows/merge-rule.yml
-+++ b/.github/workflows/merge-rule.yml
-@@ -45,7 +45,7 @@ on:
-     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
-   status:
-   workflow_run: # zizmor: ignore[dangerous-triggers]
--    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
-+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Merge rule sweep, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
-     types: [in_progress, completed]
-   check_suite:
-     types: [completed] # the only type Actions accepts here
 diff --git a/quality/catalog.yml b/quality/catalog.yml
 index 20cf6d13..d291bee7 100644
 --- a/quality/catalog.yml
@@ -103,26 +92,36 @@ index 20cf6d13..d291bee7 100644
      kind: unit
 diff --git a/quality/merge-rule-sweep.ps1 b/quality/merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..4a5e0098
+index 00000000..a447a309
 --- /dev/null
 +++ b/quality/merge-rule-sweep.ps1
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,164 @@
 +#Requires -Version 7
 +<#
 +.SYNOPSIS
 +  Cancels Merge rule runs stuck past a limit, so its queue: max group can't jam (#2454 follow-up b).
 +
 +.DESCRIPTION
-+  merge-rule.yml's evaluate job times out at 10 minutes and its runs wait in one group with queue: max. When runs pile
-+  up there (Nov 23: five, hours past that timeout, waiting in the group), everything queues behind them. This reads
-+  merge-rule.yml's unfinished runs (queued, in_progress, waiting, pending, requested), one page each, and for every
-+  run past its limit asks GitHub to cancel it: queued, pending, waiting or requested past -WaitingMaxMinutes (30) since
-+  it was created (the judge's 10-minute timeout only starts once a runner takes the job, so a run waiting in the group
-+  never times out), in_progress past -RunningMaxMinutes (15) since that attempt started running. The newest
-+  run for each pull request, or for each head when it has none, is never cancelled, however old. Otherwise a run past twice its limit, or one that
-+  refuses the plain cancel, is force-cancelled (a run past its own timeout ignores a plain cancel). It cancels, never
-+  deletes, and never touches another workflow's runs. A listing it can't read stops it with an error: unread is never
-+  "nothing to do". -DryRun reports without cancelling.
++  merge-rule.yml's runs wait in one group with queue: max, and its judge (the evaluate job) times out at 10 minutes only
++  once a runner takes it, so a run waiting in the group never times out (Nov 23: five, hours old, held every later
++  run). This reads merge-rule.yml's unfinished runs (queued, in_progress, waiting, pending, requested; one page each)
++  and cancels:
++  - a waiting run (queued, pending, waiting, requested, or in_progress with its judge not yet started) over
++    -WaitingMaxMinutes (30) since it was created;
++  - a judging run over -RunningMaxMinutes (15) since its judge started, read from the jobs API (one read per
++    in_progress run): run_started_at equals created_at for a run that waited, so it can't tell (B406);
++  - but never the newest run per pull request, or per head for a run with none, unless it is stuck itself: judging
++    over 45 minutes or waiting over 2 hours. Runs with no pull request (workflow_run, status, check_suite, schedule)
++    carry main's head and share one key on purpose: each judges every open pull request (merge-rule-sweep-v1), so
++    the newest stands for them all;
++  - dead weight at any age, the newest too: a waiting run whose pull request is merged or closed, or has moved to a
++    newer head (one GraphQL read for all of them); plain cancel only.
++  A run past twice its limit, or one that refuses a plain cancel, is force-cancelled. A run GitHub says was never
++  queued (the Nov 11 ghosts) or already completed is a warning, never retried or failed; a run older than 7 days is
++  skipped with no call. Only other errors fail the sweep. Budget: at most 15 runs acted on and 20 jobs read a sweep:
++  5 lists + 1 query + 20 jobs reads + 30 posts = 56 calls at most, 224 an hour at 4 sweeps, of the token's 1000. It
++  cancels, never deletes, and never touches another workflow's runs. A listing it can't read stops it with an error:
++  unread is never "nothing to do". -DryRun lists only what it would cancel, and why.
 +#>
 +[CmdletBinding()]
 +param([string]$Repository = $env:GITHUB_REPOSITORY, [ValidateRange(15, 360)][int]$WaitingMaxMinutes = 30,
@@ -138,11 +137,20 @@ index 00000000..4a5e0098
 +    [DateTimeOffset]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
 +}
 +
++# A refusal that means there is nothing left to stop: a warning, not a failure.
++function Get-SweepMoot($Call) {
++    $text = $Call.Output -join ' '
++    if ($text -match 'has not been queued yet') { return 'GitHub says it was never queued' }
++    if ($text -match 'is completed|already completed') { return 'GitHub says it already completed' }
++    ''
++}
++
 +function Invoke-SweepGh { $out = & $script:GhCommand @args; [pscustomobject]@{ Ok = $LASTEXITCODE -eq 0; Output = $out } }
 +
-+function Invoke-MergeRuleSweep([string]$Repository, [int]$WaitingMaxMinutes, [int]$RunningMaxMinutes, [DateTimeOffset]$Now, [switch]$DryRun) {
++function Invoke-MergeRuleSweep([string]$Repository, [int]$WaitingMaxMinutes, [int]$RunningMaxMinutes, [DateTimeOffset]$Now, [switch]$DryRun,
++    [int]$NewestWaitingMaxMinutes = 120, [int]$NewestRunningMaxMinutes = 45, [int]$MaxActions = 15, [int]$MaxJobReads = 20, [int]$IgnoreOlderThanDays = 7) {
 +    if ($Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give owner/repository.' }
-+    $acted = 0; $failed = 0; $lines = @()
++    $acted = 0; $failed = 0; $skipped = 0; $deferred = 0; $jobReads = 0; $old = 0; $lines = @()
 +    # Every unfinished run first (all of them are read before anything is cancelled), so the newest run per pull
 +    # request, or per head when it has none, is known across statuses: that one is never cancelled, however old.
 +    $all = @()
@@ -153,14 +161,48 @@ index 00000000..4a5e0098
 +        if ($page.total_count -gt 100) { $lines += "warning: more than 100 $status runs; only the first page is swept this time" }
 +        foreach ($run in @($page.workflow_runs)) {
 +            if ($run.path -cne $script:Workflow) { continue }
-+            # Waiting runs by when they were created; a running one by when this attempt started running (the judge's
-+            # 10-minute timeout counts from there, never from time spent waiting in the group).
-+            $field = if ($status -eq 'in_progress' -and $run.PSObject.Properties['run_started_at'] -and $run.run_started_at) { $run.run_started_at } else { $run.created_at }
-+            $since = ConvertTo-SweepTime $field
-+            $prs = @($run.PSObject.Properties['pull_requests'] | ForEach-Object { $_.Value } | Where-Object { $_ } | ForEach-Object { $_.number })
-+            $key = if ($prs.Count) { "pr:$($prs[0])" } else { "head:$($run.head_sha)" }
++            # Ghosts remembered by age, with no state to write: GitHub still lists runs it says were never queued (Nov 11);
++            # anything older than 7 days is past every limit here and is skipped outright, with no call.
++            if (($Now - (ConvertTo-SweepTime $run.created_at)).TotalDays -gt $IgnoreOlderThanDays) { $old++; continue }
++            # Waiting runs by when they were created. A running one by when its judge (the evaluate job) started: its
++            # 10-minute timeout counts from there. run_started_at can't tell: for a run that waited in the group it equals
++            # created_at (B406). So one jobs read per in_progress run; a judge not yet started is still waiting.
++            $since = ConvertTo-SweepTime $run.created_at; $running = $false
++            if ($status -eq 'in_progress') {
++                if ($jobReads -ge $MaxJobReads) { $deferred++; continue }
++                $jobReads++
++                $jobsRead = Invoke-SweepGh api "repos/$Repository/actions/runs/$($run.id)/jobs?filter=latest&per_page=20"
++                $judge = if ($jobsRead.Ok) { try { @((($jobsRead.Output -join "`n") | ConvertFrom-Json).jobs) | Where-Object { $_.name -match '^merge-rule-(scoped|sweep)-v\d+$' } | Select-Object -First 1 } catch { $null } }
++                if (-not $jobsRead.Ok) { $lines += "skipped run $($run.id) (in_progress): its jobs could not be read; never cancelled blind"; continue }
++                if ($judge -and $judge.status -eq 'in_progress' -and $judge.started_at) { $since = ConvertTo-SweepTime $judge.started_at; $running = $true }
++            }
++            $prList = @($run.PSObject.Properties['pull_requests'] | ForEach-Object { $_.Value } | Where-Object { $_ })
++            $key = if ($prList.Count) { "pr:$($prList[0].number)" } else { "head:$($run.head_sha)" }
++            $prHead = if ($prList.Count -and $prList[0].PSObject.Properties['head'] -and $prList[0].head) { [string]$prList[0].head.sha } else { '' }
 +            $all += [pscustomobject]@{ Run = $run; Status = $status; Since = $since; Created = (ConvertTo-SweepTime $run.created_at); Key = $key
-+                Limit = $(if ($status -eq 'in_progress') { $RunningMaxMinutes } else { $WaitingMaxMinutes }) }
++                Pr = $(if ($prList.Count) { [int]$prList[0].number } else { 0 }); PrHead = $prHead
++                Running = $running; Limit = $(if ($running) { $RunningMaxMinutes } else { $WaitingMaxMinutes }) }
++        }
++    }
++    # Dead weight (Quality cancelled 4 by hand on Nov 23): a waiting run for a pull request that is merged or closed, or
++    # for a head that pull request has since moved past. One GraphQL query reads every such pull request; if it can't be
++    # read, only this rule is skipped.
++    $dead = @{}
++    $waitingPrs = @($all | Where-Object { $_.Status -ne 'in_progress' -and $_.Pr } | ForEach-Object { $_.Pr } | Sort-Object -Unique | Select-Object -First 50)
++    if ($waitingPrs.Count) {
++        $owner, $name = $Repository -split '/', 2
++        $fields = ($waitingPrs | ForEach-Object { "p$($_): pullRequest(number: $_) { state headRefOid }" }) -join ' '
++        $query = Invoke-SweepGh api graphql -f "query=query { repository(owner: `"$owner`", name: `"$name`") { $fields } }"
++        $repo = if ($query.Ok) { try { (($query.Output -join "`n") | ConvertFrom-Json).data.repository } catch { $null } }
++        if (-not $repo) { $lines += 'warning: pull requests could not be read; the dead-weight rule is skipped this sweep' }
++        else {
++            foreach ($entry in $all | Where-Object { $_.Status -ne 'in_progress' -and $_.Pr }) {
++                $pr = $repo."p$($entry.Pr)"
++                if (-not $pr) { continue }
++                if ($pr.state -eq 'MERGED') { $dead[$entry.Run.id] = "pull request merged (#$($entry.Pr))" }
++                elseif ($pr.state -eq 'CLOSED') { $dead[$entry.Run.id] = "pull request closed (#$($entry.Pr))" }
++                elseif ($entry.PrHead -and $pr.headRefOid -and $pr.headRefOid -ne $entry.PrHead) { $dead[$entry.Run.id] = "head superseded (#$($entry.Pr))" }
++            }
 +        }
 +    }
 +    $newest = @{}
@@ -170,22 +212,45 @@ index 00000000..4a5e0098
 +    foreach ($entry in $all) {
 +        $run = $entry.Run; $status = $entry.Status
 +        $age = ($Now - $entry.Since).TotalMinutes
++        if ($dead.ContainsKey($run.id)) {
++            # Dead weight: a plain cancel at any age, the newest too; a refusal is logged, never forced, never a failure.
++            $what = "run $($run.id) ($status, $([int]$age) min, dead weight: $($dead[$run.id]))"
++            if ($DryRun) { $lines += "would cancel $what"; continue }
++            if ($acted + $failed + $skipped -ge $MaxActions) { $deferred++; continue }
++            $call = Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/cancel"
++            if ($call.Ok) { $acted++; $lines += "cancelled $what" }
++            else { $skipped++; $lines += "warning: $($what): $(if ($m = Get-SweepMoot $call) { $m } else { 'the plain cancel was refused' }); skipped" }
++            continue
++        }
 +        if ($age -le $entry.Limit) { continue }
-+        if ($newest[$entry.Key] -eq $run.id) { $lines += "kept run $($run.id) ($status, $([int]$age) min): the newest for $($entry.Key)"; continue }
-+        $what = "run $($run.id) ($status, $([int]$age) min, $($entry.Key))"
++        # The newest run per pull request (or head) is kept, unless it is stuck itself: past 45 minutes running or 2 hours
++        # waiting it would otherwise hold the group forever.
++        $isNewest = $newest[$entry.Key] -eq $run.id
++        $stuckLimit = if ($entry.Running) { $NewestRunningMaxMinutes } else { $NewestWaitingMaxMinutes }
++        if ($isNewest -and $age -le $stuckLimit) { continue }
++        $why = if ($isNewest) { "newest: yes, stuck over $stuckLimit min" } else { "newest: no, over $($entry.Limit) min $(if ($entry.Running) { 'running' } else { 'waiting' })" }
++        $what = "run $($run.id) ($status, $([int]$age) min, $why)"
 +        if ($DryRun) { $lines += "would cancel $what"; continue }
-+        # A run past twice the limit, or one that refuses a plain cancel, is force-cancelled.
-+        $done = $false
++        # A bounded budget: at most MaxActions runs acted on per sweep (5 reads + 2 posts each at most); the rest wait.
++        if ($acted + $failed + $skipped -ge $MaxActions) { $deferred++; continue }
++        # A run past twice its limit, or one that refuses a plain cancel, is force-cancelled. A run GitHub says was never
++        # queued (the Nov 11 ghosts) or has already completed is a warning: never retried, never a failure.
++        $done = $false; $moot = ''
 +        if ($age -le 2 * $entry.Limit) {
-+            $done = (Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/cancel").Ok
++            $call = Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/cancel"
++            $done = $call.Ok; if (-not $done) { $moot = Get-SweepMoot $call }
 +            if ($done) { $lines += "cancelled $what" }
 +        }
-+        if (-not $done) {
-+            $done = (Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/force-cancel").Ok
-+            $lines += if ($done) { "force-cancelled $what" } else { "FAILED to stop $what" }
++        if (-not $done -and -not $moot) {
++            $call = Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/force-cancel"
++            $done = $call.Ok; if (-not $done) { $moot = Get-SweepMoot $call }
++            if ($done) { $lines += "force-cancelled $what" }
 +        }
-+        if ($done) { $acted++ } else { $failed++ }
++        if ($moot) { $skipped++; $lines += "warning: $($what): $moot; skipped"; continue }
++        if ($done) { $acted++ } else { $failed++; $lines += "FAILED to stop $what" }
 +    }
++    if ($old) { $lines += "skipped $old run(s) older than $IgnoreOlderThanDays days outright (ghosts GitHub still lists)" }
++    if ($deferred) { $lines += "budget: $deferred more run(s) left for the next sweep (at most $MaxActions acted on and $MaxJobReads jobs read per sweep)" }
 +    [pscustomobject]@{ Acted = $acted; Failed = $failed; Lines = $lines }
 +}
 +
@@ -197,10 +262,10 @@ index 00000000..4a5e0098
 +if ($result.Failed -gt 0) { Write-Host "::error title=merge-rule sweep::$($result.Failed) stuck Merge rule run(s) could not be stopped"; exit 1 }
 diff --git a/quality/test-merge-rule-sweep.ps1 b/quality/test-merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..d5f5ee70
+index 00000000..a5786fea
 --- /dev/null
 +++ b/quality/test-merge-rule-sweep.ps1
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,221 @@
 +#Requires -Version 7
 +# Offline only: every GitHub request must match this stand-in.
 +$ErrorActionPreference = 'Stop'
@@ -214,17 +279,25 @@ index 00000000..d5f5ee70
 +    if ($Ok) { "ok   $Name" } else { "FAIL $Name"; $script:failures++ }
 +}
 +function Reset-Scenario {
-+    # $s.runs: status -> runs; each run's age in minutes. $s.refuse: run ids whose plain cancel answers 409.
-+    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @() }
++    # $s.runs: status -> runs; each run's age in minutes. $s.refuse: run ids whose plain cancel answers a 409 conflict;
++# $s.completed: run ids GitHub says already completed (409 on either cancel); $s.ghost: never queued (409 on either).
++    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @(); ghost = @(); completed = @()
++        prs = @{}; prQueryFails = $false; jobs = @{}; jobsFail = @() }
 +}
-+function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '', [double]$RunningMinutes = -1) {
++function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '', [double]$RunningMinutes = -1, [string]$PrHead = 'current', [switch]$JudgeQueued) {
 +    # By default every run is for pull request 1, so a case's young run 99 (Keeper) is the newest one kept and the old
 +    # runs are cancellable; -Head with -Pr 0 makes a run with no pull request, keyed by its head.
-+    # run_started_at: when this attempt started running; by default the same as created_at.
-+    $started = if ($RunningMinutes -ge 0) { $RunningMinutes } else { $AgeMinutes }
-+    @{ id = $Id; path = $Path; created_at = $now.AddMinutes(-$AgeMinutes).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
-+        run_started_at = $now.AddMinutes(-$started).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
-+        head_sha = $(if ($Head) { $Head } else { "head$Id" }); pull_requests = @(if ($Pr) { @{ number = $Pr } })
++    # As live (40 of 40 on Nov 23): run_started_at equals created_at even for a run that waited in the group. When its
++    # judge (the evaluate job, rendered merge-rule-scoped-v1 or merge-rule-sweep-v1) started is only in the jobs API:
++    # -RunningMinutes ago (default: the run's whole age), or still queued with -JudgeQueued.
++    $created = $now.AddMinutes(-$AgeMinutes).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
++    $started = $now.AddMinutes(-$(if ($RunningMinutes -ge 0) { $RunningMinutes } else { $AgeMinutes })).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
++    $script:s.jobs[[long]$Id] = @(
++        @{ id = $Id * 10; run_id = $Id; name = 'backstop'; status = 'completed'; conclusion = 'skipped'; created_at = $created; started_at = $created; completed_at = $created }
++        @{ id = $Id * 10 + 1; run_id = $Id; name = 'merge-rule-scoped-v1'; status = $(if ($JudgeQueued) { 'queued' } else { 'in_progress' }); conclusion = $null
++            created_at = $created; started_at = $(if ($JudgeQueued) { $created } else { $started }); completed_at = $null })
++    @{ id = $Id; path = $Path; created_at = $created; run_started_at = $created
++        head_sha = $(if ($Head) { $Head } else { "head$Id" }); pull_requests = @(if ($Pr) { @{ number = $Pr; head = @{ sha = $PrHead } } })
 +        html_url = "https://github.com/o/r/actions/runs/$Id" }
 +}
 +function Keeper { Run 99 1 }
@@ -239,12 +312,33 @@ index 00000000..d5f5ee70
 +            @{ total_count = $runs.Count; workflow_runs = $runs } | ConvertTo-Json -Depth 5; return
 +        }
 +        '^api -X POST repos/o/r/actions/runs/(\d+)/cancel$' {
-+            if ([long]$Matches[1] -in $s.refuse) { $global:LASTEXITCODE = 1; 'gh: Cannot cancel a workflow run that is completed. (HTTP 409)'; return }
++            if ([long]$Matches[1] -in $s.ghost) { $global:LASTEXITCODE = 1; 'gh: Cannot cancel a workflow run that has not been queued yet. (HTTP 409)'; return }
++            if ([long]$Matches[1] -in $s.completed) { $global:LASTEXITCODE = 1; 'gh: Cannot cancel a workflow run that is completed. (HTTP 409)'; return }
++            if ([long]$Matches[1] -in $s.refuse) { $global:LASTEXITCODE = 1; 'gh: Conflict (HTTP 409)'; return }
 +            $global:LASTEXITCODE = 0; $s.cancelled += [long]$Matches[1]; return
 +        }
 +        '^api -X POST repos/o/r/actions/runs/(\d+)/force-cancel$' {
++            if ([long]$Matches[1] -in $s.ghost) { $global:LASTEXITCODE = 1; 'gh: Cannot cancel a workflow run that has not been queued yet. (HTTP 409)'; return }
++            if ([long]$Matches[1] -in $s.completed) { $global:LASTEXITCODE = 1; 'gh: Cannot cancel a workflow run that is completed. (HTTP 409)'; return }
 +            if ([long]$Matches[1] -in $s.forceFails) { $global:LASTEXITCODE = 1; 'gh: HTTP 500'; return }
 +            $global:LASTEXITCODE = 0; $s.forced += [long]$Matches[1]; return
++        }
++        '^api repos/o/r/actions/runs/(\d+)/jobs\?filter=latest&per_page=20$' {
++            # The real shape: { total_count, jobs: [ { id, run_id, name, status, conclusion, created_at, started_at, ... } ] }.
++            if ([long]$Matches[1] -in $s.jobsFail) { $global:LASTEXITCODE = 1; 'gh: HTTP 502'; return }
++            $jobs = @($s.jobs[[long]$Matches[1]] | Where-Object { $_ })
++            $global:LASTEXITCODE = 0
++            @{ total_count = $jobs.Count; jobs = $jobs } | ConvertTo-Json -Depth 5; return
++        }
++        '^api graphql -f query=' {
++            # One query for every pull request the waiting runs name; unknown numbers come back null, as GitHub's do.
++            if ($s.prQueryFails) { $global:LASTEXITCODE = 1; return }
++            $repo = [ordered]@{}
++            foreach ($m in [regex]::Matches($a, 'p(\d+): pullRequest\(number: (\d+)\)')) {
++                $repo["p$($m.Groups[1].Value)"] = if ($s.prs.ContainsKey([int]$m.Groups[2].Value)) { $s.prs[[int]$m.Groups[2].Value] } else { $null }
++            }
++            $global:LASTEXITCODE = 0
++            @{ data = @{ repository = $repo } } | ConvertTo-Json -Depth 5; return
 +        }
 +        default { throw "Unexpected fake gh request: $a" }
 +    }
@@ -295,9 +389,9 @@ index 00000000..d5f5ee70
 +$null = Sweep
 +Assert ((($s.cancelled + $s.forced | Sort-Object) -join ',') -eq '20,22') 'of three stale runs for one pull request, every one but the newest is cancelled, whatever their status'
 +Reset-Scenario
-+$s.runs = @{ pending = @((Run 23 240 -Pr 8)) }
++$s.runs = @{ pending = @((Run 23 100 -Pr 8)); in_progress = @((Run 27 40 -Pr 9)) }
 +$null = Sweep
-+Assert ($s.cancelled.Count -eq 0 -and $s.forced.Count -eq 0) 'the only run for a pull request is kept, however old'
++Assert ($s.cancelled.Count -eq 0 -and $s.forced.Count -eq 0) 'the newest run for a pull request is kept while it waits under 2 h or runs under 45 min'
 +Reset-Scenario
 +$s.runs = @{ queued = @((Run 24 50 -Pr 0 -Head 'abc'), (Run 25 40 -Pr 0 -Head 'abc'), (Run 26 45 -Pr 0 -Head 'def')) }
 +$null = Sweep
@@ -313,5 +407,98 @@ index 00000000..d5f5ee70
 +$null = Sweep
 +Assert (($s.forced -join ',') -eq '33') 'an in_progress run past twice its limit (30 minutes running) is force-cancelled'
 +
++# Quality: a stuck newest run must not hold the group forever: past 45 min running or 2 h waiting, even it goes.
++Reset-Scenario
++$s.runs = @{ in_progress = @((Run 40 50 -Pr 11)); pending = @((Run 41 130 -Pr 12)) }
++$out = Sweep
++Assert ((($s.cancelled + $s.forced | Sort-Object) -join ',') -eq '40,41' -and @($out.Lines | Where-Object { $_ -match 'newest' }).Count -eq 2) 'even the newest run goes past 45 min running or 2 h waiting, and says it was the newest'
++
++# The Nov 11 ghosts: 409 'has not been queued yet' is logged and skipped, never retried or forced, never a failure.
++Reset-Scenario
++$s.runs = @{ queued = @((Run 42 45), (Keeper)) }; $s.ghost = @(42)
++$out = Sweep
++Assert (@($s.calls | Where-Object { $_ -match '/runs/42/' }).Count -eq 1 -and $out.Failed -eq 0 -and @($out.Lines | Where-Object { $_ -match 'run 42 .*never queued' }).Count -eq 1) 'a ghost run is logged and skipped after one call, and fails nothing'
++
++# The dry run lists only what it would cancel, and why: id, age, newest or not.
++Reset-Scenario
++$s.runs = @{ queued = @((Run 43 45), (Keeper), (Run 44 10 -Pr 13)) }
++$out = Sweep -DryRun
++Assert (@($out.Lines).Count -eq 1 -and $out.Lines[0] -match '^would cancel run 43 \(queued, 45 min, newest: no, over 30 min waiting\)') 'a dry run lists only what it would cancel, with id, age, newest and why'
++
++# A bounded budget: at most 15 runs acted on and 20 jobs read a sweep: 5 lists + 1 PR query + 20 jobs reads + 2 x 15
++# posts = 56 calls a sweep at most, 224 an hour at 4 sweeps, of the token's 1000.
++Reset-Scenario
++$s.runs = @{ queued = @(@(1..25 | ForEach-Object { Run (100 + $_) 45 }) + @(Keeper)) }
++$out = Sweep
++Assert ($s.cancelled.Count -eq 15 -and @($s.calls).Count -le 56 -and @($out.Lines | Where-Object { $_ -match 'budget' }).Count -eq 1) 'a sweep acts on at most 15 runs and says the rest wait for the next sweep'
++
++# Dead weight (Quality did 4 by hand on Nov 23): a waiting run for a merged or closed pull request, or for a head
++# that pull request has since moved past, is plainly cancelled at any age, the newest too.
++Reset-Scenario
++$s.prs = @{ 21 = @{ state = 'MERGED'; headRefOid = 'current' }; 22 = @{ state = 'OPEN'; headRefOid = 'newer' }; 23 = @{ state = 'OPEN'; headRefOid = 'current' } }
++$s.runs = @{ pending = @((Run 50 2 -Pr 21), (Run 51 3 -Pr 22), (Run 52 1 -Pr 23)); in_progress = @((Run 53 5 -Pr 21)) }
++$out = Sweep
++Assert ((($s.cancelled | Sort-Object) -join ',') -eq '50,51' -and $s.forced.Count -eq 0) 'young waiting runs for a merged PR or a superseded head are plainly cancelled; one for the current head, and a running one, are not'
++Assert (@($s.calls | Where-Object { $_ -match '^api graphql' }).Count -eq 1 -and @($out.Lines | Where-Object { $_ -match 'pull request merged|head superseded' }).Count -eq 2) 'one query reads every pull request, and the log says why each was dead weight'
++Reset-Scenario
++$s.prs = @{ 24 = @{ state = 'CLOSED'; headRefOid = 'current' } }; $s.runs = @{ queued = @((Run 54 2 -Pr 24)) }; $s.refuse = @(54)
++$out = Sweep
++Assert ($s.forced.Count -eq 0 -and $out.Failed -eq 0) 'a dead-weight run that refuses a plain cancel is logged, never forced, never a failure'
++Reset-Scenario
++$s.prQueryFails = $true; $s.prs = @{ 25 = @{ state = 'MERGED'; headRefOid = 'current' } }; $s.runs = @{ queued = @((Run 55 2 -Pr 25)) }
++$out = Sweep
++Assert ($s.cancelled.Count -eq 0 -and $out.Failed -eq 0 -and @($out.Lines | Where-Object { $_ -match 'pull requests could not be read' }).Count -eq 1) 'an unreadable PR query skips only the dead-weight rule, and says so'
++
++# Schedule pin: GitHub drops schedules on :00/:15/:30/:45 under load, so the sweep runs at off-minutes, every 15 minutes.
++$yml = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'merge-rule-sweep.yml')
++$crons = @([regex]::Matches($yml, "(?m)^\s*-\s*cron:\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
++$minutes = @(if ($crons.Count -eq 1) { ($crons[0] -split ' ')[0] -split ',' | ForEach-Object { [int]$_ } })
++Assert ($crons.Count -eq 1 -and $crons[0] -eq '7,22,37,52 * * * *' -and -not @($minutes | Where-Object { $_ % 15 -eq 0 }).Count) 'the sweep is scheduled at off-minutes 7,22,37,52, never on a quarter hour'
++
++# B406 (P1): a run that waited in the group has run_started_at == created_at, so its running age comes from its judge's
++# own started_at, read from the jobs API (one call per in_progress run).
++Reset-Scenario
++$s.runs = @{ in_progress = @((Run 60 25 -RunningMinutes 5), (Run 61 20 -JudgeQueued), (Run 62 35 -JudgeQueued), (Keeper)) }
++$out = Sweep
++Assert ((($s.cancelled + $s.forced | Sort-Object) -join ',') -eq '62') 'a judge that started 5 min ago after 20 min waiting is kept; a queued judge goes only past 30 min waiting'
++Assert (@($s.calls | Where-Object { $_ -match '/runs/\d+/jobs\?' }).Count -eq 4) 'one jobs read per in_progress run'
++Reset-Scenario
++$s.runs = @{ in_progress = @((Run 63 50), (Keeper)) }; $s.jobsFail = @(63)
++$out = Sweep
++Assert ($s.cancelled.Count -eq 0 -and $s.forced.Count -eq 0 -and $out.Failed -eq 0 -and @($out.Lines | Where-Object { $_ -match 'run 63.*jobs could not be read' }).Count -eq 1) 'a run whose jobs cannot be read is skipped and logged, never cancelled blind'
++
++# P2: an already-completed run is a warning, never forced, never a failure; a run older than 7 days (the Nov 11 ghosts)
++# is skipped outright, with no call at all; only other errors fail the sweep.
++Reset-Scenario
++$s.runs = @{ queued = @((Run 70 45), (Run 71 (8 * 1440)), (Keeper)) }; $s.completed = @(70)
++$out = Sweep
++Assert ($s.forced.Count -eq 0 -and $out.Failed -eq 0 -and @($s.calls | Where-Object { $_ -match '/runs/70/' }).Count -eq 1 -and @($out.Lines | Where-Object { $_ -match 'warning: run 70 .*already completed' }).Count -eq 1) 'an already-completed run is one call and a warning, not a failure'
++Assert (@($s.calls | Where-Object { $_ -match '/runs/71/' }).Count -eq 0 -and @($out.Lines | Where-Object { $_ -match 'older than 7 days' }).Count -eq 1) 'a run older than 7 days is skipped outright, with no call'
++
++# The workflow itself (B406 P2.4): nothing a fork can start, the least token, its own group, main's own script.
++$norm = $yml -replace "`r`n", "`n"
++$onBlock = [regex]::Match($norm, '(?ms)^on:\n(.*?)^\S').Groups[1].Value
++$triggers = @([regex]::Matches($onBlock, '(?m)^  (\w+):') | ForEach-Object { $_.Groups[1].Value })
++Assert (($triggers -join ',') -eq 'schedule,workflow_dispatch') 'only schedule and workflow_dispatch start the sweep'
++$jobPerms = [regex]::Match($norm, '(?ms)^    permissions:\n((?:      [^\n]*\n)+)').Groups[1].Value
++$granted = @([regex]::Matches($jobPerms, '(?m)^      ([\w-]+): (\w+)') | ForEach-Object { "$($_.Groups[1].Value)=$($_.Groups[2].Value)" })
++Assert ($norm -match '(?m)^permissions: \{\}$' -and ($granted -join ',') -eq 'actions=write,contents=read,pull-requests=read') 'permissions: {} at the top; the job gets actions: write, contents: read, pull-requests: read only'
++Assert ($norm -match '(?m)^  group: merge-rule-sweep\n  cancel-in-progress: false$' -and $norm -match '(?m)^          ref: main$' -and $norm -match '(?m)^          persist-credentials: false$' -and $norm -notmatch 'secrets\.') 'its own group, never cancelling a sweep in flight; main''s own checkout, no credentials kept, no secrets'
++
 +if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 +"merge-rule-sweep: $script:checks checks passed"
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 84d61018..cd506a5d 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1073,7 +1073,9 @@ public class MergeRuleTests
+         }
+         var names = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+             .Select(f => Load(f).Children[new YamlScalarNode("name")].ToString())
+-            .Where(n => n != "Merge rule")
++            // Merge rule sweep (merge-rule-sweep.yml) only cancels stuck Merge rule runs: its runs change no verdict, so a
++            // finished one needn't have the merge rule judge again (#2454, Quality).
++            .Where(n => n != "Merge rule" && n != "Merge rule sweep")
+             .Order(StringComparer.Ordinal);
+         var on = (YamlMappingNode)Load(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
+         var listed = ((YamlSequenceNode)((YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")])
