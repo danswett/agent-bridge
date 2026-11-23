@@ -9,6 +9,16 @@ sealed class PlannedStops(DeliveryGate gate, TimeSpan timeout, Action<string> lo
     CancellationTokenSource restart = new();
     bool stopping;
 
+    // Called when a stop holds the delivery fence, or a restart commits (S6): the lane pump stops draining then, never before.
+    public Action? StopHeld { get; set; }
+
+    // A hook that fails never refuses or delays the stop; the pump is also disposed when the host exits.
+    void BeginPumpStop()
+    {
+        try { StopHeld?.Invoke(); }
+        catch (Exception ex) { log($"the lane pump did not begin to stop: {ex.GetType().Name}"); }
+    }
+
     public CancellationToken RestartToken()
     {
         lock (state) { return stopping ? new CancellationToken(true) : restart.Token; }
@@ -19,6 +29,7 @@ sealed class PlannedStops(DeliveryGate gate, TimeSpan timeout, Action<string> lo
         lock (state)
         {
             if (stopping || interrupted.IsCancellationRequested) { return false; }
+            BeginPumpStop();
             handover();
             return true;
         }
@@ -43,6 +54,7 @@ sealed class PlannedStops(DeliveryGate gate, TimeSpan timeout, Action<string> lo
             if (lease is not null)
             {
                 interrupt.Cancel();
+                BeginPumpStop();
                 return new StopLease(this, lease);
             }
             log("the host was not stopped: a delivery or typing is still in progress");

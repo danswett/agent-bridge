@@ -147,7 +147,9 @@ Phase 1 S4 wires LiteDeliver to the lane through LaneComposition. Only while lan
 Copilot targets: a Claude target, or the flag off, keeps the legacy idle-typing path unchanged (a Claude lane comes later).
 An offer goes through composition.Offer, whose Offered event wakes the pump; there is no separate Wake call. With the flag on and
 the journal refused, a send is refused busy and never falls back to legacy typing. The host builds one composition and one
-pump; S6 owns stopping the pump.
+pump. Phase 1 S6 stops it: BeginStop runs once a planned stop holds the delivery fence, or a restart commits, and never before,
+because a stop the host then refuses (a delivery outlasting 15 s) leaves it running and BeginStop cannot be undone. An admitted
+delivery is never aborted; the pump and its composition are disposed when the host run ends, the pump first.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.

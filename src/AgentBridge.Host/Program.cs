@@ -646,6 +646,11 @@ async Task<int> ServeAsync(HostHandover handover)
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log, drivers, deliveryGate);
+    // S6: the lane pump stops draining once a stop holds the delivery fence (or a restart commits), never before: a refused stop
+    // leaves the host running and the pump must go on. It and its composition end with the host run, the pump first.
+    plannedStops.StopHeld = () => liteDeliver.Pump?.BeginStop();
+    using var laneComposition = liteDeliver.Composition;
+    await using var lanePump = liteDeliver.Pump;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an

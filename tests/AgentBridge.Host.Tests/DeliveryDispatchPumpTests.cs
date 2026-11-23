@@ -203,4 +203,54 @@ public sealed class DeliveryDispatchPumpTests
         f.Idle = true; f.Sessions.Change(); await f.Pump.WhenIdleAsync();
         Assert.Single(f.Sent);
     }
+
+    [Fact]
+    public async Task A_refused_stop_leaves_the_pump_draining()
+    {
+        await using var f = new Fake();
+        var delivery = f.Gate.TryEnterDelivery()!;
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromMilliseconds(50), _ => { }) { StopHeld = f.Pump.BeginStop };
+        Assert.Null(await stops.PrepareStopAsync());
+        delivery.Dispose();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+    }
+
+    [Fact]
+    public async Task A_held_stop_lets_what_is_drained_stay_delivered_then_stops_the_pump()
+    {
+        await using var f = new Fake();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = f.Pump.BeginStop };
+        var lease = await stops.PrepareStopAsync();
+        Assert.NotNull(lease);
+        // Released, as a stop the host then abandoned would be: the pump must not wake again.
+        lease.Dispose();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+        await f.Pump.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task A_stop_hook_that_throws_never_refuses_the_stop()
+    {
+        await using var f = new Fake();
+        var logs = new List<string>();
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), logs.Add) { StopHeld = () => throw new InvalidOperationException("boom") };
+        using var lease = await stops.PrepareStopAsync();
+        Assert.NotNull(lease);
+        Assert.Contains(logs, line => line.Contains("lane pump"));
+    }
+
+    [Fact]
+    public async Task A_committed_restart_stops_the_pump_before_the_handover()
+    {
+        await using var f = new Fake();
+        var order = new List<string>();
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = () => order.Add("pump") };
+        Assert.True(stops.TryCommitRestart(stops.RestartToken(), () => order.Add("handover")));
+        Assert.Equal(["pump", "handover"], order);
+        await Task.CompletedTask;
+    }
 }
