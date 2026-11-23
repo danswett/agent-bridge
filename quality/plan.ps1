@@ -10,6 +10,8 @@
     test-projects        the test project folders of the suites ci.yml's product job runs, as JSON
     whole-solution       true when the whole ring runs, so product tests AgentBridge.slnx as it
                          always did, rather than a filter of the selected projects
+    host-shards          the Host.Tests shard legs as JSON ({os, shard, of}), [] when it is not sharded; host-sharded
+                         is true/false, and product then leaves that project out of test-projects and the solution
     product-os           product's runners, from its selected suites' platforms (all three when the
                          whole ring runs), as a JSON array
     test-filter          the dotnet test --filter product adds: ring 0's in-process filter under
@@ -49,7 +51,11 @@ param(
     [string[]] $Narrow = @(),
     # Platforms product doesn't run on this event (#1249: win-arm64 runs on main, not on a pull
     # request head). The app job still packages both architectures whenever it runs.
-    [string[]] $ExcludePlatform = @()
+    [string[]] $ExcludePlatform = @(),
+    # The slowest test project runs as numbered shards in its own job (#2454, quality/host-shards.ps1), so
+    # product stops running it and its check names stay. -Shards 1 turns it off. PLAN_SHARD_PROJECT is a test hook.
+    [string] $ShardProject = ($env:PLAN_SHARD_PROJECT ?? 'tests/AgentBridge.Host.Tests'),
+    [int] $Shards = 3
 )
 
 $ErrorActionPreference = 'Stop'
@@ -91,6 +97,17 @@ $productOs = @($runners.Keys | Where-Object { ($whole -or $_ -in $platforms) -an
 # Never an empty matrix: a suite that only the excluded platform runs falls back to every runner.
 if ($productOs.Count -eq 0 -and $productIds.Count -gt 0) { $productOs = @($runners.Keys | Where-Object { -not $platform -or $_ -eq $platform } | ForEach-Object { $runners[$_] }) }
 
+# The sharded project leaves product's list when it runs as shards. The shard job runs on the runners the project's
+# own suites declare (every product runner in the whole ring), one leg per shard, and not on the fast ring.
+$hostLegs = @()
+$sharded = $Shards -gt 1 -and -not $FastRing -and $ShardProject -in $testProjects
+if ($sharded) {
+    $shardPlatforms = @($productSuites | Where-Object { $_.project -eq $ShardProject } | ForEach-Object { $_.platforms })
+    $shardOs = @($runners.Keys | Where-Object { $whole -or $_ -in $shardPlatforms } | ForEach-Object { $runners[$_] } | Where-Object { $_ -in $productOs })
+    $hostLegs = @(foreach ($os in $shardOs) { foreach ($n in 1..$Shards) { [ordered]@{ os = $os; shard = $n; of = $Shards } } })
+    $testProjects = @($testProjects | Where-Object { $_ -ne $ShardProject })
+}
+
 function Test-WholeRing([string] $rule) { $rule.StartsWith('global_triggers ') -or $rule.StartsWith('unclaimed path') }
 
 # Build inputs every project compiles from: changing one still packages the app.
@@ -128,6 +145,10 @@ $outputs['suites'] = ConvertTo-JsonArray $ids
 $outputs['test-projects'] = ConvertTo-JsonArray $testProjects
 $outputs['whole-solution'] = if ($whole) { 'true' } else { 'false' }
 $outputs['product-os'] = ConvertTo-JsonArray $productOs
+# Shard legs as matrix objects ({os, shard, of}); [] when nothing is sharded. host-sharded tells product to skip the project
+# even when the whole solution runs.
+$outputs['host-shards'] = ConvertTo-JsonArray $hostLegs
+$outputs['host-sharded'] = if ($sharded) { 'true' } else { 'false' }
 $outputs['test-filter'] = "$($selection.testFilter)"
 # Only the catalog's exact post-merge names; anything else, an unknown tier too, blocks.
 $postMerge = @($selection.postMergeJobs)

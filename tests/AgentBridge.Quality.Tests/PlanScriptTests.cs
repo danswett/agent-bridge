@@ -74,8 +74,16 @@ public class PlanScriptTests
     public Task A_push_without_a_proven_base_packages_an_earlier_untested_app_change(
         string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
 
+    [Fact]
+    public Task A_sharded_project_runs_as_numbered_shards_on_the_runners_its_suite_declares_and_leaves_product() =>
+        CheckPlan("pull_request", "tests/Example.Tests/Test.cs", false, false, shardProject: "tests/Example.Tests");
+
+    [Fact]
+    public Task In_the_whole_ring_the_sharded_project_runs_on_every_product_runner_and_the_solution_run_leaves_it_out() =>
+        CheckPlan("push", "unknown/input.txt", false, true, shardProject: "tests/Example.Tests");
+
     static async Task CheckPlan(
-        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false)
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false, string? shardProject = null)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -186,6 +194,7 @@ public class PlanScriptTests
             start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
             start.Environment["CI_PLAN_TEST_RUNS"] = unpaidApp ? "release-debt" : runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
+            if (shardProject is not null) { start.Environment["PLAN_SHARD_PROJECT"] = shardProject; }
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
             start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
@@ -248,6 +257,21 @@ public class PlanScriptTests
                         ? new[] { "ubuntu-latest", "windows-latest" }
                         : new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" },
                     JsonSerializer.Deserialize<string[]>(outputs["product-os"]));
+            // #2454: the sharded project leaves product and runs as numbered shards; nothing is sharded when it is not selected.
+            var legs = JsonSerializer.Deserialize<JsonElement[]>(outputs["host-shards"])!.Select(l => $"{l.GetProperty("os").GetString()}#{l.GetProperty("shard").GetInt32()}/{l.GetProperty("of").GetInt32()}").ToArray();
+            if (shardProject is not null && outputs["product"] == "true")
+            {
+                var os = wholeRing ? new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" } : new[] { "ubuntu-latest" };
+                if (eventName == "pull_request") { os = os.Where(o => o != "windows-11-arm").ToArray(); }
+                Assert.Equal(os.SelectMany(o => new[] { 1, 2, 3 }.Select(n => $"{o}#{n}/3")), legs);
+                Assert.DoesNotContain(shardProject, JsonSerializer.Deserialize<string[]>(outputs["test-projects"])!);
+                Assert.Equal("true", outputs["host-sharded"]);
+            }
+            else
+            {
+                Assert.Empty(legs);
+                Assert.Equal("false", outputs["host-sharded"]);
+            }
             Assert.Equal("needs.plan.outputs.app == 'true'", ((YamlMappingNode)jobs["app"])["if"].ToString());
             Assert.Equal("!cancelled() && github.event_name != 'pull_request' && (needs.plan.outputs.app-installer == 'true')",
                 ((YamlMappingNode)jobs["app-installer"])["if"].ToString());
