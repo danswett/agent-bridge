@@ -7,12 +7,18 @@ it runs **after the G9 PRs land**, on disposable hosts SRE picks, with the owner
 restart and reconnect **at run time**. This document grants none of those approvals and changes no host, trust, credential, key or
 permission. No machine name appears here or in any record the run keeps.
 
+**What this runbook overrides in the parent design, for this run only.** The parent still requires, as its pass bar, 50 compared launches inside 100 compared
+requests with an HA twin (items 1 and 5), 0 HA fallbacks (item 4) and 0 mismatches, against a disposable HA, and its "Person steps" give the relay drop to a person.
+The owner waived the HA comparison and there is no disposable HA, and Quality R9 ruled the reduced bar. So here: **pass-bar items 1, 4 and 5 and the HA-twin cases are
+superseded for this run only** (50 consecutive Host launches; the HA-fallback checks NOT COVERED; no mismatch bar; no parity claim), and the relay drop is done by the
+elevated relay-drop session below. The parent design is updated in a follow-up so a reader of the parent is not misled; until then this runbook wins for this run.
+
 ## Roles: every step names who presses
 
 - **SRE** runs the evidence, presses every control the run needs that is not listed under OWNER, and keeps the raw records.
 - **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy. But the host app update installs
   through the app, and **the restart that finishes it is OWNER-only** (guard 67): the owner presses that restart on each disposable host.
-- **OWNER** is live for exactly these: **the dry run's elevated-session approval and Restart host press (S-2)**, **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus
+- **OWNER** is live for exactly these: **the dry run's elevated-session approval and Restart press (S-2)**, **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart (S8) and the host restart that ends the established relay connection in every relay-drop event (S5, S8)**, plus
   a restart if a lost-response fault needs one (S5). The owner types nothing and runs no terminal step: they use the host's own person
   surface (the app) when SRE asks.
 - **Quality** attests the receipt against the bars; **the lead** approves the flip from the attested receipt.
@@ -26,13 +32,17 @@ time. Anything else is out of bounds and stops the run.
 | Action | Who presses | Approved by |
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
+| **Drain the three hosts** at the quiet hour (draining ends live sessions) | The lead who owns each host's sessions ends them by list; SRE verifies none remain | The owner, through the Chief, **on the day**, confirming the hour SRE proposes; nothing is drained before that |
+| **The main run's elevated session** on the drop host (separate from the dry run's) | Started by the person the approval names (see "Who starts it"); used by SRE | The owner, through the Chief, once, before S0; ended after the run |
+| **The owner's go to launch the run's sessions** (S2 onward) | SRE launches only the plan-named sessions under the person-issued grant | The Chief's go **and** the owner's go, through the Chief, before the first launch |
+| **Recovery:** a new elevated session (or administrator access) to run the removal command, only if both the dead-man and the script failed | The person the approval names | The owner, through the Chief, when it is needed |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, the warm-up restarts, and the restart that ends the established relay connection in every relay drop at S5 and S8) | OWNER, from that host's own control | The owner, per event, before it happens |
 | Drop the **drop host's** relay connection, then restore it (S5, S8; the one host only) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses read for this event>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **There is no disposable HA and the HA comparison is waived by the owner**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says "no HA comparison" |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 | **Dry run, before the main run:** the elevated session on the **spare host** | The owner approves launching it, through the Chief, as its own approval; SRE uses it | The owner, once, before the dry run. It is ended when the dry run ends; the main run's elevated session is a separate approval |
-| **Dry run:** the owner's **Restart host** press on the spare host | OWNER, in the app, once per dry-run event | The owner, per event, before it happens |
+| **Dry run:** the owner's **Restart** press on the spare host | OWNER, in the app, once per dry-run event | The owner, per event, before it happens |
 | **Dry run:** run `relay-drop-event.ps1` on the spare host (the block, the proofs, the restore, the disarm) | The elevated session on the spare host, started by SRE | The owner, per event; the commands are exactly the script below, nothing else |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real Home Assistant (there is no disposable HA: the HA-fallback checks are NOT COVERED and the HA comparison is waived by the owner).
@@ -52,29 +62,44 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
 - **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the command block below (arm the dead-man, drop, scope check, restore, disarm), in order, with the
   event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
   any setting, trust, credential, key or ACL.
-- **Owner's OK (about 09:20 PT).** The owner presses **Restart host** in the app right after each relay-drop block is in place; that restart is what ends the
-  established relay connection. **No relay-link restart command is added**: none is supported, and this run does not create one.
+- **Owner's OK (about 09:20 PT).** The owner presses **Restart** in the app right after each relay-drop block is in place; that restart is what ends the
+  established relay connection. **The exact control** is the app's **Settings, "Restart"** button (AutomationId `RestartHost`), or **"Restart now"** in the
+  "Restart the host" bar when the app shows that a restart is required; wherever this runbook says "Restart" for the owner it means that control. **No relay-link
+  restart command is added**: none is supported, and this run does not create one.
+- **Who starts it, and any UAC click.** The owner's approval names the **one person who starts the elevated session** on the drop host (for the dry run, on the spare
+  host), and that person, not the owner, clicks any UAC prompt or enters any administrator credential there. **The owner clicks nothing and types nothing.** If the
+  session cannot be started without the owner clicking or typing, the run waits and the owner is asked; nothing is improvised.
+- **The dry-run spare host.** It is **a fleet VM with no live sessions** that is **not one of the run's hosts**, so the owner's drain decision for the run does not
+  cover it and none is needed. It is **named off the repository in the dry-run approval**, and SRE verifies it has no live session before S-2. A Restart press and
+  a firewall block are never made on a host that has live sessions.
+- **Recovery if BOTH the dead-man and the script fail.** The removal command (`Remove-NetFirewallRule -Group 'SG-relay-drop'`) needs elevation, so recovery is a
+  **new owner-approved elevated session, or administrator access (administrator RDP) by the person the owner names**, on the drop host (the approval row above).
+  The impact until then is limited to that host program's outbound TCP 443 to those addresses on the one drop host: RDP and everything else are untouched. The
+  dead-man is registered with `StartWhenAvailable`, so a whole-machine reboot across the 20-minute mark still runs it after boot; the event is void either way.
+  After a fired dead-man or a dead script, SRE removes any leftover `SG-relay-drop-revert` task before the next event (the script also registers it with `-Force`).
 - **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on TCP 443,
   so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action change. Every
   rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
   that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
-- **It survives the owner's Restart host: yes, and it is not a child of the host (from the code, `AgentStarter.cs` in `AgentBridge.Host.Delivery`).** The host
+- **It survives the owner's Restart: yes, and it is not a child of the host (from the code, `AgentStarter.cs` in `AgentBridge.Host.Delivery`).** The host
   refuses to start any session while it is itself elevated (`WindowsAgentStarter.Unavailable`: an integrity level at or above 0x3000 returns "the host is running as
   administrator ... start the host unelevated"), and the sessions it does start are unelevated. So an **elevated session cannot be one the host launched**: it is started
   separately, by the owner's own approval, and is not in the host's process tree. Even for the unelevated sessions the host starts, it uses `CreateProcessW` with
   `CREATE_NEW_CONSOLE`, closes its handles, and puts the process in **no job object**, so nothing ties the session's lifetime to the host process; the only place the
   host terminates a session is the stop path (`ProcessControl` `TerminateProcess` for an end), not shutdown or restart. A host restart therefore does not end the
   elevated session, and the dead-man scheduled task (a SYSTEM task) is independent of both. **This is read from the code, not tested; to be confirmed in the dry run.**
-  **No dry run has happened yet**, and nothing here says it was confirmed. The dry run (a spare host, an owner-approved elevated session, an owner Restart host press) is its own
+  **No dry run has happened yet**, and nothing here says it was confirmed. The dry run (a spare host, an owner-approved elevated session, an owner Restart press) is its own
   approval, in the Approvals table below, and comes before the main run.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 
 #### The final command block (what the owner sees)
 
-The values come from the frozen plan, except the address list: **the address list** is the set of remote addresses the AgentBridge host process is connected to on TCP 443, read at S0 **and re-read for every event, immediately before step 1**, with that event's own read used for its rule and recorded with the event (the relay's addresses can change between events),
-read by SRE (a read, no elevation: `Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 | Select-Object -ExpandProperty RemoteAddress -Unique`);
-**the dead-man N = 20 minutes**, long enough that it cannot fire before the owner's restart and the proofs are done; **the dead-man task name is `SG-relay-drop-revert`**. Nothing else is in the block.
+The values come from the frozen plan, except the address list: **the script reads the relay addresses itself, in its step 0, for every event** (a read, no
+elevation: `Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique`), and uses
+that event's own result for its rule; SRE's S0 read is only recorded in the plan for reference.
+**The dead-man N = 20 minutes**, long enough that it cannot fire before the owner's restart and the proofs are done; **the dead-man task name is `SG-relay-drop-revert`**,
+registered with `StartWhenAvailable` and `-Force`. Nothing else is in the block.
 
 Pre-check, reads only, recorded before the first event on each host, and the RDP access path (inbound 3389 or Azure Bastion) confirmed up:
 
@@ -84,7 +109,7 @@ Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-
 ```
 
 **Each event is ONE local script that the elevated session starts itself.** Nobody can message the session while the relay is down, so nothing about an event is
-done by hand mid-drop: the owner approves the event beforehand, then presses **Restart host** once SRE tells them the script has started (the script waits for it for up to 8 minutes; a restart before the block is in place is caught by the 3c proof and voids the event). In order the script: reads
+done by hand mid-drop: the owner approves the event beforehand, then presses **Restart** once SRE tells them the script has started (the script waits for it for up to 8 minutes; a restart before the block is in place is caught by the 3c proof and voids the event). In order the script: reads
 this event's relay addresses (step 0), arms the dead-man, adds the block, **waits for the host process id to change** (the owner's restart) with a timeout, does the
 3c read, holds, restores, disarms, and does the 4b read; **the 3c and 4b reads also check the relay hostnames from the plan, resolved again at that moment** (`Resolve-DnsName`), so a new relay IP is not missed. A **timeout is 8 minutes**, the hold is 60 seconds, so with the proofs an event ends well inside the
 20-minute dead-man. Any failure restores and disarms (in `finally`), records why, and exits non-zero; the event is then void.
@@ -96,9 +121,9 @@ cannot outlive an event, and the missing 4b line in the log marks the event void
 
 **Fallback if the session does not survive the host restart.** The answer above is read from the code and is not yet confirmed. If the dry run shows otherwise (the session dies with the host),
 the event is run by a **scheduled task the session registers before the block** instead: `Register-ScheduledTask -TaskName 'SG-relay-drop-event' -Action
-(New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File <script path> -EventId <event id> -HostExe <host exe path> -HostPid <host pid> -Evidence <evidence folder> -RelayHosts <relay hostnames>')
+(New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File "<script path>" -EventId "<event id>" -HostExe "<host exe path>" -HostPid <host pid> -Evidence "<evidence folder>" -RelayHostsCsv "<relay hostnames, comma-separated>"')
 -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10)) -User 'SYSTEM' -RunLevel Highest`, started by `Start-ScheduledTask`, and removed with
-`Unregister-ScheduledTask -TaskName 'SG-relay-drop-event' -Confirm:$false -ErrorAction SilentlyContinue` afterwards. It runs the same script and nothing else.
+`Unregister-ScheduledTask -TaskName 'SG-relay-drop-event' -Confirm:$false -ErrorAction SilentlyContinue` afterwards. It runs the same script and nothing else. Its arguments are quoted and the hostnames are one comma-separated string, because a `[string[]]` cannot be passed through `-File`; **this fallback command is not tested**, and the dry run tests it only if the session does not survive the restart.
 
 ```powershell
 # relay-drop-event.ps1: run by the elevated session on the drop host, one event per run. No secrets are logged.
@@ -107,14 +132,14 @@ param(
   [Parameter(Mandatory)][string]$HostExe,      # AgentBridge host exe path from the frozen plan
   [Parameter(Mandatory)][int]$HostPid,         # host process id before the owner's restart
   [Parameter(Mandatory)][string]$Evidence,     # evidence folder (off the repository)
-  [Parameter(Mandatory)][string[]]$RelayHosts, # relay hostnames from the frozen plan (resolved again at each proof read)
+  [Parameter(Mandatory)][string]$RelayHostsCsv, # relay hostnames from the frozen plan, comma-separated (resolved again at each proof read)
   [int]$RestartTimeoutMinutes = 8, [int]$HoldSeconds = 60)
 $ErrorActionPreference = 'Stop'
 $ok = $false
 function Note($m) { Add-Content -Path (Join-Path $Evidence "relay-drop-$EventId.log") -Value ("{0:o} {1}" -f (Get-Date), $m) }
 function Relays($p) { @(Get-NetTCPConnection -OwningProcess $p -RemotePort 443 -State Established -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RemoteAddress -Unique) }
 # The relay set at the moment of a read: this event's addresses plus the hostnames resolved NOW, so a new relay IP is not missed.
-function RelayNow { @($addr) + @($RelayHosts | ForEach-Object { Resolve-DnsName -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress) | Select-Object -Unique }
+function RelayNow { @($addr) + @(($RelayHostsCsv -split ',') | ForEach-Object { Resolve-DnsName -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress) | Select-Object -Unique }
 function Defaults { Get-NetFirewallProfile | Select-Object Name, DefaultInboundAction, DefaultOutboundAction | ConvertTo-Json -Compress }
 $addr = Relays $HostPid                                  # 0. this event's relay addresses (a read)
 if (-not $addr) { throw 'no established relay connection to drop' }
@@ -122,17 +147,17 @@ $defaultsBefore = Defaults; Note "0 relay addresses: $($addr -join ',')"
 try {
   # 1. Arm the dead-man FIRST: it deletes the whole group after 20 minutes whatever happens to this session.
   $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
-  Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -User 'SYSTEM' -RunLevel Highest | Out-Null
+  Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable) -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
   Note '1 dead-man armed (20 min)'
   # 2. Drop: outbound only, the host program AND this event's relay addresses on TCP 443, in the one group.
   New-NetFirewallRule -DisplayName "SG-relay-drop-$EventId" -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program $HostExe -Protocol TCP -RemotePort 443 -RemoteAddress $addr | Out-Null
   # 3. Scope check (a read): only Outbound, the host program, TCP 443, and never 3389.
   foreach ($r in Get-NetFirewallRule -Group 'SG-relay-drop') {
-    $pf = $r | Get-NetFirewallPortFilter
-    if ($r.Direction -ne 'Outbound' -or ($r | Get-NetFirewallApplicationFilter).Program -ne $HostExe -or $pf.RemotePort -ne '443' -or $pf.LocalPort -eq '3389') { throw 'rule scope is not outbound / host program / 443' }
+    $pf = $r | Get-NetFirewallPortFilter; $af = $r | Get-NetFirewallAddressFilter
+    if ($r.Direction -ne 'Outbound' -or $r.Action -ne 'Block' -or @(Compare-Object @($af.RemoteAddress) @($addr)).Count -or ($r | Get-NetFirewallApplicationFilter).Program -ne $HostExe -or $pf.RemotePort -ne '443' -or $pf.LocalPort -eq '3389') { throw 'rule scope is not outbound, Block, host program, this event addresses, 443' }
   }
-  Note '2-3 block in place, scope checked; waiting for the owner to press Restart host'
-  # 3b. Wait for the host process id to change: the owner's Restart host ends the established connection; the new process must set up a NEW one, which is blocked.
+  Note '2-3 block in place, scope checked; waiting for the owner to press Restart'
+  # 3b. Wait for the host process id to change: the owner's Restart ends the established connection; the new process must set up a NEW one, which is blocked.
   $deadline = (Get-Date).AddMinutes($RestartTimeoutMinutes); $newPid = $null
   while (-not $newPid -and (Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 5
@@ -222,20 +247,27 @@ sha256, and the load readings before and after.
 
 | Step | Who | What | Evidence recorded |
 |---|---|---|---|
-| **S-2** | SRE; **OWNER presses the restart** | **Dry run** of `relay-drop-event.ps1` on a **spare host** (not a disposable host of the run), before anything else. It checks that the elevated session survives the host restart, the scope check, both proofs, the restore and the disarm, and that the profile defaults and the RDP rules are unchanged. **Not started until the three dry-run approvals in the table above are given; no dry run has happened.** A failure stops the run until it is fixed and the dry run is repeated | The dry run's log with its sha256, the process ids before and after, and the result |
+| **S-2** | SRE; **OWNER presses the restart** | **Dry run** of `relay-drop-event.ps1` on a **spare host** (not a disposable host of the run), before anything else. It checks that the elevated session survives the host restart, the scope check, both proofs, the restore and the disarm, and that the profile defaults and the RDP rules are unchanged, and **rehearses one S5 lost-response sequence** (so S5 does not risk being INCONCLUSIVE). **Not started until the three dry-run approvals in the table above are given; no dry run has happened.** A failure stops the run until it is fixed and the dry run is repeated | The dry run's log with its sha256, the process ids before and after, and the result |
 | **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, load (the HA fallback counter is NOT COVERED: no disposable HA) | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
 | **S2** | SRE | **Smoke:** one Host launch on one pair (no HA twin: the comparison is waived by the owner). Stop if it does not start and register exactly once | The receipt, the three double-launch counts |
 | **S3** | SRE | **Main Host launches** (the HA comparison is waived by the owner, so these are Slipgates-path launches on their own bars, not compared pairs; no parity claim), in batches no larger than the cap, each batch ended by list before the next | Per launch: the receipt and exit code, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
-| **S5** | SRE; **OWNER presses the host restart** that ends the established relay connection in each drop, on the drop host | **Lost response x3:** the elevated relay-drop session drops the target's relay connection after the send on the Host side, at SRE's request (no HA-side twin: the comparison is waived); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
+| **S5** | SRE; **OWNER presses the host restart** that ends the established relay connection in each drop, on the drop host | **Lost response x3**, by the S5 sequence below: the launch is sent while the block is in place and the owner restarts the drop host at once (no HA-side twin: the comparison is waived); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
 | **S6** | SRE | **Concurrent bursts x3** inside the cap | The invariants: sessions equal accepted requests, one session per request, counter rise equal, no double |
 | **S7** | SRE | **Long prompts x5**, one near 60 KB | Receipts, and that the prompt text is not kept in any record |
 | **S8** | **OWNER** presses each restart, including the one that ends the established relay connection in each drop; the elevated relay-drop session adds and removes the block at SRE's request | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
 | **S9** | SRE | **Late second session:** after each launch, wait 5 minutes and confirm no second session for that request | The late reads |
 | **S10** | SRE | **End-by-list sweep:** end whatever the plan's names still show live, by the ends rule below (two idle reads, name check, end only, worktrees stay), never a raw kill; confirm none of the plan's names remains on any disposable host | The sweep results and the final session lists |
 | **S11** | SRE, then Quality | Assemble the receipt (the frozen plan, actual counts and denominators per floor, every record with its sha256, the evidence path, failed and INCONCLUSIVE runs kept); Quality attests against the bars | The receipt |
+
+**The S5 sequence (lost response), rehearsed once in the dry run.** (1) The script's block is in place and scope-checked; it only stops **new** connections, so the established
+one still carries traffic. (2) **SRE sends** one Host-path launch from the source host to the drop host. (3) SRE tells the owner "sent" and **the owner presses Restart on the
+drop host at once**, which kills the connection mid-flight. (4) The source host sees the connection die: the receipt is **unconfirmed (exit 7)** if the request reached the
+drop host, or a `policy` or `target-offline` refusal if it did not. **Only an exit 7 counts toward the 3**; any other result is recorded and the case is repeated, up to
+a limit the frozen plan sets, after which S5 is INCONCLUSIVE. Each exit 7 is resolved with `launches status` on the drop host once it is back, and the 2.5 minute warm-up
+after its restart applies to any launch made in that window.
 
 ## Launching and ending the run's sessions
 
