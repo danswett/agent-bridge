@@ -178,7 +178,7 @@ All members are required unless noted.
   Today's relay refuses that field (`RosterFields.cs:26,68`); deploy the reviewed new
   allow-list before its publisher. No other field becomes allowed, except the optional evidence members the relay already accepts and nothing yet
   publishes (`attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`; see "Host-side
-  evidence producer", an owner proposal not in force). No `cwd`,
+  evidence producer", an owner decision, A1, not yet built). No `cwd`,
   `repository`, `branch`, `model`, `question`, `title`, summaries, counts of tokens, or anything
   from a prompt or a folder.
 * **name** (optional). Present only when the session has a name that came from an allowed source
@@ -627,7 +627,7 @@ alone, observe mode or roster library support is not evidence those gates are de
 | Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
 | Session owner principal, PR number, finished flag (#2643) | Never | Relay sees, only once known | Bounded closed shapes; unknown sent as absent; not stored, not logged |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
-| Attention kind, open-ask count, observed time; with option B also unsent length and a keyed hash (owner proposal, not in force) | Never | Relay sees, and agents with read scope through `fleet.list` | Closed shapes; no text; a per-host keyed hash only; none of it is published unless the owner approves |
+| Attention kind, open-ask count, observed time; the unsent length and keyed hash of the declined option B are not published (owner decision A1, not yet built) | Never | Relay sees, and agents with read scope through `fleet.list` | Closed shapes; no text; a per-host keyed hash only; none of it is published unless the owner approves |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
 | Logs and metrics | No account, device or name | Same | A test greps for a seeded name |
@@ -763,13 +763,19 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 7. **Name-only lookup** (#2151, fleet #171/#433). Supersedes the first-machine-pin
    recommendation; a unique verified live name may be found within authenticated account scope.
 
-## Host-side evidence producer (OWNER CHANGE proposal, not in force)
+## Host-side evidence producer (owner decision: A1 + B1 + C0; not yet built)
 
-**Status: a proposal for the owner. Nothing here is built, enabled or decided.** It changes what the host captures and what agents with
-read scope can see in `fleet.list`, so it needs the owner's choice between the options below. Part of #1396; found by row 28 of the HA
-parity list. Reviewed from the shadow side by Pump-Wake (the stuck-prompt shadow's owner). Its options note, slipgates-fleet
-[#1191](https://github.com/danswett/slipgates-fleet/pull/1191), uses the same letters: its A1 is Option A here, its A1b is Option B here (and its A2,
-retiring the tap, is the alternative to both).
+**Status: decided by the owner, not yet built.** On Nov 23, 2026 (about 08:25 PT, relayed by the Engineering Lead) the owner chose, for
+the stuck-prompt evidence of slipgates-fleet [#1191](https://github.com/danswett/slipgates-fleet/pull/1191), **A1 + B1 + C0**:
+
+* **A1:** fields from state the host already holds only (Option A below: `attention`, `openAsks`, `observedAt`). No new capture.
+* **B1:** a host-derived notice: when the host sees a trust or sign-in wait, it raises the notice to the owner itself, through the notice
+  machinery it already has (a needs-you item or a push kind), under the owner's own device filters. No new agent operation and no new credential.
+* **C0:** no planner. Nothing plans or sends a tap; Claude permission prompts stay answer-at-machine.
+
+Option B below (A1b: the background composer read, the per-host HMAC key and a `lastReplyAt` source) was **not chosen**: nothing in this section
+authorizes new capture, and it stays only as the record of what was declined. Part of #1396; found by row 28 of the HA parity list. The build follows
+the tests-first rule and is planned separately; until it ships, hosts publish none of these fields.
 
 **The gap.** The relay allow-list and `fleet.list` already accept the optional evidence members (`SessionEvidence`: `stale`,
 `attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`, `owner`, `pr`,
@@ -815,7 +821,7 @@ figure #1191 quotes); no new capture; no key; no screen read.
 **What A leaks.** To the relay, and to agents with read scope through `fleet.list`: that a session is waiting on the person, the kind of wait, the
 count of pending asks, and the time the host last looked. No question text, prompt, path or token.
 
-### Option B (= A1b in #1191): A plus a background composer read, a per-host HMAC key and a `lastReplyAt` source (new capture)
+### Option B (= A1b in #1191): NOT CHOSEN. A plus a background composer read, a per-host HMAC key and a `lastReplyAt` source (new capture)
 
 Adds `unsentLength`, `unsentHash` and `provenance {source: host-observed, unsentHash}` (the two hashes must match); `observedAt` is
 already in A.
@@ -862,17 +868,15 @@ is agreed.
   (an unchanged attention row republishes within 20 s with a fresh `observedAt`, and `observedAt` alone never triggers a publish), the 16 KiB and debounce cases, the relay round trip, and for B a test that no
   composer text appears in the record, log or metrics.
 
-### Owner decisions
+### Decision (owner, Nov 23, 2026)
 
-1. A only, A plus B, or neither. (Recommendation: A first. It needs no new capture and already lets the shadow detect owner-tap cases; B is
-   a separate decision about reading what a person has typed.)
-2. If B: the background read cadence (proposed 5 s), the dedicated key's custody, whether the length may be shown, and separately whether
-   any clear or replace action may ever consume `unsentHash`.
-3. A source for `lastReplyAt` (separate step, needed for composer cases).
-4. The evidence capability flag on the relay, and, in the fleet repository, accepting the `approval` kind.
+1. **A1 only**: the host publishes `attention`, `openAsks` and `observedAt` from existing state, with the existing 20 s republish keeping
+   `observedAt` fresh. The trust mapping and the `approval` kind are confirmed in review when the build is planned.
+2. **B1**: the host raises the trust or sign-in notice itself. Text is built by the host and holds no session content.
+3. **C0**: no planner and no tap.
+4. **Declined:** A1b (composer read, HMAC key, `lastReplyAt`), and so the questions about its cadence, key custody and consumers do not arise.
 
-**If the owner does not answer:** nothing is built, the host keeps publishing none of these fields, and the stuck-prompt shadow stays at
-`missing-evidence` (its offline proof is fixture-only). Merging this note changes nothing in force.
+Still open for the build, not for the owner: the evidence capability flag on the relay, and the fleet-side acceptance of the `approval` kind.
 
 ## What Trust should review
 
