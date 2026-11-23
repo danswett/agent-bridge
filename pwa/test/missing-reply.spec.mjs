@@ -9,7 +9,7 @@ test('the 16-event queued-owner fixture retains all four replies under their own
       prompt: { text: events[q].data.content, from },
       parts: [{ id: events[a].id, at: events[a].timestamp, kind: 'response', text: events[a].data.content }] }));
   const [a, b, notice, scheduled] = turns;
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate(({ a, b, notice }) => {
     const { host } = window.agentBridgeDemo;
@@ -45,7 +45,7 @@ for (const mode of ['jump', 'in-order', 'stored', 'duplicate']) {
   test(`${mode}: question and reply precede the scheduled prompt and its reply`, async ({ page }) => {
     const warnings = [];
     page.on('console', (m) => { if (m.type() === 'warning') { warnings.push(m.text()); } });
-    await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+    await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
     await page.waitForSelector('html[data-demo-ready]');
     await page.evaluate((mode) => {
       const { host } = window.agentBridgeDemo;

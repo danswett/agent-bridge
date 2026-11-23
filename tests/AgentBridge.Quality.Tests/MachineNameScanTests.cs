@@ -35,7 +35,7 @@ public class MachineNameScanTests
     // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
+        "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
     ];
 
     [Fact]
