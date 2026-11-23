@@ -1401,6 +1401,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'main-red')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-main-red.ps1
+      - name: The Merge rule sweep cancels only stuck Merge rule runs, offline
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'merge-rule-sweep')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-merge-rule-sweep.ps1
       - name: Culprit auto-revert uses offline gh and git fixtures
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'revert-culprit')) }}
         shell: pwsh

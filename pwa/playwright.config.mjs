@@ -15,7 +15,9 @@ export default defineConfig({
   testIgnore: process.env.PWA_SKIP_E2E ? '**/e2e/**' : undefined,
   timeout: 60000,
   fullyParallel: false,
-  workers: process.env.CI ? 2 : undefined,
+  // Two workers on CI. A trial (#2454) gives Chromium three; WebKit stays at two (a third made it slower
+  // on these 4-CPU runners). The project is the one on the command line, which every CI run passes.
+  workers: process.env.CI ? (process.argv.includes('--project=chromium') ? 3 : 2) : undefined,
   // CI also writes a JSON report, which tools/flaky-report.mjs reads to list every test that
   // passed only on a retry (quality/README.md §5): a retry must not hide a flake.
   reporter: process.env.CI
@@ -30,7 +32,12 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // A trace of a failing test, kept on CI: Chromium has no retry, so a failure that does not come
+    // back would otherwise leave nothing to look at (sign-in.spec, #2558). Without DOM snapshots: the
+    // snapshotter reads the page's blob: images from inside the page, which its connect-src refuses
+    // (a securitypolicyviolation that fails every test with an attachment); actions, console and
+    // network are kept.
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], trace: process.env.CI ? { mode: 'retain-on-failure', snapshots: false, screenshots: false, sources: false } : 'off' } },
     // One retry in CI for WebKit alone: its shards fail on a loaded runner in tests that then
     // pass (#1692). Chromium has none, and a pass on retry is listed, never hidden. A tap there
     // can take over 5 s to land under load (answer.spec, #1690), so its expects wait 10 s.

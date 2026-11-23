@@ -5,7 +5,7 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host;
 
-// CallerGuard and scoped credentials govern pipe ops; script management is host-CLI-only (docs/protocol/local-pipe.md).
+// CallerGuard and scoped credentials govern pipe ops; script management is the host command line or the app's confirmed press (docs/protocol/local-pipe.md).
 public static class LocalApi
 {
     // Management ops that only read.
@@ -78,7 +78,7 @@ public static class LocalApi
             { throw Refuse(op, caller, "only the signed-in app on this machine may hand this host its roster root", log); }
             return await samePcPin.HandleAsync(data, CancellationToken.None);
         }
-        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet" or "scripts.list" or "scripts.confirm")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
@@ -284,7 +284,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
-                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability, HostOps.ScriptCredentialsCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
