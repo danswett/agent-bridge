@@ -46,34 +46,39 @@ them is INCOMPLETE for those rows, never a guess and never a pass. The floors (2
 `PhoneApprovalEvidence` is extended, not duplicated: it groups by `(ClientKind, ClientPlatform)` as well as by device, and the
 expected clients become client labels (PWA, Windows, Mac, iOS, Android) beside the device ids it takes today. A PASS stays advisory.
 
-## Expected target and wrong target
+## Expected target and wrong target (owner decision: allowed, client-reported, never a decision input)
 
-R9 asked whether the host can derive an expected target from the card it issued. It can, but the result would prove nothing:
+R9 asked whether the host can derive an expected target from the card it issued. It can, but the result proves nothing: the `Question`
+on an answer row is a host-derived identity of the issued card, the row `target` is the session the host resolved, and `Incarnation` is
+that session's process instance. The host computes the "expected" and the "actual" target from the same lookup, so they agree by
+construction. What the host cannot see is which session the person's card *showed* when it was tapped.
 
-* The `Question` on an answer row is a host-derived identity of the issued card (agent, process incarnation and the native question
-  id). The row `target` is the session the host resolved, and `Incarnation` is that session's process instance. The host computes
-  the "expected" and the "actual" target from the same lookup, so they agree by construction; a field holding both is a tautology.
-* The mis-routing worth catching (an answer typed into a different session than the card showed) cannot be seen from host data alone.
-  The existing rows already make the check exact in a live run: the projection invalidates an operation whose target, incarnation or
-  question changes between its intent and terminal rows, and the live-run record correlates `Operation`, `Question`, `target` and
-  `Incarnation` with the transcript the person reads (the "tap-to-transcript" evidence the matrix already requires).
-* Recording what the *card showed* would be a client-supplied claim. That departs from "nothing client-supplied" in the audit design
-  and would be an owner CHANGE. It is **not proposed here and stays pending**; it is only worth asking if the transcript correlation
-  above turns out not to be enough.
+**Owner decision (about 08:35 PT, November 23, relayed by R9):** a **client-reported card target** is ALLOWED, labelled client-reported,
+and **never used for decisions**. This note records it; the code is a separate, sensitive slice stacked on the client-field code.
 
-So wrong-target remains a live-run check with exact correlation keys, and this note adds no expected-target field.
-
+* **What:** an optional `cardTarget` on `session.answer` (the session id the card showed, bounded and charset-checked) and an optional
+  `ClientReportedCardTarget` on the answer's audit rows, written exactly as received once it passes the shape check, omitted when absent.
+  Rows written without it stay byte-identical; a previous host ignores the field (the answer reader already ignores unknown request
+  fields, pinned by a test).
+* **Evidence only.** Comparing it with the row `target` shows a client that sent an answer for a different session than its card
+  displayed. It is a claim by the client: a client that lies can hide a mismatch, so it supports the live run's transcript check and
+  never replaces it.
+* **Never a decision input.** No gate, grant, policy, routing, staleness or projection (`audit gate`, `PhoneApprovalEvidence`) reads it:
+  an answer is routed, checked and counted exactly as without it. The code slice pins this with a source test that fails if any file
+  outside the request type, the row type and the one writer names the field, and with tests that an answer with a wrong or hostile
+  value is delivered, refused and counted exactly as one without it.
+* **Not the client field.** `ClientKind` and `ClientPlatform` stay host-derived from the verified roster and are unchanged.
 ## Departure check against the audit design
 
 | Audit design rule | This note |
 |---|---|
 | Extend #1401's existing records; no counter files, no client totals | Extends the record; adds identity labels, not totals; totals are still read from rows by the host |
-| Nothing client-supplied; no free-form reasons | The fields come from the verified roster; closed sets; nothing from the request |
+| Nothing client-supplied; no free-form reasons | The client field comes from the verified roster; closed sets; nothing from the request. The one client-supplied value, the card target, is owner-approved evidence labelled client-reported and never a decision input |
 | `ActorKind` is `person-client`, `agent` or `ha-component` | Unchanged; the client label is a separate field |
 | Old rows still read | Byte-identical and valid; unattributed in a mixed window |
 | Privacy | Adds `kind` and `platform` only; no device name, and no id beyond the principal already there |
 
-No departure, so no owner CHANGE is needed for the client field.
+No departure, so no owner CHANGE is needed for the client field. The card target is a departure from "nothing client-supplied" that the owner approved (above), on the terms stated there.
 
 ## Next slices (not in this note)
 
