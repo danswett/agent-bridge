@@ -280,7 +280,7 @@ public sealed partial class ReplyService : ISessionReplier
                 }
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
@@ -697,7 +697,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -800,6 +800,8 @@ public sealed partial class ReplyService : ISessionReplier
                 var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
+                // Once, with the typing slot held and every fence passed, just before the first key (the Copilot path's call).
+                if (!sent) { keysGoing?.Invoke(); }
                 try { result = await injector.InjectAsync(pid, keys); }
                 catch (Exception e)
                 {
