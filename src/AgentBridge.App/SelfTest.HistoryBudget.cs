@@ -395,8 +395,7 @@ static partial class SelfTest
             void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) { wheelMoving = e.IsIntermediate; if (observerDiagnostics) { wheelEvents++; } }
             var heardWheel = new PointerEventHandler((_, _) =>
             {
-                wheelReceivedCount ??= WheelHistoryCount();
-                if (wheelInput is { } input) { wheelReceipt ??= away.StampLatestNativeInput(input, scroll); }
+                // MUTATION (DO NOT MERGE, proof for #3982): the app ignores the wheel, so the check must go red.
             });
             scroll.ViewChanged += WheelChanged;
             scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
