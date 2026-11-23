@@ -15,10 +15,10 @@ index 5f4466c4..0291072f 100644
          shell: pwsh
 diff --git a/.github/workflows/merge-rule-sweep.yml b/.github/workflows/merge-rule-sweep.yml
 new file mode 100644
-index 00000000..1704f33d
+index 00000000..394a7ab6
 --- /dev/null
 +++ b/.github/workflows/merge-rule-sweep.yml
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,63 @@
 +name: Merge rule sweep
 +
 +# Cancels stuck Merge rule runs (#2454, merge-rule follow-up b; Quality's spec). merge-rule.yml's evaluate job times out
@@ -64,7 +64,8 @@ index 00000000..1704f33d
 +      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
 +        with:
 +          path: .sweep/ghosts.txt
-+          key: merge-rule-sweep-ghosts-${{ github.run_id }}
++          # No exact key: the newest saved list under the prefix is restored.
++          key: merge-rule-sweep-ghosts-
 +          restore-keys: merge-rule-sweep-ghosts-
 +      - name: Cancel Merge rule runs waiting over 30 minutes, judging over 15, or dead weight
 +        shell: pwsh
@@ -79,7 +80,8 @@ index 00000000..1704f33d
 +        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
 +        with:
 +          path: .sweep/ghosts.txt
-+          key: merge-rule-sweep-ghosts-${{ github.run_id }}
++          # Keyed by the list's contents: a new cache entry only when the list changes, not one per sweep.
++          key: merge-rule-sweep-ghosts-${{ hashFiles('.sweep/ghosts.txt') }}
 diff --git a/quality/catalog.yml b/quality/catalog.yml
 index 20cf6d13..d291bee7 100644
 --- a/quality/catalog.yml
@@ -105,10 +107,10 @@ index 20cf6d13..d291bee7 100644
      kind: unit
 diff --git a/quality/merge-rule-sweep.ps1 b/quality/merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..f1c73f70
+index 00000000..1ed7070a
 --- /dev/null
 +++ b/quality/merge-rule-sweep.ps1
-@@ -0,0 +1,242 @@
+@@ -0,0 +1,248 @@
 +#Requires -Version 7
 +<#
 +.SYNOPSIS
@@ -132,11 +134,12 @@ index 00000000..f1c73f70
 +  - dead weight at any age, the newest too: a waiting run whose head's pull request is merged or closed, or has moved
 +    to a newer head. The pull request is resolved from the run's head_sha and head_branch in one GraphQL read (a run's
 +    pull_requests is empty once merged or closed, and shows the current head, never the run's); plain cancel only.
-+  A run past twice its limit, or one that refuses a plain cancel, is force-cancelled, but never a re-run younger than
-+  its limit. A run GitHub says was never queued (the Nov 11 ghosts) is remembered in -GhostFile and never called again;
++  A run past twice its limit, or one that refuses a plain cancel, is force-cancelled; a re-run younger than its limit
++  (aged by its own attempt) is never acted on at all. A run GitHub says was never queued (the Nov 11 ghosts) is remembered in -GhostFile and never called again;
 +  that and an already-completed run are warnings, never retried or failed; a run older than 7 days is skipped with no
-+  call. Only other errors fail the sweep. The first read's x-ratelimit-remaining must say at least 150: fewer, missing
-+  or garbled, the sweep stops after one warning line and never starves the merge-rule judge. Budget: at most 15 runs
++  call. Only other errors fail the sweep. The first read's x-ratelimit-remaining must say at least 150: fewer, and the
++  sweep stops after one warning line (exit 0) so it never starves the merge-rule judge; missing or garbled, it stops the
++  same way but the run fails, so an unreadable header is never a silent pass. Budget: at most 15 runs
 +  acted on and 20 jobs read a sweep; 5 lists + 1 query + 20 jobs reads + 30 posts = 56 calls usually, 76 if every
 +  status needs 5 pages (304 an hour at 4 sweeps, of the token's 1000). It cancels, never deletes, and never touches
 +  another workflow's runs. A listing it can't read stops it with an error: unread is never "nothing to do". -DryRun
@@ -206,7 +209,8 @@ index 00000000..f1c73f70
 +                $remaining = if ($raw.Count -eq 1 -and $raw[0] -match '^\d{1,9}$') { [int]$raw[0] } else { $null }
 +                if ($null -eq $remaining -or $remaining -lt $MinRateRemaining) {
 +                    $said = if ($null -eq $remaining) { 'no readable x-ratelimit-remaining header' } else { "only $remaining API calls left this hour" }
-+                    return [pscustomobject]@{ Acted = 0; Failed = 0; Lines = @("warning: $said (rate limit; under $MinRateRemaining or unknown): the sweep did nothing, so the merge-rule judge keeps them") }
++                    # A real low count is a quiet skip (exit 0); an unreadable header is a visible failure, never a silent pass (B433 P2).
++                    return [pscustomobject]@{ Acted = 0; Failed = $(if ($null -eq $remaining) { 1 } else { 0 }); Lines = @("warning: $said (rate limit; under $MinRateRemaining or unknown): the sweep did nothing, so the merge-rule judge keeps them") }
 +                }
 +            }
 +            $page = ($body -join "`n") | ConvertFrom-Json
@@ -215,7 +219,8 @@ index 00000000..f1c73f70
 +            $seen += $runs.Count
 +            foreach ($run in $runs) {
 +                if ((Get-Field $run 'path') -cne $script:Workflow) { continue }
-+                [void]$listed.Add([long]$run.id)
++                # A run that moves between statuses while the five lists are read shows up twice: the first listing wins.
++                if (-not $listed.Add([long]$run.id)) { continue }
 +                if ($ghosts.Contains([long]$run.id)) { $known++; continue }
 +                # A re-run keeps its first created_at; its attempt goes by updated_at (never earlier than its start).
 +                $attempt = if (Get-Field $run 'run_attempt') { [int]$run.run_attempt } else { 1 }
@@ -255,6 +260,8 @@ index 00000000..f1c73f70
 +    # or has moved past that head. Resolved from the run's own head_sha and head_branch, never from pull_requests (empty
 +    # once merged or closed; shows the current head). One GraphQL read; unreadable or unknown skips only this rule.
 +    $dead = @{}
++    # Runs on main are never asked: main's commits belong to merged pull requests. That includes a pull_request_target
++    # run, whose head_branch is the base branch (main): it is skipped by this rule, which is safe (age still applies).
 +    $candidates = @($all | Where-Object { $_.Status -ne 'in_progress' -and $_.Head -match '^[0-9a-f]{4,40}$' -and $_.Branch -and $_.Branch -ne 'main' })
 +    $heads = @($candidates | ForEach-Object { $_.Head } | Sort-Object -Unique | Select-Object -First 50)
 +    if ($heads.Count) {
@@ -268,17 +275,18 @@ index 00000000..f1c73f70
 +            foreach ($entry in $candidates) {
 +                if (-not $alias.ContainsKey($entry.Head)) { continue }
 +                $nodes = @(Get-Field (Get-Field (Get-Field $repo $alias[$entry.Head]) 'associatedPullRequests') 'nodes' | Where-Object { $_ })
-+                # Only the pull request whose branch this run is for; a main commit's merged pull request never counts.
-+                $pr = $nodes | Where-Object { [string](Get-Field $_ 'headRefName') -ceq $entry.Branch } | Select-Object -First 1
-+                if (-not $pr -or -not (Get-Field $pr 'state') -or -not (Get-Field $pr 'number')) { continue }
-+                switch ([string]$pr.state) {
-+                    'MERGED' { $dead[$entry.Run.id] = "pull request merged (#$($pr.number))" }
-+                    'CLOSED' { $dead[$entry.Run.id] = "pull request closed (#$($pr.number))" }
-+                    'OPEN' {
-+                        $prHeadNow = [string](Get-Field $pr 'headRefOid')
-+                        if ($prHeadNow -and $prHeadNow -ne $entry.Head) { $dead[$entry.Run.id] = "head superseded (#$($pr.number))" }
-+                    }
-+                }
++                # Only pull requests whose branch this run is for; a main commit's merged pull request never counts. Every
++                # such pull request is weighed, in no order (B433): one OPEN at the run's own head makes it live; any
++                # unreadable one makes it unknown; otherwise an open one that moved on, then a merged, then a closed one.
++                $prs = @($nodes | Where-Object { [string](Get-Field $_ 'headRefName') -ceq $entry.Branch })
++                if (-not $prs.Count -or @($prs | Where-Object { -not (Get-Field $_ 'state') -or -not (Get-Field $_ 'number') }).Count) { continue }
++                if (@($prs | Where-Object { $_.state -ceq 'OPEN' -and [string](Get-Field $_ 'headRefOid') -ceq $entry.Head }).Count) { continue }
++                $moved = @($prs | Where-Object { $_.state -ceq 'OPEN' -and [string](Get-Field $_ 'headRefOid') }) | Select-Object -First 1
++                $merged = @($prs | Where-Object { $_.state -ceq 'MERGED' }) | Select-Object -First 1
++                $closed = @($prs | Where-Object { $_.state -ceq 'CLOSED' }) | Select-Object -First 1
++                if ($moved) { $dead[$entry.Run.id] = "head superseded (#$($moved.number))" }
++                elseif ($merged) { $dead[$entry.Run.id] = "pull request merged (#$($merged.number))" }
++                elseif ($closed) { $dead[$entry.Run.id] = "pull request closed (#$($closed.number))" }
 +            }
 +        }
 +    }
@@ -315,15 +323,15 @@ index 00000000..f1c73f70
 +        if ($DryRun) { $lines += "would cancel $what"; continue }
 +        # A bounded budget: at most MaxActions runs acted on per sweep; the rest wait for the next sweep.
 +        if ($acted + $failed + $skipped -ge $MaxActions) { $deferred++; continue }
-+        # A run past twice its limit, or one that refuses a plain cancel, is force-cancelled; never a re-run younger
-+        # than its limit. Never queued (the Nov 11 ghosts) or already completed: a warning, never retried or failed.
++        # A run past twice its limit, or one that refuses a plain cancel, is force-cancelled (only runs past their limit,
++        # re-runs aged by their own attempt, get here). Never queued (the Nov 11 ghosts) or already completed: a warning.
 +        $done = $false; $moot = ''
 +        if ($age -le 2 * $entry.Limit) {
 +            $call = Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/cancel"
 +            $done = $call.Ok; if (-not $done) { $moot = Get-SweepMoot $call }
 +            if ($done) { $lines += "cancelled $what" }
 +        }
-+        if (-not $done -and -not $moot -and -not ($entry.Attempt -gt 1 -and $age -le $entry.Limit)) {
++        if (-not $done -and -not $moot) {
 +            $call = Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/force-cancel"
 +            $done = $call.Ok; if (-not $done) { $moot = Get-SweepMoot $call }
 +            if ($done) { $lines += "force-cancelled $what" }
@@ -353,10 +361,10 @@ index 00000000..f1c73f70
 +if ($result.Failed -gt 0) { Write-Host "::error title=merge-rule sweep::$($result.Failed) stuck Merge rule run(s) could not be stopped"; exit 1 }
 diff --git a/quality/test-merge-rule-sweep.ps1 b/quality/test-merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..81a67707
+index 00000000..4c55e71f
 --- /dev/null
 +++ b/quality/test-merge-rule-sweep.ps1
-@@ -0,0 +1,345 @@
+@@ -0,0 +1,365 @@
 +#Requires -Version 7
 +# Offline only: every GitHub request must match this stand-in.
 +$ErrorActionPreference = 'Stop'
@@ -637,7 +645,7 @@ index 00000000..81a67707
 +    Reset-Scenario
 +    $s.runs = @{ queued = @((Run 83 45), (Keeper)) }; $s.rateHeader = $h
 +    $out = Sweep
-+    Assert (@($s.calls).Count -eq 1 -and $s.cancelled.Count -eq 0 -and $out.Failed -eq 0 -and @($out.Lines).Count -eq 1 -and $out.Lines[0] -match '^warning: no readable x-ratelimit-remaining') "a rate header that is $(if ($null -eq $h) { 'missing' } else { "'$h'" }) stops the sweep after one warning"
++    Assert (@($s.calls).Count -eq 1 -and $s.cancelled.Count -eq 0 -and $out.Failed -eq 1 -and @($out.Lines).Count -eq 1 -and $out.Lines[0] -match '^warning: no readable x-ratelimit-remaining') "a rate header that is $(if ($null -eq $h) { 'missing' } else { "'$h'" }) stops the sweep after one warning, and fails the run"
 +}
 +
 +# B421 (2): oldest first, and every page: the stuck ones are the old ones, and a flood never hides them.
@@ -698,7 +706,27 @@ index 00000000..81a67707
 +Assert ($names.Count -ge 2 -and -not @($names | Where-Object { $_ -notmatch $script:JudgePattern }).Count -and 'backstop' -notmatch $script:JudgePattern) "the judge pattern matches every name merge-rule.yml's evaluate job renders ($($names -join ', ')), and not the backstop"
 +
 +# The ghost cache: the same pinned actions/cache as the rest of the repository, keyed to this workflow only.
-+Assert (@([regex]::Matches($norm, 'uses: actions/cache/(restore|save)@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6\.1\.0')).Count -eq 2 -and @([regex]::Matches($norm, 'key: merge-rule-sweep-ghosts-\$\{\{ github\.run_id \}\}')).Count -eq 2) 'the ghost list is cached with the pinned actions/cache, under this workflow''s own key'
++Assert (@([regex]::Matches($norm, 'uses: actions/cache/(restore|save)@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6\.1\.0')).Count -eq 2 -and
++    $norm -match '(?m)^          key: merge-rule-sweep-ghosts-\n          restore-keys: merge-rule-sweep-ghosts-$' -and
++    $norm -match "(?m)^          key: merge-rule-sweep-ghosts-\$\{\{ hashFiles\('\.sweep/ghosts\.txt'\) \}\}$" -and $norm -notmatch 'run_id') 'the ghost list is cached with the pinned actions/cache: restored by prefix, saved under a key of its contents, never one per run'
++
++# B433 (P1): two pull requests on one branch at the same head, #1 closed and #2 open: the run is live for #2, in any
++# order GitHub lists them. Only when no open one is at the run's head does a closed, merged or moved-on one make it dead.
++foreach ($order in @('closed-first', 'open-first')) {
++    Reset-Scenario
++    $closed = PR 1 'CLOSED' 'a0e0' 'shared'; $open = PR 2 'OPEN' 'a0e0' 'shared'
++    $s.commits = @{ 'a0e0' = $(if ($order -eq 'closed-first') { @($closed, $open) } else { @($open, $closed) }); 'a0e1' = @((PR 3 'CLOSED' 'a0e1' 'two'), (PR 4 'OPEN' 'a0ff' 'two')) }
++    $s.runs = @{ pending = @((Run 800 2 -Pr 2 -Head 'a0e0' -Branch 'shared'), (Run 801 2 -Pr 4 -Head 'a0e1' -Branch 'two' -PrHead 'a0ff')) }
++    $out = Sweep
++    Assert (($s.cancelled -join ',') -eq '801' -and @($out.Lines | Where-Object { $_ -match 'run 801 .*head superseded \(#4\)' }).Count -eq 1) "a run live for an open pull request is kept though a closed one shares its branch and head ($order); one whose open pull request moved on goes"
++}
++
++# B433 P3: a run that moves between statuses while the five lists are read appears twice; it is acted on once.
++Reset-Scenario
++$twice = Run 810 45
++$s.runs = @{ queued = @($twice, (Keeper)); pending = @($twice) }
++$null = Sweep
++Assert (@($s.calls | Where-Object { $_ -match '/runs/810/' }).Count -eq 1 -and ($s.cancelled -join ',') -eq '810') 'a run listed under two statuses is acted on once'
 +
 +if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 +"merge-rule-sweep: $script:checks checks passed"
