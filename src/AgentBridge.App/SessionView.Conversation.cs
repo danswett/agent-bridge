@@ -440,6 +440,9 @@ public sealed partial class SessionView
     // corrected, put the anchor back where it was, so what is read never moves (ui.md §6.4). Not while
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
     readonly LayoutStormGuard layoutStorm = new(TimeProvider.System);
+    readonly DeferredPass laidOut = new();
+    internal int ConversationLayoutPeak => layoutStorm.Peak;
+    internal int ConversationLayoutStorms => layoutStorm.Storms;
 
     void OnConversationLaidOut(object? sender, object e)
     {
@@ -449,6 +452,15 @@ public sealed partial class SessionView
             if (passes == LayoutStormGuard.Limit + 1) { AppLog.Write($"layout storm: {passes} conversation layout passes within {LayoutStormGuard.Window.TotalSeconds:0} s; corrections skipped"); }
             return;
         }
+        // The corrections set layout properties (the panel's scroll mode, the scroll offset): inside LayoutUpdated each
+        // starts the next layout pass, and they can feed each other (#3782). They run once, at low priority, after it.
+        laidOut.Request(work => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => work()), CorrectAfterLayout);
+    }
+
+    void CorrectAfterLayout()
+    {
+        // It runs a turn after the layout that asked for it: the view may have gone, or the window be closing, by then.
+        if (!attached || !ConversationList.IsLoaded) { return; }
         if (RestoreReading()) { return; }
         if (pinEnd) { FollowPinnedEnd(); return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded

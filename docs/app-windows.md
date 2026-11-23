@@ -69,7 +69,9 @@ The record contains only opaque session/turn keys and scroll geometry, not trans
 This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
 following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
-records the first such storm with its count: a mitigation against a layout cycle (#3782), not a proven fix.
+records the first such storm with its count. They also run once, at low priority, after the layout event rather than in it,
+because setting the panel's scroll mode or the scroll offset there starts the next layout pass; layout that a correction itself
+causes runs it at most once more in that turn (#3782, the suspect named in #3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
@@ -1446,6 +1448,12 @@ finishes and fails checks makes the app exit normally with code 1: it leaves no 
 no event, and its cause is the failed checks the app wrote to `result.json`, which the
 wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
 capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
