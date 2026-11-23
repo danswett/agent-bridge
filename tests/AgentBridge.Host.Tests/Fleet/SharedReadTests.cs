@@ -79,14 +79,15 @@ public sealed class SharedReadTests
     {
         var reads = 0; var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var shared = Reader();
-        Task<int> Slow() { reads++; return gate.Task; }
+        // The in-flight read runs on a pool thread (SharedRead yields first) while the fresh one runs here: a plain ++ on both can lose a count.
+        Task<int> Slow() { Interlocked.Increment(ref reads); return gate.Task; }
         var inFlight = shared.GetAsync(connection, Slow, CancellationToken.None);
-        Assert.Equal(100, await shared.GetAsync(connection, () => { reads++; return Task.FromResult(100); }, CancellationToken.None, fresh: true));
+        Assert.Equal(100, await shared.GetAsync(connection, () => { Interlocked.Increment(ref reads); return Task.FromResult(100); }, CancellationToken.None, fresh: true));
         gate.SetResult(1);
         Assert.Equal(1, await inFlight);
         Assert.Equal(2, reads); // the fence's own read and the in-flight one: it did not join the earlier read
         time.Advance(TimeSpan.FromMilliseconds(10));
-        Assert.Equal(200, await shared.GetAsync(connection, () => { reads++; return Task.FromResult(200); }, CancellationToken.None, fresh: true));
+        Assert.Equal(200, await shared.GetAsync(connection, () => { Interlocked.Increment(ref reads); return Task.FromResult(200); }, CancellationToken.None, fresh: true));
         Assert.Equal(3, reads);
     }
 

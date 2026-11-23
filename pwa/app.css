@@ -1919,6 +1919,10 @@ summary {
 /* ---- settings ---- */
 .notify h3, .text-size h3, .account h3, .key-check h3, .release h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
+.notify-filters { margin: var(--ab-space-2) 0 0; padding: 0; border: 0; display: grid; gap: 4px; }
+.notify-filters legend { padding: 0; color: var(--ab-text2); }
+.check { display: flex; align-items: center; gap: 10px; min-height: var(--tap); }
+.check input { width: 20px; height: 20px; flex: none; }
 .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 360px; }
 .release-line { margin: 0; }
 .release-id { font: 600 1rem var(--ab-font-mono); -webkit-user-select: all; user-select: all; color: var(--ab-text); }

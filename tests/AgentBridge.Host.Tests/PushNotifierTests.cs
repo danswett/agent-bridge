@@ -2313,6 +2313,18 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Contains(Received(), r => r.Device == Laptop && Kind(r.Notification) == "group");
     }
 
+    // S2b acceptance (#3969): a sender of the Failures kind reuses PushSubscriber.Wants, so it must hold the rule first.
+    [Fact]
+    public void A_device_that_sent_no_notify_is_told_everything_as_before_except_failures_which_are_off()
+    {
+        var legacy = new PushSubscriber("d", "iPhone", "https://web.push.apple.com/x", "p", "a", "https://app/", T);
+        Assert.False(legacy.Wants(NoticeKind.Failures, ""));
+        Assert.All([NoticeKind.Question, NoticeKind.Finished, NoticeKind.Resolved, NoticeKind.SignIn, NoticeKind.Restored, NoticeKind.Group],
+            kind => Assert.True(legacy.Wants(kind, "s1"), kind.ToString()));
+        Assert.False((legacy with { Notify = new PushNotify() }).Wants(NoticeKind.Failures, ""));
+        Assert.True((legacy with { Notify = new PushNotify { DeliveryFailures = true } }).Wants(NoticeKind.Failures, ""));
+    }
+
     [Fact]
     public async Task A_device_without_notify_is_told_of_questions_and_every_finished_turn_as_before()
     {
@@ -2359,6 +2371,30 @@ public sealed class PushNotifierTests : IDisposable
         var phone = Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)).ToList();
         Assert.Equal(["question", "resolved"], phone);
         Assert.Equal(["question", "finished"], Received().Where(r => r.Device == Laptop).Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_filtering_device_has_the_question_it_was_shown_withdrawn_even_when_a_later_one_was_held_back_and_answered()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+        // The relay goes down: the second question's notice is held, and it is answered and the turn finishes.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        sender.Connected = true;
+        await notifier.PumpAsync();
+        // What it still shows (the first question) is withdrawn; the held second question never goes.
+        var kinds = Received().Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("question", out var q) ? q.GetString() : null)).ToList();
+        Assert.Equal([("question", "q1"), ("resolved", "q1")], kinds);
     }
 
     [Fact]
