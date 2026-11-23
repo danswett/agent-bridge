@@ -2977,6 +2977,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 |---|---|---|---|
 | Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
 | Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. "Start a session in it to confirm" |
+| Not tested yet, on a migrated profile | `idle`, Neutral | "Set up · not tested yet" | As Not tested yet. No Set up (migration re-pointed this agent's hooks, so there is nothing to set up) and no Remove (this profile has no owned record for the host to undo) |
 | Not set up | `needs` | "Not set up" | **Set up** |
 | Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
 | Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |

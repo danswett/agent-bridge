@@ -174,6 +174,9 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   whose relay's `ready` lists `"rosterSessionId"` in its optional `capabilities` string array.
   The host reads that on each connection and forgets it on reconnect; a missing, malformed or
   unknown capability means omit. Relay and host may therefore deploy in either order.
+  The same rule holds for the evidence members: a host sends `attention`, `openAsks` and `observedAt` (the stuck-prompt evidence the host
+  derives from state it already holds) only when `ready` lists `"rosterEvidence"`. `attention.kind` is a closed set carrying no question text; `observedAt`
+  is the publish time, refreshed by the existing 20 s republish and never the reason for a publish.
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
   observedAt, lastReplyAt, provenance, senderVerified, owner, pr, finished`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).

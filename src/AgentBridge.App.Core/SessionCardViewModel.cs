@@ -241,7 +241,8 @@ public sealed partial class SessionCardViewModel : Observable
     public PromptOrigin? Prompt => prompt;
     public bool HasPrompt => !Archived && Prompt is not null;
     public bool PromptIsSchedule => Prompt?.Schedule == true;
-    public bool PromptIsDriven => Prompt is { Schedule: false };
+    public bool PromptIsDriven => Prompt is { Schedule: false, Unverified: false };
+    public bool PromptIsUnverified => Prompt?.Unverified == true;
     public string PromptLabel => Prompt?.Label ?? "";
     public string PromptBy => Prompt?.By ?? "";
     public bool HasPromptBy => Prompt?.By is not null;
@@ -393,7 +394,7 @@ public sealed partial class SessionCardViewModel : Observable
     [
         nameof(Response), nameof(HasResponse), nameof(ResponseTruncated), nameof(ResponseDropped), nameof(HasVoice),
         nameof(UserMessage), nameof(HasUserMessage), nameof(UserMessageAbove), nameof(UserMessageBelow),
-        nameof(Prompt), nameof(HasPrompt), nameof(PromptIsSchedule), nameof(PromptIsDriven), nameof(PromptLabel),
+        nameof(Prompt), nameof(HasPrompt), nameof(PromptIsSchedule), nameof(PromptIsDriven), nameof(PromptIsUnverified), nameof(PromptLabel),
         nameof(PromptBy), nameof(HasPromptBy), nameof(PromptPreview), nameof(HasPromptPreview), nameof(PromptText),
         nameof(PromptAgeText), nameof(HasPromptAge), nameof(PromptToggleName), nameof(PromptToggleText), nameof(PromptOpen),
     ];

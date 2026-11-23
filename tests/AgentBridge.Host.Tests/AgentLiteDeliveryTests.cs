@@ -628,6 +628,55 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
         Assert.Empty(command.Typed);
     }
+    // Option 2 (owner decision on #3866, #3828 design "Busy sends to Claude"): with laneDelivery on, a Claude target keeps the legacy
+    // busy-queue typing path while claudeBusyQueue is on; Copilot stays on the lane; nothing changes with the flag off.
+    [Fact]
+    public async Task With_the_lane_on_and_the_flag_on_a_busy_claude_is_typed_on_the_legacy_path_and_the_lane_never_sees_it()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(new LiteDelivery(true, null), await r.Send());
+        Assert.False(Assert.Single(f.Typed).RequireIdle);
+        Assert.Empty(r.Records);
+    }
+    [Fact]
+    public async Task With_the_lane_on_and_the_flag_off_a_claude_is_still_refused_not_a_reply_target_with_no_keys()
+    {
+        foreach (var status in new[] { SessionStatus.Idle, SessionStatus.Working })
+        {
+            var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = status }; f.Launch(LaunchProtocol.Ask);
+            using var r = new LaneRig(f);
+            Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await r.Send());
+            Assert.Empty(f.Typed);
+            Assert.Empty(r.Records);
+        }
+    }
+    [Fact]
+    public async Task With_the_lane_on_the_flag_does_not_move_a_copilot_off_the_lane_and_a_claude_keeps_every_legacy_guard()
+    {
+        var copilot = new Fixture { Status = SessionStatus.Working, BusyQueue = true }; copilot.Launch(LaunchProtocol.Ask);
+        using var c = new LaneRig(copilot);
+        Assert.Equal(LiteKind.Pending, (await c.Send()).Outcome);
+        Assert.Empty(copilot.Typed);
+        var draft = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; draft.Launch(LaunchProtocol.Ask);
+        using var d = new LaneRig(draft);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await d.Send());
+        var asking = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Asking = true }; asking.Launch(LaunchProtocol.Ask);
+        using var q = new LaneRig(asking);
+        Assert.Equal(new LiteDelivery(false, "busy"), await q.Send());
+        Assert.Empty(draft.Typed.Concat(asking.Typed));
+    }
+    [Fact]
+    public async Task With_the_lane_on_a_claude_is_typed_the_same_words_as_without_it()
+    {
+        const string words = "ｆｉｌｅ check"; // fullwidth letters, which the lane's journal normalisation would fold
+        var plain = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; plain.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(plain, words)).Typed);
+        var lane = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; lane.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(lane);
+        Assert.True((await r.Send(words)).Typed);
+        Assert.Equal(Assert.Single(plain.Typed).Text, Assert.Single(lane.Typed).Text);
+    }
     [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
