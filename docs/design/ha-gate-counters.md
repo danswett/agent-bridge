@@ -179,8 +179,15 @@ precedes keys; authoritative delivery (including denial) closes it once. Questio
 identity hashes only version/backend/session UUID/native call or generation;
 permission display digests and all contents are excluded. Credentialed agents
 remain refused: one terminal/refused row for a matching host question, no dispatched
-intent and no credit or unresolved attempt. Other local callers, restart restoration,
-relay and HA context remain deferred; no automatic run provider is added.
+intent and no credit or unresolved attempt. Other local callers, restart restoration
+and relay context remain deferred; no automatic run provider is added.
+HA context (#1401, HA deletion gate E4(f)): an answer pressed on a Home Assistant card is audited as its
+launches and stops are: path `legacy-ha`, actorKind `ha-component`, principal `ha:connector`, the intent
+flushed before typing and a terminal after the confirmed delivery (`HaAnswerAudit`), so the windowed gate
+counts an HA approval as an HA dispatch; before this an HA approval left no row and could not read as a
+fallback. **OWNER CHANGE, pending:** an HA answer whose intent cannot be written is refused, as a launch or
+a stop from the card already is, so an HA user whose audit is unwritable cannot approve from the card.
+Quality does not arm this change before the owner answers.
 
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards

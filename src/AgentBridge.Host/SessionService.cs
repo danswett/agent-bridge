@@ -532,7 +532,7 @@ public sealed class SessionService
         return progress ? result with { Timings = watch.Timings } : result;
     }
 
-    static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
+    internal static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
     {
         if (!Guid.TryParse(session.Id, out var incarnation) || incarnation == Guid.Empty) { return null; }
         var native = session.Agent switch

@@ -61,7 +61,8 @@ public sealed class HaRunning : IAsyncDisposable
         // Answers from the cards go through the host's own delivery, as an app's do; a host that
         // cannot type into sessions here serves no answer controls rather than dead ones.
         Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
-            answers is null or UnsupportedPlatformAnswerer ? null : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
+            answers is null or UnsupportedPlatformAnswerer ? null : launchAudit is not null ? HaAnswerAudit.Wrap(answers, launchAudit)
+                : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
         Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? stop =
             stops is null or UnsupportedPlatformStopper ? null : stops is StopService audited && launchAudit is not null
                 ? (request, ct) => StopAudit.StopAsync(audited, source, launchAudit, request, "legacy-ha", "ha:connector", ct)
