@@ -62,6 +62,9 @@ public sealed record PushOptions
     // any of that machine's sessions for the agent and account still does; never once per session.
     public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
     public TimeSpan SignInTtl { get; init; } = TimeSpan.FromHours(6);
+    // A launched agent waiting on a folder-trust answer this long is told to the owner by the host, once per question (owner decision B1).
+    // Documented, no setting yet.
+    public TimeSpan TrustWaitAfter { get; init; } = TimeSpan.FromMinutes(2);
     // #913 rule 5: a question still unanswered this long after its session's first question notice of
     // the episode alerts once more. Zero sends none.
     public TimeSpan ReminderAfter { get; init; } = TimeSpan.FromMinutes(15);
@@ -148,6 +151,8 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     readonly Dictionary<(string Device, string Session), DateTimeOffset> finishedSent = [];
     // When each sign-in notice (PushNotice.SignInKey) was last made, while its sessions still need sign-in.
     readonly Dictionary<string, DateTimeOffset> signInSent = new(StringComparer.Ordinal);
+    // The folder-trust questions already told, by question id: one notice per question, the episode's latch.
+    readonly Dictionary<string, DateTimeOffset> trustSent = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> recent = new();
     // #913 rule 3: the sessions in the grouped notice, each with its question, while that is pending.
     readonly Dictionary<string, string> grouped = new(StringComparer.Ordinal);
@@ -246,6 +251,9 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     public Func<IReadOnlyList<DevicePresence>>? Presences { get; set; }
     // Told how each question notice went to each device, under the notifier's lock: it must not block.
     public Action<PushNoticeOutcome>? NoticeOutcome { get; set; }
+    // The folder-trust questions launched agents wait on now (LaunchService.TrustQuestions): host-local, they belong to pending launches and
+    // have no session. Null when this host cannot launch.
+    public Func<IReadOnlyList<TrustQuestion>>? TrustQuestions { get; set; }
 
     public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null,
         RemoteAuthorization? trust = null)
@@ -848,6 +856,8 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         // forgets it, so waking for it cannot spin.
         var anyDevice = store.All.Any(MayNotify);
         times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now || anyDevice));
+        // Trust questions arrive with no session event, so while this host can launch it looks again every half minute.
+        if (TrustQuestions is not null) { times.Add(now + TimeSpan.FromSeconds(30)); }
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
@@ -945,6 +955,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         Remind(now);
         if (groupChanged) { Regroup(now); }
         SignIns(now);
+        Trusts(now);
         Failures(now);
     }
 
@@ -1153,6 +1164,62 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     {
         if (key is null || sessions.Values.Any(t => !t.Removed && SignInKeyOf(t.Last) == key)) { return; }
         ForgetSignIn(key);
+    }
+
+    static string TrustKey(string question) => "~trust:" + question;
+
+    // A folder-trust question waiting TrustWaitAfter is told once, to every device, in the needs-you class and the question kind, in words
+    // the host builds (the agent's name and the machine's, nothing the agent said, no folder). One answered or gone before it went is
+    // forgotten with anything of it still waiting; a later question is a new episode. With no device to tell, nothing has been said.
+    void Trusts(DateTimeOffset now)
+    {
+        if (TrustQuestions is not { } read) { return; }
+        var waiting = read().ToDictionary(q => q.Id, StringComparer.Ordinal);
+        foreach (var id in trustSent.Keys.Where(k => !waiting.ContainsKey(k)).ToList())
+        {
+            trustSent.Remove(id);
+            outbox.RemoveAll(o => o.Kind == NoticeKind.Question && o.Session == TrustKey(id));
+        }
+        foreach (var q in waiting.Values)
+        {
+            if (trustSent.ContainsKey(q.Id) || now < q.AskedAt + options.TrustWaitAfter || !store.All.Any(MayNotify)) { continue; }
+            trustSent[q.Id] = now;
+            EnqueueTrust(q, now);
+        }
+    }
+
+    void EnqueueTrust(TrustQuestion q, DateTimeOffset now)
+    {
+        var key = TrustKey(q.Id);
+        foreach (var sub in store.All)
+        {
+            if (!MayNotify(sub) || !sub.Wants(NoticeKind.Question, key)) { continue; }
+            var message = PushNotice.Fit(new PushMessage
+            {
+                Notification = new PushNotification
+                {
+                    Title = $"{AgentName(q.Kind)} on {machine.Name} needs a folder-trust answer",
+                    Body = "A launched session is waiting for a folder-trust answer",
+                    Navigate = PushNotice.NavigateNeedsYou(sub.App, machine.Id),
+                    Tag = PushNotice.Tag(machine.Id, key),
+                    Data = new PushNoticeData { Kind = NoticeKind.Question, Machine = machine.Id, Session = "", Class = NotificationClass.NeedsYou, At = now },
+                },
+            });
+            outbox.RemoveAll(o => o.Device == sub.Device && o.Session == key);
+            outbox.Add(new Outgoing
+            {
+                Device = sub.Device,
+                Session = key,
+                Kind = NoticeKind.Question,
+                Plain = PushNotice.Serialize(message),
+                Ttl = (int)options.QuestionTtl.TotalSeconds,
+                Urgency = "high",
+                Topic = PushNotice.Topic(machine.Id, key),
+                Created = now,
+                NotBefore = now,
+                Grant = sub.Grant,
+            });
+        }
     }
 
     void ForgetSignIn(string key)

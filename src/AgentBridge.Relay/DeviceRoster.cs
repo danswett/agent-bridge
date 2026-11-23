@@ -20,7 +20,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
 {
     public const string Observe = "observe";
     public const string Enforce = "enforce";
-    public enum Admission { Open, Approved, Pending, Removed }
+    // Unavailable: the store could not say (an error, a timeout, a body that does not read) for an account that is, or may be, in
+    // enforce. It is never Open: enforce does not fail open.
+    public enum Admission { Open, Approved, Pending, Removed, Unavailable }
+    // Accounts this relay has seen in enforce, kept in memory only: the mode moves one way, so a latched account that the store then
+    // cannot answer for (an error, a body that does not read, a roster gone missing, a mode gone back) is Unavailable, never Open.
+    readonly ConcurrentDictionary<string, bool> latched = new();
     // One append carries a few entries (an add, its confirmation), never a whole history.
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
@@ -260,7 +265,11 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         try
         {
             using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
-            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s) { return Admission.Open; }
+            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s)
+            {
+                return latched.ContainsKey(accountId) ? Admission.Unavailable : Admission.Open;
+            }
+            latched[accountId] = true;
             var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
             verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
             if (verifier.State.Active.ContainsKey(deviceId)) { return Admission.Approved; }
@@ -274,7 +283,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         {
             metrics.Roster("devices-admission", "error");
             log.LogWarning(e, "device roster admission read failed");
-            return Admission.Open;
+            return latched.ContainsKey(accountId) ? Admission.Unavailable : Admission.Open;
         }
     }
 
@@ -290,12 +299,14 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
             var read = await store.ReadAsync(NameOf(accountId), cts.Token);
             if (Decode(read) is not { } s) { return false; }
-            if (s.Mode == Enforce) { return true; }
+            if (s.Mode == Enforce) { latched[accountId] = true; return true; }
             var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
             verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
             if (!verifier.State.PersonDevices.Contains(deviceId)) { return false; }
             var body = JsonSerializer.SerializeToUtf8Bytes(s with { Mode = Enforce }, Json);
-            return await store.WriteAsync(NameOf(accountId), body, read?.ETag, cts.Token) is not null;
+            var written = await store.WriteAsync(NameOf(accountId), body, read?.ETag, cts.Token) is not null;
+            if (written) { latched[accountId] = true; }
+            return written;
         }
         catch (Exception e)
         {

@@ -201,6 +201,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await conn.CloseAsync(CloseCodes.Removed, "removed");
             return;
         }
+        // The store could not say whether this account is in enforce: turned away to try again, never served as if it were not.
+        if (admission == DeviceRoster.Admission.Unavailable)
+        {
+            metrics.Refused(CloseCodes.Restarting);
+            await conn.CloseAsync(CloseCodes.Restarting, "try-later");
+            return;
+        }
         conn.Pending = admission == DeviceRoster.Admission.Pending;
 
         var devices = accounts.GetOrAdd(conn.Account.Id, _ => new());
@@ -591,6 +598,8 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         foreach (var c in devices.Values.ToArray())
         {
             var admission = await deviceRoster.AdmissionAsync(accountId, c.DeviceId);
+            // A read that failed changes nothing: no device is un-pended, and none closed, on a transient store error.
+            if (admission == DeviceRoster.Admission.Unavailable) { continue; }
             c.Pending = admission == DeviceRoster.Admission.Pending;
             if (admission == DeviceRoster.Admission.Removed) { await c.CloseAsync(CloseCodes.Removed, "removed"); }
         }
