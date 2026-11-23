@@ -10,13 +10,17 @@ namespace AgentBridge.Relay;
 // signed by the account's own devices. The relay is an untrusted store (design §3.6): it keeps an
 // entry only if it is valid against its own copy, so a stranger cannot fill the log, but a host
 // verifies what it is given for itself and never takes the relay's word. Nothing here decides who
-// may connect; mode is "observe" and the relay serves every account the same.
+// may connect while an account's mode is "observe", which every account starts in. "enforce" (#1359 R2) is only ever set by
+// an active person's device on its own connection and never moves back here: the relay then tags each socket approved,
+// pending or removed (Admission). It is defense in depth: a host verifies and enforces for itself.
 //
 // Kept apart from MachineRoster (the last-seen list of offline machines): that one is disposable
 // and expires, this one is what an account's trust rests on.
 public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<DeviceRoster> log, IRosterStore? store)
 {
-    public const string Mode = "observe";
+    public const string Observe = "observe";
+    public const string Enforce = "enforce";
+    public enum Admission { Open, Approved, Pending, Removed }
     // One append carries a few entries (an add, its confirmation), never a whole history.
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
@@ -55,7 +59,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     string NameOf(string accountId) =>
         "v1/" + Convert.ToHexStringLower(HMACSHA256.HashData(nameKey, Encoding.UTF8.GetBytes(accountId))) + ".json";
 
-    sealed record Stored(int V, string Generation, List<string> Entries);
+    sealed record Stored(int V, string Generation, List<string> Entries, string? Mode = null);
 
     public sealed record Snapshot(string Mode, string? Generation, IReadOnlyList<string> Entries);
     public sealed record Result(string Hash, string Verdict, string? Reason);
@@ -69,7 +73,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             var read = await store.ReadAsync(NameOf(accountId), cts.Token);
             var s = Decode(read);
             metrics.Roster("devices-get", "ok");
-            return new Snapshot(Mode, s?.Generation, s?.Entries ?? []);
+            return new Snapshot(s?.Mode == Enforce ? Enforce : Observe, s?.Generation, s?.Entries ?? []);
         }
         catch (Exception e)
         {
@@ -244,7 +248,62 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 aside.Add((index, entry));
             }
         }
-        return (results, changed ? new Stored(1, generation, kept) : null);
+        return (results, changed ? new Stored(1, generation, kept, stored?.Mode) : null);
+    }
+
+    // Where a device stands with the account's roster. Open: the account is in observe, has no roster, or the store cannot say
+    // (the relay is never the gate, so it fails open). In enforce: Approved when the key is active, Removed when an add of this
+    // key was revoked, otherwise Pending. Replays the stored log, which the store bounds.
+    public async Task<Admission> AdmissionAsync(string accountId, string deviceId)
+    {
+        if (store is null) { return Admission.Open; }
+        try
+        {
+            using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
+            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s) { return Admission.Open; }
+            var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+            verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
+            if (verifier.State.Active.ContainsKey(deviceId)) { return Admission.Approved; }
+            for (var i = 0; i < verifier.Graph.Count; i++)
+            {
+                if (verifier.Graph[i].IsAdd && verifier.Graph[i].DeviceId == deviceId && verifier.State.IsRevoked(i)) { return Admission.Removed; }
+            }
+            return Admission.Pending;
+        }
+        catch (Exception e)
+        {
+            metrics.Roster("devices-admission", "error");
+            log.LogWarning(e, "device roster admission read failed");
+            return Admission.Open;
+        }
+    }
+
+    // Moves the account to enforce, once, when the asker's key is active in its roster. One way: nothing here moves it back.
+    // False when the asker is not approved, there is no roster, or the store cannot be written.
+    public async Task<bool> EnforceAsync(string accountId, string deviceId)
+    {
+        if (store is null) { return false; }
+        var gate = locks.GetOrAdd(accountId, _ => new Gate());
+        await gate.Lock.WaitAsync();
+        try
+        {
+            using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
+            var read = await store.ReadAsync(NameOf(accountId), cts.Token);
+            if (Decode(read) is not { } s) { return false; }
+            if (s.Mode == Enforce) { return true; }
+            var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+            verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
+            if (!verifier.State.PersonDevices.Contains(deviceId)) { return false; }
+            var body = JsonSerializer.SerializeToUtf8Bytes(s with { Mode = Enforce }, Json);
+            return await store.WriteAsync(NameOf(accountId), body, read?.ETag, cts.Token) is not null;
+        }
+        catch (Exception e)
+        {
+            metrics.Roster("devices-enforce", "error");
+            log.LogWarning(e, "device roster enforce failed");
+            return false;
+        }
+        finally { gate.Lock.Release(); }
     }
 
     static List<Result> Refuse(List<Result> results, List<(int Index, Entry Entry)> parsed, string reason)

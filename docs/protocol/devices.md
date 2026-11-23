@@ -562,6 +562,20 @@ Both messages are text frames from an admitted device of any kind, counted again
 
 A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode, next section) is what feeds it.
 
+## The relay's enforce mode (R2, first part)
+
+Each account's relay mode starts as `observe`, which is what the relay has always done, and is reported as `mode` in `roster`. It moves to `enforce` only when a device that is an active **person** device in the account's roster (not a host) sends `{ "t": "roster-enforce", "id": n }` on its own connection; the relay answers `{ "t": "roster-enforce-result", "id": n, "mode": "enforce" }` or `{ ..., "error": "not-approved" }`. It never moves back (a reset is a later slice). The request needs no presence proof: it only tightens, and the relay is never the gate (device-approval.md §4.5). An account with no roster cannot be switched.
+
+In `enforce` the relay tags each connecting key from its own verified copy of the roster:
+
+* **approved**: the key is active in the roster. Served as before.
+* **pending**: any other key. Its presence is `{ "devices": [], "pending": true }`. Its control messages (push, blobs, feedback, roster, forget, registry, `roster-enforce`) are ignored. Its binary frames are routed only to a device that has itself sent to it, and only an approved **person** device may send to a pending one first, so a pending device never opens a channel and two pending devices cannot talk.
+* **removed**: an add of this key was revoked in the roster. The socket is closed at admission with close code `4030` (`removed`), advisory like everything the relay says.
+
+A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). If the store cannot be read the device is served as in `observe`: the relay fails open because the hosts' own gate (`security.roster enforce`) is the one that counts. Accounts in `observe` are unchanged byte for byte.
+
+Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the pending and attempt limits, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
+
 ## The host's verifier (OFF mode)
 
 A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the default; `observe` is [below](#observe-mode); anything else is reported in the log and read as `off`).
