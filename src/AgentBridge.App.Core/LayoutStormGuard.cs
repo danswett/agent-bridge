@@ -20,6 +20,9 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
     public int Peak { get { lock (runs) { return peak; } } }
     public int Storms { get { lock (runs) { return storms; } } }
 
+    // Stamps held: never more than Limit, so a dense burst cannot grow the queue (#3811).
+    internal int Retained { get { lock (runs) { return runs.Count; } } }
+
     // True when a correction may run; count is the runs in the window. first is true once per storm, for the log.
     public bool Allowed(out int count, out bool first)
     {
@@ -42,7 +45,8 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
         {
             var now = clock.GetTimestamp();
             Prune(now);
-            runs.Enqueue(now);
+            // At Limit the window is already full; the oldest stamps decide when it ends, so later ones add nothing.
+            if (runs.Count < Limit) { runs.Enqueue(now); }
             peak = Math.Max(peak, runs.Count);
         }
     }
