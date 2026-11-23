@@ -292,6 +292,7 @@ public sealed partial class AgentAuditLog
         catch (FileNotFoundException) { return null; }
     }
     internal static long RetainedThrough(string folder) => ReadHead(folder, false)?.RetainedThrough ?? 0;
+    internal static long RetainedThrough(string folder, bool launch) => ReadHead(folder, launch)?.RetainedThrough ?? 0;
     internal static bool Adopted(string folder) => ReadHead(folder, false)?.Adopted == true || ReadHead(folder, true)?.Adopted == true;
     static bool TryCountAdoptedRows(string folder, bool launch, AdoptionPrefix prefix, out long count)
     {

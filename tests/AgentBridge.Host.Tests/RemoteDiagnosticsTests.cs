@@ -121,11 +121,11 @@ public sealed class RemoteDiagnosticsTests
         var diagnostics = Diagnostics(journal);
 
         var first = diagnostics.ReadAsync("device-a", 5);
-        await journal.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await journal.Entered.Task;
         // Another device while the first read runs: refused at once, never queued behind it.
         Assert.Equal(RemoteDiagnostics.TooSoon, (await Assert.ThrowsAsync<InvalidOperationException>(() => diagnostics.ReadAsync("device-b", 5))).Message);
         journal.Release();
-        Assert.Equal(DiagnosticsProtocol.Schema, (await first.WaitAsync(TimeSpan.FromSeconds(10))).Snapshot.Schema);
+        Assert.Equal(DiagnosticsProtocol.Schema, (await first).Snapshot.Schema);
 
         // The same device again before MinInterval: refused without a read.
         Assert.Equal(RemoteDiagnostics.TooSoon, (await Assert.ThrowsAsync<InvalidOperationException>(() => diagnostics.ReadAsync("device-a", 5))).Message);
@@ -144,16 +144,16 @@ public sealed class RemoteDiagnosticsTests
         var diagnostics = Diagnostics(journal);
 
         var first = diagnostics.ReadAsync("device-a", 5);
-        await journal.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await journal.Entered.Task;
         Assert.False(first.IsCompleted);
         time.Advance(DiagnosticsProtocol.ServerDeadline);
 
         // The fixed text, never the cancellation's own.
-        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => first.WaitAsync(TimeSpan.FromSeconds(10)));
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => first);
         Assert.Equal(RemoteDiagnostics.Unfinished, refused.Message);
         Assert.Null(refused.InnerException);
         journal.Release();
-        Assert.Equal(DiagnosticsProtocol.Schema, (await diagnostics.ReadAsync("device-b", 5).WaitAsync(TimeSpan.FromSeconds(10))).Snapshot.Schema);
+        Assert.Equal(DiagnosticsProtocol.Schema, (await diagnostics.ReadAsync("device-b", 5)).Snapshot.Schema);
     }
 
     [Fact]
@@ -164,12 +164,12 @@ public sealed class RemoteDiagnosticsTests
         using var cancel = new CancellationTokenSource();
 
         var first = diagnostics.ReadAsync("device-a", 5, cancellationToken: cancel.Token);
-        await journal.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await journal.Entered.Task;
         cancel.Cancel();
 
-        Assert.Equal(RemoteDiagnostics.Unfinished, (await Assert.ThrowsAsync<InvalidOperationException>(() => first.WaitAsync(TimeSpan.FromSeconds(10)))).Message);
+        Assert.Equal(RemoteDiagnostics.Unfinished, (await Assert.ThrowsAsync<InvalidOperationException>(() => first)).Message);
         journal.Release();
-        await diagnostics.ReadAsync("device-b", 5).WaitAsync(TimeSpan.FromSeconds(10));
+        await diagnostics.ReadAsync("device-b", 5);
         Assert.Equal(2, journal.Reads);
     }
 
@@ -196,19 +196,19 @@ public sealed class RemoteDiagnosticsTests
         var diagnostics = Diagnostics(journal, log: Log);
 
         var first = diagnostics.ReadAsync("device-a", 5);
-        await journal.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await journal.Entered.Task;
         time.Advance(DiagnosticsProtocol.ServerDeadline);
-        Assert.Equal(RemoteDiagnostics.Unfinished, (await Assert.ThrowsAsync<InvalidOperationException>(() => first.WaitAsync(TimeSpan.FromSeconds(10)))).Message);
+        Assert.Equal(RemoteDiagnostics.Unfinished, (await Assert.ThrowsAsync<InvalidOperationException>(() => first)).Message);
         Assert.Equal(1, diagnostics.GivenUp);
 
         journal.Release();
-        var served = await diagnostics.ReadAsync("device-b", 5).WaitAsync(TimeSpan.FromSeconds(10));
+        var served = await diagnostics.ReadAsync("device-b", 5);
         Assert.Equal(0, Volatile.Read(ref logged));
         Assert.Contains("1 given up", served.Note, StringComparison.Ordinal);
 
         // A journal that cannot be read is sent as failed, and its type, never its text, is logged.
         var failing = Diagnostics(new FailingJournal(), log: Log);
-        var read = await failing.ReadAsync("device-a", 5).WaitAsync(TimeSpan.FromSeconds(10));
+        var read = await failing.ReadAsync("device-a", 5);
         Assert.Equal(DiagnosticsMissing.Failed, read.Snapshot.Journal.Missing);
         Assert.Contains($"({nameof(IOException)})", read.Note, StringComparison.Ordinal);
         Assert.DoesNotContain(Canary, read.Note, StringComparison.Ordinal);
@@ -256,7 +256,7 @@ public sealed class RemoteDiagnosticsTests
             Assert.DoesNotContain(Canary, JsonSerializer.Serialize(relay, ProtocolJson.Options), StringComparison.Ordinal);
 
             release.Set();
-            await status.WaitAsync(TimeSpan.FromSeconds(10));
+            await status;
         }
         finally
         {

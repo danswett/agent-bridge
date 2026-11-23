@@ -38,13 +38,13 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 |---|---|
 | `Verified` | 43 |
 | `Verified (historical)` | 5 |
-| `Implemented, untested live` | 54 |
+| `Implemented, untested live` | 56 |
 | `Partial` | 2 |
-| `Missing` | 8 |
+| `Missing` | 9 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
-| **Total** | **150** feature rows in §1–§18 |
+| **Total** | **153** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Partial`. Every `Missing` and `Partial` row links an issue labelled
 [`parity`](https://github.com/danswett/agent-bridge/issues?q=label%3Aparity).
@@ -198,6 +198,9 @@ remain subject to the [PWA push rehearsal](design/pwa-push-lifecycle.md) for #23
 | Answered anywhere withdraws the notice; a stale tap is refused | All | README "Answering from the notification" | `Verified (historical)` | `PushNotifierTests.An_answered_question_is_replaced_quietly_where_it_was_shown_but_not_on_the_device_that_answered`. Live: Progress › Push (cleared) | |
 | One notification per session (tags); several sessions at once | All | Per-session tags | `Verified (historical)` | `PushNoticeTests.Each_session_has_one_topic_a_push_service_accepts_and_one_tag`, `pwa/test/push.spec.mjs`. Live: Progress › Push | |
 | Option buttons and "Type an answer" on the phone notification | All | `answerButtons.*` | `Intentionally different` | Web Push on iOS has no action buttons or text inputs; a tap opens the card | Design §8 (S5). The old buttons return for migrated machines through the HA connector's stage 5b ([ha-connector.md](ha-connector.md#stage-5b-phone-notifications); `NotifyTests`, live in the `ha-integration` job) |
+| Notification paths with Home Assistant off (PWA push, Windows toasts) | All | — | `Implemented, untested live` | PWA push: `PushFlowTests.A_question_its_withdrawal_and_a_finished_turn_reach_the_phone_with_no_Home_Assistant_connector_in_the_process` (no connector in the process; it does not detect a call to Home Assistant). Both paths, **scanned only**: `HaOffNotificationTests` reads the push and the Windows toast code for Home Assistant names; no HA-off flow runs the Windows toasts | Live per-client counts (ten of each, away from home) stay OPEN: [ha-s4-evidence-matrix.md](design/ha-s4-evidence-matrix.md) row 16 |
+| Reconnect never reannounces old work | All | — | `Implemented, untested live` | `PushNotifierTests.After_a_relay_reconnect_a_question_and_a_finished_turn_already_shown_are_not_pushed_again` | |
+| Background push to iOS and iPadOS | Apple | — | `Missing` | APNs transport not built; open-app notices only | IOS-PUSH, row 16 of the S4 inventory ([ha-s4-evidence-matrix.md](design/ha-s4-evidence-matrix.md)) |
 | Desktop notifications with option buttons and a text box | All | — (HA only) | `Verified (historical)` | `ToastTests` (11). Live: Progress › Windows app (answered from a toast button; withdrawn once answered) | Beyond parity |
 | Notification styling (icon, colour, interruption level) | All | `answerButtons.icon`, `.color`, `.interruptionLevel` | `N/A` | HA companion-app specific | Carried for the HA connector's answer buttons (`homeAssistant.answerButtons.*`) |
 
