@@ -49,13 +49,14 @@ public sealed class BusyQueueStore(TimeProvider time)
     }
 
     // A later state. held false frees the slot; queued sets until to the watch after now.
-    public void Settle(string request, string state, string? reason, bool held)
+    public bool Settle(string request, string state, string? reason, bool held, string? expected = null)
     {
         lock (gate)
         {
-            if (!records.TryGetValue(request, out var r)) { return; }
+            if (!records.TryGetValue(request, out var r)) { return false; }
             records[request] = r with { State = state, Reason = reason, Held = held, Until = state == Queued ? time.GetUtcNow() + Watch : r.Until };
             if (!held) { FreeSlot(request); }
+            return true;
         }
     }
 

@@ -94,4 +94,47 @@ public sealed class BusyQueueStoreTests
         var q = Req(); s.TryBegin(q, "p", "sess1"); s.Track(q, null, 0); s.Release(q);
         Assert.Null(s.Holder("sess1"));
     }
+
+    // Every settle is a compare-and-set (#4125, #4129): a late settle never overwrites a record another path already settled.
+    [Fact]
+    public void A_settle_after_delivered_changes_nothing_and_a_delivered_record_never_holds_a_slot_again()
+    {
+        var s = Store(); var r = Req();
+        s.TryBegin(r, "p", "sess1"); s.KeysWent(r);
+        Assert.True(s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.InFlight));   // another path: the prompt was taken
+        Assert.False(s.Settle(r, BusyQueueStore.Queued, null, held: true, expected: BusyQueueStore.InFlight));      // the first send's own late settle
+        Assert.False(s.Settle(r, BusyQueueStore.Unconfirmed, "noRow", held: true));
+        s.KeysWent(r);
+        Assert.Equal((BusyQueueStore.Delivered, false, (string?)null), (s.Get(r)!.State, s.Get(r)!.Held, s.Get(r)!.Reason));
+        Assert.False(s.SlotHeld("sess1"));
+    }
+
+    [Fact]
+    public void A_late_settle_leaks_no_held_record_and_a_delivered_record_is_pruned_after_the_window()
+    {
+        var s = Store(); var r = Req();
+        s.TryBegin(r, "p", "sess1"); s.KeysWent(r);
+        s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.InFlight);
+        s.Settle(r, BusyQueueStore.Queued, null, held: true, expected: BusyQueueStore.InFlight);
+        Assert.DoesNotContain(s.Records(), x => x.Held);
+        clock.Advance(BusyQueueStore.Window);
+        Assert.Equal(BusyQueueStore.Begin.Started, s.TryBegin(Req(), "p", "sess1"));
+        Assert.DoesNotContain(s.Records(), x => x.Request == r);
+    }
+
+    [Fact]
+    public void A_settle_applies_only_to_the_state_the_caller_read_and_release_only_to_a_record_that_typed_nothing()
+    {
+        var s = Store(); var r = Req();
+        s.TryBegin(r, "p", "sess1"); s.KeysWent(r); s.Settle(r, BusyQueueStore.Queued, null, held: true);
+        Assert.False(s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.Unconfirmed));
+        Assert.Equal((BusyQueueStore.Queued, true), (s.Get(r)!.State, s.Get(r)!.Held));
+        Assert.True(s.Settle(r, BusyQueueStore.Unconfirmed, "watchEnded", held: true, expected: BusyQueueStore.Queued));
+        s.Release(r);                                                                    // keys went: the record and the slot stay
+        Assert.Equal("watchEnded", s.Get(r)!.Reason);
+        Assert.True(s.SlotHeld("sess1"));
+        Assert.True(s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.Unconfirmed));
+        s.Release(r);                                                                    // already delivered: not removed
+        Assert.Equal(BusyQueueStore.Delivered, s.Get(r)!.State);
+    }
 }
