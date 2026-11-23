@@ -133,6 +133,7 @@ Program's authorized relay entry and HaRunning assign relay/person-client and
 legacy-ha/ha-component respectively; the pipe stays local. Only an explicitly
 assigned control-writer run context supplies a run; there is no automatic provider.
 The run-control writer remains a later slice; this adds only its nullable context seam.
+Slice 5a (section 7) adds that writer, `GateRunControl`, with no caller until 5b.
 
 Slice 3 (#2522) audits app/host-CLI answers on the local handler: empty run means
 zero qualifying credit. A flushed intent follows native-question validation and
@@ -342,7 +343,10 @@ A6a = #2066, and A6-rest = the remaining #1401 work.
 | 2 | Launch wiring, required | 210 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
 | 3 | Approval wiring, required | 220 | 1 + A3/A5; A4 pattern, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
 | 4 | Stop wiring, required | 200 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
-| 5 | Run prepare/reset, required | 220 | 2-4 + 9 + A3/A4/A5/A6a; reset voids old ID, issues new ID, requires fresh all-host begin markers; never zero in place |
+| 5 | Run prepare/reset, required; split before implementation into 5a-5c (below), each at most 250 lines | 220 as estimated, over once the person-class entry, pause and roster are counted | 2-4 + 9 + A3/A4/A5/A6a; reset voids old ID, issues new ID, requires fresh all-host begin markers; never zero in place |
+| 5a | Host-internal run-control writer: `gate.start` begin marker and `gate.reset` void plus a new begin marker, assigning `ControlWriterRun`; single host | 130 | 2-4 + A3/A4/A5/A6a; relay person authority only (never the local pipe, an agent or the HA connector); an unwritable marker leaves no run; nothing calls it until 5b |
+| 5b | Person-class relay entry that constructs the authority and calls 5a (a protocol op; sensitive) | 200 | 5a; authenticated person-class channel and host-side person authorization; agents and read-only audit clients refused |
+| 5c | Admission pause with the five-minute deadline, pinned roster membership and coverage attestation, all-host begin markers | 240 | 5b + 9; persisted UTC pause deadline, monotonic timer, uncertain deadline voids the run |
 | 6 | Run seal/fresh snapshot, required lifecycle continuation | 230 | 5 + 9 + A3/A4/A5/A6a; no client-supplied counts; bounded pause |
 | 7 | Gate reducer + existing message-source adapter, required | 240 | 6 + 9 + A3/A4/A5/A6a; A6-rest required; stale claims fail |
 | 8 | Shared durable operation-map hardening, later | 220 | 2-4 + A3/A4/A5/A6a; A6-rest required; core wiring already dedupes or invalidates uncertainty |
