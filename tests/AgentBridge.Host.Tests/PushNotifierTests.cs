@@ -2313,6 +2313,18 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Contains(Received(), r => r.Device == Laptop && Kind(r.Notification) == "group");
     }
 
+    // S2b acceptance (#3969): a sender of the Failures kind reuses PushSubscriber.Wants, so it must hold the rule first.
+    [Fact]
+    public void A_device_that_sent_no_notify_is_told_everything_as_before_except_failures_which_are_off()
+    {
+        var legacy = new PushSubscriber("d", "iPhone", "https://web.push.apple.com/x", "p", "a", "https://app/", T);
+        Assert.False(legacy.Wants(NoticeKind.Failures, ""));
+        Assert.All([NoticeKind.Question, NoticeKind.Finished, NoticeKind.Resolved, NoticeKind.SignIn, NoticeKind.Restored, NoticeKind.Group],
+            kind => Assert.True(legacy.Wants(kind, "s1"), kind.ToString()));
+        Assert.False((legacy with { Notify = new PushNotify() }).Wants(NoticeKind.Failures, ""));
+        Assert.True((legacy with { Notify = new PushNotify { DeliveryFailures = true } }).Wants(NoticeKind.Failures, ""));
+    }
+
     [Fact]
     public async Task A_device_without_notify_is_told_of_questions_and_every_finished_turn_as_before()
     {

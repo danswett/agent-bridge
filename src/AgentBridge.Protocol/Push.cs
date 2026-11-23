@@ -34,11 +34,13 @@ public sealed record PushNotify
     public bool DeliveryFailures { get; init; }
     public IReadOnlyList<string> PinnedSessions { get; init; } = [];
 
-    // Whether a notice of this kind about this session is wanted. Only questions and finished turns are
+    // Whether a notice of this kind about this session is wanted. Questions, finished turns and failures are
     // filtered (a group is questions); resolved follows the question it withdraws, and every other kind is always wanted.
     public bool Wants(NoticeKind kind, string session) => kind switch
     {
         NoticeKind.Question or NoticeKind.Group => Questions,
+        // Off unless the device turned it on, whatever its other flags say (v1-sessions.md, Notification filters).
+        NoticeKind.Failures => DeliveryFailures,
         NoticeKind.Finished => All || (Pinned && PinnedSessions.Contains(session)),
         _ => true,
     };
