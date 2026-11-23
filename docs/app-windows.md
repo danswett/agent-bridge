@@ -67,6 +67,9 @@ profile's `*-reading.json` beside the other app stores. Startup restores that se
 and reading position; a missing or stale session falls back to the first available session.
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
+The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
+following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
+records the first such storm with its count: a mitigation against a layout cycle (#3782), not a proven fix.
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
