@@ -1149,6 +1149,13 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
   (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
   change is the next verified commit's to publish.
+* **Verify before publishing.** The train never rebuilds: it publishes the exact bytes CI built. Before it
+  does, a `verify` job per architecture (`windows-latest` for x64, `windows-11-arm` for Arm64) downloads
+  that run's release files and installer input, refuses any that are missing, foreign or altered
+  (`Assert-AppInstallerInput`), installs the package per user and self-tests the installed app, as `ci.yml`'s
+  `app-installer` job does. `publish` needs both to succeed, so a failure in either **publishes nothing**,
+  and the `alert` job then fails the run with a named error (commit and CI run); a red train run is the
+  alert, and no other notification channel is wired here.
 * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
   unsigned, until it gains the sign step.
