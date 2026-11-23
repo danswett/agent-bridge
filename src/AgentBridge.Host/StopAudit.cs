@@ -10,7 +10,7 @@ namespace AgentBridge.Host;
 internal static class StopAudit
 {
     internal static async Task<StopResult> StopAsync(StopService stops, ISessionSource source, AgentAuditLog audit,
-        StopRequest request, string path, string principal, CancellationToken ct = default)
+        StopRequest request, string path, string principal, CancellationToken ct = default, ClientIdentity? client = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key) || !Guid.TryParseExact(request.Id, "D", out var target)
             || target == Guid.Empty) { return Refused("the stop needs valid request and session UUIDs"); }
@@ -36,7 +36,8 @@ internal static class StopAudit
         AgentAuditEntry Entry(Guid identity, string phase, string outcome, string reason) =>
             new(path == "relay" ? "in" : "local", key.ToString(), principal, [], Ops.SessionStop, target.ToString(), outcome,
                 Gate: new GateAuditMetadata(1, Guid.NewGuid(), Guid.Empty, 0, phase, path,
-                    path == "legacy-ha" ? "ha-component" : "person-client", identity, reason));
+                    path == "legacy-ha" ? "ha-component" : "person-client", identity, reason,
+                    ClientKind: path == "relay" ? client?.Kind : null, ClientPlatform: path == "relay" ? client?.Platform : null));
         bool Prepare(int pid, DateTimeOffset at)
         {
             attempted = true;
