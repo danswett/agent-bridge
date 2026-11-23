@@ -26,13 +26,16 @@ rows"); the remote launch it proves is described there and in [fleet-grants-cli.
 3. The target host holds a receiver-side grant for the source agent session, with caps and a kill switch the run can
    read back. The grant is **person-issued** for the run; no builder or script creates, widens or reuses one. Any
    person action the run needs (the grant, an induced restart or reconnect) is approved by that person **at run time**.
-4. Disposable hosts only. No run uses a person's own grant, a person's session or a machine in daily use.
+4. Disposable hosts and a disposable HA only. No run uses a person's own grant, a person's session, a machine in daily
+   use, or the owner's real Home Assistant.
 
 ## What runs
 
 Each case is one `fleet launch --target <node>` from an agent on the source host, driven by a script
 that records the request id, the receipt and both hosts' own logs. The HA transport is run for the same
-inputs in the same window, for comparison only.
+inputs in the same window, for comparison only. **The HA transport in this run is a disposable HA instance made for
+the run, never the owner's real Home Assistant** (AGENTS.md, first rule): no HA comparison press, payload or entity
+write goes to the real one, and the receipt names the disposable HA used.
 
 | Case | Expected on the Host path |
 |---|---|
@@ -112,8 +115,10 @@ so a second session for the same request would not show as a second row. Doubles
 **sessions**, never from rows. Every request in the run plan carries its own unique launch name. At the end of each
 request, and again after the 5 minute late wait, for each target compare three counts for that launch name:
 
-1. the **live sessions** on the target (the session list), matched by the launch name and by start time inside the
-   request's window;
+1. **every new session** that appears on the target during the request's window (the session list before and after,
+   by start time), not only those with the request's launch name: a stray or misnamed second session is exactly
+   what this check exists to find. The ones carrying the launch name are matched to the request; any other new
+   session in the window is an unexplained session and fails the run;
 2. the **started rows** in `launches list --json` for the same request;
 3. the **receiver's counter rise** for the grant (hourly, daily and live usage), read before and after.
 
