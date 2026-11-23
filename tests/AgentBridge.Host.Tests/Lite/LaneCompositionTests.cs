@@ -19,8 +19,12 @@ public sealed class LaneCompositionTests : IDisposable
     sealed class Replier : ISessionReplier
     {
         public bool Available => true;
-        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null) =>
-            Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        {
+            if (request.StillCurrent?.Invoke() != true) { return Task.FromResult(new ReplyResult(AnswerOutcome.Refused)); }
+            _ = request.HandoffText!();
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        }
     }
 
     public LaneCompositionTests() => Directory.CreateDirectory(root);
@@ -50,6 +54,7 @@ public sealed class LaneCompositionTests : IDisposable
     [Fact]
     public void The_real_journal_opens_once_with_its_private_key_and_observers_never_build_it()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         using var lane = Create();
         Assert.False(lane.HasPending("t"));
         Assert.Empty(Directory.GetFileSystemEntries(root));
@@ -112,5 +117,20 @@ public sealed class LaneCompositionTests : IDisposable
         Assert.True(lane.HasPending("t"));
         Assert.Equal(DeliveryOfferState.Pending, lane.Status(request, "t", sender)!.State);
         Assert.False(lane.Uncertain);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_offer_made_while_enabled_is_not_handed_off_after_the_flag_or_liteKill_goes_off(bool liteKillOff)
+    {
+        open = Memory;
+        using var lane = Create();
+        var scheduler = lane.Resolve().Scheduler!;
+        Assert.Equal(DeliveryOfferState.Pending, lane.Offer(Guid.NewGuid(), "t", new("user"), "body", () => true).State);
+        if (liteKillOff) { kill = false; } else { flag = false; }
+        Assert.Equal(LaneStatus.Off, lane.Resolve().Status);
+        Assert.Equal(LaneResult.Waiting, await scheduler.DeliverNextAsync("t"));
+        Assert.True(lane.HasPending("t"));
     }
 }

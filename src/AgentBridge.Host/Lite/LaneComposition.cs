@@ -96,7 +96,8 @@ internal sealed class LaneComposition : IDisposable
     {
         if (Resolve() is not { Status: LaneStatus.Ready, Scheduler: { } lane })
         { return new(DeliveryOfferState.Refused, $"Target {target}: lane delivery is not available."); }
-        var status = lane.Offer(request, target, sender, body, current, revoked);
+        // The scheduler keeps this predicate for every later fence, so it must carry the switches too.
+        var status = lane.Offer(request, target, sender, body, () => Enabled() && current(), revoked);
         if (status.State is DeliveryOfferState.Pending or DeliveryOfferState.Queued) { Raise(Offered, target); }
         return status;
     }
