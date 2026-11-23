@@ -68,8 +68,14 @@ and reading position; a missing or stale session falls back to the first availab
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
-following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
-records the first such storm with its count: a mitigation against a layout cycle (#3782), not a proven fix.
+following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
+nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
+and `app.log` records the first skipped correction of a storm with its count (#3842). The guard keeps at most 60 stamps however dense the burst, and a skipped
+pass while a saved reading position still waits schedules one retry after the window, so a finite burst cannot leave
+the restore undone (#3811). They also run once, at low priority,
+after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
+layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
+#3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
@@ -988,9 +994,8 @@ connector's Install button on a machine the dashboard drives.
   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
-  doesn't rest on the order main's CI runs go in (first attempts share
-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, unless main's head has since
+  doesn't rest on the order main's CI runs go in (each push has a group of its
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
   changed the app (main's own selector, under the lock, says so; main's later run publishes
   both, where publishing this first could leave that one's lower version refused), and
   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
@@ -1133,10 +1138,13 @@ A second way to publish, apart from merging: `.github/workflows/release-train.ym
 (and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
 Merging never waits for it and it never blocks a merge.
 
-**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
+**Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
 superseded run that went green still publishes nothing when `main`'s head has since changed the
 app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
+(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
+`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
+starvation lasts until the train lands.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
@@ -1454,6 +1462,12 @@ finishes and fails checks makes the app exit normally with code 1: it leaves no 
 no event, and its cause is the failed checks the app wrote to `result.json`, which the
 wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
 capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
