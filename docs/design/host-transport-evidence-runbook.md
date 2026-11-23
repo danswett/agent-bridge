@@ -94,9 +94,9 @@ the dead-man task runs that removal after N minutes.
    pairs run in both directions. SRE verifies each host shows no live session that is not the run's own; a host with any other live session is not disposable.
 3. **No disposable HA (owner answer, about 09:00 PT): the HA-fallback checks are SKIPPED and are NOT COVERED.** Pass bar item 4, the HA fallback counter
    reads in S0 to S11, and the stop condition on an HA fallback cannot be observed without one. The evidence and the receipt say **NOT COVERED** for each,
-   in those words, so the lead's approval of the flip reads it. Nothing is improvised and the real Home Assistant is never used. **Open for the lead:** the
-   HA twin comparison (the 100 pairs and the mismatch bar) also needs an HA to compare against; until the lead rules on it, the comparison is not claimed
-   and the receipt says so.
+   in those words, so the lead's approval of the flip reads it. Nothing is improvised and the real Home Assistant is never used. **The HA twin comparison is
+   also NOT COVERED** (the owner's skip: with no HA there is nothing to compare against). The receipt says so in those words, and the 100 compared pairs and
+   the mismatch bar are not claimed. **Quality rules on whether the gate can still be met without them**; this runbook does not decide it.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
 5. **The run plan is frozen before request 1** and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
    every coverage floor, the live-session cap, the unique launch names (from the fixed `SG Builder <n>` / `SG Worker <n>` list), the batch
@@ -135,8 +135,8 @@ sha256, and the load readings before and after.
 | **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, load (the HA fallback counter is NOT COVERED: no disposable HA) | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
-| **S2** | SRE | **Smoke:** one Host launch and its HA twin on one pair. Stop if it does not start and register exactly once | Both receipts, the three double-launch counts |
-| **S3** | SRE | **Main pairs:** at least 100 compared pairs in batches no larger than the cap, each batch ended by list before the next; the 50 consecutive count is inside this | Per pair: both receipts and exit codes, `sessions.list`, `launches list`, the counter rise |
+| **S2** | SRE | **Smoke:** one Host launch on one pair (the HA twin is NOT COVERED). Stop if it does not start and register exactly once | The receipt, the three double-launch counts |
+| **S3** | SRE | **Main Host launches** (the HA comparison is NOT COVERED, so these are Host-only, not compared pairs; the 100 pairs and the 50 consecutive compared launches are not claimed), in batches no larger than the cap, each batch ended by list before the next | Per launch: the receipt and exit code, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
 | **S5** | SRE (the owner only if a fault needs a restart) | **Lost response x3:** the elevated relay-drop session drops the target's relay connection after the send on the Host side, at SRE's request (the HA-side twin is NOT COVERED: no disposable HA); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
 | **S6** | SRE | **Concurrent bursts x3** inside the cap | The invariants: sessions equal accepted requests, one session per request, counter rise equal, no double |
@@ -162,7 +162,7 @@ excused as load:
 
 - a double launch, or any new session on a target in a request's window that the request does not explain;
 - any HA fallback press on a Host-path request (NOT COVERED: no disposable HA, so this cannot be observed; the receipt says so);
-- any mismatch between a Host request and its HA twin;
+- any mismatch between a Host request and its HA twin (NOT COVERED: no HA twin is run);
 - a launch that lands on the wrong target;
 - a person-guard bypass (any action that needed a person and happened without one);
 - a counter, session list or load reading that cannot be read;
