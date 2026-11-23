@@ -1,0 +1,199 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 76a9f4183..972a5e47f 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -77,6 +77,10 @@ jobs:
+       # unknown, or a run is by hand (the whole-ring step below).
+       whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
+       product: ${{ steps.select.outputs.product }}
++      # Host.Tests as numbered shard legs (#2454): host-tests is true exactly when there are legs; host-sharded tells product to leave the project out.
++      host-tests: ${{ steps.select.outputs.host-tests }}
++      host-shards: ${{ steps.select.outputs.host-shards }}
++      host-sharded: ${{ steps.select.outputs.host-sharded }}
+       ha-integration: ${{ steps.select.outputs.ha-integration }}
+       spikes: ${{ steps.select.outputs.spikes }}
+       spikes-linux: ${{ steps.select.outputs.spikes-linux }}
+@@ -238,7 +242,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
++          JOBS: product host-tests ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -280,6 +284,7 @@ jobs:
+       WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
+       TEST_PROJECTS: ${{ needs.plan.outputs.test-projects }}
+       WHOLE_SOLUTION: ${{ needs.plan.outputs.whole-solution }}
++      HOST_SHARDED: ${{ needs.plan.outputs.host-sharded }}
+       # Ring 0's filter on a draft's fast ring, and nothing anywhere else, whatever the plan said.
+       TEST_FILTER: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && needs.plan.outputs.test-filter || '' }}
+     steps:
+@@ -296,8 +301,14 @@ jobs:
+         # suites their project, so it's here.
+         shell: pwsh
+         run: |
+-          if ($env:WHOLE_SOLUTION -eq 'true') {
++          if ($env:WHOLE_SOLUTION -eq 'true' -and $env:HOST_SHARDED -ne 'true') {
+             $target = 'AgentBridge.slnx'
++          } elseif ($env:WHOLE_SOLUTION -eq 'true') {
++            # The whole ring, with Host.Tests run by the host-tests shards: every other test project, as a solution filter.
++            $projects = @(Get-ChildItem tests -Directory | Where-Object { $_.Name -like '*.Tests' -and $_.Name -ne 'AgentBridge.Host.Tests' } | ForEach-Object { "tests/$($_.Name)/" + (Get-ChildItem $_.FullName -Filter *.csproj).Name })
++            $target = Join-Path $env:RUNNER_TEMP selected.slnf
++            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = $projects } } | ConvertTo-Json -Depth 3 | Set-Content $target
++            Write-Host "selected.slnf: all test projects except Host.Tests ($($projects.Count))"
+           } elseif (($tests = @($env:TEST_PROJECTS | ConvertFrom-Json)).Count -eq 0) {
+             $target = ''
+           } else {
+@@ -495,6 +506,76 @@ jobs:
+           path: ${{ runner.temp }}/relay-image.sarif
+           if-no-files-found: ignore
+           retention-days: 14
++  host-tests:
++    # tests/AgentBridge.Host.Tests as numbered shards (#2454, quality/host-shards.ps1): its slowest classes no longer set product's wall time.
++    # One leg per shard per runner the project's suites declare; a skipped host-tests whose plan said true never counts as a pass (quality-gate below).
++    needs: plan
++    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.host-tests == 'true'
++    strategy:
++      fail-fast: false
++      matrix:
++        include: ${{ fromJSON(needs.plan.outputs.host-shards) }}
++    name: host-tests (${{ matrix.os }}, ${{ matrix.shard }}/${{ matrix.of }})
++    runs-on: ${{ matrix.os }}
++    timeout-minutes: 30
++    env:
++      SHARD: ${{ matrix.shard }}
++      OF: ${{ matrix.of }}
++      # Empty: the plan never shards the draft fast ring. If it ever did, the shard filter is parenthesised when combined with it.
++      TEST_FILTER: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && needs.plan.outputs.test-filter || '' }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - name: NuGet packages from main's cache
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.nuget/packages
++          key: nuget-product-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
++          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-product-{0}-{1}-', runner.os, runner.arch) || '' }}
++      - run: dotnet tool restore
++      - run: dotnet build tests/AgentBridge.Host.Tests -c Release --nologo
++        timeout-minutes: 10
++      - name: This shard's filter and a one-project target
++        shell: pwsh
++        run: |
++          $target = Join-Path $env:RUNNER_TEMP host.slnf
++          @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = @('tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj') } } | ConvertTo-Json -Depth 3 | Set-Content $target
++          $filter = & ./quality/host-shards.ps1 -Shard ([int]$env:SHARD) -Of ([int]$env:OF)
++          if ($env:TEST_FILTER) { $filter = "($filter)&($env:TEST_FILTER)" }
++          "DOTNET_TARGET=$target" | Add-Content $env:GITHUB_ENV
++          "SHARD_FILTER=$filter" | Add-Content $env:GITHUB_ENV
++      - name: dotnet test, with coverage and per-test times
++        if: matrix.os == 'ubuntu-latest'
++        shell: pwsh
++        run: |
++          . ./quality/dotnet-test-command.ps1
++          $command = Add-DotnetCrashBlame "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory TestResults --logger trx --filter `"$env:SHARD_FILTER`""
++          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml $command
++        timeout-minutes: 20
++        env:
++          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
++      - name: Windows tests retry only failed cases once
++        if: matrix.os == 'windows-latest' || matrix.os == 'windows-11-arm'
++        shell: pwsh
++        run: |
++          . ./quality/product-test-retry.ps1
++          exit (Invoke-ProductTestRetry -Target $env:DOTNET_TARGET -Filter $env:SHARD_FILTER)
++        timeout-minutes: 20
++        env:
++          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
++      - name: Keep this shard's test results
++        if: success() || failure()
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: host-tests-${{ matrix.os }}-${{ matrix.shard }}
++          path: TestResults/**/*.trx
++          if-no-files-found: ignore
++          retention-days: 14
++
+   relay-image-sarif:
+     # The relay image's scan to code scanning (the Security tab), from main only. A pull request's
+     # results would be compared with main's last upload, so a vulnerability published since then
+@@ -1787,7 +1868,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, host-tests, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+@@ -1868,13 +1949,14 @@ jobs:
+             exit 1
+           fi
+           # Selected: every job when the whole ring runs, otherwise those the plan gave true.
+-          # App and installer always use their own outputs, on main too (#1910).
++          # App and installer always use their own outputs, on main too (#1910); so does host-tests, which has legs only when sharded,
++          # and a host-tests the plan said true for that was skipped never counts as green.
+           # Each selected job must have succeeded; a skipped one was meant to run and didn't.
+           missing=$(echo "$NEEDS" | jq -r --arg off "$PR_OFF" '
+             (.plan.outputs // {}) as $plan
+             | ($plan["whole-ring"] == "true") as $all
+             | ($off | split(" ")) as $off
+-            | [to_entries[] | select(.key == "plan" or ($all and .key != "app" and .key != "app-installer") or $plan[.key] == "true")
++            | [to_entries[] | select(.key == "plan" or ($all and .key != "app" and .key != "app-installer" and .key != "host-tests") or $plan[.key] == "true")
+                 | select(.key | IN($off[]) | not)
+                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
+             | join(", ")')
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 20cf6d13b..900e466b9 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -245,7 +245,7 @@ suites:
+     triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/app-channels.ps1, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
+     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
+     command: dotnet test tests/AgentBridge.Host.Tests -c Release
+-    where: ci.yml product
++    where: ci.yml product, host-tests
+     # Product's Windows on Arm leg runs every product suite; it's named once, here (#3208).
+     tier: post-merge
+     tier_jobs: [product (windows-11-arm)]
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a42..a845dadc7 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -466,7 +466,7 @@ public class CiPlanTests
+         // The waiver's steps come first; the check is the one that reads the needs.
+         var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
+             .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
+-        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
++        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\" and .key != \"host-tests\") or $plan[.key] == \"true\"",
+             check["run"].ToString(), StringComparison.Ordinal);
+         // A pull request skips post-merge jobs, so its gate doesn't count them as selected (#3209).
+         foreach (var part in new[] { "jq -r --arg off \"$PR_OFF\" '", "($off | split(\" \")) as $off", "| select(.key | IN($off[]) | not)" })
+@@ -561,7 +561,7 @@ public class CiPlanTests
+         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+-        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++        Assert.Equal(new[] { "plan", "product", "host-tests", "ha-integration", "spikes", "spikes-linux", "app",
+             "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index 8dd2f93e1..a0a629e6d 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -87,7 +87,7 @@ public class HaValidationCoverageTests
+         var jobs = CiJobs();
+ 
+         Assert.Equal(
+-            new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++            new[] { "plan", "product", "host-tests", "ha-integration", "spikes", "spikes-linux", "app",
+                 "app-installer", "light", "pwa-ui", "pwa-e2e" },
+             Needs(jobs, "quality-gate"));
+         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
