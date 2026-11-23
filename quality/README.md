@@ -395,6 +395,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
+   - `app`'s published-app self-test is sharded (#1755, Part of #2454): `AgentBridge.exe --self-test <result.json>
+     --self-test-shard i/n` runs the common start (display, the demo's rows) and then only shard `i` of `n`'s stages. The
+     stages are named and run in a fixed order (`SelfTestStages.All`: layout, launch, approve, themes, signin, progress,
+     contrast, resize); n is 1, 2 or 3, each shard takes a contiguous run of them, and without the option the one run
+     does them all, as before. A pure function in `AgentBridge.App.Core` assigns them, so its tests (every stage in exactly
+     one shard for every n, in order) run on every pull request. The result records `shard`, the `stages` it ran and
+     `stagesAll`; `build/app-self-test.ps1 -Shard i/n` passes the option, and `build/app-self-test-join.ps1` fails a run
+     whose shards are missing, doubled, of another count, or whose stages do not add up to `stagesAll`, or whose
+     result names a failure. Target for three shards: the `app` check from about 12 to about 7 minutes. The CI side
+     (the shard matrix, the join, the pinned check names in `catalog.yml` and `merge-rule.yml`) is Quality's to push, in two
+     steps: shard jobs first run beside the whole self-test, which `app` still runs and which still decides, until three main
+     runs of every shard agree with it (a shard that left out state a later stage needs, such as the launched session or
+     the approval, shows there, not in a merge); then `app` stops running the whole self-test and joins the shards instead.
+     The names `app (win-x64)` and `app (win-arm64)`, the one `needs.app.result` that `quality-gate` reads and the arm64
+     waiver names do not change at either step. Live resize stays last of its shard and measures only what its shard drew (#765).
    - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
      distribution-notice and installed-app self-test checks. It waits for `app`, downloads that
      run's existing architecture/version release artifact and a small notice/identity artifact,
@@ -577,6 +592,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     **A run whose jobs cannot be read is passed over only after 15 minutes.** The API can answer 404, a 5xx, or an empty or cut-short body
+     for a main run's jobs (a zombie run it never serves took every pull request's merge-rule to `error` for as long as it sat newest).
+     Such a run is skipped, and the status says `skipped unreadable run <id>`, only once it was created over 15 minutes ago: a fresh run
+     can 404 briefly, and until then the judge errors as it always has. A completed failed run is never skipped (that would hide a red main),
+     and a run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
+     The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
+     failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
