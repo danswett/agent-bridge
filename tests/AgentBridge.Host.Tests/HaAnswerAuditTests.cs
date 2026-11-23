@@ -34,6 +34,37 @@ public sealed partial class AgentAnswerFlowTests
         Assert.Equal(GateVerdictKind.Fail, GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0)).Kind);
     }
 
+    [Fact]
+    public void Launch_rows_written_with_the_old_connector_principal_are_still_read_and_counted()
+    {
+        var root = Path.Combine(f.Root, "old");
+        var folder = Path.Combine(root, "default");
+        Directory.CreateDirectory(folder);
+        var log = new AgentAuditLog(folder);
+        var op = Guid.NewGuid();
+        var request = Guid.NewGuid().ToString();
+        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "legacy-ha", "ha-component", op, "none");
+        var intent = new AgentAuditEntry("local", request, "ha-component:local", [], "session.launch", request, "reserved", Gate: gate);
+        Assert.True(log.Append(intent));
+        Assert.True(log.Append(intent with { Target = Guid.NewGuid().ToString(), Outcome = "started", Gate = gate with { Phase = "terminal" } }));
+
+        Assert.Equal(1, GateAuditProjection.ReadWindow(folder, DateTimeOffset.UtcNow.AddHours(-1)).LegacyHaDispatches);
+        var listing = new StringWriter();
+        Assert.Equal(0, AuditCommands.Run(["audit", "--profile", "default"], root, listing, new StringWriter()));
+        Assert.Contains("ha-component:local", listing.ToString());
+    }
+
+    [Fact]
+    public async Task With_no_audit_log_the_HA_answer_delegate_still_types()
+    {
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        var answer = HaRunning.AnswerDelegate(Answerer(), null)!;
+
+        Assert.Equal(AnswerOutcome.Delivered, (await answer(Request(ClaudeId, "toolu_1", Chosen), CancellationToken.None)).Outcome);
+
+        Assert.NotEmpty(injector.Plans);
+    }
+
     // OWNER DECISION (b), via the chief: when the audit row cannot be written the HA answer is STILL typed, and the failure is recorded
     // as audit_write_failed in the host diagnostic log (never the audit file) plus an in-memory count the next successful write flushes.
     [Fact]
@@ -133,7 +164,7 @@ sealed class HaAnswerAuditFixture
         blocker = Path.Combine(Profile, AgentAuditLog.FolderName);
         if (block) { File.WriteAllText(blocker, "not a folder"); }
         Audit = new AgentAuditLog(Profile, log: s => { if (throwingLog) { throw new IOException("diagnostic log unwritable"); } Logged.Add(s); }, maxBytes: maxBytes);
-        answer = HaAnswerAudit.Wrap(answerer, Audit);
+        answer = HaRunning.AnswerDelegate(answerer, Audit)!;
     }
     public void Unblock() { if (File.Exists(blocker)) { File.Delete(blocker); } }
     public List<AuditCommands.Row> Rows() => GateAuditProjection.Load(Profile).Rows;

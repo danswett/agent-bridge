@@ -423,6 +423,20 @@ answers 410. Accounts and tokens are unaffected.
 
 Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only the smoke test.
 
+## Who approves a production deploy
+
+The owner decided on Nov 23, typing to Chief: "Deploying never needs me". Production deploys, for example the `production`
+environment approval for `relay.yml`, no longer need the owner. This supersedes any per-deploy owner approval elsewhere on
+this page. The conditions, in Chief's wording as recorded in fleet `docs/owner-decisions.md` (Nov 23):
+
+> SRE approves them through the per-command danswett route, after the normal gates (the change is merged on main through
+> Quality, the staging deploy and smoke test are green, only the newest run is approved, a health check follows, the runbook
+> rollback is used if the deploy is bad, and SRE reports to Chief).
+
+Where the environment's required reviewer is danswett, the owner answered "OK: SRE approves via my account".
+
+> It does NOT cover turning on enforce flags, kill switches, repository settings or variables, or credentials.
+
 ## Rollback
 
 - **A bad build:** run `relay.yml` (Actions, *Relay deploy*, *Run workflow* on `main`) with
