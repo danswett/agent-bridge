@@ -25,6 +25,10 @@ static partial class RunnerRouting
     internal static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
     const string ProductMatrix = "${{ fromJSON(needs.plan.outputs.product-os) }}";
     static readonly HashSet<string> Needed = [.. Conjuncts(Expr.Parse(Guard)).Select(c => c.ToString())];
+    // The one alternative (R8b): a run by hand on main with use_ab_ci, to try the pool before the variable flips. Only
+    // people with write access can dispatch, and only main's workflow runs. Exactly "(guard) || <this>", as one conjunct.
+    internal const string Dispatch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci";
+    static readonly string GuardOrDispatch = Expr.Parse($"({Guard}) || {Dispatch}").ToString();
 
     // The labels only: not "--deny-self-hosted-runners", which names an option, not a runner.
     [GeneratedRegex(@"(?<![\w-])(ab-ci|self-hosted)(?![\w-])", RegexOptions.IgnoreCase)]
@@ -91,7 +95,7 @@ static partial class RunnerRouting
         var reachable = Values(expr, []).Where(v => maySelfHost(v.Value)).ToList();
         // A label anywhere but the guarded value (tested, say) is no guard: fail.
         if (reachable.Count == 0) { return Label().IsMatch(text) ? $"{text.Trim()} names the pool, but not as the guarded value" : null; }
-        var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions));
+        var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions) && !v.Conditions.Contains(GuardOrDispatch));
         if (open.Value is not null) { return $"{open.Value} is reached without it"; }
         // The whole shape: GUARD (with any narrowing && conditions) && <the one self-hosted value> || <one hosted fallback>.
         // A second ||, a second self-hosted arm or no hosted fallback is a violation even when each piece is guarded.
