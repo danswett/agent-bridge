@@ -85,6 +85,17 @@ this event's relay addresses (step 0), arms the dead-man, adds the block, **wait
 3c read, holds, restores, disarms, and does the 4b read. A **timeout is 8 minutes**, the hold is 60 seconds, so with the proofs an event ends well inside the
 20-minute dead-man. Any failure restores and disarms (in `finally`), records why, and exits non-zero; the event is then void.
 
+**Evidence stays local until the relay is back.** The script writes its log into the evidence folder **on the drop host** (`relay-drop-<event id>.log`), because
+nothing can be sent while the relay is down. SRE reads and reports it **only after the 4b proof shows the relay is back**, with its sha256. **If the script itself
+dies** (the session is lost, the process is killed), **the dead-man covers it**: its scheduled task deletes the `SG-relay-drop` group after 20 minutes, so the block
+cannot outlive an event, and the missing 4b line in the log marks the event void.
+
+**Fallback if the session does not survive the host restart.** The answer above is that it survives. If SRE's dry run shows otherwise (the session dies with the host),
+the event is run by a **scheduled task the session registers before the block** instead: `Register-ScheduledTask -TaskName 'SG-relay-drop-event' -Action
+(New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File <script path> -EventId <event id> -HostExe <host exe path> -HostPid <host pid> -Evidence <evidence folder>')
+-Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10)) -User 'SYSTEM' -RunLevel Highest`, started by `Start-ScheduledTask`, and removed with
+`Unregister-ScheduledTask -TaskName 'SG-relay-drop-event' -Confirm:$false -ErrorAction SilentlyContinue` afterwards. It runs the same script and nothing else.
+
 ```powershell
 # relay-drop-event.ps1: run by the elevated session on the drop host, one event per run. No secrets are logged.
 param(
