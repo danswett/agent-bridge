@@ -106,7 +106,7 @@ public static class RosterFields
 // from its next snapshot, so the relay's restart or a machine's leaving leaves no session behind.
 public sealed class SessionRegistry(TimeProvider time)
 {
-    sealed record Held(string Epoch, long Seq, DateTimeOffset At, DateTimeOffset ReceivedAt, string Json);
+    sealed record Held(string Epoch, long Seq, DateTimeOffset At, DateTimeOffset ReceivedAt, string Json, bool Announced = false);
     readonly ConcurrentDictionary<(string Account, string Machine), Held> held = new();
 
     // Null when kept, else why not: too-large, bad-record, or stale (not newer than what is held).
@@ -130,7 +130,20 @@ public sealed class SessionRegistry(TimeProvider time)
         }
     }
 
-    public void Drop(string account, string machine) => held.TryRemove((account, machine), out _);
+    public bool Drop(string account, string machine) => held.TryRemove((account, machine), out _);
+
+    // Machines whose record just went a minute without a new snapshot, each once: subscribers are
+    // told they are offline without having to ask. A later put replaces the entry and rearms it.
+    public List<(string Account, string Machine)> Expire()
+    {
+        var now = time.GetUtcNow();
+        var gone = new List<(string, string)>();
+        foreach (var (key, h) in held)
+        {
+            if (!h.Announced && now - h.ReceivedAt > RosterFields.HeartbeatWindow && held.TryUpdate(key, h with { Announced = true }, h)) { gone.Add(key); }
+        }
+        return gone;
+    }
 
     // The account's held machines. Fresh is false once a host has gone a minute without a new
     // snapshot: its sessions are then withheld and it reads as offline, whatever its socket says.

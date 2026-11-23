@@ -181,7 +181,15 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   are dropped when the host's socket closes. `online` is false, and `record` null, when the host
   is gone or has sent nothing for 60 seconds.
 
-Not yet: `registry-subscribe` / `changed`, a later slice of the design.
+* **`registry-subscribe`** (any device, no reply): from then until the socket closes, the relay sends that
+  socket one `registry-changed` frame per change, for its own account only. A client that wants the
+  current state sends `registry-get` after it: the reply proves the subscription is already in place.
+  * `{ t, machine, online: true, record }` for each accepted `registry-put`; refused puts send nothing.
+  * `{ t, machine, online: false, record: null }` when the host's socket closes, or when a held record
+    has had no new snapshot for 60 seconds (checked every second, so within about a minute).
+  * `{ t, machine, removed: true }` when a person's device forgets the machine.
+  A device that never subscribes is never sent one. Frames are sent in order, one at a time, with the same
+  10-second send limit as every other control frame.
 
 The host normally publishes immediately on each authenticated connection, then polls every two seconds
 with a 20-second heartbeat. Pending failed-put backoff is retained across reconnects before that

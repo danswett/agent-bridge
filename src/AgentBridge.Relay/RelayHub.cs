@@ -93,6 +93,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public int WindowFrames;
         public int RosterInFlight;
         public long RegistryGetAt = -2000;
+        public volatile bool RegistrySubscribed;
 
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
@@ -196,6 +197,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
         string end = "closed";
         Exception? endedBy = null;
+        var dropped = false;
         try
         {
             using var hints = conn.ReleaseHint ? await releaseHints.SubscribeAsync(data => conn.SendAsync(data, WebSocketMessageType.Text)) : null;
@@ -209,7 +211,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             lock (devices)
             {
                 roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
-                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { registry.Drop(conn.Account.Id, conn.DeviceId); }
+                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { dropped = registry.Drop(conn.Account.Id, conn.DeviceId); }
                 ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
             }
             // Read before our own close below: this is what the device sent, not our answer.
@@ -219,6 +221,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             socketLog.Information("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
                 conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut, cause);
             await BroadcastPresenceAsync(conn.Account.Id);
+            if (dropped) { await ChangedAsync(conn.Account.Id, new { t = "registry-changed", machine = conn.DeviceId, online = false, record = (object?)null }); }
         }
     }
 
@@ -341,6 +344,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 {
                     await RegistryAsync(conn, devices, m, gt.GetString() == "registry-put");
                 }
+                else if (m.TryGetProperty("t", out var st) && st.GetString() == "registry-subscribe")
+                {
+                    conn.RegistrySubscribed = true;
+                    EnsureRegistrySweeper();
+                }
                 continue;
             }
             if (type != WebSocketMessageType.Binary) { continue; }
@@ -392,6 +400,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             // Only the outcome is logged, never the record.
             log.LogInformation("registry-put {Conn}: {Outcome}", conn.Tag, error ?? "ok");
             await conn.SendJsonAsync(new { t = "registry-result", id, error });
+            if (error is null) { await ChangedAsync(account, new { t = "registry-changed", machine = conn.DeviceId, online = true, record = JsonDocument.Parse(m.GetProperty("record").GetRawText()).RootElement }); }
             return;
         }
         var now = Environment.TickCount64;
@@ -415,6 +424,32 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await conn.SendJsonAsync(new { t = "registry", id, known }, RegistryJson);
     }
 
+    // registry-changed to the account's subscribed sockets, one at a time so a machine's frames keep
+    // their order. A slow socket costs at most the 10 s send limit; one that fails just misses it.
+    async Task ChangedAsync(string account, object frame)
+    {
+        if (!accounts.TryGetValue(account, out var devices)) { return; }
+        foreach (var c in devices.Values.Where(c => c.RegistrySubscribed).ToList())
+        {
+            try { await c.SendJsonAsync(frame, RegistryJson); } catch (Exception) { }
+        }
+    }
+
+    ITimer? registrySweeper;
+
+    // Started by the first subscriber: nothing runs for a relay that nobody watches.
+    void EnsureRegistrySweeper() =>
+        Interlocked.CompareExchange(ref registrySweeper, options.Roster.Time.CreateTimer(_ => _ = SweepRegistryAsync(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)), null);
+
+    async Task SweepRegistryAsync()
+    {
+        try
+        {
+            foreach (var (account, machine) in registry.Expire()) { await ChangedAsync(account, new { t = "registry-changed", machine, online = false, record = (object?)null }); }
+        }
+        catch (Exception e) { log.LogWarning(e, "registry sweep failed"); }
+    }
+
     // A person's device forgetting one of the account's machines that is gone (docs/protocol/roster.md).
     async Task ForgetAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, JsonElement m)
     {
@@ -432,7 +467,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
-        if (error is null) { await RosterChangedAsync(conn.Account.Id); }
+        if (error is null) { await RosterChangedAsync(conn.Account.Id); await ChangedAsync(conn.Account.Id, new { t = "registry-changed", machine = machine!.ToLowerInvariant(), removed = true }); }
     }
 
     // The signed device roster (docs/protocol/devices.md): read it, or offer entries to it. Open to
