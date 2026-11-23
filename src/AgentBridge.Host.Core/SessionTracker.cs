@@ -165,6 +165,10 @@ internal sealed class SessionTracker
     // Tests: how many times the session was built.
     internal int Builds { get; private set; }
 
+    // A blocking Notification (permission_prompt, elicitation_dialog, agent_needs_input) newer than the transcript, with no
+    // tool running to name: Claude waits on the person and writes nothing, so the session is never not responding (#3838).
+    bool _hookBlocked;
+
     // The main agent's own delegates as of the last update, for a history read on another thread:
     // replaced whole, never changed in place.
     public Conversation.HistorySeed MainDelegates { get; private set; } = new(new Dictionary<string, string?>(), new Dictionary<string, string>());
@@ -264,6 +268,7 @@ internal sealed class SessionTracker
             question = question with { AnswerAtMachine = true };
         }
         DateTimeOffset? hintAt = null;
+        _hookBlocked = false;
 
         // A Claude AskUserQuestion the transcript has not written yet (#3838): Claude Code writes it only once it is
         // answered when parallel tool calls follow it, but the claude/ask hook recorded it when it fired. It is shown
@@ -289,6 +294,9 @@ internal sealed class SessionTracker
                     // answer, so it is answered at the machine.
                     question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{CopilotPermission.Plain(tool.Name)}**?" : $"Allow **{CopilotPermission.Plain(tool.Name)}**?\n\n{CopilotPermission.Fence(tool.Summary)}", hookAt, atMachine: true);
                     hintAt = hookAt;
+                    break;
+                case "waiting" when question is null && !(_staleHook is { } old && old.At == hookAt):
+                    _hookBlocked = true;
                     break;
             }
         }
@@ -421,7 +429,7 @@ internal sealed class SessionTracker
     // question (it is waiting on the person) or another attention; any event clears it.
     Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now)
     {
-        if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
+        if (effective != SessionStatus.Working || lastEvent is not { } last || _hookBlocked) { return null; }
         var busy = background || _state.Tools.Current() is not null;
         var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
         if (now - last < after) { return null; }

@@ -18,12 +18,12 @@ public class HookQuestionTests
         public readonly string Transcript;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Session_()
+        public Session_(string? hookStatus = null, DateTimeOffset? hookAt = null)
         {
             Transcript = F.ClaudeTranscript(Id);
-            F.ClaudeRegistration(Id, 900, Transcript);
+            F.ClaudeRegistration(Id, 900, Transcript, hookStatus, hookAt);
             F.Processes.Run(AgentKind.Claude, 900);
-            Source = F.Source();
+            Source = F.Source(stalledAfter: TimeSpan.FromMinutes(10));
         }
 
         public async Task<Session> After(params string[] lines)
@@ -136,5 +136,44 @@ public class HookQuestionTests
         var session = await s.Refresh();
 
         Assert.Null(session.Question);
+    }
+
+    // S3: a Notification Claude is blocked on (permission_prompt, elicitation_dialog, agent_needs_input) with no tool running
+    // leaves the transcript silent, so the session read Working and, after ten minutes, "Not responding".
+    [Fact]
+    public async Task A_session_blocked_on_a_notification_with_no_tool_running_is_never_not_responding()
+    {
+        await using var s = new Session_("waiting", Fixture.T0.AddSeconds(5));
+        await s.After(Claude.User("go", 1));
+
+        s.F.Time.Advance(TimeSpan.FromMinutes(35));
+        var session = await s.Refresh();
+
+        Assert.Null(session.Attention);
+        Assert.Equal(SessionStatus.Working, session.Status);
+    }
+
+    [Fact]
+    public async Task A_blocking_notification_older_than_the_transcript_does_not_hold_back_not_responding()
+    {
+        await using var s = new Session_("waiting", Fixture.T0.AddSeconds(5));
+        await s.After(Claude.User("go", 1), Claude.Assistant(20, "end_turn", Claude.Text("working on it")), Claude.User("carry on", 21));
+
+        s.F.Time.Advance(TimeSpan.FromMinutes(11));
+        var session = await s.Refresh();
+
+        Assert.Equal(AttentionKind.NotResponding, session.Attention?.Kind);
+    }
+
+    [Fact]
+    public async Task A_session_with_no_blocking_notification_still_reads_not_responding_when_silent()
+    {
+        await using var s = new Session_();
+        await s.After(Claude.User("go", 1));
+
+        s.F.Time.Advance(TimeSpan.FromMinutes(11));
+        var session = await s.Refresh();
+
+        Assert.Equal(AttentionKind.NotResponding, session.Attention?.Kind);
     }
 }
