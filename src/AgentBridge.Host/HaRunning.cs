@@ -25,23 +25,22 @@ public sealed class HaRunning : IAsyncDisposable
     internal const string Principal = "ha:connector";
 
     // What the connector is given for each action, composed here only (tests drive these very delegates, and a source scan keeps
-    // every other call to the answer, stop and launch services out of the HA files). Each is audited, and with no audit log it
-    // refuses rather than act unaudited: an action from the card is never taken on credit. OWNER CHANGE, pending (ha-gate-counters.md).
-    const string NoAudit = "the audit log is not available, so an action from Home Assistant is refused";
-
+    // every other call to the answer, stop and launch services out of the HA files). OWNER DECISION (b), via the chief: send anyway
+    // and log the failure. Each is audited; when its audit row cannot be written the action is STILL performed and recorded as
+    // audit_write_failed, which the gate counts as an unaudited HA dispatch (design/ha-gate-counters.md). Only a host with no audit log
+    // at all (never so in production) takes the three plain lines below, which the source scan allows by their exact text.
     internal static Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? AnswerDelegate(ISessionAnswerer? answers, AgentAuditLog? audit) =>
         answers is null or UnsupportedPlatformAnswerer ? null : audit is not null ? HaAnswerAudit.Wrap(answers, audit)
-            : (_, _) => Task.FromResult(new AgentBridge.Protocol.AnswerResult(AgentBridge.Protocol.AnswerOutcome.Refused, NoAudit));
+            : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
 
     internal static Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? StopDelegate(ISessionStopper? stops, ISessionSource source, AgentAuditLog? audit) =>
         stops is null or UnsupportedPlatformStopper ? null : stops is StopService audited && audit is not null
             ? (request, ct) => StopAudit.StopAsync(audited, source, audit, request, "legacy-ha", Principal, ct)
-            : (_, _) => Task.FromResult(new AgentBridge.Protocol.StopResult(AgentBridge.Protocol.StopOutcome.Refused, NoAudit));
+            : stops.StopAsync;
 
     internal static Func<AgentBridge.Protocol.LaunchRequest, CancellationToken, Task<AgentBridge.Protocol.LaunchResult>> LaunchDelegate(AgentBridge.Host.Delivery.Launch.ISessionLauncher launcher, AgentAuditLog? audit) =>
-        (request, ct) => audit is null ? Task.FromResult(new AgentBridge.Protocol.LaunchResult(AgentBridge.Protocol.LaunchOutcome.Refused, NoAudit))
-            : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", audit, new("legacy-ha", "ha-component", Principal, audit.ControlWriterRun), ct);
-    public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor? usage,
+        (request, ct) => audit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
+            : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", audit, new("legacy-ha", "ha-component", Principal, audit.ControlWriterRun), ct);    public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor? usage,
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,

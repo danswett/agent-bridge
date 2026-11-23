@@ -54,6 +54,17 @@ public sealed partial class AgentAnswerFlowTests
         Assert.Contains("ha-component:local", listing.ToString());
     }
 
+    [Fact]
+    public async Task With_no_audit_log_the_HA_answer_delegate_still_types()
+    {
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        var answer = HaRunning.AnswerDelegate(Answerer(), null)!;
+
+        Assert.Equal(AnswerOutcome.Delivered, (await answer(Request(ClaudeId, "toolu_1", Chosen), CancellationToken.None)).Outcome);
+
+        Assert.NotEmpty(injector.Plans);
+    }
+
     // OWNER DECISION (b), via the chief: when the audit row cannot be written the HA answer is STILL typed, and the failure is recorded
     // as audit_write_failed in the host diagnostic log (never the audit file) plus an in-memory count the next successful write flushes.
     [Fact]

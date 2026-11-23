@@ -280,15 +280,61 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task With_no_audit_log_the_HA_stop_delegate_refuses_instead_of_stopping()
+    public async Task With_no_audit_log_the_HA_stop_delegate_still_stops()
     {
         var stopper = Stopper();
         await WorkingAsync();
+        var stop = HaRunning.StopDelegate(stopper, source, null)!;
+        var arm = await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None);
 
-        Assert.Equal(StopOutcome.Refused, (await HaRunning.StopDelegate(stopper, source, null)!(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None)).Outcome);
+        Assert.Equal(StopOutcome.Ended, (await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm }, CancellationToken.None)).Outcome);
+    }
 
-        Assert.Empty(injector.Plans);
-        Assert.Empty(control.Terminated);
+    // The audit is readable but refuses the intent (its quota is exhausted): the stop is still performed and recorded as unaudited.
+    [Fact]
+    public async Task An_HA_stop_is_still_performed_when_the_audit_is_readable_but_refuses_the_intent()
+    {
+        var audit = new AgentAuditLog(StopAuditProfile, clock, logged.Enqueue, maxBytes: 0);
+        var stopper = Stopper();
+        await WorkingAsync();
+        var stop = HaRunning.StopDelegate(stopper, source, audit)!;
+        var arm = await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None);
+
+        Assert.Equal(StopOutcome.Ended, (await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm }, CancellationToken.None)).Outcome);
+
+        Assert.Contains(logged, l => l.StartsWith("audit_write_failed kind=stop ", StringComparison.Ordinal));
+        Assert.True(audit.PendingUnauditedHa >= 1);
+    }
+
+    // OWNER DECISION (b): an HA stop is still performed when its audit row cannot be written; audit_write_failed is logged and the
+    // count is flushed once at the next successful audit write, which the gate counts as an unaudited HA dispatch (FAIL).
+    [Fact]
+    public async Task An_HA_stop_is_still_performed_when_the_audit_cannot_be_written_and_counted_once_when_it_next_writes()
+    {
+        Directory.CreateDirectory(StopAuditProfile);
+        var blocker = Path.Combine(StopAuditProfile, AgentAuditLog.FolderName);
+        File.WriteAllText(blocker, "not a folder");
+        var audit = new AgentAuditLog(StopAuditProfile, clock, logged.Enqueue);
+        var stopper = Stopper();
+        await WorkingAsync();
+        var stop = HaRunning.StopDelegate(stopper, source, audit)!;
+        var arm = await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None);
+
+        Assert.Equal(StopOutcome.Ended, (await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm }, CancellationToken.None)).Outcome);
+
+        // One event per press that reached the host over HA unaudited: the arm press and the confirming press.
+        var lines = logged.Where(l => l.StartsWith("audit_write_failed", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, lines.Length);
+        Assert.All(lines, line => Assert.Matches(@"^audit_write_failed kind=stop session=[A-Za-z0-9._-]{1,64} at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$", line));
+        Assert.Equal(2, audit.PendingUnauditedHa);
+        File.Delete(blocker);
+        var pending = audit.PendingUnauditedHa;
+        Assert.True(audit.Append(new AgentAuditEntry("local", "r1", "someone", [], "agent.note", "x", "ok")));
+        Assert.True(audit.Append(new AgentAuditEntry("local", "r2", "someone", [], "agent.note", "x", "ok")));
+        Assert.Equal(pending.ToString(), Assert.Single(StopRows(), r => r.Action == "audit_write_failed").Target);
+        var report = GateAuditProjection.ReadWindow(StopAuditProfile, clock.GetUtcNow().AddHours(-1));
+        Assert.Equal(pending, report.LegacyHaDispatches);
+        Assert.Equal(GateVerdictKind.Fail, GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0)).Kind);
     }
 
     [Fact]

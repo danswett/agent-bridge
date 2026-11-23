@@ -18,11 +18,22 @@ public sealed class HaAuditedPathGuardTests
     // What HaRunning must call, so Start cannot bypass the composed delegates.
     static readonly string[] Required = ["AnswerDelegate(answers, launchAudit)", "StopDelegate(stops, source, launchAudit)", "LaunchDelegate(launcher, launchAudit)"];
 
+    // Owner decision (b): a host with no audit log at all still performs the action; these three lines in HaRunning.cs, by their exact
+    // trimmed text, are the only plain calls the scan allows. Anything else, with or without a comment, is red.
+    static readonly string[] AllowedNoAuditLines =
+    [
+        ": (request, ct) => answers.AnswerAsync(request, ct, sender: \"home-assistant\");",
+        ": stops.StopAsync;",
+        "(request, ct) => audit is null ? launcher.LaunchAsync(request, \"home-assistant\", ct)",
+    ];
+
     static string Strip(string text) => Regex.Replace(Regex.Replace(text, @"/\*.*?\*/", "", RegexOptions.Singleline), @"//[^\r\n]*", "");
 
     // The problems in one source file. The connector's own sender is named in exactly one place, HaAnswerAudit.cs.
     internal static List<string> Check(string path, string text)
     {
+        if (path.EndsWith("HaRunning.cs", StringComparison.Ordinal))
+        { text = string.Join('\n', text.Split('\n').Where(l => !AllowedNoAuditLines.Contains(l.Trim()))); }
         var code = Strip(text);
         var problems = Forbidden.Where(f => f.Pattern.IsMatch(code)).Select(f => $"{path}: {f.What}").ToList();
         if (!path.EndsWith("HaAnswerAudit.cs", StringComparison.Ordinal) && Regex.IsMatch(code, @"\bsender:")) { problems.Add($"{path}: a direct sender"); }
