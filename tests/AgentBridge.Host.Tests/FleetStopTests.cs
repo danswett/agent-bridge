@@ -337,6 +337,54 @@ public sealed class FleetStopTests : IDisposable
         using var parsed = JsonDocument.Parse(output.ToString());
         return (exit, parsed.RootElement.Clone());
     }
+    // A stop request id is remembered from the audit, so a host restart (a fresh StopService, an empty
+    // memory) never dispatches it again (fleet-grants.md, stop replay and audit).
+    AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null) =>
+        new("local", request.ToString(), credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, session ?? id, outcome,
+            Gate: new(1, Guid.NewGuid(), Guid.Empty, 0, phase, "local", "agent",
+                StopAudit.Identity(Guid.Parse(id), 700, started), outcome == "attempted" ? "none" : outcome == "ended" ? "none" : "refused"))
+        { Grant = (grantId ?? grant.Id).ToString() };
+    [Fact]
+    public async Task An_ended_stop_replays_from_the_audit_after_a_restart_without_dispatching()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(request, "intent", "attempted")));
+        Assert.True(audit.Append(Row(request, "terminal", "ended")));
+        var receipt = await End(request: request);
+        Assert.Equal(("ended", null, 0, 0), (receipt.Outcome, receipt.Reason, injector.Calls, control.Terminations));
+        Assert.Contains(GateAuditProjection.Load(Folder).Rows, r => r.Action == "fleet.end.replay" && r.Request == request.ToString());
+    }
+    [Fact]
+    public async Task A_stop_whose_outcome_was_never_recorded_is_unconfirmed_and_not_dispatched_again()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.True(new AgentAuditLog(Folder).Append(Row(request, "intent", "attempted")));
+        var receipt = await End(request: request);
+        Assert.Equal(("unconfirmed", "duplicate-id", 0, 0), (receipt.Outcome, receipt.Reason, injector.Calls, control.Terminations));
+    }
+    [Fact]
+    public async Task A_request_id_already_bound_to_another_grant_is_refused()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(request, "intent", "attempted", grantId: Guid.NewGuid())));
+        Assert.True(audit.Append(Row(request, "terminal", "ended", grantId: Guid.NewGuid())));
+        var receipt = await End(request: request);
+        Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_request_refused_before_dispatch_may_be_sent_again_with_the_same_id()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.True(new AgentAuditLog(Folder).Append(Row(request, "terminal", "refused")));
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        Assert.Equal(1, injector.Calls);
+    }
     sealed class Chan : IProtocolChannel
     {
         public string PeerId => "fixture";
