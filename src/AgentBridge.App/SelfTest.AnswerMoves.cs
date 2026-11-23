@@ -152,8 +152,17 @@ static partial class SelfTest
                     clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
                 });
                 held = armed;
+                // For the failure's message only, after the verdict is read: how long the hold lasts, to tell the guard's own half second
+                // from one that keeps arming (win-arm64, main's 40c35191 held it after a quiet and a strict look).
+                var holdFor = "";
+                if (held)
+                {
+                    var waited = System.Diagnostics.Stopwatch.StartNew();
+                    holdFor = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3))
+                        ? $"; released {waited.ElapsedMilliseconds} ms after the look" : "; still held 3 s after the look";
+                }
                 if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
-                check(settled && setupSettled && quiet && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; quiet: {quiet}; focused: {focused}; shown: {clearShown}; held: {held})");
+                check(settled && setupSettled && quiet && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; quiet: {quiet}; focused: {focused}; shown: {clearShown}; held: {held}{holdFor})");
 
                 // A press while the person's own act still holds, with their question grown since
                 // the last layout pass: the pass that press brings is read with nothing exempt, so

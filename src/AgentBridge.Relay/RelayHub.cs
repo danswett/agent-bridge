@@ -21,6 +21,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     static readonly JsonSerializerOptions RegistryJson = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
     readonly SessionRegistry registry = new(options.Roster.Time);
+    readonly ConcurrentDictionary<string, TokenBucket> registryReads = new();
     readonly LogSampler socketLog = new(log, options.LogLinesPerMinute, options.LogTime);
     long presenceVersion;
 
@@ -95,7 +96,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
         public int RosterInFlight;
-        public long RegistryGetAt = -2000;
+        public TokenBucket? RegistryReads;
         public volatile bool RegistrySubscribed;
         RegistryOutbox? registryOutbox;
 
@@ -434,9 +435,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             await conn.SendJsonAsync(new { t = "registry-result", id, error });
             return;
         }
-        var now = Environment.TickCount64;
-        if (now - conn.RegistryGetAt < 2000) { await conn.SendJsonAsync(new { t = "registry", id, error = "slow-down" }); return; }
-        conn.RegistryGetAt = now;
+        // Socket burst first, then the account's shared ceiling (RegistryReadLimit, #1396).
+        var time = options.Roster.Time;
+        conn.RegistryReads ??= new TokenBucket(RegistryReadLimit.SocketBurst, RegistryReadLimit.SocketRefillPerSecond, time);
+        var accountReads = registryReads.GetOrAdd(account, _ => new TokenBucket(RegistryReadLimit.AccountBurst, RegistryReadLimit.AccountRefillPerSecond, time));
+        if (!conn.RegistryReads.TryTake() || !accountReads.TryTake()) { await conn.SendJsonAsync(new { t = "registry", id, error = "slow-down" }); return; }
         var parts = new List<Dictionary<string, object?>>();
         foreach (var (machine, json, lastSeen, fresh) in registry.Read(account))
         {
