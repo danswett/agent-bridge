@@ -137,7 +137,7 @@ resolve names. The ID-first refusal contract above takes precedence for identity
 | `delivered` | success; the only success |
 | `refused` with `badMachine` or `noSuchMachine` | final identity failure naming the device ID; no name, fragment or HA fallback |
 | `off` (including the mode turned off while the signing key was made; nothing sent) or `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name) | falls back to Home Assistant once |
-| `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | no fallback over any transport: the first message may already have been typed, so a resend could deliver it twice. It is reported once from the host's durable status record, which the sender pulls by request id |
+| `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | no fallback over any transport: the first message may already have been typed, so a resend could deliver it twice. It is reported from the host's memory-only status store, which the sender pulls by request id (after a host restart the lookup answers unknown, reported as unconfirmed) |
 | `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant once; such a refusal means nothing was typed, which is its own proof (there is no separate `NoKeysSent` code). Never after a queued (Accepted) or `unconfirmed` result |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
