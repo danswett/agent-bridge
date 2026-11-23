@@ -45,6 +45,17 @@ publisher. This slice changes neither verification nor selection.
 
 Own-account messaging exception (owner, Nov 20, 2026, 21:22 PT): [AP5-lite](../protocol/agent-lite.md) local `fleet.find`/`fleet.list` uses fresh present-host rows marked `trust: "own-account"` while messaging is on, even without a verified roster. `found.session.trust` and list-row `trust` authorize messaging routing only, never launches, stop, phone approval or remote manage. Off or kill refuses routing as `off`; presence and registry must stay bound to one current connection snapshot whose account still matches the host's current identity account, or the read refuses `notSameAccount`. The actual send still requires own account and matching channel key. Statements below forbidding unsigned routing describe the roster-governed path and future replacement selection, not this temporary exception.
 
+Reader core, slice RC (#2462, part of #1776): `FleetRegistryReader` (`src/AgentBridge.Host/Fleet/FleetRegistryReader.cs`)
+holds registry state from `registry-get` replies and `registry-changed` frames (order rule, 60 s `at` rule, purge on
+`removed` and on a get that no longer lists a machine, 24 h cache on the monotonic clock). It has a verification seam for
+`hostSign` and nothing is wired to `fleet.list` or `fleet.find` yet; records stay unverified.
+
+Owner decisions (relayed by Engineering, Nov 22, 2026 Pacific): S8 is kept: Home Assistant may remain possible as an
+optional Slipgates client on the normal client protocol (no side door, no extra privileges); nothing in Home Assistant
+is required for Slipgates. The slice 11 dual run stays the gate before the HA connector is removed (S7). The suspension of
+`hostSign` (the Nov 20 own-account messaging exception above) stays temporary; R/#1776 remains a later slice. This
+replaces an earlier relayed note that S8 was dropped.
+
 ## Summary in plain English
 
 **The problem.** Today only Home Assistant (HA) knows, in one place, which sessions exist on
@@ -257,8 +268,9 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 The relay's own received-time/sequence checks are not independent reader verification
 (`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
-in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
-`at` rule, `registry-subscribe` and signature checks are still to come.
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643).
+`FleetRegistryReader` (slice RC) applies the 60 s `at` rule, `registry-changed` frames and
+`removed` purges the same way; it is not yet wired to `fleet.list`. Signature checks are still to come (#1776).
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
   (a session that ends is sent at once, never held for the debounce),
