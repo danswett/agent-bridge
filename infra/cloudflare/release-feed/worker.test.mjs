@@ -54,6 +54,15 @@ r = await get(`${P}?per_page=10&page=1`);
 assert.equal(r.status, 200);
 assert.ok(Number(r.headers.get('age')) >= 600);
 
+// #3870: the cache key is the public zone URL, so purge-by-URL of that URL clears the entry, whichever host asked.
+assert.ok([...store.keys()].every((k) => k.startsWith('https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=')),
+  'every key is a releases.slipgates.com URL');
+assert.ok(store.has('https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1'), 'exact purgeable URL');
+upstream = [ok('[{"tag_name":"z"}]')];
+await worker.fetch(new Request(`https://agent-bridge-release-feed.example.workers.dev${P}?per_page=12&page=1`), {}, ctx);
+await Promise.all(pending.splice(0));
+assert.ok(store.has('https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=12&page=1'), 'workers.dev request uses the zone key');
+
 // no cached copy and a failing refresh: an error, never an empty success
 upstream = [{ status: 500, body: 'x' }];
 r = await get(`${P}?per_page=7&page=1`);

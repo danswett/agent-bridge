@@ -6,7 +6,10 @@ unauthenticated GitHub rate limit. It serves one route only:
 `GET /repos/danswett/agent-bridge/releases?per_page=N&page=N` (per_page 1-100, page 1-1000)
 
 - Fresh for 300 seconds at the edge without a token, or 60 seconds when the optional `GITHUB_TOKEN`
-  Worker secret is present; keyed on both `per_page` and `page`.
+  Worker secret is present; keyed on both `per_page` and `page`. The key is the public zone URL
+  (`https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=N&page=N`), so a Cloudflare
+  purge-by-URL of that URL can clear an entry (#3870). Whether a purge clears a Cache API entry under a zone-host key
+  is not proven here; it needs one live check by the owner or a Cloudflare session.
 - Every list answer carries a content-based `ETag` and `Age`: 0 after a successful GitHub fetch or
   revalidation, otherwise the cache age in seconds (#1163). `If-None-Match` matching the current list
   returns 304 with no body and the same `ETag` and real `Age`, including when serving stale.

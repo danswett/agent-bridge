@@ -4,6 +4,8 @@
 
 const UPSTREAM = 'https://api.github.com/repos/danswett/agent-bridge/releases';
 const PATH = '/repos/danswett/agent-bridge/releases';
+// The zone host. The cache key is the public URL on it, so a Cloudflare purge-by-URL of that URL clears the entry (#3870).
+const ZONE_HOST = 'releases.slipgates.com';
 const FRESH_SECONDS = 300;
 const STALE_SECONDS = 86400;
 const FETCHED_AT = 'x-fetched-at';
@@ -74,8 +76,9 @@ export default {
     const page = intParam(url, 'page', 1, 1000);
     if (perPage === null || page === null) return failure(400, 'bad per_page or page');
 
-    // per_page and page are both part of the key, so different pages never share an answer.
-    const cacheKey = new Request(`https://releases-cache.invalid${PATH}?per_page=${perPage}&page=${page}`);
+    // per_page and page are both part of the key, so different pages never share an answer. The key is always the
+    // zone URL, whichever host asked, so purge-by-URL of https://releases.slipgates.com/... reaches it (#3870).
+    const cacheKey = new Request(`https://${ZONE_HOST}${PATH}?per_page=${perPage}&page=${page}`);
     const cache = caches.default;
     const cached = await cache.match(cacheKey);
     const now = Date.now();
