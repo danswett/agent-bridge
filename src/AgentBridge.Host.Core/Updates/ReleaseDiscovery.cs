@@ -242,7 +242,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
                     };
                     Write(state);
                     log?.Invoke($"update check: the release list came from the CDN, from its copy of {Span(a)} ago");
-                    if (holding && state.Problem == Problems.Limited && (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
+                    if (holding && state.Problem == Problems.Limited && RelayAnchor(state) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
                     return relayed;
                 }
                 log?.Invoke($"update check: the CDN's release list was not used, as {refused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
@@ -302,7 +302,15 @@ public sealed partial class ReleaseDiscovery : IDisposable
     {
         var sane = Sane(state, now);
         if (sane != state) { Write(sane); }
-        return !unsaved && !sane.RelayExpired && (sane.GitHubAnsweredAt ?? sane.RelayBootstrapAt) is { } start && start <= now && now - start < GithubRelayAtMost;
+        return !unsaved && !sane.RelayExpired && RelayAnchor(sane) is { } start && start <= now && now - start < GithubRelayAtMost;
+    }
+
+    // What the relay grace counts from: the later of when GitHub last answered here (or the rate-limit bootstrap) and when the relay last
+    // served a verified halt policy.
+    static DateTimeOffset? RelayAnchor(State state)
+    {
+        var github = state.GitHubAnsweredAt ?? state.RelayBootstrapAt;
+        return github is { } g && state.RelayVerifiedAt is { } v ? (g > v ? g : v) : github ?? state.RelayVerifiedAt;
     }
 
     State BackedOff(State state, Answer answer, DateTimeOffset now, string url)
@@ -334,7 +342,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
         NotBefore = state.NotBefore > now + LongestWait + BackoffJitter ? now : state.NotBefore,
         RelayBootstrapAt = state.RelayBootstrapAt > now || state.GitHubAnsweredAt > now ? DateTimeOffset.MinValue : state.RelayBootstrapAt,
         GitHubAnsweredAt = state.GitHubAnsweredAt > now ? null : state.GitHubAnsweredAt,
-        RelayExpired = state.RelayExpired || (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && now - start >= GithubRelayAtMost,
+        RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt,
+        RelayExpired = state.RelayExpired || RelayAnchor(state with { RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt }) is { } start && now - start >= GithubRelayAtMost,
     };
 
     internal sealed record Quota(int Remaining, DateTimeOffset At);
@@ -706,6 +715,9 @@ public sealed partial class ReleaseDiscovery : IDisposable
         public DateTimeOffset? GitHubAnsweredAt { get; init; }
         // Only this repository's GitHub list can start or clear the missing-answer bootstrap.
         public DateTimeOffset? RelayBootstrapAt { get; init; }
+        // When the relay last served a halt policy that passed the whole verification here (HaltPolicy.cs): it extends the relay grace as
+        // a GitHub answer does (owner decision, Chief, #2225, Nov 23). Never a GitHub answer: GitHubAnsweredAt stays GitHub's alone.
+        public DateTimeOffset? RelayVerifiedAt { get; init; }
         public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }

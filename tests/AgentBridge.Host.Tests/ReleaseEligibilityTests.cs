@@ -618,6 +618,56 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.False(source.Snapshot.Fresh);
     }
 
+    // Owner decision (Chief, #2225, Nov 23): a halt list read from the relay that passes the whole verification (the same one as
+    // GitHub's) also extends the relay grace, as a GitHub answer does. Residual, in the design doc: a compromised relay that keeps
+    // serving an older but verified list keeps the grace open.
+    [Fact]
+    public async Task A_verified_relay_policy_extends_the_relay_grace_past_the_24_hours_since_GitHub_answered()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+
+        // GitHub's policy read is refused every hour for 30 hours; the relay's verified list renews it each time.
+        for (var hour = 1; hour <= 30; hour++)
+        {
+            time.Advance(TimeSpan.FromHours(1));
+            await source.ReadAsync(default);
+            Assert.True(source.Snapshot.Fresh, $"not fresh at hour {hour}");
+        }
+        Assert.Equal(30, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList));
+    }
+
+    [Theory]
+    [InlineData("older")]
+    [InlineData("omits a known halt")]
+    [InlineData("over an hour old")]
+    public async Task A_relay_policy_that_is_older_omits_a_known_halt_or_is_over_an_hour_old_does_not_extend_the_grace(string why)
+    {
+        var known = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2350"]}""");
+        var older = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var omits = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2348"]}""");
+        var (relay, carrier) = why == "older" ? (Metadata("2349", older), ("2349", older)) : why == "omits a known halt" ? (Metadata("2351", omits), ("2351", omits)) : (Metadata("2350", known), ("2350", known));
+        var limited = false;
+        var age = why == "over an hour old" ? TimeSpan.FromMinutes(61) : TimeSpan.Zero;
+        var handler = HeldGitHub(known, () => relay, () => age, () => limited, "2350", carrier);
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+        await source.ReadAsync(default);
+        limited = true;
+
+        // Hourly for 25 hours: nothing the relay sends moves the grace, so it ends 24 hours after GitHub answered.
+        for (var hour = 1; hour <= 23; hour++) { time.Advance(TimeSpan.FromHours(1)); await source.ReadAsync(default).ContinueWith(_ => { }); }
+        var asked = handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList);
+        time.Advance(TimeSpan.FromHours(2));
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+
+        Assert.False(source.Snapshot.Fresh);
+        Assert.Equal(asked, handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList)); // not asked once the grace ended
+        Assert.Contains("0.1.2350", source.KnownHalts);
+    }
+
     [Fact]
     public async Task A_later_GitHub_answer_replaces_a_relay_renewal()
     {
@@ -639,47 +689,48 @@ public sealed class ReleaseEligibilityTests : IDisposable
         Assert.Equal(2, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
     }
 
+    // Owner decision (Chief, #2225, Nov 23) replaces the old cap: a verified relay renewal moves the grace anchor to itself, so it is fresh for the
+    // six hours from its own copy (not cut off at 24 hours after GitHub last answered) and the grace then ends 24 hours after it.
     [Fact]
-    public async Task A_relay_renewal_is_never_fresh_past_the_end_of_the_relay_grace()
+    public async Task A_verified_relay_renewal_is_fresh_for_six_hours_from_its_copy_and_the_grace_then_counts_from_it()
     {
         var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
         await GitHubAnswersTheReleaseList(handler);
-        var graceEnd = time.GetUtcNow() + ReleaseDiscovery.GithubRelayAtMost;
         time.Advance(TimeSpan.FromHours(20));
         var source = Policy(handler);
+        var arrived = time.GetUtcNow();
 
         await source.ReadAsync(default);
 
-        // Stamped so that it is stale a revalidation period before the grace ends, not six hours after the read.
-        Assert.Equal(graceEnd - ReleaseDiscovery.GithubRevalidateEvery, source.Snapshot.At);
+        Assert.Equal(arrived, source.Snapshot.At);
         Assert.True(source.Snapshot.Fresh);
-        time.AdjustTime(graceEnd);
+        time.AdjustTime(arrived + ReleaseDiscovery.GithubRevalidateEvery - TimeSpan.FromMinutes(1));
+        Assert.True(source.Snapshot.Fresh);
+        time.AdjustTime(arrived + ReleaseDiscovery.GithubRevalidateEvery);
         Assert.False(source.Snapshot.Fresh);
         Assert.Contains("0.1.2349", source.KnownHalts);
     }
 
-    // Not stale on arrival: a renewal is stamped graceEnd minus six hours, so one that arrives at any time inside the grace is
-    // fresh from then until the grace ends, including one arriving after the eighteenth hour.
+    // Not stale on arrival, whenever in the grace it comes: a verified renewal counts from its own copy, so it is fresh for six hours
+    // from its arrival, including one arriving after the eighteenth hour.
     [Theory]
     [InlineData(1)]
     [InlineData(17)]
     [InlineData(18)]
     [InlineData(23)]
-    public async Task A_relay_renewal_arriving_inside_the_grace_is_fresh_until_the_grace_ends(int hoursAfterGitHubAnswered)
+    public async Task A_relay_renewal_arriving_inside_the_grace_is_fresh_for_six_hours_from_its_arrival(int hoursAfterGitHubAnswered)
     {
         var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
         var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
         await GitHubAnswersTheReleaseList(handler);
-        var graceEnd = time.GetUtcNow() + ReleaseDiscovery.GithubRelayAtMost;
         time.Advance(TimeSpan.FromHours(hoursAfterGitHubAnswered));
         var source = Policy(handler);
 
         var arrived = time.GetUtcNow();
         await source.ReadAsync(default);
 
-        // Fresh for the six hours, or until the grace ends if that comes first: never stale on arrival.
-        var staleAt = arrived + ReleaseDiscovery.GithubRevalidateEvery < graceEnd ? arrived + ReleaseDiscovery.GithubRevalidateEvery : graceEnd;
+        var staleAt = arrived + ReleaseDiscovery.GithubRevalidateEvery;
         Assert.True(source.Snapshot.Fresh);
         time.AdjustTime(staleAt - TimeSpan.FromMinutes(1));
         Assert.True(source.Snapshot.Fresh);

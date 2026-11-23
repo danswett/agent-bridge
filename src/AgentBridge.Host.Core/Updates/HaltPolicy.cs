@@ -92,9 +92,13 @@ public sealed partial class ReleaseDiscovery
                         if (omitted) { log?.Invoke("update policy: a relay policy that omits a known halt was refused; known halts retained"); }
                         else if (policy.Policy is null || verified.Release >= policy.Policy.Release)
                         {
-                            // Stale a revalidation period before the relay grace ends, so a halt it hides lasts no
-                            // longer than the grace (the 6 hours of freshness never run past its end).
-                            var graceEnd = (state.GitHubAnsweredAt ?? state.RelayBootstrapAt)!.Value + GithubRelayAtMost;
+                            // Owner decision (Chief, #2225, Nov 23): a halt list the relay served that passed the whole verification
+                            // here extends the relay grace as a GitHub answer does. An older list, one that omits a known halt,
+                            // one past its Age or one that failed verification never reaches this line.
+                            state = state with { RelayVerifiedAt = now };
+                            // Stale a revalidation period before the relay grace ends, so the 6 hours of freshness never run
+                            // past its end (the grace now counts from the later of GitHub's last answer and this).
+                            var graceEnd = RelayAnchor(state)!.Value + GithubRelayAtMost;
                             policy = policy with { Policy = verified, At = Earlier(now - relayed.Age, graceEnd - GithubRevalidateEvery), ETag = null, Verified = policy.Attempt };
                             Renewed($"the relay's list, its copy {Span(relayed.Age)} old; {GitHubSaid(answer)}", policy);
                         }

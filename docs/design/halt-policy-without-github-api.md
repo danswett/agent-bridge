@@ -81,12 +81,12 @@ one `halts.json` whose size and sha256 the list names, **downloaded from `github
 strict body. **The relay path never clears a halt:** a relay policy that omits any halt already known is
 refused whole, and an older release than the one known is ignored; only GitHub's own answer can
 clear one (a reviewed edit). Any failure leaves the policy unrenewed. **The renewal is stamped
-`min(now - Age, graceEnd - GithubRevalidateEvery)`**, where `graceEnd` is `GithubRelayAtMost` after
-GitHub last answered here, so its six hours of freshness (also at action time, in the app and the host)
-never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
+`min(now - Age, graceEnd - GithubRevalidateEvery)`**, where `graceEnd` is `GithubRelayAtMost` after the later of
+GitHub having last answered here and the relay having last served a verified halt policy (below), so its six hours of freshness
+(also at action time, in the app and the host) never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
 the read. GitHub's own answer always wins, and it is asked first every hour.
 
-**Widened Nov 23 (Engineering R8b, P0 on one machine, v0.1.7522): needs the owner's or Chief's acknowledgement.** The Nov 22 approval below
+**Widened Nov 23 (Engineering R8b, P0 on one machine, v0.1.7522): owner-approved (Nov 23, relayed by Engineering R8b; the Chief records it on #2225, and its link goes here once that comment exists).** The Nov 22 approval below
 names refusals (403 and 429). On that machine the policy read failed for another reason (its 100-release list was past the 4 MiB cap, a
 status-0 failure), so no refusal ever reached the relay and the policy aged out; the same would hold for a 5xx or a timeout. The
 relay is now tried on any failed GitHub policy read, with every bound above unchanged (open grace, `Age` at most an hour, the carrier
@@ -105,6 +105,21 @@ also logs ONE line: `update policy: renewed from GitHub, release 0.1.N, At=<ISO 
 machine (one failed attempt during an outage, with the relay or the next hourly try renewing it), so read a machine by its renewal
 lines: a policy that is current has a renewal line within the last six hours, and one with only `not renewed` lines for longer than
 that is the stale case.
+
+**Grace extension (owner decision, Chief, Nov 23, recorded on #2225):** a halt policy the
+relay served that passes the whole verification here also extends the relay grace, as a GitHub answer does. "Verified" means the same
+checks as GitHub's answer (the carrier named by the list, downloaded from `github.com`, its size and sha256 matching what the list
+names, the strict body), the relay's own 200 with an `Age` of at most an hour, no halt already known omitted, and a release not older
+than the one known; this is a digest check, not a signature, as the signed anchor below is still not built. State: `relayVerifiedAt`
+in `release-discovery.json`; the grace counts from the later of `gitHubAnsweredAt` (or the rate-limit bootstrap) and it, and
+`gitHubAnsweredAt` stays GitHub's alone. An older list, one that omits a known halt, one over its `Age`, or one that fails
+verification moves nothing. It still never removes a known halt.
+
+**Residual, recorded (Nov 23):** because each verified read now moves the grace, the 24-hour bound on a hidden halt no longer holds
+while the relay keeps answering. A compromised or stale relay that keeps serving an older but still verified list (the same release as the
+one known, its `Age` within the hour) keeps the grace open, and a NEWER halt stays hidden from this machine until GitHub's own policy read
+answers again, the relay stops, or the compromise is removed. It can never forge a halt or clear a known one. The signed anchor below
+remains the real fix.
 
 **Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
