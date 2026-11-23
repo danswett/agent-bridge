@@ -58,9 +58,9 @@ internal static class GateAuditProjection
     }
 
     // The retirement counters over a time window (owner decision, Nov 22): every operation whose first row is at or
-    // after `since`, whatever its run. A restart is a new start date. Trimmed old evidence breaks coverage only when a
-    // stream's retained gate rows begin after the window start (TrimmedIntoWindow), because only then could rows in the
-    // window have been lost.
+    // after `since`, whatever its run. A restart is a new start date. Evidence trimmed by retention makes the answer
+    // INCOMPLETE only when a stream's retained gate rows begin after the window start (TrimmedIntoWindow), because only then
+    // could rows in the window have been lost.
     // Whether trimming could have removed evidence inside the window. Launches live in launches-*.jsonl and every other
     // action in agents-*.jsonl, each with its own head and retained floor, so each stream is judged only from its own gate
     // rows: a stream trimmed to a floor above zero whose oldest retained gate row begins after the window start (or that
@@ -82,7 +82,9 @@ internal static class GateAuditProjection
             boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
         var launchesRetained = AgentAuditLog.RetainedThrough(Path.Combine(profile, AgentAuditLog.FolderName), launch: true);
         var trimmedIntoWindow = TrimmedIntoWindow(rows, retained, launchesRetained, since);
-        return Project(rows, complete && !adopted, Guid.Empty, coverage: coverage || trimmedIntoWindow, retainedThrough: retained, since: since);
+        var report = Project(rows, complete && !adopted, Guid.Empty, coverage: coverage, retainedThrough: retained, since: since);
+        // Trimmed evidence is missing evidence, not a proven break: INCOMPLETE. A coverage-break fault the heads report stays a FAIL.
+        return trimmedIntoWindow ? report with { IncompleteReasons = [.. report.IncompleteReasons, "retention-trimmed-into-window"] } : report;
     }
 
     internal static GateAuditReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, Guid run, Guid? onlyOperation = null, bool coverage = false, long retainedThrough = 0,

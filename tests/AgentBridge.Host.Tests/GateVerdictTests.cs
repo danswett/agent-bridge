@@ -294,4 +294,71 @@ public sealed class GateVerdictTests : IDisposable
         Assert.DoesNotContain(report.Totals, t => t.Action.StartsWith("grant."));
         Assert.Equal(1, report.Totals.Single(t => t is { Action: "session.launch", Path: "relay" }).Successes);
     }
+
+    // Real retention files (review 2/3): the log trims agents-*.jsonl itself once daily files are older than 30 days.
+    // Evidence trimmed into the window is missing evidence: INCOMPLETE, never a pass and never an invented fault.
+    void AnswerRow(AgentAuditLog log)
+    {
+        var op = Guid.NewGuid();
+        var session = Guid.NewGuid().ToString();
+        var gate = new GateAuditMetadata(1, op, Guid.Empty, 0, "intent", "relay", "person-client", op, "none", Question: Guid.NewGuid());
+        var intent = new AgentAuditEntry("in", op.ToString(), "person:phone-1", [], "session.answer", session, "reserved", Gate: gate);
+        Assert.True(log.Append(intent));
+        Assert.True(log.Append(intent with { Outcome = "delivered", Gate = gate with { Phase = "terminal" } }));
+    }
+
+    // One agents row a day for 41 days, with a launch row on day 0 that launch retention keeps. Returns day 0.
+    DateTimeOffset FortyOneDays()
+    {
+        Directory.CreateDirectory(Profile);
+        var day0 = Now;
+        var log = new AgentAuditLog(Profile, clock);
+        Rows("relay", "person-client", "person:phone-1", "started", "none");
+        for (var day = 0; day <= 40; day++)
+        {
+            AnswerRow(log);
+            clock.Advance(TimeSpan.FromDays(1));
+        }
+        return day0;
+    }
+
+    [Fact]
+    public void Agents_files_trimmed_into_the_window_are_incomplete_even_when_an_old_launch_row_survives()
+    {
+        var day0 = FortyOneDays();
+        var report = GateAuditProjection.ReadWindow(Profile, day0.AddDays(5));
+        Assert.Contains("retention-trimmed-into-window", report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+        var verdict = GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0));
+        Assert.Equal(GateVerdictKind.Incomplete, verdict.Kind);
+        Assert.Contains(verdict.Reasons, r => r.Contains("retention-trimmed-into-window"));
+    }
+
+    [Fact]
+    public void A_window_older_than_the_thirty_day_retention_is_incomplete_once_files_have_been_trimmed()
+    {
+        var day0 = FortyOneDays();
+        Assert.True(Now - day0.AddDays(5) > TimeSpan.FromDays(29));
+        Assert.Contains("retention-trimmed-into-window", GateAuditProjection.ReadWindow(Profile, Now.AddDays(-36)).IncompleteReasons);
+    }
+
+    [Fact]
+    public void Agents_files_trimmed_before_the_window_start_are_fine()
+    {
+        var day0 = FortyOneDays();
+        var report = GateAuditProjection.ReadWindow(Profile, day0.AddDays(25));
+        Assert.DoesNotContain("retention-trimmed-into-window", report.IncompleteReasons);
+        Assert.False(report.Invalidated);
+        Assert.Equal(16, report.Totals.Single(t => t is { Action: "session.answer", Path: "relay" }).Successes);
+    }
+
+    [Fact]
+    public void A_long_window_over_history_that_was_never_trimmed_is_fine()
+    {
+        Directory.CreateDirectory(Profile);
+        var log = new AgentAuditLog(Profile, clock);
+        for (var day = 0; day < 5; day++) { AnswerRow(log); clock.Advance(TimeSpan.FromDays(1)); }
+        var report = GateAuditProjection.ReadWindow(Profile, Now.AddDays(-60));
+        Assert.DoesNotContain("retention-trimmed-into-window", report.IncompleteReasons);
+    }
 }
