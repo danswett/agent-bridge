@@ -123,7 +123,7 @@ Receiver refusals, in the order they are checked:
 | `replay` | this request was already seen |
 | `rate` | the pair went over its limit |
 | `notReplyTarget` | the target is not a session this host can type into. Lite types into Copilot and Claude Code sessions only (**owner-approved CHANGE, ~15:20 PT Nov 22**: Claude was refused before); Codex and unknown agents stay refused, and the lane (`laneDelivery`) still takes Copilot targets only. A Claude session is held to the same gates, idle, rate, signed account and process-incarnation fences as Copilot, and the fence is asked again before the first key and before each Enter pressed again when Claude took the first as part of the paste (a lost grant, kill switch or account stops the keys); its input box is read as the replier reads it (on screen, no `/` or `!` command waiting). Claude shows a suggested prompt in an empty box that a screen read cannot tell from typed words, so only a box that is off screen or holds a command is `composerNotEmpty` for Claude |
-| `busy` | the target is not idle, or the duplicate memory is full |
+| `busy` | the target is not idle (a working Claude too, unless `agentMessaging.claudeBusyQueue` is on, default off), or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, (discovery held is `sessionResolutionIncomplete`, below). A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |
 | `sessionResolutionIncomplete` | the target is a node id and session discovery is held, so a live session may not be listed yet. Nothing was typed; retry after a few seconds. Final for the sender's HA fallback, as `noSuchSession` is (docs/design/reply-deduplication.md; #1396) |
@@ -137,7 +137,7 @@ resolve names. The ID-first refusal contract above takes precedence for identity
 | `delivered` | success; the only success |
 | `refused` with `badMachine` or `noSuchMachine` | final identity failure naming the device ID; no name, fragment or HA fallback |
 | `off` (including the mode turned off while the signing key was made; nothing sent), `undeliverable` (machine offline, nothing queued; a device id matches only the present host with that id, never a host name), `unconfirmed` (no acknowledgement in 10 seconds, or the mode went off while waiting) | falls back to Home Assistant once; after `unconfirmed` the first message may still have been typed, so the fallback can deliver it twice |
-| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant |
+| `refused` with `busy` or `notReplyTarget` | falls back to Home Assistant, once, only when nothing was typed (`NoKeysSent`); never after Accepted or Unconfirmed |
 | `refused` with `rate` | final failure shown to the sender; never sent over Home Assistant |
 | any other `refused` (other account, replay, size, and so on) | final failure shown to the sender |
 

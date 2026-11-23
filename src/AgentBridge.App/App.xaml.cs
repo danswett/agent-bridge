@@ -192,13 +192,19 @@ public partial class App : Application
         {
             window.Activate();
             Action<int> finished = code => { ExitCode = code; Quit(); };
+            if (options.BadSelfTestShard is { } bad)
+            {
+                AppLog.Write($"self-test: refused: --self-test-shard {bad} is not i/n with 1 <= i <= n <= 3");
+                finished(2);
+                return;
+            }
             _ = options.LiveListReplay
                 ? SelfTest.RunLiveListAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollPreserve
                 ? SelfTest.RunHistoryScrollPreserveAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollBudget
                 ? SelfTest.RunHistoryScrollBudgetAsync(window, main, demo!, options.SelfTest, finished)
-                : SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, finished);
+                : SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, finished, options.SelfTestShard);
             return;
         }
 

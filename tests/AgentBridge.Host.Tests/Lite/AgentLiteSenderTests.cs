@@ -80,6 +80,25 @@ public class AgentLiteSenderTests
     }
 
     [Theory]
+    [InlineData(true, true, LiteKind.Undeliverable)]
+    [InlineData(false, true, LiteKind.Refused)]
+    [InlineData(true, false, LiteKind.Refused)]
+    public async Task Detached_script_sends_validate_the_stable_host_identity_and_live_grant_before_offline_fallback(
+        bool ownMachine, bool live, LiteKind expected)
+    {
+        using var r = new Rig();
+        r.Link.Account = "";
+        r.Live = live;
+        var script = AgentCredential.Script("fixture-credential", ownMachine ? Self : Other, "collector", DateTimeOffset.UtcNow);
+
+        var result = await r.Sender().SendAsync(script, new LiteSendInput(Other, "agent-b2", "hello"), default);
+
+        Assert.Equal(expected, result.Kind);
+        Assert.Equal(expected == LiteKind.Undeliverable ? AgentLiteSender.OfflineText : AgentLiteSender.NoCredential, result.Code);
+        Assert.Equal(0, r.Signed);
+    }
+
+    [Theory]
     [InlineData("session", "script:machine/pump")]
     [InlineData("script", "agent:machine/session")]
     [InlineData("script", "person:machine/person")]
