@@ -176,6 +176,8 @@ public sealed class LiteDeliver(
                     if (keysWent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
                     break;
             }
+            // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
+            if (store.Get(body.Request) is { Held: true }) { _ = Watcher?.Start(body.Request); }
         }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }

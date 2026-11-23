@@ -77,7 +77,10 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { if (records.ContainsKey(request)) { tracked[request] = (transcript, offset); } }
     }
 
-    public (string? Transcript, long Offset) Tracking(string request) => default;
+    public (string? Transcript, long Offset) Tracking(string request)
+    {
+        lock (gate) { return tracked.TryGetValue(request, out var where) ? where : default; }
+    }
 
     public Holding? Holder(string session)
     {
