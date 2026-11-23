@@ -1,6 +1,6 @@
 # Device approval and the signed roster (#55)
 
-**Status: decided design, not built.** The owner decided every §11 decision on 2026-11-04, each
+**Status: decided design, partly built** (the build status of each slice is under §12). The owner decided every §11 decision on 2026-11-04, each
 option (a). Each slice is still security-reviewed independently before merge (§12). It refines
 design.md [§5.4](../design.md#54-accounts-devices-and-the-signed-roster). Where the two disagree,
 this note is the newer reasoning; design.md §5.4 is to be updated to these decisions.
@@ -2888,3 +2888,19 @@ on below was made on 2026-11-04 (§11), so none is waiting for one.
 | R9 | `enforce` by default for new installs | R8 | Yes |
 | A1 | Apple: join, then approve, Devices and person commands (contributor) | R1, R2 | For Apple clients |
 | L1 | Later: recovery key if chosen, checkpoints, CPace in place of two codes if wanted, presence-proven Allow-all launches, and the presence proofs for `macos` and `linux` prompts (desktop PWAs, and a Mac app without Touch ID), plus synced passkeys in a later protocol version | | |
+
+### Build status of each slice (reconciled November 23, 2026, against `main` d0e20137)
+
+Found by reading the tree, not by running it. "Built" means the code exists on `main`; it says nothing about a live run.
+`R3b` is the enforce gate cut as #1359.
+
+| Slice | Status | Where, and what is not there |
+|---|---|---|
+| R1 | Built (R1a to R1c); R1d partly | C# library `src/AgentBridge.Roster` (verifier, state, graph, removal parent, commands, enrollment exchange, WebAuthn assertion) with `tests/AgentBridge.Roster.Tests`; the PWA port `pwa/js/roster`. Signing keys: `src/AgentBridge.App.Core/CapSignKeys.cs` and `pwa/js/roster/cap-sign-key.js`; whether every platform's key store (TPM, DPAPI, WebCrypto) is covered is not checked |
+| R2 | Partly built | The relay's store and appends (`src/AgentBridge.Relay/DeviceRoster.cs`, `Roster*.cs`). Its mode is the constant `observe`. Not found: `enforce`, approved and pending admission, bound tokens, the `removed` close code |
+| R3 | Partly built | The host's modes `off` and `observe` (`SecuritySettings.cs`, `HostRosterObserve.cs`: "enforce comes with a later slice"), the pinned reader (`HostRosterPin.cs`), the pin writer and the v2 transition (`HostRosterPinWriter.cs`, `HostRosterTransition.cs`) and host-side enrollment over the local pipe (`HostEnrollment.cs`, #3450). **Not built: the `ChannelHub` gate (R3b, #1359)**; gossip and `roster.submit` were not found |
+| R4 | Partly built | `src/AgentBridge.App.Core/Enrollment2519/LocalPersonEligibility.cs` and `CapSignKeys.cs`. No Windows join or Devices screen found; the presence proof is not built |
+| R5 | Library only | `pwa/js/roster/*` (including `enrollment.js`) and the read-only sign-in device list (`pwa/js/signin-devices.js`, #1073). No passkey registration, join, approve or Devices screen found |
+| R6 to R9 | Not built | No person-only actions on roster commands, no removal end to end, no owner cutover, no `enforce` by default |
+| A1 | Not built | |
+| L1 | Not built | |

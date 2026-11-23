@@ -319,10 +319,23 @@ Refusals and failures remain visible; they earn no success credit.
 Windowed form (owner, Nov 22): read by `--since <start date>` in place of `--run <id>`; PASS,
 FAIL and INCOMPLETE and the exit codes are unchanged, and the seal and pause steps below do
 not apply. Windowed S4 (landed, #3813) supplies the projection and reducer
-(`GateAuditProjection.ReadWindow`, `GateVerdict`); the message-source adapter and the command
-are later cuts. A `GateVerdict` PASS covers one host only and is never retirement evidence by
-itself: the command must combine every pinned host's reading, and a missing or offline host
-makes the whole answer INCOMPLETE.
+(`GateAuditProjection.ReadWindow`, `GateVerdict`). The command exists (HA deletion gate E4(f)):
+`agent-bridge-host audit gate --since <ISO time with offset> [--profile <name>] [--messages <file>]
+[--host <id>] [--json]`. It is read-only (no writer, lock or profile is created) and exits 0 PASS,
+1 FAIL, 2 INCOMPLETE. `--messages` is `{"relayDelivered": n, "haFallbacks": n}` from the fleet's
+send log; without it the answer is INCOMPLETE (`missing-message-evidence`), never zero fallbacks,
+and a negative, malformed or incomplete file is refused. `--json` prints a closed schema-1 reading
+for the fleet combiner, which takes one `<host>.json` per pinned host, applies the floors to the
+fleet sums and names a host with no file INCOMPLETE: `schema`, `host` (the `--host` label, which
+`--json` requires; the command never reads an identity), `since` (UTC), `readAt` (UTC, the window end: when it was read; a start after it is refused, and the combiner compares every host's span), `kind` (`pass`, `fail`, `incomplete`),
+`reasons` (closed codes only: `invalidated-window`, `ha-fallback`, `coverage-break`,
+`retention-trimmed-into-window`, `unresolved-intent`, `audit-incomplete`, `sequence-break`,
+`missing-window-evidence`, `missing-message-evidence`, `below-floor:<launch|approval|stop|message>`),
+`relay` (`launch`, `approval`, `stop`), `messages` (`relayDelivered`, `haFallbacks`, or null),
+`invalidated` and `legacyHaDispatches`. Per-host floors are never expected to be met alone, so
+the combiner ignores `below-floor` codes. A `GateVerdict` PASS covers one host only and is never
+retirement evidence by itself: the combiner must see every pinned host, and a missing or offline
+host makes the whole answer INCOMPLETE. The readings are unsigned SRE-held files, so a fleet PASS is advisory.
 
 Propose `agent-bridge-host audit gate --run <id> [--json]` on the existing audit
 reader, after #2066. This is a new interface to build, not a command available now.
@@ -397,7 +410,7 @@ A6a = #2066, and A6-rest = the remaining #1401 work.
 | 5 | Superseded by the window (owner, Nov 22): run prepare/reset | none | dropped, with 5a (#3789) and 5b |
 | 6 | Superseded by the window (owner, Nov 22): run seal/fresh snapshot | none | dropped |
 | S4 | Windowed projection and verdict reducer (replaces 6 and the reducer half of 7); landed, #3813 | 454 | 2-4 + 9 + A3/A4/A5/A6a; start date from config or the parity checklist; no run ID |
-| 7b | Existing message-source adapter and the `audit gate --since` command | 240 | S4; A6-rest required; stale claims fail |
+| 7b | `audit gate --since` command: landed, with the fleet combiner as its consumer (fleet `Get-HaFallbackGate`); message evidence comes from the fleet send log | 454 | S4; A6-rest required; stale claims fail |
 | 8 | Shared durable operation-map hardening, later | 220 | 2-4 + A3/A4/A5/A6a; A6-rest required; core wiring already dedupes or invalidates uncertainty |
 | 9 | A6 durable-head/archive continuity, required before 5 | 230 | A3/A4/A5 + A6a; completes A6-rest in separately measured cuts |
 | 10 | Receiver/message provenance hardening, later | 160 | Reuse PairShadow; A3/A4/A5/A6a consumers unchanged; A6-rest for restart; no rebuilt counter |

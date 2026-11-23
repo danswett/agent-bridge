@@ -24,7 +24,7 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
     // Called at least every two seconds; force the first snapshot on each new connection.
     // Refusals, timeouts and cancellation propagate to the host's diagnostics owner.
     public async Task<bool> PublishAsync(Func<JsonElement, CancellationToken, Task> put, bool share = true, bool force = false, CancellationToken ct = default,
-        bool relaySupportsSessionId = false)
+        bool relaySupportsSessionId = false, bool relaySupportsEvidence = false)
     {
         await publishing.WaitAsync(ct);
         try
@@ -40,13 +40,15 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             // Ended rows must disappear even when ordinary changes are still being coalesced.
             var removed = !lastSessionIds.IsSubsetOf(usable.Select(e => e.Node["agent_bridge_".Length..]));
             if (!force && !removed && elapsed < TimeSpan.FromSeconds(2)) { return false; }
-            var sessions = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal)
-                .Take(64).Select(entry =>
+            var ordered = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal).Take(64).ToArray();
+            // observedAt is the publish time, so it is left out of the content compared for the 20 s republish and set only on what is sent.
+            (string Id, object Item) Project((Session Session, string Node) entry, string? observedAt)
                 {
                     var (s, node) = entry;
                     var id = node["agent_bridge_".Length..];
                     var displayName = name?.Invoke(s.Id)?.Trim();
-                    return new
+                    var evidence = relaySupportsEvidence ? ((object Attention, int OpenAsks)?)Evidence(s) : null;
+                    return (id, new
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
                         sessionId = relaySupportsSessionId ? FleetSessionId.ForNode(s.Id, node) : null,
@@ -54,26 +56,30 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                         startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
                         owner = Outcome("owner", s.Owner), pr = Outcome("pr", s.Pr), finished = Outcome("finished", s.Finished),
-                    };
-                }).ToList();
+                        attention = evidence?.Attention, openAsks = evidence?.OpenAsks, observedAt = evidence is null ? null : observedAt,
+                    });
+                }
+            var sessions = ordered.Select(e => Project(e, null).Item).ToList();
             var truncated = usable.Length > 64;
             int? total = truncated ? usable.Length : null;
             var content = JsonSerializer.Serialize(new { truncated, total, sessions }, ProtocolJson.Options);
             if (!force && content == lastContent && elapsed < TimeSpan.FromSeconds(20)) { return false; }
             var seq = ++sequence;
             var at = clock.GetUtcNow();
+            var observed = at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+            var published = ordered.Select(e => Project(e, observed)).ToList();
             JsonElement record;
             while (true)
             {
                 record = JsonSerializer.SerializeToElement(new
                 {
-                    v = 1, machine, epoch, seq, at, truncated, total, sessions,
+                    v = 1, machine, epoch, seq, at, truncated, total, sessions = published.Select(p => p.Item).ToList(),
                 }, ProtocolJson.Options);
                 record = sign?.Invoke(record) ?? record;
                 if (Encoding.UTF8.GetByteCount(record.GetRawText()) <= 16 * 1024) { break; }
-                if (sessions.Count == 0) { throw new InvalidDataException("registry publication exceeds the 16 KiB record limit"); }
+                if (published.Count == 0) { throw new InvalidDataException("registry publication exceeds the 16 KiB record limit"); }
                 // Fit the completed signed record, dropping the least-recent state change first.
-                sessions.RemoveAt(sessions.Count - 1);
+                published.RemoveAt(published.Count - 1);
                 truncated = true;
                 total = usable.Length;
             }
@@ -81,10 +87,21 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             await put(record, ct);
             lastSent = started;
             lastContent = content;
-            lastSessionIds = sessions.Select(s => s.id).ToHashSet(StringComparer.Ordinal);
+            lastSessionIds = published.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
             return true;
         }
         finally { publishing.Release(); }
+    }
+
+    // Stuck-prompt evidence from state the host already holds (owner decision A1). The kinds are a closed set and carry no question text: a pending
+    // question is "question"; an approval is not mapped in this change and a sign-in or error wait has no kind in the registry's vocabulary, so both
+    // are "unknown", never guessed; nothing pending is "none". openAsks counts the prompts waiting.
+    static (object Attention, int OpenAsks) Evidence(Session s)
+    {
+        var kind = s.Question is { } q ? (q.Kind == QuestionKind.Form ? "question" : "unknown")
+            : s.WaitingOn is not null ? "question" : s.Attention is not null ? "unknown" : "none";
+        var asks = s.Question is { } pending ? Math.Max(1, pending.Waiting ?? 1) : s.WaitingOn is not null ? 1 : 0;
+        return (new { kind }, asks);
     }
 
     // Unknown is sent as absent, which readers already treat as unknown, so a relay older than
