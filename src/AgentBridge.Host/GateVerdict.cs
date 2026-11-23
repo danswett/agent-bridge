@@ -2,7 +2,12 @@ namespace AgentBridge.Host;
 
 // The existing fleet message recorder's counts for the window (docs/design/ha-gate-counters.md section 6).
 // Supplied by the message adapter (slice 7b); never by a client.
-internal sealed record GateMessageEvidence(int RelayDelivered, int HaFallbacks);
+// Counts cannot be negative: a corrupt or hostile figure such as -1 fallbacks must not read as "no fallback".
+internal sealed record GateMessageEvidence(int RelayDelivered, int HaFallbacks)
+{
+    public int RelayDelivered { get; } = RelayDelivered >= 0 ? RelayDelivered : throw new ArgumentOutOfRangeException(nameof(RelayDelivered));
+    public int HaFallbacks { get; } = HaFallbacks >= 0 ? HaFallbacks : throw new ArgumentOutOfRangeException(nameof(HaFallbacks));
+}
 
 internal enum GateVerdictKind { Pass = 0, Fail = 1, Incomplete = 2 }
 

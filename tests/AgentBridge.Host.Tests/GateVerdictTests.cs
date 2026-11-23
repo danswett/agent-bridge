@@ -17,6 +17,20 @@ public sealed class GateVerdictTests : IDisposable
 
     static readonly GateMessageEvidence Messages = new(500, 0);
 
+    [Theory]
+    [InlineData(500, -1)]
+    [InlineData(-1, 0)]
+    [InlineData(int.MinValue, int.MinValue)]
+    public void Message_evidence_with_a_negative_count_cannot_be_constructed(int delivered, int fallbacks) =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => new GateMessageEvidence(delivered, fallbacks));
+
+    [Fact]
+    public void Message_evidence_of_zero_counts_is_valid_and_only_the_thresholds_decide()
+    {
+        var verdict = GateVerdict.Evaluate(Report(), new GateMessageEvidence(0, 0));
+        Assert.Equal(GateVerdictKind.Incomplete, verdict.Kind);
+    }
+
     [Fact]
     public void Relay_sums_at_the_four_thresholds_with_no_fault_pass()
     {
