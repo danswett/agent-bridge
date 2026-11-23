@@ -190,6 +190,21 @@ test('list is typed by default and carries content only on request', async () =>
   connection.close(); host.close();
 });
 
+test('the default list hides the working folder (cwd); title, repository and branch stay; cwd comes only with include "content"', async () => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'sessions.list': () => ({ sessions: [session({ cwd: 'C:/work/repo', repository: 'repo', branch: 'main', title: 'T' })] }),
+  });
+  const { client, connection } = await clientFor(host);
+  const plain = (await call(client, 'list_agent_sessions', {})).sessions[0];
+  assert.equal('cwd' in plain, false);
+  assert.deepEqual([plain.title, plain.repository, plain.branch], ['T', 'repo', 'main']);
+  const withContent = (await call(client, 'list_agent_sessions', { include: 'content' })).sessions[0];
+  assert.equal(withContent.cwd, 'C:/work/repo');
+  assert.equal(withContent.activity.response, 'hello');
+  connection.close(); host.close();
+});
+
 test('reply sends the whole text under a fresh request id and returns since', async () => {
   const long = 'x'.repeat(5000);
   const host = await fakeHost({
