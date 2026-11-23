@@ -841,7 +841,11 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
   `vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)`,
   and falls back to the hosted label otherwise. A fork pull request, and anything run by `pull_request_target`, never
   reaches a self-hosted runner (the owner also set fork-PR approval to every external contributor). The repository
-  variable `AB_CI_SELF_HOSTED` flips the whole pool back to hosted runners without a workflow change.
+  variable `AB_CI_SELF_HOSTED` flips the whole pool back to hosted runners without a workflow change. **Capacity first
+(proposed):** with a run per commit on main (item 4), every merge runs in full, about 101 job-minutes today and about 55 once
+pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
+`true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
+start within about a minute; a queue that grows is the signal to add runners or flip it back.
   `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` fails a workflow whose self-hosted job lacks the guard,
   or that has any self-hosted job and a `pull_request_target` trigger.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
@@ -867,6 +871,9 @@ result file, and a final step merges them, failing if a section ran twice or not
 earlier one left must be fixed or kept with that one: a "each section alone" job proves it before sharding turns on.
 *Product tests* shard by test project into three groups of about equal time (`dotnet test` per project, the build done once
 per runner). Every shard is still a full assertion run: none is skipped or loosened to save time.
+**A shard keeps the names other things read:** the required checks `app (win-x64)` and `app (win-arm64)` (the selector, `main_green`
+and the release train select on them) and `product`'s matrix names stay as they are; shard jobs run under other names and the
+`app` job, or an aggregate that keeps its name, waits for them.
 
 **Path filters (proposed extension).** The catalog's selector already skips what a change cannot affect (`no_test_paths`, `triggers`): a
 docs-only PR runs nothing .NET (0.9 min). Extend it so a PWA-only change runs `pwa-ui` and `pwa-e2e` only (about 6 min
