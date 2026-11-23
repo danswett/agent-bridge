@@ -475,6 +475,8 @@ public sealed class RelayClient : IAsyncDisposable
                         case "registry":
                             if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
+                                // Keep this wording: the fleet tools retry a registry-rate refusal by matching it (reply-session.ps1). It names the old
+                                // 2 s rule; change both together.
                                 if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
                                 else if (j.TryGetProperty("known", out _))
                                 {
