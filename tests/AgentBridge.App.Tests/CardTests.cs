@@ -376,6 +376,24 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Empty(host.Sent(Ops.SessionAnswer));
     }
 
+    // Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent.
+    [Fact]
+    public void A_required_multi_with_nothing_ticked_is_not_sent_and_names_the_field_and_one_ticked_is_built()
+    {
+        var q = Question(Make.Form(new Field { Name = "toppings", Title = "toppings", Type = FieldType.Multi, Options = [new Option("x"), new Option("y")], Required = true }));
+
+        q.Send();
+
+        Assert.Equal("\"toppings\" needs an answer.", q.Error);
+        Assert.True(q.Fields[0].Invalid);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+
+        q.Fields[0].Options[1].IsSelected = true;
+        var (answer, problem, _) = q.Build();
+        Assert.Null(problem);
+        Assert.Equal("""["y"]""", answer.Fields!["toppings"].GetRawText());
+    }
+
     [Fact]
     public void A_form_builds_each_type_of_field_as_the_contract_says()
     {

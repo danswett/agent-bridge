@@ -1626,10 +1626,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
         if (p is not null)
         {
-            var active = p.Transcript?.Read().StartedSince(p.Started.StartedAt) == true;
+            var state = p.Transcript?.Read();
+            var active = state?.StartedSince(p.Started.StartedAt) == true;
+            var working = WorkingAndAsking(state, p.Started.StartedAt);
             lock (pendingGate)
             {
-                if (!active || p.Question != StartupQuestion.None) { return Waiting(p.Launcher.Label, p.Question); }
+                if (!active || p.Question != StartupQuestion.None)
+                {
+                    return working && p.Question == StartupQuestion.None ? FirstReplyWords.WaitingForAnAnswer(p.Launcher.Label) : Waiting(p.Launcher.Label, p.Question);
+                }
                 if (!pending.Remove(p)) { return null; }
                 p.Ready = true;
                 p.RegisteredLate = true;
@@ -1639,17 +1644,23 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             return null;
         }
         // session.resume alone is not activity, and an old resumed transcript is not this launch.
-        var past = held!.RegistersBeforeReady
-            ? held.Transcript?.Read().StartedSince(held.StartedAt) == true
+        var heldState = held!.RegistersBeforeReady ? held.Transcript?.Read() : null;
+        var past = held.RegistersBeforeReady
+            ? heldState?.StartedSince(held.StartedAt) == true
             : source.Get(sessionId) is not null;
         var alive = held.Alive();
         lock (pendingGate)
         {
-            if (alive && !past) { return FirstReplyWords.NotSeenReady(held.Label); }
+            if (alive && !past) { return WorkingAndAsking(heldState, held.StartedAt) ? FirstReplyWords.WaitingForAnAnswer(held.Label) : FirstReplyWords.NotSeenReady(held.Label); }
             neverReady.Remove(sessionId);
             return null;
         }
     }
+
+    // Whether the session's own transcript shows it working since this launch AND a question or permission request open
+    // now (not the stale ones of a killed CLI a resume left): it is waiting for an answer, not starting (#3538).
+    static bool WorkingAndAsking(CopilotInputState? state, DateTimeOffset? startedAt) =>
+        state is { Readable: true, Asking: true, Resumed: false, ActivityAt: { } activity } && startedAt is { } at && activity >= at;
 
     // What a held reply says while the launch is still followed: the question its window asks,
     // answered from a device where the bridge allows that for folder trust (#947), else the

@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
@@ -1031,10 +1032,10 @@ public class DiscoveryHoldTests
 
     // Permissions are the only way to make a folder unreadable to its owner, and only Unix
     // honours them for that; CI runs these on Linux.
-    [Fact]
+    [UnixPermissionsFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task A_registration_folder_that_cannot_be_looked_into_is_not_an_agent_with_no_sessions()
     {
-        if (!Unix()) { return; }
         using var f = new Fixture();
         var transcript = f.ClaudeTranscript(B);
         Fixture.Append(transcript, Claude.User("hi", 1));
@@ -1056,10 +1057,10 @@ public class DiscoveryHoldTests
         finally { File.SetUnixFileMode(f.Runtime, mode); }
     }
 
-    [Fact]
+    [UnixPermissionsFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task A_registration_whose_details_cannot_be_read_is_not_taken_for_deleted()
     {
-        if (!Unix()) { return; }
         using var f = new Fixture();
         var transcript = f.ClaudeTranscript(B);
         Fixture.Append(transcript, Claude.User("hi", 1));
@@ -1082,8 +1083,15 @@ public class DiscoveryHoldTests
         finally { File.SetUnixFileMode(f.ClaudeRegistrations, mode); }
     }
 
-    // Root reads anything, so permissions prove nothing under it.
-    static bool Unix() => !OperatingSystem.IsWindows() && Environment.UserName != "root";
+    // Skipped with its reason where permissions prove nothing: never a silent pass.
+    sealed class UnixPermissionsFactAttribute : FactAttribute
+    {
+        public UnixPermissionsFactAttribute()
+        {
+            if (OperatingSystem.IsWindows()) { Skip = "file modes make a folder unreadable only on Unix"; }
+            else if (Environment.UserName == "root") { Skip = "root reads anything, so permissions prove nothing under it"; }
+        }
+    }
 
     // A symbolic link, or on Windows without the privilege for one, a junction: both are
     // reparse points, which is what discovery looks for.
