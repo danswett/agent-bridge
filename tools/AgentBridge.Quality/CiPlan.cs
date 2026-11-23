@@ -52,13 +52,19 @@ static partial class CiPlan
     [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
     private static partial Regex AppBuilt();
     const string AppResult = "${{ needs.app.result }}";
+    // The waiver-adjusted form (#2454): the same result, read after the gate's waiver step, so a red Arm64 leg does not read as an unbuilt app.
+    const string AppStepResult = "${{ steps.app.outputs.result }}";
+    const string AppStepNeeds = "${{ steps.waiver.outputs.needs || toJSON(needs) }}";
+    // The step's whole command, compared exactly: a shell comment or another command in the script that
+    // merely mentions the expression is not it (YAML comments never reach the parsed scalar).
+    const string AppStepRun = "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"";
     const string ConcurrencyGroup =
-        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
     // publish's own group, keeping every waiting publish (queue: max) where the default lets the
     // next to arrive replace the one waiting: a re-run of an old run could otherwise replace a
-    // newer run's waiting publish (#938's review). Only publish: elsewhere, ci-main's newest run
-    // is meant to replace the one waiting (quality/README.md §4.7).
+    // newer run's waiting publish (#938's review). Only publish: elsewhere a newer run is meant to
+    // replace the one waiting, as a pull request's does (quality/README.md §4.7).
     const string PublishGroup = "publish-prerelease";
     const string PublishIf = "!cancelled() && needs.publish-gate.result == 'success'";
     const string PublishAfterSignIf = PublishIf + " && needs.sign.result == 'success'";
@@ -125,15 +131,14 @@ static partial class CiPlan
             return problems;
         }
 
-        // Main's push runs coalesce in ci-main, never cancelled once running, and only first
-        // attempts join it: a re-run there could take a waiting push run's place, so that push's
-        // commit would go untested (quality/README.md §4.7).
+        // Each push to main has a group of its own, ci-main-<sha>, never cancelled, so every merge gets its
+        // full run; a re-run has a run-id group of its own (quality/README.md §4.7).
         if (Child(root, "concurrency") is not YamlMappingNode concurrency
             || Normalize(Scalar(concurrency, "group") ?? "") != ConcurrencyGroup
             || Normalize(Scalar(concurrency, "cancel-in-progress") ?? "") != CancelInProgress)
             Add($"ci.yml's concurrency isn't group {ConcurrencyGroup} with cancel-in-progress {CancelInProgress}");
         if (Child(root, "concurrency") is YamlMappingNode rootConcurrency && Child(rootConcurrency, "queue") is not null)
-            Add("ci.yml's concurrency sets queue, but only publish's may: in ci-main the newest push run replaces the one waiting");
+            Add("ci.yml's concurrency sets queue, but only publish's may: a queue keeps every waiting run");
         foreach (var (id, job) in jobs)
             if (id != "publish" && Child(job, "concurrency") is YamlMappingNode jobConcurrency && Child(jobConcurrency, "queue") is not null)
                 Add($"ci.yml job {id}'s concurrency sets queue, but only publish's may");
@@ -257,8 +262,13 @@ static partial class CiPlan
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
             // What publish-gate reads to tell the app was built and checked in this run.
             var gateOutputs = Child(gate, "outputs") as YamlMappingNode;
-            if (Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "") != AppResult)
-                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult}, so {PublishGate} can't tell this run built the app");
+            var appOutput = Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "");
+            // The step form is accepted only when its step reads the app's own result from the waiver-adjusted needs.
+            var appStep = Steps(gate).FirstOrDefault(s => Scalar(s, "id") == "app");
+            var stepReadsApp = appStep is not null && Child(appStep, "env") is YamlMappingNode appEnv && Normalize(Scalar(appEnv, "NEEDS") ?? "") == AppStepNeeds
+                && Normalize(Scalar(appStep, "run") ?? "") == AppStepRun;
+            if (appOutput != AppResult && !(appOutput == AppStepResult && stepReadsApp))
+                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult} (or {AppStepResult} with a step id app), so {PublishGate} can't tell this run built the app");
             // The jobs a pull request skips aren't selected there, or the gate would wait on them.
             var offs = Steps(gate).Select(s => Child(s, "env") as YamlMappingNode).OfType<YamlMappingNode>()
                 .Select(e => Scalar(e, "PR_OFF")).OfType<string>().ToList();

@@ -12,6 +12,7 @@ public sealed record DeliveryJournalRecord(string Session, DeliveryHeader Header
     public PriorityCapability? Capability { get; init; }
     public string? PriorityReason { get; init; }
     public string? PriorityPrevious { get; init; }
+    public string? PriorityBinding { get; init; }
 }
 
 // Node-bound evidence only: replay metadata, never payloads or key sends.
@@ -31,11 +32,17 @@ public sealed partial class DeliveryJournal : IDisposable
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
         : this(HostKey(diagnosticsFile), b => Append(JournalFile(diagnosticsFile), b), log,
-            Reservations(JournalFile(diagnosticsFile))) { }
+            Reservations(JournalFile(diagnosticsFile)), HeadAnchor(diagnosticsFile)) { }
+
+    // HostKey has already required Windows and made this folder private.
+    static IPriorityAnchor HeadAnchor(string diagnosticsFile) => OperatingSystem.IsWindows()
+        ? new DpapiPriorityAnchor(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(diagnosticsFile))!, "delivery.head"))
+        : throw new PlatformNotSupportedException("The priority head requires DPAPI.");
 
     internal DeliveryJournal(byte[] key, Action<byte[]> append, Action<string> log,
-        IEnumerable<DeliveryJournalRecord>? reservations = null)
+        IEnumerable<DeliveryJournalRecord>? reservations = null, IPriorityAnchor? anchor = null)
     {
+        this.anchor = anchor;
         hmac = new HMACSHA256(key);
         CryptographicOperations.ZeroMemory(key);
         this.append = append;
@@ -48,7 +55,7 @@ public sealed partial class DeliveryJournal : IDisposable
             if (validState && state == DeliveryState.Priority) { ReplayPriority(r, facts); continue; }
             var refused = RefusePriorityChain(r, facts);
             if (!validState || r.Capability is not null || r.PriorityReason is not null || r.PriorityPrevious is not null ||
-                r.Header.N == 0 && !Matches(r, ""))
+                r.PriorityBinding is not null || r.Header.N == 0 && !Matches(r, ""))
             {
                 if (refused) { UnconfirmedReplay(r); continue; }
                 throw new InvalidDataException("Delivery journal evidence cannot enter legacy replay.");
@@ -56,6 +63,8 @@ public sealed partial class DeliveryJournal : IDisposable
             var id = (r.Session, r.Header.Id);
             if (r.Header.N != 0 && (refused || state is not (DeliveryState.Enqueued or DeliveryState.Demoted)))
             { unverified.Add(id); log("delivery journal body unavailable; replay is unconfirmed and inert for authority"); }
+            // A MAC-valid zero-body record linked to refused priority evidence is still inert history, never Dropped.
+            else if (refused) { unverified.Add(id); }
             else { unverified.Remove(id); }
             latest[id] = r;
             replayed.Add(id);
@@ -66,6 +75,7 @@ public sealed partial class DeliveryJournal : IDisposable
             var lane = (r.Session, seq[0]);
             reserved[lane] = Math.Max(reserved.GetValueOrDefault(lane), long.Parse(seq[1..], System.Globalization.CultureInfo.InvariantCulture));
         }
+        VerifyAnchor();
     }
 
     static string JournalFile(string diagnosticsFile) =>
@@ -169,6 +179,12 @@ public sealed partial class DeliveryJournal : IDisposable
 
     bool Matches(DeliveryJournalRecord record, string body)
     {
+        // JSON can deliver a null MAC; that is unverifiable evidence, not an exception that drops the whole journal.
+        if (record.Hmac is null)
+        {
+            log("delivery journal verification refused (missing MAC); no success acknowledgement");
+            return false;
+        }
         try
         {
             return CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(record.Hmac), Mac(record with { Hmac = "" }, body));

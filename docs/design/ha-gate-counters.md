@@ -41,6 +41,45 @@ wiring; A5 #2011 supplies answer/lookup wiring. A6a is #2064 / PR #2066,
 not the remaining A6 durable-head/archive/pruning work. The gate must not claim
 integrity before A3 lands. Existing hash links alone cannot prove no tail was lost.
 
+### Status at main 0416b9d7b (S1 definition of the remaining #1401 and row 25 work)
+
+Checked against source and commit subjects only; not a live run.
+
+* **#1401 dependencies landed:** A3 #2009 (#2222), A4 #2010 (#2017), A5 #2011 (#2013) and
+  A6a #2064 (#2066, merged; the "unmerged" statement above is out of date). Later audit
+  work also landed: archive (#3162), person-signed rotation (#3566, #3580, #3551).
+* **Counter source in code:** `src/AgentBridge.Host/GateAudit.cs` defines the `path`
+  (`relay`, `local`, `legacy-ha`), `actorKind` and control phases (`gate.start`, `gate.pause`,
+  `gate.reset`, `gate.seal`); launch, approval and stop wiring exist in `GateLaunchAudit.cs`,
+  `PhoneApprovalEvidence.cs`, `StopAudit.cs` and `HaRunning.cs` (red tests #2570, #2588,
+  #2596, #2629).
+* **Landed state (source, not a live run):** present are the durable audit head and
+  `AgentAuditLog.Continuity` (slice 9, with continuity and checkpoint-recovery tests),
+  `GateAuditProjection.Read/Project`, used by the launch, approval and stop wiring, and,
+  since #3813, the windowed `GateAuditProjection.ReadWindow` and the `GateVerdict` reducer.
+  No writer of the `gate.start`, `gate.pause`, `gate.reset` and `gate.seal` control rows
+  exists, and none is wanted (see the window decision below). Still not built: the
+  message-source adapter and a command that exposes the verdict to a person or client (7b).
+* **Confirmed (owner, relayed by Engineering, Nov 22):** the #1401 audit log is the counter
+  source for launches, approvals and stops (S4). A counter is still not evidence until the
+  windowed reader and verdict run. S8 stays: HA remains possible as an optional client, and
+  the slice 11 dual run is still the gate.
+* **Window, not a run (owner, Nov 22):** the retirement counters read the audit log over a
+  time window: the last N days with HA off, from a start date kept in config or the parity
+  checklist. A restart is a new start date. There is no run ID, no person-started run and no
+  run-control op: section 5 and slices 5 and 6 below are superseded, and slice 5b (the
+  person-class run entry) and the 5a writer (#3789) are dropped. Windowed S4 (#3813) reads
+  operations whose first row is on or after the start date, any run, skips `grant.*` rows, and
+  reduces them with the 50/30/20 and 500 message thresholds and zero HA dispatches. Trim
+  detection is per stream (launches and agents each have their own retained floor): evidence
+  trimmed by retention into the window is INCOMPLETE (`retention-trimmed-into-window`), not a
+  pass, and the remedy is a later start date. A hard need for a run boundary would return only
+  as a temporary op deleted with the HA connector (S7), as a new change.
+* **Row 25 gap in fleet:** fleet `ops/ha-retirement` scanned PowerShell only, so live Python
+  that talks to HA was invisible; `pump/fleet_pump/wake.py` is not an HA caller. Fleet slice S5
+  scans live `.py` too and allowlists today's live findings (24: 19 PowerShell and 5 Python),
+  defined in fleet `docs/ha-retirement.md`.
+
 ## 2. Authority and path
 
 The destination host owns launch, approval and stop counts. Neither the
@@ -231,6 +270,11 @@ only under the writer lock; checkpoint replacement remains atomic and flushed.
 
 ## 5. Continuous run and reset
 
+**Superseded (owner, Nov 22):** the counters are read over a time window from a start date,
+not over a started run; there is no run-start, pause, reset or seal control. See the "Window,
+not a run" status note in section 1. The text below is kept as the design record and for a
+temporary run boundary should one be needed again.
+
 The person-class control entry points are `start`, `pause`, `reset` and `seal`.
 Each requires an authenticated person-class channel and host-side person
 authorization, never the local pipe or shared OS-user identity.
@@ -271,6 +315,14 @@ begin markers. It never zeroes an existing run in place or erases its evidence.
 Refusals and failures remain visible; they earn no success credit.
 
 ## 6. One operator view and verdict
+
+Windowed form (owner, Nov 22): read by `--since <start date>` in place of `--run <id>`; PASS,
+FAIL and INCOMPLETE and the exit codes are unchanged, and the seal and pause steps below do
+not apply. Windowed S4 (landed, #3813) supplies the projection and reducer
+(`GateAuditProjection.ReadWindow`, `GateVerdict`); the message-source adapter and the command
+are later cuts. A `GateVerdict` PASS covers one host only and is never retirement evidence by
+itself: the command must combine every pinned host's reading, and a missing or offline host
+makes the whole answer INCOMPLETE.
 
 Propose `agent-bridge-host audit gate --run <id> [--json]` on the existing audit
 reader, after #2066. This is a new interface to build, not a command available now.
@@ -342,9 +394,10 @@ A6a = #2066, and A6-rest = the remaining #1401 work.
 | 2 | Launch wiring, required | 210 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
 | 3 | Approval wiring, required | 220 | 1 + A3/A5; A4 pattern, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
 | 4 | Stop wiring, required | 200 | 1 + A3/A4; A5 attribution compatible, A6a reader; A6-rest is a proof dependency, not merge prerequisite |
-| 5 | Run prepare/reset, required | 220 | 2-4 + 9 + A3/A4/A5/A6a; reset voids old ID, issues new ID, requires fresh all-host begin markers; never zero in place |
-| 6 | Run seal/fresh snapshot, required lifecycle continuation | 230 | 5 + 9 + A3/A4/A5/A6a; no client-supplied counts; bounded pause |
-| 7 | Gate reducer + existing message-source adapter, required | 240 | 6 + 9 + A3/A4/A5/A6a; A6-rest required; stale claims fail |
+| 5 | Superseded by the window (owner, Nov 22): run prepare/reset | none | dropped, with 5a (#3789) and 5b |
+| 6 | Superseded by the window (owner, Nov 22): run seal/fresh snapshot | none | dropped |
+| S4 | Windowed projection and verdict reducer (replaces 6 and the reducer half of 7); landed, #3813 | 454 | 2-4 + 9 + A3/A4/A5/A6a; start date from config or the parity checklist; no run ID |
+| 7b | Existing message-source adapter and the `audit gate --since` command | 240 | S4; A6-rest required; stale claims fail |
 | 8 | Shared durable operation-map hardening, later | 220 | 2-4 + A3/A4/A5/A6a; A6-rest required; core wiring already dedupes or invalidates uncertainty |
 | 9 | A6 durable-head/archive continuity, required before 5 | 230 | A3/A4/A5 + A6a; completes A6-rest in separately measured cuts |
 | 10 | Receiver/message provenance hardening, later | 160 | Reuse PairShadow; A3/A4/A5/A6a consumers unchanged; A6-rest for restart; no rebuilt counter |
