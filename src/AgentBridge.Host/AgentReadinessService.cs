@@ -107,7 +107,7 @@ public sealed class AgentReadinessService(
     async Task<AgentReadiness> CheckAsync(Launcher launcher, IntakeState? state, string? problem, CancellationToken ct)
     {
         var home = launcher.Tuning switch { "claude" => homes.Claude, "codex" => homes.Codex, _ => homes.Copilot };
-        var (hooks, setup) = Hooks(home, state, problem);
+        var (hooks, setup) = Hooks(launcher.Tuning is "claude" or "codex" ? launcher.Tuning : "copilot", home, state, problem);
         var row = new AgentReadiness(launcher.Id, launcher.Label, home, null, null,
             new(ReadinessState.Missing, "Not installed. Install this CLI, then check again."),
             new(ReadinessState.Unknown, "Version not checked."),
@@ -165,7 +165,15 @@ public sealed class AgentReadinessService(
         }
     }
 
-    (ReadinessCheck, HookSetupState) Hooks(string home, IntakeState? state, string? problem)
+    // A migrated profile (#783, §6.11) has no agent-bridge-owner.json: migration re-points the old
+    // bridge's registrations and records them in migration.json. Those agents are set up; Set up
+    // would only fail ("legacy registration; use Migrate"). An agent migration did not re-point
+    // (Codex, when the old bridge never hooked it) has no registration and stays not set up.
+    bool MigratedAgent(string agent) =>
+        AgentBridge.Host.Migration.MigrationRecord.Load(profile).Record is { State: "migrated" } record
+        && record.Files.Any(file => file.Changes.Any(change => change.Agent == agent));
+
+    (ReadinessCheck, HookSetupState) Hooks(string agent, string home, IntakeState? state, string? problem)
     {
         if (readOnly() is { } why) { return (new(ReadinessState.Blocked, $"Hook setup is unavailable while this host is read-only: {why}"), HookSetupState.Unknown); }
         if (problem is not null) { return (new(ReadinessState.Failed, problem), HookSetupState.Unknown); }
@@ -175,6 +183,7 @@ public sealed class AgentReadinessService(
             try { bytes = File.ReadAllBytes(Path.Combine(home, "agent-bridge-owner.json")); }
             catch (Exception absent) when (absent is FileNotFoundException or DirectoryNotFoundException)
             {
+                if (state is not null && MigratedAgent(agent)) { return (new(ReadinessState.Unknown, "Migrated from agent-ha-bridge, which re-pointed this agent's hooks here; nothing has been heard from them yet."), HookSetupState.Completed); }
                 return (state is null ? new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required.")
                     : new(ReadinessState.Unknown, "Intake is enabled; this agent's registration and ownership have not been verified."), HookSetupState.NotSetUp);
             }

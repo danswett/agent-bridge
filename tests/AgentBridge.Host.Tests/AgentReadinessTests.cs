@@ -105,6 +105,53 @@ public sealed class AgentReadinessTests : IDisposable
         Assert.DoesNotContain("token-like", agent.VersionCheck.Detail);
     }
 
+    void MigratedProfile(string state, params string[] agents)
+    {
+        new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
+        var file = new AgentBridge.Host.Migration.MigrationRecord.FileRecord
+        {
+            Role = "hooks", Path = Path.Combine(f.Root, "hooks.json"), Existed = true, Backup = "b", Before = "x",
+            Changes = [.. agents.Select(a => new AgentBridge.Host.Migration.EntryChange(a, "SessionStart", System.Text.Json.Nodes.JsonValue.Create("old")!, System.Text.Json.Nodes.JsonValue.Create("new")!))],
+        };
+        new AgentBridge.Host.Migration.MigrationRecord { InstallationId = "i", BridgeHome = Path.Combine(f.Root, "old"), State = state, Files = { file } }.Save(Profile);
+    }
+
+    [Fact]
+    public async Task A_migrated_profile_reports_Completed_for_the_agents_migration_re_pointed_and_never_offers_Set_up()
+    {
+        MigratedProfile("migrated", "copilot", "claude");
+        await using var service = Service();
+
+        var report = await service.RefreshAsync();
+
+        foreach (var id in new[] { "copilot", "claude" })
+        {
+            Assert.Equal(HookSetupState.Completed, Agent(report, id).HookSetup);
+            Assert.Contains("migrat", Agent(report, id).Hooks.Detail, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(ReadinessState.Unknown, Agent(report, id).Hooks.State);
+        }
+    }
+
+    [Fact]
+    public async Task A_migrated_profile_still_reports_NotSetUp_for_an_agent_migration_did_not_re_point()
+    {
+        MigratedProfile("migrated", "copilot", "claude");
+        await using var service = Service();
+
+        Assert.Equal(HookSetupState.NotSetUp, Agent(await service.RefreshAsync(), "codex").HookSetup);
+    }
+
+    [Fact]
+    public async Task A_part_way_migration_or_a_missing_record_does_not_count_as_set_up()
+    {
+        MigratedProfile("migrating", "claude");
+        await using var service = Service();
+        Assert.Equal(HookSetupState.NotSetUp, Agent(await service.RefreshAsync(), "claude").HookSetup);
+
+        File.Delete(Path.Combine(Profile, "migration.json"));
+        Assert.Equal(HookSetupState.NotSetUp, Agent(await service.RefreshAsync(fresh: true), "claude").HookSetup);
+    }
+
     [Fact]
     public async Task An_owned_record_and_enabled_intake_are_evidence_not_a_claim_of_verified_hooks_or_sign_in()
     {
