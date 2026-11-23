@@ -281,12 +281,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (`-FastRing`: ring 0, Linux only, §2). Its `tiers` output and the summary's Tier column give
    each gated job's tier, blocking or post-merge, and each post-merge leg by exact name (item 9).
 
-   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
-   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
-   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
-   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
-   so it runs beside them and can't take a waiting push run's place and leave that push's commit
-   untested (#938's review). GitHub promises no
+   **Main: every push runs, nothing is cancelled.** Each push to `main` has the concurrency group
+   `ci-main-<sha>`, which never cancels a run in progress, so every merge gets its full run (a single
+   shared group kept one running and one waiting run, and a newer push cancelled the one waiting:
+   3 of 10 main runs on Nov 22). A re-run (attempt 2 on) gets its own run-id group, like a run by hand,
+   so it runs beside the first attempt and can't take its place (#938's review). GitHub promises no
    order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
    over unfinished product evidence, and judges the newest usable named-job result.
    So a main run's change is everything since the last commit main's CI
@@ -497,8 +496,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
-     never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). A named test job cancelled after its tests or build started holds
+     never cancel a run in progress either, and none is replaced: each has its own group
+     `ci-main-<sha>` (item 7). A named test job cancelled after its tests or build started holds
      merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
@@ -612,7 +611,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      started, and a step that failed before it is judged like any other; a never-assigned runner
      also needs a nonempty step manifest. Cancelled runs are
      inspected rather than hiding a test failure behind older green evidence; a cancelled run
-     with no jobs (displaced in `ci-main`) is passed over.
+     with no jobs (cancelled before it started: only runs from before per-commit groups) is passed over.
      An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
      merge-rule description (after any blocking reason, compacted) and to the detailed log;
      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed

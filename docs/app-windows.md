@@ -992,9 +992,8 @@ connector's Install button on a machine the dashboard drives.
   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
-  doesn't rest on the order main's CI runs go in (first attempts share
-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, unless main's head has since
+  doesn't rest on the order main's CI runs go in (each push has a group of its
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
   changed the app (main's own selector, under the lock, says so; main's later run publishes
   both, where publishing this first could leave that one's lower version refused), and
   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
@@ -1137,10 +1136,13 @@ A second way to publish, apart from merging: `.github/workflows/release-train.ym
 (and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
 Merging never waits for it and it never blocks a merge.
 
-**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
+**Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
 superseded run that went green still publishes nothing when `main`'s head has since changed the
 app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
+(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
+`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
+starvation lasts until the train lands.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
