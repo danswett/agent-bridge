@@ -97,6 +97,14 @@ if ($Shard -and $wrote) {
     try { $wrongShard = (Get-Content $Result -Raw | ConvertFrom-Json).shard -ne $Shard } catch { $wrongShard = $true }
 }
 $failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
+# #3982: where the posted native wheel went, in the step output on every run that drew the history (window handles and
+# class names only, no titles). Diagnosis: it never changes the verdict.
+if ($wrote) {
+    try {
+        $wheel = (Get-Content $Result -Raw | ConvertFrom-Json).historyWheelFill.wheelDiagnosis
+        if ($wheel) { Write-Host "self-test $($wheel.Line)" }
+    } catch { Write-Host 'self-test native wheel: no diagnosis in this result' }
+}
 . (Join-Path $PSScriptRoot 'app-self-test-trace.ps1')
 $evidence = [ordered]@{
     processId = $p.Id; exitCode = $code; failedChecks = $failedChecks; bounceTrace = $null
