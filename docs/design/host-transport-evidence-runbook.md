@@ -74,7 +74,8 @@ Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-
 Per event, in this order, by the elevated session, after the owner approves that event:
 
 ```powershell
-# 0. Re-read the relay addresses for THIS event (read, before anything else; use this event's own result in step 2, and record it):Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique
+# 0. Re-read the relay addresses for THIS event (read, before anything else; use this event's own result in step 2, and record it):
+Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique
 # 1. Arm the dead-man FIRST: it deletes the whole group after N minutes whatever happens to the session.
 $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
 Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -User 'SYSTEM' -RunLevel Highest
