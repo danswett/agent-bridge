@@ -1481,6 +1481,10 @@ leaves the device only in this request, only to hosts of the account (the rule a
 stored with the subscription and removed with it, and is not returned by `push.list`. Only `failures` is decided by its own flag (`deliveryFailures`, off for a device that sent no `notify`); sign-in
 and the other notice kinds are not filtered. An older host that does not know `notify` ignores it
 and keeps sending everything. A request with a `notify` of the wrong shape fails as a request.
+A launched agent that waits on a folder-trust answer for two minutes (`TrustWaitAfter`, documented here, not a setting) is told to the owner by the host
+itself, once per question: the `question` kind in the `needsYou` class, with host-built words (the agent's name, the machine's name, and "A launched session is
+waiting for a folder-trust answer"), nothing the agent said and no folder, opening the machine's Needs you. It is not a new kind and not a planner: nothing
+sends a tap, and a question answered or gone first is forgotten without a notice. It follows the device's own `notify` filters for the `question` kind.
 A device that filters a session's finished turns is still told when a question it was shown is no longer waiting: the host sends it the `resolved` notice, and drops a question not yet sent, when the turn ends.
 
 ### `push.unsubscribe`
