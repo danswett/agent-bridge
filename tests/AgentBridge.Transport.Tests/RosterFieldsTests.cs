@@ -546,4 +546,35 @@ public sealed class RosterFieldsTests
         await Task.Delay(300);
         Assert.Empty(strangerWire.Drain());
     }
+
+    // HA retirement row 15 (forget machine), HA off (#1396): once a person forgets an offline machine it is in no read (neither a record
+    // nor the known list), and when it comes back its old sequence does not bind it: the relay kept no history of it.
+    [Fact]
+    public async Task A_forgotten_machine_is_in_no_read_and_its_old_sequence_does_not_bind_it_when_it_comes_back()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        await using var person = await relay.ConnectAsync(token, "win", "app");
+        var reader = new Wirer(person);
+        var host = await relay.ConnectAsync(token, "dev-box", "host");
+        var (id, key) = (host.Id, host.Key);
+        Assert.Null(await new Wirer(host).PutAsync(host, Record(id, seq: 50)));
+        await host.DisposeAsync();
+        await Wait.UntilAsync(() => person.Relay.Known?.Any(k => k.Id == id) == true, "the host listed as offline");
+
+        Assert.Null(await person.Relay.ForgetAsync(id));
+        await Wait.UntilAsync(() => person.Relay.Known?.All(k => k.Id != id) == true, "the forgotten host not listed");
+
+        var frames = await reader.GetAsync(person);
+        Assert.DoesNotContain(frames, f => f.TryGetProperty("machine", out var m) && m.GetString() == id);
+        var known = frames.Single(f => f.TryGetProperty("known", out _)).GetProperty("known");
+        Assert.DoesNotContain(known.EnumerateArray(), k => k.GetProperty("machine").GetString() == id);
+
+        await using var back = await relay.ConnectAsync(token, "dev-box", "host", key);
+        Assert.Null(await new Wirer(back).PutAsync(back, Record(back.Id, seq: 1)));
+        var again = (await reader.GetAsync(person)).Single(f => f.TryGetProperty("machine", out _));
+        Assert.Equal(id, again.GetProperty("machine").GetString());
+        Assert.Equal(1, again.GetProperty("record").GetProperty("seq").GetInt64());
+        Assert.True(again.GetProperty("online").GetBoolean());
+    }
 }
