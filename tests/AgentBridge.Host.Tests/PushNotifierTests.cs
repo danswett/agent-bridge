@@ -2321,8 +2321,8 @@ public sealed class PushNotifierTests : IDisposable
 
     // Per-device notification filters (push.subscribe notify): the host filters when it sends, so the
     // service worker never has to drop a push. Absent notify means no filtering.
-    static object Filters(bool questions = true, bool pinned = true, bool all = false, string[]? pins = null) =>
-        new { questions, pinned, all, deliveryFailures = false, pinnedSessions = pins ?? [] };
+    static object Filters(bool questions = true, bool pinned = true, bool all = false, string[]? pins = null, bool failures = false) =>
+        new { questions, pinned, all, deliveryFailures = failures, pinnedSessions = pins ?? [] };
 
     async Task Finish(string id)
     {
@@ -2385,6 +2385,93 @@ public sealed class PushNotifierTests : IDisposable
         source.Upsert(S("s1", SessionStatus.Working));
         await After(TimeSpan.FromSeconds(3));
         Assert.DoesNotContain(Phone, Received().Select(r => r.Device));
+    }
+
+    // S2b-2a: the machine's delivery-failure notice. A count only, one per machine per 60 s window sent at the window's end,
+    // to a device that turned it on, always alerting (docs/protocol/v1-sessions.md, the failures notice).
+    [Fact]
+    public async Task Delivery_failures_in_a_window_go_as_one_count_at_its_end_to_a_device_that_turned_them_on()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(20));
+        notifier.NoteDeliveryFailure(2);
+        await After(TimeSpan.FromSeconds(39));
+        Assert.Empty(sender.Sent);  // 59 s in: the window is still open
+        await After(TimeSpan.FromSeconds(2));
+        var (device, n, ttl, urgency, topic) = Assert.Single(Received());
+        Assert.Equal(Phone, device);
+        Assert.Equal("Messages not delivered", n.GetProperty("title").GetString());
+        Assert.Equal("DEV · 3 messages not delivered", n.GetProperty("body").GetString());
+        Assert.Equal($"{Machine}:~failures", n.GetProperty("tag").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        var d = n.GetProperty("data");
+        Assert.Equal(("failures", 3, ""), (d.GetProperty("kind").GetString(), d.GetProperty("failures").GetInt32(), d.GetProperty("session").GetString()));
+        Assert.False(n.TryGetProperty("silent", out _));  // always a visible notification, never silent
+        Assert.Equal((21600, "normal", PushNotice.Topic(Machine, PushNotice.FailuresKey)), (ttl, urgency, topic));
+        // A count only: no message id, no text.
+        Assert.DoesNotContain("id=", n.GetRawText());
+    }
+
+    [Fact]
+    public async Task Delivery_failures_go_to_no_device_that_did_not_ask_for_them()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        Subscribe(Laptop);  // sent no notify at all
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal([Phone], Received().Select(r => r.Device));
+        // A device with the other flags on and failures off gets none either.
+        Subscribe(Laptop, notify: Filters(all: true));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal([Phone, Phone], Received().Select(r => r.Device));
+    }
+
+    [Fact]
+    public async Task A_failure_after_a_window_closes_opens_the_next_with_only_its_own_count()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        notifier.NoteDeliveryFailure(4);
+        await After(TimeSpan.FromSeconds(60));
+        await After(TimeSpan.FromSeconds(30));
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(59));
+        Assert.Single(Received());  // the second window has not closed
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["DEV · 4 messages not delivered", "DEV · 1 message not delivered"],
+            Received().Select(r => r.Notification.GetProperty("body").GetString()));
+    }
+
+    [Fact]
+    public async Task Delivery_failures_ignore_a_count_below_one_and_a_window_nobody_wants_leaves_no_count_behind()
+    {
+        Start();
+        notifier.NoteDeliveryFailure(0);
+        notifier.NoteDeliveryFailure(-3);
+        await After(TimeSpan.FromMinutes(2));
+        Assert.Empty(sender.Sent);
+        Subscribe(Laptop);  // wants none
+        notifier.NoteDeliveryFailure(5);
+        await After(TimeSpan.FromSeconds(61));
+        // A device that turns them on afterwards is not told of the failures of the window that passed.
+        Subscribe(Phone, notify: Filters(failures: true));
+        await After(TimeSpan.FromMinutes(5));
+        Assert.Empty(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_delivery_failure_notice_goes_even_to_a_device_in_use_and_is_not_collapsed_with_a_session_notice()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true, questions: false, pinned: false));
+        notifier.Watching = device => device == Phone;
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal("failures", Kind(Assert.Single(Received()).Notification));
     }
 
     [Fact]

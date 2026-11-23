@@ -144,7 +144,7 @@ public sealed class AuditGateCommandTests : IDisposable
         Assert.Equal((500, 0), (json.GetProperty("messages").GetProperty("relayDelivered").GetInt32(), json.GetProperty("messages").GetProperty("haFallbacks").GetInt32()));
         Assert.Empty(json.GetProperty("reasons").EnumerateArray());
         // A closed v1 schema: the combiner refuses a field it does not know by name.
-        Assert.Equal(["host", "invalidated", "kind", "legacyHaDispatches", "messages", "reasons", "relay", "schema", "since"], json.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal(["host", "invalidated", "kind", "legacyHaDispatches", "messages", "readAt", "reasons", "relay", "schema", "since"], json.EnumerateObject().Select(p => p.Name).Order());
         // What a fleet combiner reads instead of this host's own verdict (per-host floors are never expected to be met alone).
         Assert.False(json.GetProperty("invalidated").GetBoolean());
     }
@@ -225,5 +225,20 @@ public sealed class AuditGateCommandTests : IDisposable
             Assert.All(reasons, code => Assert.Contains(code, Codes));
             Assert.Equal(reasons.Distinct().Count(), reasons.Length);
         }
+    }
+
+    [Fact]
+    public void The_json_carries_the_read_time_as_the_window_end_and_a_start_after_it_is_refused()
+    {
+        Floors(Log());
+        var read = new FakeTimeProvider(DateTimeOffset.Parse("2026-11-23T12:00:00Z"));
+        var o = new StringWriter();
+        Assert.Equal(0, AuditGateCommand.Run(["audit", "gate", "--since", Since, "--host", "host-a", "--messages", Messages(), "--json"], root, o, new StringWriter(), read));
+        using var doc = JsonDocument.Parse(o.ToString());
+        Assert.Equal("2026-11-23T12:00:00Z", doc.RootElement.GetProperty("readAt").GetString());
+
+        var e = new StringWriter();
+        Assert.Equal(2, AuditGateCommand.Run(["audit", "gate", "--since", "2026-11-24T00:00:00Z", "--host", "host-a", "--json"], root, new StringWriter(), e, read));
+        Assert.Contains("usage", e.ToString());
     }
 }

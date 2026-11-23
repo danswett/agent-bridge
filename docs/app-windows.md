@@ -406,6 +406,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
