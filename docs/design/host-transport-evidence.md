@@ -182,6 +182,26 @@ Rollback is **HA kept**: nothing on this gate deletes HA code (deletion needs E4
   again; those calls stay in the code until E4, so this is a revert, not a rewrite.
 - If a Host-path request is `unconfirmed`, rolling back does not resend it: it is resolved by `launches status` first.
 
+## Names, and ending the sessions the run starts
+
+A run starts at least 100 Host sessions and as many HA-twin sessions (200 or more in all), so the names and the
+live count are planned, not left to chance.
+
+- **Names.** Each request's unique launch name is taken from the fixed `SG Builder <n>` / `SG Worker <n>` list that the
+  existing name gate (`FleetLaunchNames`, a format and collision rule) accepts; the run plan assigns every name before
+  the first request. A name is **held while its session is live** and is reused only after that session has ended,
+  because a live name collides (`name-gate`). The plan therefore never needs more names than the cap below.
+- **Cap.** The run plan states a bound on simultaneously live disposable sessions per target (Quality/SRE's number,
+  written before the first request). The run issues requests in batches no larger than the cap, ends the batch, and only
+  then starts the next; a batch that would exceed the cap is not started. The concurrent bursts are inside the cap too.
+- **Ending.** Each batch is ended by the same operator that ran it, by list (the names in the plan), through the existing
+  end path for the disposable hosts (`fleet end` once G10 lands, otherwise the current end wrappers on those hosts only).
+  Never a raw kill, and never anything outside the plan's list. After the run an **end-by-list** sweep ends whatever the
+  plan's names still show live and records each result.
+- **Check.** After the sweep the session list on every disposable host shows none of the plan's names. A name still
+  live after the sweep is a finding in the receipt, not something to leave running. The receipt records the cap used,
+  the batch sizes, and the sweep result, with the session lists hashed as raw records.
+
 ## Out of scope
 
 The end path (G10, G11 B), the session-registry dual run (slice 11), the load proof, the HA-off rehearsal,
