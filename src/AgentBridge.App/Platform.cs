@@ -16,7 +16,7 @@ namespace AgentBridge.App;
 // profileFolder: this profile's own folder, where the installer's copy of the package is made
 // (PackageHandoff); null for a copy that only reads its version. log: where which source answered
 // a check (the CDN or GitHub, #927) is said.
-sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null, Action<string>? log = null) : IUpdater
+sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null, Action<string>? log = null, bool updateOnly = false) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     // Shared with every profile's app and host through the app's folder (#530).
@@ -221,7 +221,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // #3343: started through a copy of this app outside the installation, which installs in place when a held file refuses Update.exe.
         var helper = InPlaceHandoff.CopyHelper(Path.Combine(root, "current"), Path.Combine(profileFolder!, "app-update-helper"), "AgentBridge.exe");
         using var me = System.Diagnostics.Process.GetCurrentProcess();
-        var request = new InPlaceHandoff(copy.Package, copy.Digest, root, packages, me.Id, me.StartTime.ToUniversalTime().Ticks, ["--background", "--profile", profile]);
+        var request = new InPlaceHandoff(copy.Package, copy.Digest, root, packages, me.Id, me.StartTime.ToUniversalTime().Ticks, [updateOnly ? "--update-only" : "--background", "--profile", profile]);
         handedOver = handoff.Launch(copy, root, packages, request.Restart,
             _ => locator.Process.StartProcess(helper, request.Arguments(), Path.GetDirectoryName(helper)!, false));
         // The helper has started: the next start may say the install didn't take (#1167). Best

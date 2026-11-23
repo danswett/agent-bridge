@@ -169,7 +169,7 @@ public sealed class RunCompletionTests : IDisposable
             }
             class Updater {
                 string Ready => "2"; Release pending = new(); Asset local; string source = "", profile = "", profileFolder = Path.Combine(State.Folder, "profile");
-                Handoff Handoff = new(); IDisposable handedOver; Action<string> log = AppLog.Write;
+                Handoff Handoff = new(); IDisposable handedOver; Action<string> log = AppLog.Write; bool updateOnly;
                 void Manager() { } string PackageFile(Asset asset) => Path.Combine(State.Folder, "Update.fake");
                 public static void Run(bool callbackThrows, bool fail) =>
                     new Updater { Handoff = new Handoff { Fail = fail } }.ApplyAndRestart("2",

@@ -140,7 +140,7 @@ sealed class SingleInstance : IDisposable
         var mutex = new Mutex(true, $@"Local\{name}", out var mine);
         var show = new EventWaitHandle(false, EventResetMode.AutoReset, $@"Local\{name}.show");
         if (mine) { return new SingleInstance(mutex, show); }
-        if (!options.Background && !options.ToastActivated) { show.Set(); }
+        if (!options.Background && !options.ToastActivated && !options.UpdateOnly) { show.Set(); }
         show.Dispose();
         mutex.Dispose();
         return null;

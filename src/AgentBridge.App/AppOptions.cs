@@ -13,6 +13,9 @@ sealed record AppOptions
     public string Profile { get; init; } = "default";
     // Started at sign-in: into the notification area, without a window.
     public bool Background { get; init; }
+    // Started by the host on a machine whose app was closed, only to install a newer release between
+    // turns and end (UpdateOnlyRun): no window, tray icon, toast or sign-in entry. Implies Background.
+    public bool UpdateOnly { get; init; }
     // Windows started this process to deliver a toast click (the activator's command line).
     public bool ToastActivated { get; init; }
     // A pretend host inside the app, for trying it without agents and for CI.
@@ -32,6 +35,7 @@ sealed record AppOptions
             {
                 case "--profile" when i + 1 < args.Length && Identity.IsValidProfile(args[i + 1]): o = o with { Profile = args[++i] }; break;
                 case "--background": o = o with { Background = true }; break;
+                case "--update-only": o = o with { Background = true, UpdateOnly = true }; break;
                 case "-ToastActivated" or "--toast-activated": o = o with { ToastActivated = true }; break;
                 case "--demo": o = o with { Demo = true }; break;
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;

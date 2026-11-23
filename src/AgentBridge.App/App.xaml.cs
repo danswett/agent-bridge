@@ -76,24 +76,27 @@ public partial class App : Application
         }
 
         var prefsFile = Path.Combine(appData, $"{options.Profile}-settings.json");
-        var firstInstall = installed && !options.Demo && options.SelfTest is null && AppPreferences.IsFirstRun(prefsFile);
-        var prefs = AppPreferences.Load(prefsFile);
+        var firstInstall = installed && !options.Demo && options.SelfTest is null && !options.UpdateOnly && AppPreferences.IsFirstRun(prefsFile);
+        var chosen = AppPreferences.Load(prefsFile);
+        // The headless update run acts as if updating between turns were chosen, and saves only what it changed.
+        var prefs = options.UpdateOnly ? UpdateOnlyRun.Prefs(chosen) : chosen;
         if (firstInstall) { prefs = prefs with { GuidePending = true }; }
         AppPreferences Prefs() => prefs;
         void SavePrefs(AppPreferences next)
         {
             prefs = next;
-            try { next.Save(prefsFile); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"settings not saved: {e.Message}"); }
+            try { (options.UpdateOnly ? UpdateOnlyRun.ForFile(next, chosen) : next).Save(prefsFile); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"settings not saved: {e.Message}"); }
         }
         if (firstInstall) { SavePrefs(prefs); }
 
         // One updater for Settings and the automatic updates alike, observed so that what either
         // does is what the account's other devices are told (#51).
-        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder, AppLog.Write));
+        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder, AppLog.Write, options.UpdateOnly));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
         var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay, relayEditable: !installed) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
 
-        if (installed)
+        // The headless run leaves the person's machine as it found it: no sign-in entry, first-run guide or toast registration.
+        if (installed && !options.UpdateOnly)
         {
             FirstRun(Prefs, SavePrefs, atSignIn);
             try { ToastActivator.Register(Paths.Exe, Path.Combine(AppContext.BaseDirectory, AppAssets.Logo)); }
@@ -102,7 +105,7 @@ public partial class App : Application
 
         MainViewModel? self = null;
         var shrinker = new WinRtImageShrinker();
-        IToastSink sink = installed ? new WindowsToastSink() : new NoToasts();
+        IToastSink sink = installed && !options.UpdateOnly ? new WindowsToastSink() : new NoToasts();
 
         // A machine's cards and toasts, whichever machine it is: everything they do goes to that
         // machine's own host.
@@ -195,7 +198,7 @@ public partial class App : Application
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
+        if (!options.UpdateOnly) { tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit); }
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
@@ -220,7 +223,8 @@ public partial class App : Application
         // changed.
         if (!options.Demo && updater.InstalledVersion is not null)
         {
-            var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
+            // Said by the next start a person sees, not by the headless run: nobody is there to read it.
+            var announced = options.UpdateOnly ? null : AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
             MainWindow shownIn = window;
             autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, pid => PackageProcesses.Others(options.Profile, pid), ui: ui, preflight: InstallBlockers.Find)
             {
@@ -251,9 +255,15 @@ public partial class App : Application
             var updates = autoUpdater;
             settings.PreferencesChanged += () => _ = updates.TickAsync();
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
-            updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
+            // The headless run ends once there is nothing left for it to do (UpdateOnlyRun).
+            var headless = options.UpdateOnly ? new UpdateOnlyRun(() => updates.State, TimeProvider.System) : null;
+            void EndIfDone()
+            {
+                if (headless?.Finished() is { } over) { AppLog.Write($"update-only: ending, {over}"); Quit(); }
+            }
+            updateTimer.Tick += async (_, _) => { await updates.TickAsync(); EndIfDone(); };
             updateTimer.Start();
-            _ = autoUpdater.TickAsync();
+            _ = updates.TickAsync().ContinueWith(_ => ui.Post(EndIfDone), TaskScheduler.Default);
         }
         // What this machine's updater is doing, for the account's other devices to see, and their
         // presses of Check and Install (#51). A copy the updater cannot update says so.
