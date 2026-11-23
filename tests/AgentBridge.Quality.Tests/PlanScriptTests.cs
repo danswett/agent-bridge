@@ -16,36 +16,9 @@ public class PlanScriptTests
     [InlineData("pull_request", "Directory.Build.props", true, true)]
     [InlineData("pull_request", ".github/actions/install-trivy/action.yml", true, true)]
     [InlineData("push", "docs/guide.md", false, false)]
-    [InlineData("push", "docs/guide.md", false, true)]
-    [InlineData("push", ".github/workflows/merge-rule.yml", false, true)]
-    [InlineData("push", ".github/CODEOWNERS", false, true)]
-    [InlineData("push", "quality/merge-rule.yml", false, true)]
-    [InlineData("push", ".github/workflows/ci.yml", true, true)]
-    [InlineData("push", "src/AgentBridge.App/View.cs", true, false)]
-    [InlineData("push", "src/AgentBridge.App/View.cs", true, true)]
-    [InlineData("push", "build/pack-app.ps1", true, true)]
-    [InlineData("push", "Directory.Build.props", true, true)]
-    [InlineData("push", ".github/actions/install-trivy/action.yml", true, true)]
-    [InlineData("push", "tests/Example.Tests/Test.cs", false, false)]
-    [InlineData("push", "tests/Example.Tests/Shared.cs", true, false)]
-    [InlineData("pull_request", "tests/Example.Tests/Test.cs", false, false)]
-    [InlineData("push", "tests/AgentBridge.Quality.Tests/Test.cs", false, true)]
-    [InlineData("push", "docs/protocol/examples/demo.json", true, false)]
-    [InlineData("push", "unknown/input.txt", false, true)]
-    [InlineData("workflow_dispatch", ".github/workflows/merge-rule.yml", true, true)]
     public Task The_workflows_plan_selects_the_installer_only_with_its_app_input(
         string eventName, string changed, bool packages, bool wholeRing) =>
         CheckPlan(eventName, changed, packages, wholeRing);
-
-    [Fact]
-    public Task A_test_and_code_change_cannot_skip_main_product() =>
-        CheckPlan("push", "tests/Example.Tests/Test.cs", true, false, anotherFile: "src/AgentBridge.App/View.cs");
-
-    [Theory]
-    [InlineData("docs/guide.md")]
-    [InlineData("tests/Example.Tests/Test.cs")]
-    public Task A_green_but_unpublished_app_change_is_carried_by_the_next_main_head(string changed) =>
-        CheckPlan("push", changed, true, false, unpaidApp: true);
 
     [Theory]
     [InlineData("windows-latest", true)]
@@ -66,15 +39,7 @@ public class PlanScriptTests
         Assert.False(windows.Children.ContainsKey("continue-on-error"));
     }
 
-    [Theory]
-    [InlineData("docs/guide.md", false)]
-    [InlineData("docs/guide.md", true)]
-    [InlineData(".github/workflows/merge-rule.yml", false)]
-    [InlineData(".github/workflows/merge-rule.yml", true)]
-    public Task A_push_without_a_proven_base_packages_an_earlier_untested_app_change(
-        string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
-
-    static async Task CheckPlan(
+    internal static async Task CheckPlan(
         string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
