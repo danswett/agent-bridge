@@ -10,6 +10,7 @@ permission. No machine name appears here or in any record the run keeps.
 ## Roles: every step names who presses
 
 - **SRE** runs the evidence, presses every control the run needs that is not listed under OWNER, and keeps the raw records.
+- **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy.
 - **OWNER** is live for exactly two things: **the launch grant (S1)** and **each induced host restart or relay reconnect (S8)**, plus
   a restart if a lost-response fault needs one (S5). The owner types nothing and runs no terminal step: they use the host's own person
   surface (the app) when SRE asks.
@@ -27,6 +28,7 @@ time. Anything else is out of bounds and stops the run.
 | Restart a disposable host (S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
 | Drop and restore a disposable host's relay connection (S5, S8) | SRE, with the owner's approval of the event | The owner, per event, before it happens |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
+| Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real
 Home Assistant (the comparison runs on a disposable HA only).
@@ -65,6 +67,7 @@ sha256, and the load readings before and after.
 
 | Step | Who | What | Evidence recorded |
 |---|---|---|---|
+| **S-1** | **SRE approves and deploys** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook | Each host's build head, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, the HA fallback counter, load | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
 | **S2** | SRE | **Smoke:** one Host launch and its HA twin on one pair. Stop if it does not start and register exactly once | Both receipts, the three double-launch counts |
