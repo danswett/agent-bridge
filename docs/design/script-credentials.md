@@ -1,5 +1,12 @@
 # Script credentials: one credential for fleet scripts that run outside any session (#1402)
 
+**Owner decision (option 1, recorded on #1414): script credentials are issued from the Slipgates app.**
+Only a person's press in the app mints, revokes or rotates one, and no terminal or PowerShell step
+exists anywhere (the owner's Nov 19 rule, #3305 to #3308). The `agent-bridge-host scripts add` and
+`scripts revoke` commands this note once proposed are not built. Build order: script send (#2763)
+and the `launch:fleet` grant first, then the app-issued credential, then the fleet scripts switch
+over and `AGENT_HA_AGENT_TOKEN` retires.
+
 Part of #1396 (HA parity, slice S5), and of epic #1248. #2346 implements the Windows caller
 slice: registered scripts authenticate as `script:<machine>/<name>` for **`fleet.list` and
 `fleet.find` only**. Stored scope remains `read+reply`, but the hello advertises `read` and a
@@ -102,23 +109,24 @@ says. The base script credential never carries it.
 
 ## 5. Who mints and who revokes
 
-**Only a person at the machine mints or revokes**, through the host's own command line or the
-app. Never an agent, never a script, never a remote device. This follows guard #67 (host
-management is refused from inside an agent session) and agent-token-rotation.md §4 (a new
-token is accepted only from a person's device).
+**Only a person's press in the Slipgates app mints, revokes or rotates**, on the machine's own
+host and from a presence-proven device. Never an agent, never a script, never a remote device
+without that presence, and no terminal or PowerShell step. This follows guard #67 (host management
+is refused from inside an agent session) and agent-token-rotation.md �4 (a new token is accepted
+only from a person's device). The owner chose this over a host command line (recorded on #1414).
 
-* **Mint (proposed).** `agent-bridge-host scripts add <name>`. The host writes the token
-  straight into an owner-only file for that script (§7) and shows the owner the name, scope,
-  expiry date and the **last four characters** only. The token is never printed, logged,
-  put in an argument, or sent over any channel.
-* **Revoke (proposed).** `agent-bridge-host scripts revoke <name>`, or a "Revoke" button
-  beside the script in the app. The record is deleted, every open connection on it is closed
-  and the next call is refused.
-* **Rotate.** Mint the same name again. The host writes the new file atomically and keeps the
-  old credential until the new one passes one real call (agent-token-rotation.md §4), then
-  deletes it. At most two credentials per name are live, and only during a rotation; a
-  failed first call changes nothing, and `scripts revoke <name>` kills both. To end a leak
-  at once, revoke first and then mint, rather than rotating. A script reads its file on each run, so it needs no restart.
+* **Mint.** In app Settings the person presses "Add script credential" and picks a script name.
+  The host writes the token straight into an owner-only file for that script (�7) and the app shows
+  the name, scope, expiry date and the **last four characters** only. The token is never printed,
+  logged, put in an argument, or sent over any channel, and no person ever handles it.
+* **Revoke.** The "Revoke" press beside the script in the app. The record is deleted, every open
+  connection on it is closed and the next call is refused.
+* **Rotate.** The "Rotate" press, or minting the same name again. The host writes the new file
+  atomically and keeps the old credential until the new one passes one real call
+  (agent-token-rotation.md �4), then deletes it. At most two credentials per name are live, and
+  only during a rotation; a failed first call changes nothing, and a Revoke press kills both. To
+  end a leak at once, revoke first and then mint, rather than rotating. A script reads its file on
+  each run, so it needs no restart.
 * **Automatic revocation.** Expiry; an unreadable store (fail closed, nothing is accepted until
   the owner deals with it).
 
@@ -131,8 +139,9 @@ token is accepted only from a person's device).
    states it. A partial or untraceable ancestry is refused, never treated as a script.
    A task the scheduler runs never passes that (its SYSTEM service host can't be opened), and
    ancestry couldn't vouch for it anyway: any user process can register a task that runs anything.
-   A scheduled script needs a credential bound to its task, minted elevated with
-   `scripts add <name> --task <\Folder\Task> [--file <path>]...`. The mint is refused unless the
+   A scheduled script needs a credential bound to its task, minted by an app press that names the
+   task (`<\Folder\Task>`) and any extra `--file` paths, with the host service doing the elevated
+   binding (how that service is elevated is #1414's design to settle, not a terminal step). The mint is refused unless the
    task and every file it runs (its program, the script it names, each `--file` that script runs)
    are writable only by SYSTEM and Administrators; it records hashes of the task's definition
    (actions, principal, triggers) and of each file. Accepting it needs a running instance of that
@@ -191,9 +200,9 @@ revocable at the machine in one command.
   `set-agent-ha-token.ps1` approach of setting a per-VM environment variable is not repeated:
   an environment variable is inherited by every child process, which is how the HA token ended
   up in every session.
-* **Rollout, one machine at a time.** The owner runs `scripts add` for each script on each of
-  the four machines. A fleet roll-out that wants to avoid running it by hand needs a
-  person-approved remote mint, which is out of scope here (Q3).
+* **Rollout, one machine at a time.** The owner presses "Add script credential" in the app for
+  each script on each of the four machines; no command is run. A mint for another machine from one
+  device needs a person-approved remote press, which stays out of scope (Q3).
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.
@@ -204,7 +213,7 @@ revocable at the machine in one command.
 |---|---|---|
 | Token used from inside an agent session | Refused at the host; nothing is sent | A line in the audit log and a notice: "script `<name>` credential was presented from inside an agent session", with no token text |
 | Token used after expiry or revoke | Refused as "no live credential" | The script's own error; a notice carries the expiry date, never the token |
-| Owner suspects a leak | `scripts revoke <name>`; remint the same name | The script shows as revoked in the app; the audit log shows the last use (time and op) of the old one |
+| Owner suspects a leak | The "Revoke" press for `<name>`; then mint the same name | The script shows as revoked in the app; the audit log shows the last use (time and op) of the old one |
 | File lost with the machine | Revoke by name on the machine, or delete the credential store | The remaining machines are untouched, because nothing is shared |
 | Store unreadable at host start | Fails closed: nothing accepted or issued | A host notice, as for session credentials |
 
@@ -239,7 +248,7 @@ these script credentials grant no roster verification or additional actions.
 |---|---|
 | `kind` and `name` on the record; mint without a session; check that skips the process binding | about 90 |
 | Caller rule: ancestry in full, no agent session in it, else refuse | about 60 |
-| `scripts add` and `scripts revoke` host commands, owner-only file write, last-four display | about 100 |
+| Host mint, revoke and rotate ops behind the app presses (presence-proven), owner-only file write, last-four display | about 100 |
 | Script principal in the audit and the UI label; op allow-list for `kind: "script"` | about 50 |
 | Tests (kind confusion, refusal from inside a session, expiry, revoke, canary) | about 90 |
 | **Total** | **about 390** |
@@ -256,8 +265,8 @@ Engineering and the owner's security review agree to this note before any code i
 2. **Q2: one credential per script, or one shared by all five.** Recommended: one per script,
    so a leak of the pump wake's does not open the messenger's ops, and the audit says which
    script acted. Cost: five mints per machine.
-3. **Q3: remote mint.** Is running `scripts add` by hand on four machines acceptable, or is a
-   person-approved mint from the app needed first?
+3. **Q3: remote mint.** Answered for the local case: the app press replaces the terminal command
+   (owner decision, option 1, #1414). Still open: a person-approved press for another machine.
 4. **Q4: the ops per script** in §9 are inferred, not read from the scripts (§9 preamble).
 5. **Q5: macOS and Linux.** Out of scope now; confirm the owner is content that the script
    credential waits for peer identification there, as the session credential does.
