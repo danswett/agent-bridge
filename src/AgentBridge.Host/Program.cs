@@ -1124,7 +1124,8 @@ async Task<int> ServeAsync(HostHandover handover)
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
             await liveRoster.ServeAsync(() => relay.GetRosterAsync(current.Token), () => fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
-                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability)));
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability),
+                relaySupportsEvidence: relay.Capabilities.Contains(SessionEvidence.RelayCapability)));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");
