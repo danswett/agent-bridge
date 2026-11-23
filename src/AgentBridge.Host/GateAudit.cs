@@ -139,6 +139,12 @@ internal static class GateAuditProjection
                 totals[key]++;
             }
         }
+        // Each audit_write_failed row is HA actions performed with no audit row (the write failed): an unaudited HA dispatch, so a FAIL.
+        if (since is { } window)
+        {
+            haDispatches += rows.Where(r => r.Action == "audit_write_failed" && r.At >= window)
+                .Sum(r => int.TryParse(r.Target, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 1);
+        }
         return new(totals.Select(p => new GateAuditTotal(p.Key.Action, p.Key.Path, p.Key.ActorKind, p.Value)).ToArray(),
             reasons.Order(StringComparer.Ordinal).ToArray(), invalidated, haDispatches);
     }

@@ -34,14 +34,67 @@ public sealed partial class AgentAnswerFlowTests
         Assert.Equal(GateVerdictKind.Fail, GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0)).Kind);
     }
 
+    // OWNER DECISION (b), via the chief: when the audit row cannot be written the HA answer is STILL typed, and the failure is recorded
+    // as audit_write_failed in the host diagnostic log (never the audit file) plus an in-memory count the next successful write flushes.
     [Fact]
-    public async Task An_unwritable_audit_refuses_an_HA_answer_before_anything_is_typed()
+    public async Task An_HA_answer_is_still_typed_when_the_audit_cannot_be_written_and_the_failure_is_logged_without_the_answer_or_a_token()
     {
         var host = new HaAnswerAuditFixture(f.Root, Answerer(), maxBytes: 0);
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
 
-        Assert.Equal(AnswerOutcome.Refused, (await host.Answer(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
 
-        Assert.Empty(injector.Plans);
+        Assert.NotEmpty(injector.Plans);
+        var line = Assert.Single(host.Logged, l => l.StartsWith("audit_write_failed", StringComparison.Ordinal));
+        Assert.Matches(@"^audit_write_failed kind=answer session=[A-Za-z0-9._-]{1,64} at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$", line);
+        Assert.DoesNotContain("token", line, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, host.Audit.PendingUnauditedHa);
+    }
+
+    [Fact]
+    public async Task An_unaudited_HA_answer_is_counted_once_when_the_audit_next_writes_and_the_gate_fails_on_it()
+    {
+        var host = new HaAnswerAuditFixture(f.Root, Answerer(), block: true);
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        Assert.Equal(1, host.Audit.PendingUnauditedHa);
+
+        host.Unblock();
+        Assert.True(host.Audit.Append(new AgentAuditEntry("local", "r1", "someone", [], "agent.note", "x", "ok")));
+        Assert.True(host.Audit.Append(new AgentAuditEntry("local", "r2", "someone", [], "agent.note", "x", "ok")));
+
+        Assert.Equal("1", Assert.Single(host.Rows(), r => r.Action == "audit_write_failed").Target);
+        Assert.Equal(0, host.Audit.PendingUnauditedHa);
+        var report = GateAuditProjection.ReadWindow(host.Profile, DateTimeOffset.UtcNow.AddHours(-1));
+        Assert.Equal(1, report.LegacyHaDispatches);
+        Assert.Equal(GateVerdictKind.Fail, GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0)).Kind);
+    }
+
+    [Fact]
+    public async Task A_diagnostic_log_that_also_fails_cannot_stop_the_HA_answer_and_the_in_memory_count_is_flushed_later()
+    {
+        var host = new HaAnswerAuditFixture(f.Root, Answerer(), block: true, throwingLog: true);
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+
+        Assert.Empty(host.Logged);
+        Assert.Equal(1, host.Audit.PendingUnauditedHa);
+        host.Unblock();
+        Assert.True(host.Audit.Append(new AgentAuditEntry("local", "r1", "someone", [], "agent.note", "x", "ok")));
+        Assert.Equal("1", Assert.Single(host.Rows(), r => r.Action == "audit_write_failed").Target);
+    }
+
+    [Fact]
+    public async Task A_failed_flush_keeps_the_count_for_the_next_write()
+    {
+        var host = new HaAnswerAuditFixture(f.Root, Answerer(), block: true);
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await host.Answer(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+
+        Assert.False(host.Audit.Append(new AgentAuditEntry("local", "r1", "someone", [], "agent.note", "x", "ok")));
+
+        Assert.Equal(1, host.Audit.PendingUnauditedHa);
     }
 
     [Fact]
@@ -66,11 +119,23 @@ public sealed partial class AgentAnswerFlowTests
     }
 }
 
-sealed class HaAnswerAuditFixture(string root, ISessionAnswerer answerer, long maxBytes = AgentAuditLog.MaxBytes)
+sealed class HaAnswerAuditFixture
 {
-    public string Profile { get; } = Path.Combine(root, "default");
-    readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>> answer =
-        HaAnswerAudit.Wrap(answerer, new AgentAuditLog(Path.Combine(root, "default"), maxBytes: maxBytes));
+    public string Profile { get; }
+    public AgentAuditLog Audit { get; }
+    public List<string> Logged { get; } = [];
+    readonly string blocker;
+    readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>> answer;
+    public HaAnswerAuditFixture(string root, ISessionAnswerer answerer, long maxBytes = AgentAuditLog.MaxBytes, bool block = false, bool throwingLog = false)
+    {
+        Profile = Path.Combine(root, "default");
+        Directory.CreateDirectory(Profile);
+        blocker = Path.Combine(Profile, AgentAuditLog.FolderName);
+        if (block) { File.WriteAllText(blocker, "not a folder"); }
+        Audit = new AgentAuditLog(Profile, log: s => { if (throwingLog) { throw new IOException("diagnostic log unwritable"); } Logged.Add(s); }, maxBytes: maxBytes);
+        answer = HaAnswerAudit.Wrap(answerer, Audit);
+    }
+    public void Unblock() { if (File.Exists(blocker)) { File.Delete(blocker); } }
     public List<AuditCommands.Row> Rows() => GateAuditProjection.Load(Profile).Rows;
     public Task<AnswerResult> Answer(AnswerRequest request) => answer(request, CancellationToken.None);
 }

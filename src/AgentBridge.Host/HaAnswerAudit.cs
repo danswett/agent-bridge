@@ -9,8 +9,9 @@ namespace AgentBridge.Host;
 // principal ha:connector, the intent flushed before any key is typed and a terminal after the confirmed delivery. Without a row
 // the windowed gate could not see an HA approval as an HA fallback.
 //
-// OWNER CHANGE, pending: an answer whose intent cannot be written is refused (as a launch or a stop from the card already is),
-// so an HA user whose audit log is unwritable can no longer approve from the card.
+// OWNER DECISION (b), via the chief: an answer whose audit row cannot be written is STILL typed, never refused for the audit's sake. The failure is
+// logged as audit_write_failed (host diagnostic log, plus an in-memory count the next successful audit write flushes) and the gate counts it as
+// an unaudited HA dispatch, so the verdict is FAIL (design/ha-gate-counters.md).
 internal static class HaAnswerAudit
 {
     internal const string Principal = "ha:connector";
@@ -21,13 +22,16 @@ internal static class HaAnswerAudit
         return (request, ct) => answers.AnswerAuditedAsync(request, (operation, session, question) => Prepare(audit, operation, session, question), ct, sender: "home-assistant");
     }
 
-    // Null refuses: the question has no gate identity, or the intent could not be written.
+    // Never refuses for the audit: with no gate identity or an unwritable audit the answer proceeds and the failure is recorded.
     static Action<AnswerOutcome>? Prepare(AgentAuditLog audit, Guid operation, Session session, Question question)
     {
-        if (SessionService.AnswerGate(session, question, operation, "ha-component") is not { } gate) { return null; }
+        // Owner decision (b): an answer from the card is still typed when its audit row cannot be written (no gate identity, or an
+        // unwritable audit); the failure is recorded as audit_write_failed and counted by the gate as an unaudited HA dispatch.
+        Action<AnswerOutcome> unaudited = _ => { };
+        if (SessionService.AnswerGate(session, question, operation, "ha-component") is not { } gate) { audit.RecordUnauditedHa("answer", session.Id); return unaudited; }
         gate = gate with { Path = "legacy-ha" };
         var intent = new AgentAuditEntry("local", gate.Operation.ToString(), Principal, [], Ops.SessionAnswer, gate.Incarnation.ToString(), "attempted", Gate: gate);
-        if (!audit.Append(intent)) { return null; }
+        if (!audit.Append(intent)) { audit.RecordUnauditedHa("answer", session.Id); return unaudited; }
         return outcome => audit.Append(intent with
         {
             Outcome = outcome == AnswerOutcome.Delivered ? "delivered" : "refused",

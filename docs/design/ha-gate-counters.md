@@ -185,10 +185,18 @@ HA context (#1401, HA deletion gate E4(f)): an answer pressed on a Home Assistan
 launches and stops are: path `legacy-ha`, actorKind `ha-component`, principal `ha:connector`, the intent
 flushed before typing and a terminal after the confirmed delivery (`HaAnswerAudit`), so the windowed gate
 counts an HA approval as an HA dispatch; before this an HA approval left no row and could not read as a
-fallback. **OWNER CHANGE, pending:** an HA answer whose intent cannot be written is refused, as a launch or
-a stop from the card already is, so an HA user whose audit is unwritable cannot approve from the card.
-Quality does not arm this change before the owner answers.
-
+fallback.
+**Owner decision (b), via the chief: send anyway and log the failure; not fail-closed.** When the audit row cannot be written (the
+question has no gate identity, or the audit is unwritable) the HA answer is STILL typed, never refused for the audit's sake. The failure
+is recorded as an `audit_write_failed` event with the action kind (`answer`; `stop` and `launch` follow the same rule), a sanitized
+session id and the time, and nothing else: no answer text, no token, no request body. **The fallback is the host diagnostic log**
+(`AgentAuditLog`'s `log`, which the host points at its own log), never the audit file that just failed; if that log also throws, nothing
+escapes and the **in-memory count** is the last record. That count is flushed into the audit as ONE `audit_write_failed` row (target =
+the count) on the next successful audit write, taken before it is written and put back if that write fails, so it is counted once.
+**The gate counts each `audit_write_failed` as an unaudited HA dispatch**: the windowed projection adds it to `legacyHaDispatches`
+(rows at or after the window start), so the verdict is FAIL (`ha-fallback`), never PASS. While the audit stays unwritable the gate cannot
+read it at all (INCOMPLETE, never PASS), and the diagnostic log and the in-memory count are the record until it can. A process restart
+loses the in-memory count, which is why the diagnostic log line is written first.
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards
 and precedes confirmation arming or dispatch; refused/busy/failed pre-dispatch
