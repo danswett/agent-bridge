@@ -96,7 +96,7 @@ lives 120 s. What is missing is an answer: `replay` does not say what the first 
    same-id offer from the same peer (the channel's static key, as today) is answered with that outcome as a `receipt`, still without typing.
 2. **A probe that never types.** A lookup is a re-offer of the same sealed envelope carrying a probe marker inside the signed body (a new,
    versioned lite marker). A probe of an id the receiver has no record of is answered `unknown` and nothing is typed; without the marker
-   an unseen id is a first offer and would deliver (that is idempotent resend, below).
+   an unseen id is a first offer and would deliver (a late resend, which this design does not do).
 3. **Sender keeps the sealed envelope.** For a send that ends `unconfirmed`, the sender's host keeps the sealed bytes in memory until the
    envelope expires (at most 120 s, at most 64 entries, dropped on expiry or restart) and serves them to a new agent pipe op,
    `agent.receipt { request }`, which returns `delivered`, `refused:<code>`, `pending`, `queued`, `in-flight` (ask again shortly), or
@@ -114,9 +114,9 @@ a refusal code, so it exposes nothing about the target's sessions or text, and i
 **Slices** (each at most 400 lines, tests first): (1) receiver journal and `receipt` answer, with the probe marker; (2) the sender's
 sealed-envelope memory and `agent.receipt`; (3) `reply-session`.
 
-**Open decisions for the owner.** (a) Strict probe (this design) against exactly-once resend, where a re-offer of an unseen id delivers it
-late; the probe is safer for stale messages and costs a wire marker. (b) Whether the journal should survive a host restart; this design says
-no, since the envelope's 120 s already bounds what a lookup could reach.
+**Decided (owner; recorded by the Chief on #3875).** (a) A **strict probe**: a lookup only reads the outcome and never types; an
+unseen id answers `unknown`. Exactly-once resend (a re-offer that delivers an unseen id late) is not part of this design. (b) The
+journal is **memory only, 150 s**: a restart forgets it, and a lookup after one is `unknown`.
 
 ## Turn it on (a person at each machine, in the agreed order)
 
