@@ -43,11 +43,12 @@ function Get-RunRedReason($run) {
 }
 
 # The FULL lane (full.yml) gates the release, never a merge (S2, #4104). Required, all succeeded: the aggregate full-gate (which fails when a lane
-# it selected was skipped, WebKit's included), the x64 self-test, pack and installer, and the Arm64 PACK and INSTALLER: only the Arm64
-# self-test and the Arm64 tests are waived (owner decision, #2454; Quality's conditions on 4217), so the Arm64 package is never optional. No other job there
-# may be red. A run with no FULL run yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
-$script:FullRequiredJobs = @('full-gate', 'app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)', 'app-pack (win-arm64)', 'app-installer (win-arm64)')
-$script:ArmJobs = @('app-selftest (win-arm64)', 'product (windows-11-arm)')
+# it selected was skipped, WebKit's included), the x64 self-test, pack and installer, and the Arm64 PACK (with its package and SBOM, below). Waived (owner
+# decision, #2454 and "ship now"; R8b on 4220): everything Arm64 that RUNS the app: the self-test, the tests, and the Arm64 INSTALLER, which installs and starts
+# the app, i.e. is the Arm64 self-test (#4159: a red Arm64 installer must not block a release). So the Arm64 package is never optional, but its checks are.
+# No other job there may be red. A run with no FULL run yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
+$script:FullRequiredJobs = @('full-gate', 'app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)', 'app-pack (win-arm64)')
+$script:ArmJobs = @('app-selftest (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
 function Get-FullRedReason($run) {
     $full = $run.PSObject.Properties['Full']?.Value
     if ($null -eq $full) { return 'no FULL run for this commit yet' }

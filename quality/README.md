@@ -865,7 +865,8 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 * **The release train is to gate publish on FULL** (docs/app-windows.md, "The release train"), and its selector already does
   (`build/select-release-commit.ps1`, fixtures in `build/test-select-release-commit.ps1`, piece 1 and 2): it takes the newest `main` commit whose FAST
   lane **and** FULL lane are green, and publishes FULL's packages, never rebuilding. FULL must show, all succeeded: `full-gate`; the x64 self-test, pack and installer; the
-  **Arm64 pack and installer**. **Only the Arm64 self-test and the Arm64 tests are waived** (owner, #2454): the Arm64 package is never optional,
+  **Arm64 pack**. **What runs the app on Arm64 is waived** (owner, #2454 and "ship now"): its self-test, its tests and its installer (which installs and
+  starts the app, so it is the Arm64 self-test; #4159): the Arm64 package is never optional,
   and the packages and both SBOMs (the Arm64 one is what attestation needs) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
   commit's `head_sha`, never by branch. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, "Releases and updates" in docs/app-windows.md
   describes what runs.

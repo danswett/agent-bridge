@@ -56,8 +56,10 @@ Check 'a run with no Full property at all (an older record) is not a pass' (Pick
 # head_sha, never by branch; and a FULL run with a skipped lane (WebKit) is not selectable, which the aggregate full-gate shows.
 Check 'an Arm64 pack that failed is not publishable: only the Arm64 self-test is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-pack (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 pack that did not run is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = $null }), (Run 'sha102' 102))) 'sha102'
+Check 'an Arm64 installer that did not run at all is still publishable (waived)' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-installer (win-arm64)' = $null }), (Run 'sha102' 102))) 'sha103'
+Check 'the x64 installer is not waived: failed, it is not publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 pack that was skipped is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
-Check 'an Arm64 installer that failed is not publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'an Arm64 installer that failed is still publishable: it installs and starts the app, the Arm64 self-test the owner waived (#4159)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
 Check 'a FULL run with no aggregate full-gate result is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = $null }), (Run 'sha102' 102))) 'sha102'
 Check 'a FULL run whose full-gate failed (a WebKit job skipped) is not selectable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'full-gate' = 'failure'; 'pwa-ui (webkit 1/3)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
 Check 'a FULL run whose full-gate was skipped is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
