@@ -940,7 +940,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
         Assert.True(new GrantStore(folder, key, new(folder), scope).Issue(grant).Usable);
         var receiverStore = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
-        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore);
+        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore, startedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
         var channel = new LiteChannel(self, "host", statik, new('a', 32), "123", true);
         var sign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var q = sign.ExportParameters(false).Q;
