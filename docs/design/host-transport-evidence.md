@@ -99,9 +99,19 @@ other rows. A mismatch is any pair that lands in different rows, or in the same 
 dropped for a run fault (a host down for a reason outside the case) are listed in the receipt and replaced; they are
 never silently excluded, and more than the plan's stated number dropped makes the run INCONCLUSIVE.
 
-**Counting doubles.** At the end of each request, and again after the 5 minute late wait, list the target's launches
-with `launches list --json` and count entries by request id (`rid`). More than one started session for a request id,
-or a session that appears only after the late wait, is a double launch and fails the run.
+**Counting doubles.** `launches list --json` has no request id and the store keeps one row per principal and request,
+so a second session for the same request would not show as a second row. Doubles are therefore counted from
+**sessions**, never from rows. Every request in the run plan carries its own unique launch name. At the end of each
+request, and again after the 5 minute late wait, for each target compare three counts for that launch name:
+
+1. the **live sessions** on the target (the session list), matched by the launch name and by start time inside the
+   request's window;
+2. the **started rows** in `launches list --json` for the same request;
+3. the **receiver's counter rise** for the grant (hourly, daily and live usage), read before and after.
+
+All three must be exactly one per Host request (zero when the request was refused), and the three must agree. Any
+count above one, any disagreement between the three, or a session that appears only after the late wait is a double
+launch (or a missing record) and fails the run. A count that cannot be read makes the run INCONCLUSIVE.
 
 ## Pass bar
 
@@ -125,7 +135,7 @@ Quality sets these floors:
 - **Window**: at least 6 h across at least 4 distinct hours, including one induced host restart and one relay
   reconnect. Each induced event needs the owner's approval **at run time**; this document grants none.
 - **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request id.
-2. **0 double launches**: for each request id, at most one session exists on the target.
+2. **0 double launches**: for each request (its unique launch name), at most one session exists on the target, and the live-session, started-row and counter-rise counts agree.
 3. **0 HA fallbacks**: zero HA presses made as a fallback on any Host-path request (the HA fallback counter stays at zero for
    Host-path requests).
 4. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
