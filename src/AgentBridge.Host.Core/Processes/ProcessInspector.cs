@@ -738,6 +738,11 @@ public static partial class CommandLine
         return arguments.Count > 6 && ProbeOptions(arguments, arguments.Count - 6);
     }
 
+    // An invocation that cannot open a session and does no session work: it only prints information (version, help) or
+    // runs one of the agent's own management commands. Discovery does not hold for it (#3933 option c). Nothing here
+    // is guessed: any option, word or shape not listed is false, so an unreadable or unfamiliar command line still holds.
+    public static bool IsNonSessionInvocation(AgentKind agent, string? commandLine) => false;
+
     // The `claude auth status` the host asks at most hourly before a probe (#200): the program, or
     // a runtime and its script, then `auth status` and nothing else. Only half the test: a person
     // checking their own sign-in runs exactly this too, and is held for as any Claude process is,
