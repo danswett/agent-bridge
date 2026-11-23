@@ -313,6 +313,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    train selector) read it, so a run counts green only if what it relied on is green too. Today every run
    records `relied-parent=none`: it diffs from a passed base. The record comes first, the judges next, and the
    first-parent shortcut that makes a run rely on its parent last, so nothing changes until the judges honour it.
+   The planner honours it too: a passed run is a base for the next run's diff only if every parent it relied on, back to a run that
+   relied on none, passed as well (a parent that failed or was cancelled never tested its change, so that change stays in the next diff);
+   an unreadable record is not proved, so an older base tests more, never less.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass

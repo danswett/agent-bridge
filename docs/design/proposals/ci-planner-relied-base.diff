@@ -1,0 +1,51 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2104c856..0c08cb8a 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -167,15 +167,42 @@ jobs:
+           $base = 'HEAD^1'
+           $known = $env:EVENT -eq 'pull_request'
+           if ($env:EVENT -eq 'push') {
+-            $passed = @(gh api "repos/$env:REPO/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=100" --jq '.workflow_runs[].head_sha')
++            $passed = @(gh api "repos/$env:REPO/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=100" --jq '.workflow_runs[] | [.id, .head_sha] | @tsv')
+             if ($LASTEXITCODE) {
+               "::warning title=plan::couldn't read main's passed CI runs, so the whole ring runs"
+             } else {
+-              foreach ($sha in $passed) {
+-                if ($sha -notmatch '^[0-9a-f]{40}$') { "::warning title=plan::unreadable run head '$sha', so the whole ring runs"; break }
++              $runIds = @{}
++              foreach ($row in $passed) { $id, $sha = $row -split "`t"; if ($sha -cmatch '^[0-9a-f]{40}$' -and -not $runIds.ContainsKey($sha)) { $runIds[$sha] = $id } }
++              # The in-flight parent a passed run relied on to test only its own change: its plan job's plan-base notice. $null for none or no record
++              # (a run from before the record), '?' when it can't be read or isn't in the shape.
++              function Get-Relied([string] $runId) {
++                $job = @(gh api "repos/$env:REPO/actions/runs/$runId/jobs?filter=latest&per_page=100" --jq '.jobs[] | select(.name == "plan") | .id')
++                if ($LASTEXITCODE) { return '?' }
++                if ($job.Count -eq 0) { return $null }
++                $note = @(gh api "repos/$env:REPO/check-runs/$($job[0])/annotations?per_page=100" --jq '.[] | select(.title == "plan-base") | .message')
++                if ($LASTEXITCODE) { return '?' }
++                if ($note.Count -eq 0) { return $null }
++                if ($note[0] -cmatch '^base=[0-9a-f]{40} relied-parent=(none|[0-9a-f]{40})$') { if ($Matches[1] -ceq 'none') { return $null } else { return $Matches[1] } }
++                return '?'
++              }
++              # A passed run proves its base only if every parent it relied on, back to a run that relied on none, passed too: a parent that failed or
++              # was cancelled never tested its change, so a run that counted on it leaves that change for the next diff. Unreadable or too deep: not
++              # proved, so an older base tests more, never less.
++              function Test-Covered([string] $sha) {
++                for ($depth = 0; $sha; $depth++) {
++                  if ($depth -ge 20 -or -not $runIds.ContainsKey($sha)) { return $false }
++                  $parent = Get-Relied $runIds[$sha]
++                  if ($parent -ceq '?') { return $false }
++                  $sha = $parent
++                }
++                return $true
++              }
++              foreach ($row in $passed) {
++                $id, $sha = $row -split "`t"
++                if ($sha -cnotmatch '^[0-9a-f]{40}$') { "::warning title=plan::unreadable run head '$sha', so the whole ring runs"; break }
+                 if ($sha -eq $env:SHA) { continue }
+                 git merge-base --is-ancestor $sha HEAD
+-                if ($LASTEXITCODE -eq 0) { $base = $sha; $known = $true; break }
++                if ($LASTEXITCODE -eq 0 -and (Test-Covered $sha)) { $base = $sha; $known = $true; break }
+               }
+             }
+             # A green run may have skipped publishing because main changed the app again.

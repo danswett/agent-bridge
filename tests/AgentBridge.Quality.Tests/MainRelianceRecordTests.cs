@@ -9,8 +9,11 @@ namespace AgentBridge.Quality.Tests;
 [Trait("Category", "Process")]
 public class MainRelianceRecordTests
 {
-    // The real whole-ring step, run in a small repository with a stubbed gh. Commits: c0, c1 (tagged v0.1.1, the published release), c2, c3 = HEAD.
-    static async Task<(string Stdout, string[] Commits)> RunStep(string passedAt, Func<string[], string>? passed = null)
+    // The real whole-ring step, run in a small repository with a stubbed gh. Commits: c0, c1, c2 (tagged v0.1.1, the published release), c3 = HEAD.
+    // passed: the shas of main's passed CI runs, newest first (run ids 1000, 1001, ...). relied: for a passed run's sha, the plan-base record its
+    // plan job annotated ("none" or a parent sha; absent = no record). broken: shas whose annotations cannot be read.
+    static async Task<(string Stdout, string[] Commits)> RunStep(string passedAt, Func<string[], string>? passed = null,
+        Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -30,12 +33,14 @@ public class MainRelianceRecordTests
                 ChangedFiles.Git(folder, "add", "--", name + ".txt");
                 ChangedFiles.Git(folder, "-c", "user.name=quality", "-c", "user.email=quality@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", name);
                 commits.Add(ChangedFiles.Git(folder, "rev-parse", "HEAD").Trim());
-                if (name == "c1") { ChangedFiles.Git(folder, "tag", "v0.1.1"); }
+                if (name == "c2") { ChangedFiles.Git(folder, "tag", "v0.1.1"); }
             }
 
             var start = new ProcessStartInfo("pwsh") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true };
             start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
             start.Environment["CI_PLAN_TEST_PASSED"] = passed is null ? passedAt : passed([.. commits]);
+            start.Environment["CI_PLAN_TEST_RELIED"] = relied is null ? "" : string.Join(",", relied([.. commits]).Select(r => $"{r.Key}={r.Value}"));
+            start.Environment["CI_PLAN_TEST_BROKEN"] = broken is null ? "" : broken([.. commits]);
             start.Environment["EVENT"] = "push";
             start.Environment["DRAFT"] = "false";
             start.Environment["REPO"] = "o/r";
@@ -45,9 +50,18 @@ public class MainRelianceRecordTests
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
                          """
                          $ErrorActionPreference = 'Stop'
+                         $stubPassed = @($env:CI_PLAN_TEST_PASSED -split ',' | Where-Object { $_ })
+                         $stubRelied = @{}
+                         foreach ($pair in ($env:CI_PLAN_TEST_RELIED -split ',' | Where-Object { $_ })) { $k, $v = $pair -split '=', 2; $stubRelied[$k] = $v }
                          function global:gh {
                              $global:LASTEXITCODE = 0
-                             if ($args[1] -like '*actions/workflows/*') { $env:CI_PLAN_TEST_PASSED -split ',' | Where-Object { $_ } }
+                             if ($args[1] -like '*actions/workflows/*') { for ($i = 0; $i -lt $stubPassed.Count; $i++) { "$(1000 + $i)`t$($stubPassed[$i])" } }
+                             elseif ($args[1] -match '/actions/runs/(\d+)/jobs\?') { $Matches[1] }
+                             elseif ($args[1] -match '/check-runs/(\d+)/annotations\?') {
+                                 $stubSha = $stubPassed[[int]$Matches[1] - 1000]
+                                 if ($env:CI_PLAN_TEST_BROKEN -split ',' -contains $stubSha) { $global:LASTEXITCODE = 1; return }
+                                 if ($stubRelied.ContainsKey($stubSha)) { "base=$('a' * 40) relied-parent=$($stubRelied[$stubSha])" }
+                             }
                              elseif ($args[1] -like '*releases?*') { 'v0.1.1' }
                              else { throw "Unexpected offline gh call: $($args -join ' ')" }
                          }
@@ -74,6 +88,42 @@ public class MainRelianceRecordTests
 
         Assert.Contains($"::notice title=plan-base::base={commits[1]} relied-parent=none", stdout, StringComparison.Ordinal);
     }
+
+    // Item A, planner side: a passed run is a base only if every in-flight parent it relied on, back to a run that relied on none, passed too
+    // (it is among the passed runs). Otherwise the parent's change was never tested, so the next run's diff carries it forward.
+    static readonly string Gone = new('f', 40);
+
+    static async Task<string> BaseOf(Func<string[], string> passed, Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null)
+    {
+        var (stdout, commits) = await RunStep("", passed, relied, broken);
+        var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
+        var found = commits.Select((sha, i) => (sha, i)).FirstOrDefault(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
+        return found.sha is null ? line : $"c{found.i}";
+    }
+
+    [Fact]
+    public async Task A_passed_run_that_relied_on_a_passed_parent_is_a_base()
+        => Assert.Equal("c2", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[2]] = c[1], [c[1]] = "none" }));
+
+    [Fact]
+    public async Task A_passed_run_whose_parent_did_not_pass_is_not_a_base_the_next_older_one_is()
+        => Assert.Equal("c1", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[2]] = Gone, [c[1]] = "none" }));
+
+    [Fact]
+    public async Task A_failure_further_back_the_chain_is_not_covered_either()
+        => Assert.Equal("c0", await BaseOf(c => $"{c[2]},{c[1]},{c[0]}", c => new() { [c[2]] = c[1], [c[1]] = Gone, [c[0]] = "none" }));
+
+    [Fact]
+    public async Task A_reliance_loop_is_not_a_base()
+        => Assert.Equal("c0", await BaseOf(c => $"{c[2]},{c[1]},{c[0]}", c => new() { [c[2]] = c[1], [c[1]] = c[2], [c[0]] = "none" }));
+
+    [Fact]
+    public async Task A_run_with_no_plan_record_relied_on_nothing_and_is_a_base()
+        => Assert.Equal("c2", await BaseOf(c => $"{c[2]},{c[1]}"));
+
+    [Fact]
+    public async Task A_passed_run_whose_record_cannot_be_read_is_not_a_base_so_more_is_tested_not_less()
+        => Assert.Equal("c1", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[1]] = "none" }, c => c[2]));
 
     [Fact]
     public async Task A_main_push_with_no_proven_base_records_the_first_parent_as_a_base_it_does_not_vouch_for()
