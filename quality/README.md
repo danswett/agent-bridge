@@ -815,13 +815,14 @@ path-filter extension, the reused-machine rules, the cost figures and the order 
 **What gates main (decided, Nov 23; Eng R8b's ruling).** Main is green on **build and test only**: the required jobs are
 `plan`, `product`, the `app` job's build and UI self-test, the PWA, Home Assistant and light jobs, and `quality-gate`.
 `ci.yml` **keeps** packing, the installer check, `sign`, `attest` and `vpk` as **non-required jobs**: they run beside the
-gate, upload the bytes they built, and hold neither main nor a merge. The release train (#3769) **never rebuilds**: it
-installs and self-tests those exact bytes before it publishes, and when that fails it publishes nothing and raises an alert,
-so a bad installer blocks the release, never a merge. **`ci.yml` packs:** its non-required pack jobs (x64 and Arm64) upload
-`agent-bridge-windows-<ver>` and `agent-bridge-windows-arm64-<ver>`, the artifacts `build/select-release-commit.ps1` requires
-unexpired before the train takes a commit; without them the train publishes nothing. **The x64 package is required for a
-release; the Arm64 one is optional** (owner decision A, via Eng R8b: Arm64 does not gate, as #3769 says), and neither packing,
-`sign`, `attest` nor the installer check is required for main to be green. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
+gate, upload the bytes they built, and hold neither main nor a merge. The release train never rebuilds: #3769 (merged) is its
+commit selector only, `build/select-release-commit.ps1`, and the train publishes the bytes `ci.yml` built. **Proposed, a separate
+change (not #3769):** the train installs and self-tests those exact bytes before it publishes, and when that fails it publishes
+nothing and raises an alert, so a bad installer blocks the release, never a merge. **`ci.yml` packs:** its non-required pack jobs
+(x64 and Arm64) upload `agent-bridge-windows-<ver>` and `agent-bridge-windows-arm64-<ver>`, and the selector requires **both**
+architectures' artifacts unexpired before it takes a commit; without them the train publishes nothing. Only the Arm64 *jobs* may
+be red (owner decision A, via Eng R8b: Arm64 does not gate); neither packing, `sign`, `attest` nor the installer check is
+required for main to be green. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, the text
 of "Releases and updates" in docs/app-windows.md describes what runs.
 
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
@@ -846,8 +847,11 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
 pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
 `true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
 start within about a minute; a queue that grows is the signal to add runners or flip it back.
-  `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` fails a workflow whose self-hosted job lacks the guard,
-  or that has any self-hosted job and a `pull_request_target` trigger.
+  `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` checks that the guard text appears, exactly, ahead of a label and
+  followed by `&&`, and fails a self-hosted job without it or one in a workflow with a `pull_request_target` trigger. **It is a
+  text check, not proof that the guard controls routing** (swapped arms, a label in a later `||` arm, a negated guard,
+  `workflow_run` and a runner chosen from a variable can still get round it); the real check is #3824, and it is a
+  **precondition of setting `AB_CI_SELF_HOSTED` to `true`**.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
@@ -898,13 +902,17 @@ job-minutes off every main run. Net (estimate), main falls from 101 to about 55 
 
 **Order of work (proposed).** (1) The per-SHA concurrency line, and the test that pins `ci.yml`'s concurrency (`CiPlanTests`) with it:
 no risk, stops the cancelling. (2) The routing guard and its lint, with `ab-ci` off (`AB_CI_SELF_HOSTED` unset). (3) The
-runners registered, then `AB_CI_SELF_HOSTED=true`. (4) The app self-test sections option, the each-section-alone job, then
-the shards. (5) Product shards, the PWA filters. (6) Pack, installer, `sign` and `attest` become non-required jobs in `ci.yml`, and the train installs and self-tests their bytes
-before it publishes (#3769); `publish` moves to the train. Quality alone
+runners registered, then `AB_CI_SELF_HOSTED=true`, **only after these have landed** (they are what makes a reused machine
+safe): per-job `NUGET_PACKAGES`, `DOTNET_CLI_HOME` and MSBuild state under `RUNNER_TEMP`; tools installed to a per-job path
+(`dotnet tool install --tool-path` under `RUNNER_TEMP`, not `dotnet tool install -g vpk`, which persists on the machine); a clean
+workspace each job; and the stronger routing lint of #3824. (4) The app self-test sections option, the each-section-alone job, then
+the shards. (5) Product shards, the PWA filters. (6) Pack, installer, `sign` and `attest` become non-required jobs in `ci.yml`; `publish` moves to the train, and the train installing
+and self-testing their bytes before it publishes is a separate proposed change (#3769, merged, is the selector only). Quality alone
 pushes `ci.yml` and the merge rule: this document is the design, step (1) is written as a patch (`docs/design/proposals/ci-per-sha-main-concurrency.diff` on
 branch `sg-ci-gate-diff`: `ci.yml`, the plan's pinned concurrency expression in `tools/AgentBridge.Quality/CiPlan.cs`,
 `CiPlanTests` and the text that named the old group; `git apply` it, the Quality tests pass with it), and step (2)'s `runs-on` is
-the CI builder's: it must carry the exact guard above, which `CiRunnerRoutingTests` checks.
+the CI builder's: it must carry the exact guard above. `CiRunnerRoutingTests` only checks that text appears (it does not prove
+the guard controls routing); the stronger lint of #3824 is a precondition of step (3), setting `AB_CI_SELF_HOSTED=true`.
 
 ### Independent review depth
 
