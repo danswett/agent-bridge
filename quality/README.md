@@ -532,11 +532,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `publish-prerelease.ps1` publishes each version (the run number) once, never one older
    than any published, and never from a commit that doesn't hold the latest release's commit
    (a run number says nothing of commit order; behind it publishes nothing, and diverged or
-   unreadable stops publishing). So a run publishes even after `main` has moved on (an app
-   change followed by a docs-only commit is released by the first's run), unless main's head,
-   read under the lock, has since changed the app by main's own ring-1 selector: then main's
-   later run publishes both, since publishing the older first could leave the newer's lower run
-   number refused (an unreadable or off-main head stops publishing). One reaching
+   unreadable stops publishing). So a run publishes even after `main` has moved on, app changes
+   or not (#4104), as long as main's head, read under the lock, still follows its commit (an
+   unreadable or off-main head stops publishing); main's later run publishes its own higher
+   version over it. When GitHub numbered a descendant's run lower, that version is refused and
+   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
