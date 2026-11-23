@@ -127,8 +127,13 @@ public class NuGetMirrorTests
         start.Environment["MIRROR_TEST_SCRIPT"] = script;
         start.Environment["MIRROR_TEST_SOURCE"] = source;
         start.Environment["MIRROR_TEST_PATH"] = path;
+        // pwsh's own error view is coloured (ANSI) and wrapped to the console width on Linux, which split the message in
+        // CI (#4218). The script's message is written as is instead: no formatting to depend on, on any platform.
+        start.Environment["NO_COLOR"] = "1";
+        start.Environment["TERM"] = "dumb";
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
-                     $"$ErrorActionPreference = 'Stop'; . $env:MIRROR_TEST_SCRIPT; {function} -Source $env:MIRROR_TEST_SOURCE -Path $env:MIRROR_TEST_PATH" })
+                     "$ErrorActionPreference = 'Stop'; try { . $env:MIRROR_TEST_SCRIPT; " + function + " -Source $env:MIRROR_TEST_SOURCE -Path $env:MIRROR_TEST_PATH } " +
+                     "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }" })
             start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var error = process.StandardError.ReadToEndAsync();
