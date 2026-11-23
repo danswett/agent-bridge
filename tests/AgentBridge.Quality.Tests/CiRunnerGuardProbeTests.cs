@@ -61,31 +61,28 @@ public sealed class CiRunnerGuardProbeTests
     [InlineData("${{ format('{0}', vars.RUNNER) }}")]
     // Text around an expression, which this check can't follow.
     [InlineData("ab-ci-${{ github.run_id }}")]
-    public void A_runner_that_can_be_self_hosted_outside_the_whole_guard_is_a_violation(string runsOn)
-    {
-        var one = Assert.Single(Check(Workflow(runsOn)));
-        Assert.Contains("job product", one);
-    }
-
-    [Theory]
     // B216's shapes: the pool in both arms, the guard folded into format(), a second runner entry.
     [InlineData("${{ " + Guard + " && 'ab-ci' || 'ab-ci' }}")]
     [InlineData("${{ format('{0}', " + Guard + ") && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ format('{0}', " + Guard + " && 'ab-ci') || 'windows-latest' }}")]
     [InlineData("[\"${{ " + Guard + " && 'ab-ci' || 'windows-latest' }}\", self-hosted]")]
-    public void Shapes_that_carry_the_whole_guard_text_but_still_reach_the_pool_are_violations(string runsOn)
-        => Assert.NotEmpty(Check(Workflow(runsOn)));
-
-    [Theory]
-    // R8b: the whole runs-on is GUARD && <self-hosted> || <hosted>. Narrowing && conditions in front are allowed (the
-    // product line's matrix.os test); another ||, a second self-hosted arm, or no hosted fallback is not.
+    // R8b: the whole runs-on is GUARD && <self-hosted> || <hosted>; narrowing && conditions in front are allowed (the
+    // product line's matrix.os test), another ||, a second self-hosted arm or no hosted fallback is not.
     [InlineData("${{ " + Guard + " && 'ab-ci' || 'windows-latest' || 'ubuntu-latest' }}")]
     [InlineData("${{ " + Guard + " && 'ab-ci' }}")]
     [InlineData("${{ " + Guard + " && 'ab-ci' || " + Guard + " && 'self-hosted' || 'windows-latest' }}")]
     [InlineData("${{ " + Guard + " && 'ab-ci' || " + Guard + " && 'windows-latest' || 'ubuntu-latest' }}")]
     [InlineData("${{ 'windows-latest' || " + Guard + " && 'ab-ci' }}")]
-    public void Anything_but_one_guarded_pool_arm_then_one_hosted_fallback_is_a_violation(string runsOn)
-        => Assert.NotEmpty(Check(Workflow(runsOn)));
+    // Runner groups (a pool with no hosted fallback) and bare self-hosted labels.
+    [InlineData("{ group: ab-ci }")]
+    [InlineData("{ group: ab-ci, labels: [windows] }")]
+    [InlineData("{ labels: [self-hosted, windows] }")]
+    [InlineData("[self-hosted, windows, x64, ab-ci]")]
+    public void A_runner_that_can_be_self_hosted_outside_the_whole_guard_is_a_violation(string runsOn)
+    {
+        var one = Assert.Single(Check(Workflow(runsOn)));
+        Assert.Contains("job product", one);
+    }
 
     [Fact]
     public void A_second_runs_on_key_is_a_violation_not_a_crash()
@@ -146,15 +143,6 @@ public sealed class CiRunnerGuardProbeTests
 
         Assert.Contains(violations, v => v.Contains(trigger, StringComparison.Ordinal));
     }
-
-    [Theory]
-    // A runner group is a self-hosted (or larger-runner) pool with no hosted fallback the guard could choose.
-    [InlineData("{ group: ab-ci }")]
-    [InlineData("{ group: ab-ci, labels: [windows] }")]
-    [InlineData("{ labels: [self-hosted, windows] }")]
-    [InlineData("[self-hosted, windows, x64, ab-ci]")]
-    public void Runner_groups_and_bare_self_hosted_labels_are_violations(string runsOn)
-        => Assert.NotEmpty(Check(Workflow(runsOn)));
 
     [Theory]
     [InlineData("${{ (github.event_name == 'push' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}", "on: [push, pull_request_target]")]

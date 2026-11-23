@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace AgentBridge.Quality;
 
@@ -10,7 +11,7 @@ namespace AgentBridge.Quality;
 /// Anything else throws <see cref="FormatException"/>, which the caller reads as "can't tell", never as safe.
 /// https://docs.github.com/en/actions/reference/workflows-and-actions/expressions
 /// </summary>
-abstract record Expr
+abstract partial record Expr
 {
     public sealed record Or(Expr[] Arms) : Expr { public override string ToString() => $"({string.Join(" || ", Arms.Select(a => a.ToString()))})"; }
     public sealed record And(Expr[] Arms) : Expr { public override string ToString() => $"({string.Join(" && ", Arms.Select(a => a.ToString()))})"; }
@@ -20,13 +21,8 @@ abstract record Expr
     public sealed record Path(string Text) : Expr { public override string ToString() => Text; }
     public sealed record Literal(object? Value) : Expr
     {
-        public override string ToString() => Value switch
-        {
-            string s => $"'{s.Replace("'", "''", StringComparison.Ordinal)}'",
-            bool b => b ? "true" : "false",
-            null => "null",
-            _ => Convert.ToString(Value, CultureInfo.InvariantCulture)!,
-        };
+        public override string ToString() => Value is string s ? $"'{s.Replace("'", "''", StringComparison.Ordinal)}'"
+            : Value is bool b ? (b ? "true" : "false") : Value is null ? "null" : Convert.ToString(Value, CultureInfo.InvariantCulture)!;
     }
 
     public static Expr Parse(string text)
@@ -36,39 +32,16 @@ abstract record Expr
         return parser.AtEnd ? expr : throw new FormatException($"unexpected {parser.Peek} in {text}");
     }
 
+    // A string ('' escapes a quote), an operator or punctuation, or a word (names, numbers, true, a-b-c); nothing else.
+    [GeneratedRegex(@"\G\s*(?:('(?:[^']|'')*')|(&&|\|\||==|!=|<=|>=|[()\[\],.!<>*])|([\w-]+))\s*")]
+    private static partial Regex Token();
+
     static List<string> Tokens(string text)
     {
-        var tokens = new List<string>();
-        for (var i = 0; i < text.Length;)
-        {
-            var c = text[i];
-            if (char.IsWhiteSpace(c)) { i++; continue; }
-            if (c == '\'')
-            {
-                var s = new StringBuilder("'");
-                for (i++; ; i++)
-                {
-                    if (i >= text.Length) { throw new FormatException("unterminated string"); }
-                    if (text[i] == '\'' && i + 1 < text.Length && text[i + 1] == '\'') { s.Append('\''); i++; continue; }
-                    if (text[i] == '\'') { i++; break; }
-                    s.Append(text[i]);
-                }
-                tokens.Add(s.ToString());
-                continue;
-            }
-            var two = i + 1 < text.Length ? text.Substring(i, 2) : "";
-            if (two is "&&" or "||" or "==" or "!=" or "<=" or ">=") { tokens.Add(two); i += 2; continue; }
-            if ("()[],.!<>*".Contains(c)) { tokens.Add(c.ToString()); i++; continue; }
-            if (char.IsLetterOrDigit(c) || c is '_' || c is '-')
-            {
-                var start = i;
-                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] is '_' or '-' || (text[i] == '.' && char.IsDigit(text[start])))) { i++; }
-                tokens.Add(text[start..i]);
-                continue;
-            }
-            throw new FormatException($"unexpected character {c}");
-        }
-        return tokens;
+        var (tokens, at) = (new List<string>(), 0);
+        // \G keeps the matches contiguous, so reaching the end means every character was read.
+        for (var m = Token().Match(text); m.Success && m.Length > 0; m = m.NextMatch()) { tokens.Add(m.Groups[1].Value + m.Groups[2].Value + m.Groups[3].Value); at = m.Index + m.Length; }
+        return text[at..].Trim().Length == 0 ? tokens : throw new FormatException($"can't read {text} at {at}");
     }
 
     sealed class Parser(List<string> tokens)
@@ -104,7 +77,7 @@ abstract record Expr
         {
             var token = Next();
             if (token == "(") { var inner = Or(); Expect(")"); return inner; }
-            if (token.StartsWith('\'')) { return new Literal(token[1..]); }
+            if (token.StartsWith('\'')) { return new Literal(token[1..^1].Replace("''", "'", StringComparison.Ordinal)); }
             if (token is "true" or "false") { return new Literal(token == "true"); }
             if (token == "null") { return new Literal(null); }
             if (char.IsDigit(token[0]) || token[0] == '-') { return new Literal(double.Parse(token, CultureInfo.InvariantCulture)); }
