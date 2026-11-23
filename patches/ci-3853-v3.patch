@@ -1,0 +1,479 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 8e83d42ae..8092c2743 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -78,6 +78,7 @@ jobs:
+       whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
+       product: ${{ steps.select.outputs.product }}
+       # Host.Tests as numbered shard legs (#2454): host-tests is true exactly when there are legs; host-sharded tells product to leave the project out.
++      relay-container: ${{ steps.select.outputs.relay-container }}
+       host-tests: ${{ steps.select.outputs.host-tests }}
+       host-shards: ${{ steps.select.outputs.host-shards }}
+       host-sharded: ${{ steps.select.outputs.host-sharded }}
+@@ -242,7 +243,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product host-tests ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
++          JOBS: product host-tests relay-container ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -465,47 +466,6 @@ jobs:
+           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+           $env:AGENT_BRIDGE_HOOK = "$env:RUNNER_TEMP/hook/agent-bridge-host-hook.exe"
+           dotnet test tests/AgentBridge.Hooks.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~HookProcessTests" --logger "console;verbosity=normal"
+-      - name: Relay container builds and serves
+-        # Run as it ships: its own unprivileged user and a read-only file system. The first product
+-        # image built but crashed at start, which only running it shows. container-scan scans the image
+-        # this builds, so it needs this step too.
+-        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
+-        run: |
+-          docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
+-          docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
+-          for _ in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+-          curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
+-          curl -fsS http://127.0.0.1:8080/readyz
+-      # The relay image's scan (quality/README.md §3.3, container-scan). Blocking on a high or
+-      # critical vulnerability that has a fix, in the base image's packages or the relay's NuGet
+-      # packages: a rebuild on the fixed base, or a package bump, clears it. One without a fix
+-      # cannot be cleared here, so it is only reported (code scanning, from main). The image had no
+-      # high or critical finding, fixed or not, when this was added (#433). To accept one for a
+-      # while, list it in .trivyignore with a reason and an exp: date. The database comes first,
+-      # from mirror.gcr.io or else ghcr.io (install-trivy's download-db.ps1); with neither, the
+-      # install fails and nothing is scanned. Both scans use only that database.
+-      - name: Install Trivy
+-        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
+-        uses: ./.github/actions/install-trivy
+-        with:
+-          vulnerability-db: 'true'
+-      - name: The relay image has no fixable high or critical vulnerability
+-        id: relay-scan
+-        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
+-        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
+-      - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
+-        # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
+-        # scanning from main.
+-        if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
+-        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --format sarif --output "$RUNNER_TEMP/relay-image.sarif" agent-bridge-relay
+-      - name: Keep the relay image's SARIF
+-        if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
+-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        with:
+-          name: relay-image-sarif
+-          path: ${{ runner.temp }}/relay-image.sarif
+-          if-no-files-found: ignore
+-          retention-days: 14
+   host-tests:
+     # tests/AgentBridge.Host.Tests as numbered shards (#2454, quality/host-shards.ps1): its slowest classes no longer set product's wall time.
+     # One leg per shard per runner the project's suites declare; a skipped host-tests whose plan said true never counts as a pass (quality-gate below).
+@@ -576,13 +536,69 @@ jobs:
+           if-no-files-found: ignore
+           retention-days: 14
+ 
++  relay-container:
++    # The relay image, built and run as it ships, then scanned (#433), as its own Linux job: it was 355 s inside product (ubuntu), as long as that
++    # job's tests. Same selection as before (the relay-container and container-scan suites, or the whole ring); relay-image-sarif sends the scan on.
++    needs: plan
++    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.relay-container == 'true'
++    runs-on: ubuntu-latest
++    timeout-minutes: 20
++    env:
++      SUITES: ${{ needs.plan.outputs.suites }}
++      WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - name: Relay container builds and serves
++        # Run as it ships: its own unprivileged user and a read-only file system. The first product
++        # image built but crashed at start, which only running it shows. container-scan scans the image
++        # this builds, so it needs this step too.
++        if: (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
++        run: |
++          docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
++          docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
++          for _ in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
++          curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
++          curl -fsS http://127.0.0.1:8080/readyz
++      # The relay image's scan (quality/README.md §3.3, container-scan). Blocking on a high or
++      # critical vulnerability that has a fix, in the base image's packages or the relay's NuGet
++      # packages: a rebuild on the fixed base, or a package bump, clears it. One without a fix
++      # cannot be cleared here, so it is only reported (code scanning, from main). The image had no
++      # high or critical finding, fixed or not, when this was added (#433). To accept one for a
++      # while, list it in .trivyignore with a reason and an exp: date. The database comes first,
++      # from mirror.gcr.io or else ghcr.io (install-trivy's download-db.ps1); with neither, the
++      # install fails and nothing is scanned. Both scans use only that database.
++      - name: Install Trivy
++        if: (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
++        uses: ./.github/actions/install-trivy
++        with:
++          vulnerability-db: 'true'
++      - name: The relay image has no fixable high or critical vulnerability
++        id: relay-scan
++        if: (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
++        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
++      - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
++        # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
++        # scanning from main.
++        if: !cancelled() && steps.relay-scan.outcome != 'skipped'
++        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --format sarif --output "$RUNNER_TEMP/relay-image.sarif" agent-bridge-relay
++      - name: Keep the relay image's SARIF
++        if: !cancelled() && steps.relay-scan.outcome != 'skipped'
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: relay-image-sarif
++          path: ${{ runner.temp }}/relay-image.sarif
++          if-no-files-found: ignore
++          retention-days: 14
++
+   relay-image-sarif:
+     # The relay image's scan to code scanning (the Security tab), from main only. A pull request's
+     # results would be compared with main's last upload, so a vulnerability published since then
+     # would show as one the pull request added and fail code scanning's check, for something the
+-    # pull request did not do; product's scan step is the pull request's gate. Its own job, so
++    # pull request did not do; relay-container's scan step is the pull request's gate. Its own job, so
+     # security-events: write is not given to the job that runs every test.
+-    needs: product
++    needs: relay-container
+     if: >-
+       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+       github.repository == 'danswett/agent-bridge'
+@@ -596,7 +612,7 @@ jobs:
+         with:
+           persist-credentials: false
+       - id: sarif
+-        # Absent when product failed before the image was built; nothing to send then.
++        # Absent when relay-container failed before the image was built; nothing to send then.
+         continue-on-error: true
+         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+         with:
+@@ -1881,7 +1897,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, host-tests, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, host-tests, relay-container, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/quality/arm64-waiver.ps1 b/quality/arm64-waiver.ps1
+index 9759d180d..a148a5072 100644
+--- a/quality/arm64-waiver.ps1
++++ b/quality/arm64-waiver.ps1
+@@ -15,7 +15,7 @@ param(
+     [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
+ )
+ $ErrorActionPreference = 'Stop'
+-$waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
++$waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)', 'host-tests (windows-11-arm, 1/3)', 'host-tests (windows-11-arm, 2/3)', 'host-tests (windows-11-arm, 3/3)')
+ $ids = @()
+ $lines = @()
+ try {
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 900e466b9..fa4a7372b 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -248,7 +248,7 @@ suites:
+     where: ci.yml product, host-tests
+     # Product's Windows on Arm leg runs every product suite; it's named once, here (#3208).
+     tier: post-merge
+-    tier_jobs: [product (windows-11-arm)]
++    tier_jobs: [product (windows-11-arm), "host-tests (windows-11-arm, 1/3)", "host-tests (windows-11-arm, 2/3)", "host-tests (windows-11-arm, 3/3)"]
+     baseline: { tests: 609, seconds: 30 }
+     status: exists
+ 
+@@ -693,7 +693,7 @@ suites:
+     runner: hosted
+     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, .dockerignore]
+     command: see ci.yml "Relay container builds and serves"
+-    where: ci.yml product
++    where: ci.yml relay-container
+     status: exists
+ 
+   - id: app-package
+@@ -1286,8 +1286,8 @@ suites:
+     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
+     # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
+     # ones go to code scanning from main only. relay.yml scan holds staging and production back.
+-    command: see ci.yml product (install-trivy's vulnerability-db, then trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+-    where: ci.yml product, relay-image-sarif; relay.yml scan
++    command: see ci.yml relay-container (install-trivy's vulnerability-db, then trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
++    where: ci.yml relay-container, relay-image-sarif; relay.yml scan
+     status: exists
+ 
+   - id: iac-scan
+diff --git a/quality/merge-rule.yml b/quality/merge-rule.yml
+index ac4c7cdfd..25c97ca94 100644
+--- a/quality/merge-rule.yml
++++ b/quality/merge-rule.yml
+@@ -67,6 +67,9 @@ arm64_waiver:
+     - app (win-arm64)
+     - app-installer (win-arm64)
+     - product (windows-11-arm)
++    - host-tests (windows-11-arm, 1/3)
++    - host-tests (windows-11-arm, 2/3)
++    - host-tests (windows-11-arm, 3/3)
+ 
+ # Owner decision (#2454, Nov 22 15:25), while Codex is down: a second receipt (independent-review-2) whose description is exactly
+ # this text stands in for the second model family, next to a successful first receipt that names a model family, and never for the
+@@ -97,6 +100,16 @@ main_green:
+   exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
+   jobs:
+     - product
++    - host-tests (ubuntu-latest, 1/3)
++    - host-tests (ubuntu-latest, 2/3)
++    - host-tests (ubuntu-latest, 3/3)
++    - host-tests (windows-latest, 1/3)
++    - host-tests (windows-latest, 2/3)
++    - host-tests (windows-latest, 3/3)
++    - host-tests (windows-11-arm, 1/3)
++    - host-tests (windows-11-arm, 2/3)
++    - host-tests (windows-11-arm, 3/3)
++    - relay-container
+     - ha-integration
+     - spikes
+     - spikes-linux
+@@ -124,6 +137,7 @@ main_green:
+       - Run actions/setup-dotnet@*
+       - NuGet packages from main's cache
+       - Save NuGet packages to main's cache
++    host-tests: *dotnet_infra
+     ha-integration: *dotnet_infra
+     spikes: *dotnet_infra
+     app: *dotnet_infra
+diff --git a/quality/plan.ps1 b/quality/plan.ps1
+index 6f6384c6a..c69903b33 100644
+--- a/quality/plan.ps1
++++ b/quality/plan.ps1
+@@ -110,6 +110,7 @@ $sharded = $Shards -gt 1 -and -not $FastRing -and $hostJob -and -not $productSki
+ if ($sharded) {
+     $shardPlatforms = @($productSuites | Where-Object { $_.project -eq $ShardProject } | ForEach-Object { $_.platforms })
+     $shardOs = @($runners.Keys | Where-Object { $whole -or $_ -in $shardPlatforms } | ForEach-Object { $runners[$_] } | Where-Object { $_ -in $productOs })
++    if (@($shardOs).Count -eq 0) { throw "$ShardProject is sharded but no runner is left to run its shards." }
+     $hostLegs = @(foreach ($os in $shardOs) { foreach ($n in 1..$Shards) { [ordered]@{ os = $os; shard = $n; of = $Shards } } })
+     $testProjects = @($testProjects | Where-Object { $_ -ne $ShardProject })
+ }
+diff --git a/quality/test-arm64-waiver.ps1 b/quality/test-arm64-waiver.ps1
+index 8aae8addb..d37c4be3a 100644
+--- a/quality/test-arm64-waiver.ps1
++++ b/quality/test-arm64-waiver.ps1
+@@ -62,7 +62,7 @@ try {
+ 
+     $ci = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
+     $code = Get-Content -Raw $script
+-    foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
++    foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)', 'host-tests (windows-11-arm, 1/3)', 'host-tests (windows-11-arm, 2/3)', 'host-tests (windows-11-arm, 3/3)') {
+         Check "the waived name '$name' is in the script" ($code.Contains("'$name'"))
+     }
+     Check 'ci.yml retains all three Arm64 jobs' ($ci.Contains('name: app (${{ matrix.runtime }})') -and $ci.Contains('name: app-installer (${{ matrix.runtime }})') -and $ci.Contains('runtime: win-arm64') -and $ci.Contains('"windows-11-arm"'))
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index a845dadc7..b37672917 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -14,13 +14,14 @@ public class CiPlanTests
+               suites: ${{ steps.select.outputs.suites }}
+               product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
+               product: ${{ steps.select.outputs.product }}
++              relay-container: ${{ steps.select.outputs.relay-container }}
+               ha-integration: ${{ steps.select.outputs.ha-integration }}
+               app: ${{ steps.select.outputs.app }}
+             steps:
+               - id: whole-ring
+               - id: select
+                 env:
+-                  JOBS: product ha-integration app
++                  JOBS: product ha-integration app relay-container
+           product:
+             needs: plan
+             if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
+@@ -40,10 +41,13 @@ public class CiPlanTests
+           app:
+             needs: plan
+             if: needs.plan.outputs.app == 'true'
++          relay-container:
++            needs: plan
++            if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.relay-container == 'true'
+           relay-image-sarif:
+-            needs: product
++            needs: relay-container
+           quality-gate:
+-            needs: [plan, product, ha-integration, app]
++            needs: [plan, product, ha-integration, app, relay-container]
+             if: always()
+             outputs:
+               app: ${{ needs.app.result }}
+@@ -225,7 +229,7 @@ public class CiPlanTests
+     {
+         const string Problem = " isn't in quality-gate's needs, so its result wouldn't count (only attest, publish, publish-gate, relay-image-sarif, sign may stay out)";
+ 
+-        Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, app]")));
++        Assert.Equal(["ci.yml job ha-integration" + Problem], Check(Wired.Replace("needs: [plan, product, ha-integration, app, relay-container]", "needs: [plan, product, app, relay-container]")));
+         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    runs-on: ubuntu-latest\n  quality-gate:")));
+         // Downstream of the gate, it could fail after the gate passed.
+         Assert.Equal(["ci.yml job lint" + Problem], Check(Wired.Replace("  quality-gate:", "  lint:\n    needs: quality-gate\n  quality-gate:")));
+@@ -374,9 +378,9 @@ public class CiPlanTests
+     [Fact]
+     public void A_check_job_renamed_to_a_delivery_job_is_reported_since_delivery_jobs_are_pinned_to_their_place()
+     {
+-        var problems = Check(Wired.Replace("relay-image-sarif:\n    needs: product", "relay-image-sarif:\n    needs: plan").Replace("relay-image-sarif:\r\n    needs: product", "relay-image-sarif:\r\n    needs: plan"));
++        var problems = Check(Wired.Replace("relay-image-sarif:\n    needs: relay-container", "relay-image-sarif:\n    needs: plan").Replace("relay-image-sarif:\r\n    needs: relay-container", "relay-image-sarif:\r\n    needs: plan"));
+ 
+-        Assert.Equal(["ci.yml delivery job relay-image-sarif must need exactly [product]"], problems);
++        Assert.Equal(["ci.yml delivery job relay-image-sarif must need exactly [relay-container]"], problems);
+     }
+ 
+     [Fact]
+@@ -400,7 +404,7 @@ public class CiPlanTests
+             .Replace("JOBS: product ha-integration app", "JOBS: product ha-integration app app-installer", StringComparison.Ordinal)
+             .Replace("app: ${{ steps.select.outputs.app }}", "app: ${{ steps.select.outputs.app }}\n      app-installer: ${{ steps.select.outputs.app-installer }}", StringComparison.Ordinal)
+             .Replace("  relay-image-sarif:", "  app-installer:\n    needs: [plan, app]\n    if: \"!cancelled() && (needs.plan.outputs.app-installer == 'true')\"\n  relay-image-sarif:", StringComparison.Ordinal)
+-            .Replace("needs: [plan, product, ha-integration, app]", "needs: [plan, product, ha-integration, app, app-installer]", StringComparison.Ordinal);
++            .Replace("needs: [plan, product, ha-integration, app, relay-container]", "needs: [plan, product, ha-integration, app, relay-container, app-installer]", StringComparison.Ordinal);
+         Assert.Empty(Check(wired));
+         foreach (var id in new[] { "app", "app-installer" })
+         {
+@@ -561,7 +565,7 @@ public class CiPlanTests
+         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+-        Assert.Equal(new[] { "plan", "product", "host-tests", "ha-integration", "spikes", "spikes-linux", "app",
++        Assert.Equal(new[] { "plan", "product", "host-tests", "relay-container", "ha-integration", "spikes", "spikes-linux", "app",
+             "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index a0a629e6d..f8481c91d 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -87,7 +87,7 @@ public class HaValidationCoverageTests
+         var jobs = CiJobs();
+ 
+         Assert.Equal(
+-            new[] { "plan", "product", "host-tests", "ha-integration", "spikes", "spikes-linux", "app",
++            new[] { "plan", "product", "host-tests", "relay-container", "ha-integration", "spikes", "spikes-linux", "app",
+                 "app-installer", "light", "pwa-ui", "pwa-e2e" },
+             Needs(jobs, "quality-gate"));
+         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 84d610187..762b0f529 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -2127,18 +2127,33 @@ public class MergeRuleTests
+         }
+     }
+ 
++    [Fact]
++    public void A_red_host_tests_shard_holds_main_and_an_infra_only_failure_in_one_does_not()
++    {
++        // #2454: Host.Tests runs as host-tests shards, so each leg is a main-green job and its setup steps are infra, like product's.
++        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
++        foreach (var os in new[] { "ubuntu-latest", "windows-latest", "windows-11-arm" })
++            foreach (var n in new[] { 1, 2, 3 })
++                Assert.Contains($"host-tests ({os}, {n}/3)", config.MainGreen.Jobs);
++        Assert.Equal(config.MainGreen.InfraSteps["product"], config.MainGreen.InfraSteps["host-tests"]);
++    }
++
+     // A fixed clock for the tests (the waiver itself no longer expires, owner decision #2454).
+     static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 27, 8, 0, 0, TimeSpan.Zero);
+ 
+     const string WaiverYaml = """
+         arm64_waiver:
+-          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
++          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm), "host-tests (windows-11-arm, 1/3)", "host-tests (windows-11-arm, 2/3)", "host-tests (windows-11-arm, 3/3)"]
+         """;
+ 
+     [Theory]
+     [InlineData("app (win-arm64)", true)]
+     [InlineData("app-installer (win-arm64)", true)]
+     [InlineData("product (windows-11-arm)", true)]
++    [InlineData("host-tests (windows-11-arm, 1/3)", true)]
++    [InlineData("host-tests (windows-11-arm, 3/3)", true)]
++    [InlineData("host-tests (windows-latest, 1/3)", false)]
++    [InlineData("host-tests (windows-11-arm, 4/3)", false)]
+     [InlineData("light", false)]
+     [InlineData("app (win-x64)", false)]
+     public void The_repository_arm64_waiver_is_permanent_and_has_an_exact_job_scope(string job, bool allowed)
+@@ -2151,7 +2166,7 @@ public class MergeRuleTests
+     }
+ 
+     [Fact]
+-    public void The_three_job_waiver_config_loads_and_allows_only_its_exact_failures()
++    public void The_six_job_waiver_config_loads_and_allows_only_its_exact_failures()
+     {
+         var path = WriteConfig(arm64Waiver: true);
+         try
+@@ -2161,7 +2176,7 @@ public class MergeRuleTests
+             var error = Record.Exception(() => config = MergeRuleConfig.Parse(yaml));
+             Assert.Null(error);
+             Assert.NotNull(config);
+-            Assert.Equal(["app (win-arm64)", "app-installer (win-arm64)", "product (windows-11-arm)"], config.Arm64Waiver!.Jobs);
++            Assert.Equal(["app (win-arm64)", "app-installer (win-arm64)", "product (windows-11-arm)", "host-tests (windows-11-arm, 1/3)", "host-tests (windows-11-arm, 2/3)", "host-tests (windows-11-arm, 3/3)"], config.Arm64Waiver!.Jobs);
+             Assert.True(config.Arm64Waiver.Allows("app (win-arm64)", "failure"));
+             Assert.True(config.Arm64Waiver.Allows("app-installer (win-arm64)", "failure"));
+             Assert.True(config.Arm64Waiver.Allows("product (windows-11-arm)", "failure"));
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 8c389b3c0..49a00f707 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -26,7 +26,7 @@ static partial class CiPlan
+         ["sign"] = [PublishGate],
+         ["publish"] = [PublishGate, "sign"],
+         ["attest"] = ["publish"],
+-        ["relay-image-sarif"] = ["product"],
++        ["relay-image-sarif"] = ["relay-container"],
+     };
+     static readonly HashSet<string> Delivery = new(DeliveryNeeds.Keys, StringComparer.Ordinal);
+     static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
+@@ -491,6 +491,12 @@ static partial class CiPlan
+             var runners = ProductRunners.Select(r => $"product ({r})").ToList();
+             return (runners, runners.Where(r => r != "product (windows-11-arm)").ToList());
+         }
++        if (id == "host-tests")
++        {
++            // The shard legs come from the plan (quality/plan.ps1 -Shards, 3): one per product runner, the arm64 ones on main only.
++            var shards = ProductRunners.SelectMany(r => Enumerable.Range(1, 3).Select(n => $"host-tests ({r}, {n}/3)")).ToList();
++            return (shards, shards.Where(r => !r.Contains("(windows-11-arm,", StringComparison.Ordinal)).ToList());
++        }
+         var name = Scalar(job, "name") ?? id;
+         var matrix = Child(job, "strategy") is YamlMappingNode strategy ? Child(strategy, "matrix") : null;
+         if (matrix is null)
+diff --git a/tools/AgentBridge.Quality/MergeRule.cs b/tools/AgentBridge.Quality/MergeRule.cs
+index 57fe47a4e..92033a85b 100644
+--- a/tools/AgentBridge.Quality/MergeRule.cs
++++ b/tools/AgentBridge.Quality/MergeRule.cs
+@@ -74,9 +74,9 @@ sealed class MergeRuleConfig
+             missing.Add("copilot_waiver.second_review");
+         if (missing.Count > 0)
+             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
+-        if (config.Arm64Waiver is { } arm64 && (arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
++        if (config.Arm64Waiver is { } arm64 && (arm64.Jobs is null || arm64.Jobs.Count != 6 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 6
+             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
+-            throw new FormatException("arm64_waiver needs exactly the three arm64 jobs.");
++            throw new FormatException("arm64_waiver needs exactly the six arm64 jobs (app, app-installer, product and the three host-tests shards).");
+         if (config.CodexWaiver is { } codex && (codex.Switch != "CODEX_WAIVER" || string.IsNullOrEmpty(codex.Description) || codex.Description != codex.Description.Trim()))
+             throw new FormatException("codex_waiver needs CODEX_WAIVER and a description with no surrounding spaces.");
+         return config;
+@@ -123,7 +123,8 @@ sealed class Arm64WaiverConfig
+     public bool Active() => true;
+ 
+     public bool Allows(string name, string? conclusion) => conclusion == "failure"
+-        && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
++        && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)"
++            or "host-tests (windows-11-arm, 1/3)" or "host-tests (windows-11-arm, 2/3)" or "host-tests (windows-11-arm, 3/3)")
+         && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);
+ }
+ 
+diff --git a/tools/AgentBridge.Quality/ReportCommand.cs b/tools/AgentBridge.Quality/ReportCommand.cs
+index 07a048604..4e89f630f 100644
+--- a/tools/AgentBridge.Quality/ReportCommand.cs
++++ b/tools/AgentBridge.Quality/ReportCommand.cs
+@@ -24,7 +24,7 @@ static class ReportCommand
+     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "slug", "days", "base", "max-logs", "out", "run-url" };
+ 
+     // The jobs that run dotnet test, whose logs name the tests that failed (ci.yml).
+-    static readonly string[] TestJobs = ["product", "ha-integration"];
++    static readonly string[] TestJobs = ["product", "host-tests", "ha-integration"];
+ 
+     public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, DateTimeOffset? now = null)
+     {
