@@ -14,6 +14,11 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
     // Monotonic stamps: a wall-clock step (sync, DST, manual) must not end or extend a storm.
     readonly Queue<long> runs = [];
     bool announced;
+    int peak, storms;
+
+    // The most correction runs seen in one window, and how many storms were announced: the self-test reads both.
+    public int Peak { get { lock (runs) { return peak; } } }
+    public int Storms { get { lock (runs) { return storms; } } }
 
     // True when a correction may run; count is the runs in the window. first is true once per storm, for the log.
     public bool Allowed(out int count, out bool first)
@@ -25,6 +30,7 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
             var allowed = count < Limit;
             first = !allowed && !announced;
             announced = !allowed;
+            if (first) { storms++; }
             return allowed;
         }
     }
@@ -37,6 +43,7 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
             var now = clock.GetTimestamp();
             Prune(now);
             runs.Enqueue(now);
+            peak = Math.Max(peak, runs.Count);
         }
     }
 
