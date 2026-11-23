@@ -189,8 +189,10 @@ public sealed class LiteDeliver(
             // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
             if (store.Get(body.Request) is { Held: true })
             {
-                _ = Watcher?.Start(body.Request);
-                if (driver is not null && armed is { } arm) { _ = ArmKeeper?.Start(body.Request, () => driver.KeepArm(time.GetUtcNow(), arm.Generation)); }
+                // The session ending releases the held slot and ends both loops (sessionEnded). Unknown, a held discovery pass or a throwing source, is not ended.
+                bool Gone() { try { return source.Held is null && source.Get(id) is null; } catch (Exception e) when (e is not OutOfMemoryException) { return false; } }
+                _ = Watcher?.Start(body.Request, Gone);
+                if (driver is not null && armed is { } arm) { _ = ArmKeeper?.Start(body.Request, () => driver.KeepArm(time.GetUtcNow(), arm.Generation), Gone); }
             }
         }
         ReplyResult result;

@@ -43,4 +43,22 @@ public sealed class BusyQueueArmKeeperTests
         clock.Advance(BusyQueueArmKeeper.Every);
         await keeping.WaitAsync(TimeSpan.FromSeconds(5));
     }
+
+    // D2b-3 (#3856): the session ending stops the keeper and releases the slot, so a timer does not run for a session that is gone.
+    [Fact]
+    public async Task A_session_that_ends_stops_the_keeper_releases_the_slot_and_the_arm_is_not_kept_again()
+    {
+        var (s, r) = Held(); var kept = 0; var ended = false;
+        var keeping = new BusyQueueArmKeeper(s, clock).KeepAsync(r, () => kept++, default, () => ended);
+        for (var i = 0; i < 2; i++) { clock.Advance(BusyQueueArmKeeper.Every); await Task.WhenAny(keeping, Task.Delay(5)); }
+        Assert.False(keeping.IsCompleted);
+        ended = true;
+        var before = kept;
+        clock.Advance(BusyQueueArmKeeper.Every);
+        await keeping.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(before, kept);
+        var rec = s.Get(r)!;
+        Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
+        Assert.False(s.SlotHeld("sess1"));
+    }
 }

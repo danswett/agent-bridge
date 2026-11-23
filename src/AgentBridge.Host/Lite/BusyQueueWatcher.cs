@@ -13,13 +13,13 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
     public Func<string, long, string, bool> Taken { get; init; } = ClaudeQueue.Taken;
 
     // Starts the watch in the background. A watcher that fails leaves the record held, exactly as it was.
-    public Task Start(string request) => Task.Run(async () =>
+    public Task Start(string request, Func<bool>? ended = null) => Task.Run(async () =>
     {
-        try { await WatchAsync(request); }
+        try { await WatchAsync(request, default, ended); }
         catch (Exception e) when (e is not OutOfMemoryException) { }
     });
 
-    public async Task WatchAsync(string request, CancellationToken ct = default)
+    public async Task WatchAsync(string request, CancellationToken ct = default, Func<bool>? ended = null)
     {
         if (store.Get(request) is not { Held: true } first) { return; }
         // A queued send is watched until its Accepted time plus the watch; one that was unconfirmed with no row, for the watch from now.

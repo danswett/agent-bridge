@@ -902,6 +902,18 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(LiteKind.Unconfirmed, (await SendNew(f.Build())).Outcome);
         d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
         Assert.True(d.PromptIsAgents);
+    }    // D2b-3 (#3856): a session that ends releases its held slot (sessionEnded); the record is unconfirmed, not held, and no timer is left for it.
+    [Fact]
+    public async Task With_the_watch_on_a_session_that_ends_while_a_send_is_held_releases_its_slot_as_sessionEnded()
+    {
+        var f = BusyClaude(ReplyStage.Queued); f.Watch = true;
+        Assert.Equal(LiteKind.Queued, (await SendNew(f.Build())).Outcome);
+        Assert.True(f.Store.SlotHeld(Target));
+        f.Exists = false;                                                                   // the session ends
+        await Tick(f, () => !f.Store.SlotHeld(Target), TimeSpan.FromSeconds(30));
+        var rec = f.Store.Records().Single();
+        Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
+        Assert.False(f.Store.SlotHeld(Target));
     }    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {

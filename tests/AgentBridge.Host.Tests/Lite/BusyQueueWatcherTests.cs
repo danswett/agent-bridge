@@ -96,4 +96,30 @@ public sealed class BusyQueueWatcherTests
         await Drive(new BusyQueueWatcher(s2, clock) { Taken = (_, _, _) => throw new IOException("nope") }.WatchAsync(r2), TimeSpan.FromSeconds(130));
         Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded"), (s2.Get(r2)!.State, s2.Get(r2)!.Reason));
     }
+
+    // D2b-3 (#3856): the session ending releases the held slot with sessionEnded and ends the watch.
+    [Fact]
+    public async Task A_session_that_ends_releases_the_held_slot_as_sessionEnded_and_ends_the_watch_early()
+    {
+        var (s, r) = Held(); var ended = false;
+        var watch = new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => false }.WatchAsync(r, default, () => ended);
+        for (var i = 0; i < 3; i++) { clock.Advance(BusyQueueWatcher.Poll); await Task.WhenAny(watch, Task.Delay(5)); }
+        Assert.False(watch.IsCompleted);
+        ended = true;
+        await Drive(watch, TimeSpan.FromSeconds(10));
+        var rec = s.Get(r)!;
+        Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
+        Assert.False(s.SlotHeld("sess1"));
+    }
+
+    [Fact]
+    public async Task A_prompt_taken_just_before_the_session_ended_is_still_delivered_and_a_failing_check_is_not_ended()
+    {
+        var (s, r) = Held();
+        await Drive(new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => true }.WatchAsync(r, default, () => true), TimeSpan.FromSeconds(10));
+        Assert.Equal((BusyQueueStore.Delivered, false), (s.Get(r)!.State, s.Get(r)!.Held));
+        var (s2, r2) = Held();
+        await Drive(new BusyQueueWatcher(s2, clock) { Taken = (_, _, _) => false }.WatchAsync(r2, default, () => throw new InvalidOperationException("source down")), TimeSpan.FromSeconds(130));
+        Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded", true), (s2.Get(r2)!.State, s2.Get(r2)!.Reason, s2.Get(r2)!.Held));
+    }
 }
