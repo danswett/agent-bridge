@@ -24,15 +24,15 @@ unauthenticated GitHub rate limit. It serves one route only:
 - Packages and `releases.<channel>.json` are not proxied. Clients get them from GitHub download URLs, which
   GitHub does not count against the limit. Clients must accept only asset URLs under
   `https://github.com/danswett/agent-bridge/releases/download/`.
-- No required secrets, no logging of request data, no R2, no CI token. The optional read-only
-  `GITHUB_TOKEN` secret is sent only to GitHub in the upstream Authorization header, never to clients.
-  Incoming client credentials are not forwarded.
+- The Worker works without any secret; no logging of request data, no R2, no CI token. Its read-only
+  `GITHUB_TOKEN` secret (set by the deploy workflow, below) is sent only to GitHub in the upstream
+  Authorization header of the release-list read, never to clients. Incoming client credentials are not forwarded.
 
 Risk: Cloudflare egress IPs are shared, so GitHub may rate limit the refresh. Stale-on-error covers short
-gaps. Creating the optional read-only token secret remains an owner decision; this code does not
-create a credential or deploy anything. Without it, freshness stays at 300 seconds.
-After owner approval, the deployment operator can run `wrangler secret put GITHUB_TOKEN` from this
-directory and enter the read-only token at the prompt; never put its value in `wrangler.toml`.
+gaps. The owner approved the read-only token (Nov 23): it is the `release-feed-deploy` environment secret
+`RELEASE_FEED_GITHUB_TOKEN`, and the deploy workflow sets the Worker's `GITHUB_TOKEN` from it on every deploy.
+Nobody runs `wrangler secret put` by hand, and its value is never put in `wrangler.toml`. This code creates no
+credential. Without the secret on the Worker, freshness stays at 300 seconds.
 The relay remains untrusted transport: client `CdnProblem` validation is unchanged, and clients
 still reject lists older than one hour using `Age`.
 
@@ -50,9 +50,12 @@ by hand. The workflow:
 - **test**: runs the Worker's tests (`worker.test.mjs`), with no secret.
 - **deploy**: waits for SRE's approval of the `release-feed-deploy` environment, then runs `wrangler deploy` (an exact,
   pinned wrangler) with that environment's Cloudflare API token. It reads `wrangler.toml` (name `agent-bridge-release-feed`,
-  route `releases.slipgates.com/*`, `workers_dev = false`) and publishes `worker.js`. It sets no secret and changes no DNS.
-- **purge-check**: in the `release-purge` environment, purges the list URL by URL and checks the next answer was fetched
-  after the purge, then a bodyless 304 for its ETag. That is the purge-by-URL check (#3870).
+  route `releases.slipgates.com/*`, `workers_dev = false`) and publishes `worker.js`. It requires the environment secret
+  `RELEASE_FEED_GITHUB_TOKEN`: without it the run fails before anything deploys. After deploying it sets the Worker's
+  `GITHUB_TOKEN` secret from it, on stdin, never logged. It changes no DNS.
+- **purge-check**: in the `release-purge` environment, purges both list URLs the app reads (the update check's
+  `per_page=10&page=1` and the halt policy's `per_page=100&page=1`) by URL, and fails unless each next answer was
+  fetched after the purge, then a bodyless 304 for each ETag. That is the purge-by-URL check (#3870).
 
 The first requests after a deploy that changes the cache key refetch from GitHub once.
 
