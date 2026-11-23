@@ -188,7 +188,7 @@ Entra ingestion needs #1813), and `Azure.Storage.UseReplication` on `abblobprodw
 does not cover retained feedback or signed-device trust; those four findings stay open.
 Roster soft-delete findings already pass and are not suppressed. No authentication,
 retention, replication, production purge-protection or scan-gate behavior is changed.
-These template changes reach Azure only through a separately owner-approved deployment.
+These template changes reach Azure only through a separate deployment approved as in [Who approves a production deploy](#who-approves-a-production-deploy). Anything that section does not cover (enforce flags, kill switches, repository settings or variables, credentials) still needs the owner.
 
 ## Building a stamp
 
@@ -263,7 +263,7 @@ and PWA already installed) keep working with no re-pairing. Do not put a redirec
 The relay's Content-Security-Policy follows the request's Host, so it needs no change. DNS for
 `relay.slipgates.com` (DNS-only CNAME to the app, `asuid.relay` TXT) is done; `slipgates.com` has no CAA records.
 
-Rollout, staging first, production on the owner's approval, by someone with Azure access:
+Rollout, staging first, production approved by SRE as in [Who approves a production deploy](#who-approves-a-production-deploy), by someone with Azure access:
 
 1. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <running sha>` and read the diff (production is only included with `-Production`): only the new hostname is added;
    `relay.bad-duck.com`'s binding is unchanged.
@@ -352,7 +352,7 @@ the display name is the description, the category is `Slipgates relay`. The file
 source and the module reads it with `loadTextContent`, so adding or removing a block needs no other
 edit. `RelayQueriesTests` fails CI on a repeated, empty or non-kebab id, a block with no query, or a
 first line with no `: description`. Like the rest of the stamp it reaches Azure only through
-`infra/deploy.ps1` and the owner's go-ahead.
+`infra/deploy.ps1` and SRE's approval ([Who approves a production deploy](#who-approves-a-production-deploy)).
 
 ## Reading a disconnect
 
@@ -713,7 +713,7 @@ another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thou
 ## Metrics export (#1134)
 
 The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag; `relay.sockets.live` and `relay.connects` also carry `site`, the hostname the device connected through, reduced to a configured name (`Relay__KnownHostnames__0..`; unset means `relay.slipgates.com` and `relay.bad-duck.com`, and setting any replaces both) or `other`, so a client cannot mint values. `/healthz` reports the same counts as `sockets: [{site, kind, count}]` (aggregate only), with a 0 for every configured hostname and kind, so an emptied hostname reads 0 rather than disappearing. To retire a hostname, watch `customMetrics` `relay.sockets.live` by `site` until it stays 0 for 24 h. Added by #1312: `relay.ratelimited` (counter; `kind` is `auth`, `connect` or `frames`: the two HTTP rate-limit policies and the per-socket frame-rate closes), `relay.draining` (gauge, 1 while the replica drains for shutdown, else 0) and `relay.drain.duration` (ms, time to tell every socket to reconnect). `relay.pushes` now reports HTTP 404 and 410 from the push service as outcome `gone` (a dead subscription), keeping `2xx`, other `4xx`, `5xx` and the relay's own errors as before. The exporter also takes the built-in `System.Runtime` and `Microsoft.AspNetCore.Server.Kestrel` meters (process, GC, thread-pool and connection metrics with their own standard tags, none an account, device or address); it is still a metrics provider only, with no trace or log exporter. `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it.
-**Wiring (#1311).** `infra/main.bicep` now declares production's Application Insights component (workspace-based, named by `appInsightsName`) and passes its connection string to `productionApp`, which sets `APPLICATIONINSIGHTS_CONNECTION_STRING` on the container. Staging and any stamp without a component get no setting, so they export nothing (`relay-app.bicep`'s `appInsightsConnectionString` is empty by default). `monitoring.bicep` refers to the same component with `existing`, so the availability test and A-AVAIL keep it and nothing is recreated. `infra/test-appinsights-wiring.sh` checks this on the compiled template. It reaches production only through `infra/deploy.ps1 -Production -ProductionImage <running digest>` and the owner's go-ahead; until then nothing is exported.
+**Wiring (#1311).** `infra/main.bicep` now declares production's Application Insights component (workspace-based, named by `appInsightsName`) and passes its connection string to `productionApp`, which sets `APPLICATIONINSIGHTS_CONNECTION_STRING` on the container. Staging and any stamp without a component get no setting, so they export nothing (`relay-app.bicep`'s `appInsightsConnectionString` is empty by default). `monitoring.bicep` refers to the same component with `existing`, so the availability test and A-AVAIL keep it and nothing is recreated. `infra/test-appinsights-wiring.sh` checks this on the compiled template. It reaches production only through `infra/deploy.ps1 -Production -ProductionImage <running digest>` and SRE's approval ([Who approves a production deploy](#who-approves-a-production-deploy)); until then nothing is exported.
 
 **Cost.** A workspace-based component has no cap of its own: its data counts against the Log Analytics workspace's daily cap (`logDailyCapGb`), so a flood of metrics could crowd out other logs on a capped day. Estimate, not a measurement: the exporter sends each series about once a minute; about 40 series (the three instruments by `kind` and `site`, plus `relay.connects`) is about 58,000 `customMetrics` rows a day per replica at roughly 0.6 KB, so about 35 MB a day, about 1 GB a month, a few dollars at most. The availability test adds a few MB a day. Check `Usage` for the component's real daily volume after the first week and replace this estimate.
 
