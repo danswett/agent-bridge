@@ -1059,27 +1059,70 @@ public class MergeRuleTests
         Assert.Equal(("failure", "Check native-clients ended failure on abcdef0 (+1 more)"), (verdict.State, verdict.Description));
     }
 
+    // Workflows left out of merge-rule.yml's workflow_run list because none of their runs can put a check or status on a
+    // pull request's head, and the judge reads only a head's checks and statuses (quality/merge-rule.yml: "Every check run
+    // and status on the head must pass"). EVENT TABLE, why no verdict can change when one of them starts or finishes:
+    //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
+    //                               branch's tip, never a pull request's head, and it cannot be dispatched.
+    //   Re-run known flakes         the same trigger, the same reason.
+    //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
+    //                               on a pull request's branch ends skipped, which the judge counts as passing.
+    // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
+    // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
+    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+
+    static YamlMappingNode LoadWorkflow(string file)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(file)));
+        return (YamlMappingNode)stream.Documents[0].RootNode;
+    }
+
     // A workflow left out of merge-rule.yml's workflow_run list could still fail after the last
     // evaluation, and its red would never reach merge-rule until the schedule came round.
     [Fact]
     public void A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
-        static YamlMappingNode Load(string file)
-        {
-            var stream = new YamlStream();
-            stream.Load(new StringReader(File.ReadAllText(file)));
-            return (YamlMappingNode)stream.Documents[0].RootNode;
-        }
         var names = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
-            .Select(f => Load(f).Children[new YamlScalarNode("name")].ToString())
-            .Where(n => n != "Merge rule")
+            .Select(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString())
+            .Where(n => n != "Merge rule" && !CannotReachAPullRequestHead.Contains(n))
             .Order(StringComparer.Ordinal);
-        var on = (YamlMappingNode)Load(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
+        var on = (YamlMappingNode)LoadWorkflow(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
         var listed = ((YamlSequenceNode)((YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")])
             .Children[new YamlScalarNode("workflows")]).Children.Select(n => n.ToString()).Order(StringComparer.Ordinal);
 
         Assert.Equal(names, listed);
+    }
+
+    // The exclusions above hold only while each of those workflows still cannot reach a pull request's head.
+    [Fact]
+    public void The_workflows_left_out_of_the_list_still_cannot_put_a_check_on_a_pull_request_head()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var byName = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+            .ToDictionary(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString(), f => f);
+        foreach (var name in CannotReachAPullRequestHead)
+        {
+            Assert.True(byName.TryGetValue(name, out var file), $"{name} no longer exists: remove it from the exclusions");
+            var workflow = LoadWorkflow(file!);
+            var on = (YamlMappingNode)workflow.Children[new YamlScalarNode("on")];
+            var triggers = on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal).ToArray();
+            if (name == "Upload release halt policy")
+            {
+                Assert.All(triggers, t => Assert.Contains(t, new[] { "push", "workflow_dispatch" }));
+                var push = (YamlMappingNode)on.Children[new YamlScalarNode("push")];
+                Assert.Equal(["main"], ((YamlSequenceNode)push.Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString()));
+                var jobs = (YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")];
+                Assert.All(jobs.Children.Values.Cast<YamlMappingNode>(),
+                    job => Assert.Contains("refs/heads/main", job.Children[new YamlScalarNode("if")].ToString(), StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.Equal(["workflow_run"], triggers);
+            }
+            Assert.DoesNotMatch(@"(statuses|checks):\s*write", File.ReadAllText(file!));
+        }
     }
 
     [Fact]
