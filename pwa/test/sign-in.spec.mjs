@@ -85,8 +85,11 @@ test('an active code expires while hidden without a periodic banner sweep', asyn
     window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 12000).toISOString() };
   });
   await signIn(page).click();
-  await page.clock.runFor(100);
-  await expect(sheet(page).locator('.sign-in-code')).toHaveText('WDJB-MJHT');
+  // The demo answers on a timer after an async hop, and a paused clock fires nothing by itself: so
+  // the clock is driven in steps while the code is waited for, never a fixed run followed by one
+  // look (the sheet's text is read without waiting, since a wait here would stall).
+  const sheetText = (selector) => page.evaluate((s) => document.querySelector(`dialog.sign-in-sheet ${s}`)?.textContent ?? null, selector);
+  await expect.poll(async () => { await page.clock.runFor(100); return sheetText('.sign-in-code'); }, { intervals: [20, 50, 100] }).toBe('WDJB-MJHT');
   await visibility(page, false);
   await page.evaluate(() => {
     const banners = window.agentBridgeDemo.page.signIns, render = banners.render;
@@ -96,8 +99,10 @@ test('an active code expires while hidden without a periodic banner sweep', asyn
   await page.clock.runFor(10000);
   expect(await page.evaluate(() => window.__bannerRenders)).toBe(0);
   expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(1);
+  // Its twelve seconds run out; if the sheet's redraw waits on a timer set after an async hop, the
+  // clock keeps moving until the sheet says so, then it is checked.
   await page.clock.runFor(2000);
-  await expect(sheet(page).locator('.sign-in-expired')).toHaveText('Code expired');
+  await expect.poll(async () => { await page.clock.runFor(100); return sheetText('.sign-in-expired'); }, { intervals: [20, 50, 100] }).toBe('Code expired');
   expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
   expect(await page.evaluate(() => window.__bannerRenders)).toBe(1);
   await visibility(page, true);
