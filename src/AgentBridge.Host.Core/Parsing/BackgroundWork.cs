@@ -560,8 +560,11 @@ internal sealed class BackgroundWork
         since is null || processStartedAt is not { } start || since >= start - Slack;
 
     // What is still running and could still report back to the session's current process.
-    public (int Agents, int Shells) Running(DateTimeOffset? processStartedAt) =>
-        (_agents.Values.Count(a => a.Background && a.Working && Live(a.Since, processStartedAt)), _shells.Values.Count(s => Live(s, processStartedAt)));
+    // now: when given, a shell whose latest start or "still running" mark is Limits.BackgroundShellStale or more
+    // behind it no longer counts (#1108); a shell with no recorded time still does.
+    public (int Agents, int Shells) Running(DateTimeOffset? processStartedAt, DateTimeOffset? now = null) =>
+        (_agents.Values.Count(a => a.Background && a.Working && Live(a.Since, processStartedAt)),
+         _shells.Values.Count(s => Live(s, processStartedAt) && (now is not { } at || s is not { } since || at - since < Limits.BackgroundShellStale)));
 
     // The entries as listed: running first (newest start first), then the most recently
     // finished, at most Limits.Subagents, with the number left out. Waiting: the agents with

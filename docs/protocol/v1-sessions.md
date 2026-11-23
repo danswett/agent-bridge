@@ -2331,7 +2331,7 @@ both are sent.
 | Field | Type | Notes |
 |---|---|---|
 | `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message, at any depth. One between runs (a `subagents` entry `idle`) is not counted |
-| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
+| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background. A shell counts from its latest start or "still running" mark, from the session's current process only, and stops counting once that mark is 4 hours old (`Limits.BackgroundShellStale`): one whose end the transcript never shows would otherwise keep a finished session out of `idle` for ever, and a stuck reader still clears the same day (#1108, #1396). The host drops it when the clock passes the limit, with nothing written to the transcript. **Risk, accepted:** a command that runs silently for more than 4 hours, with no new start or "still running" mark, stops counting and its session reads `idle`. The host adds no process check (a transcript holds no shell process id), and an agent's End still needs the launcher's or Quality's attestation; what a person's End then stops is the person's decision |
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
 `background` says why it is not finished. A client shows a session that is `idle` with

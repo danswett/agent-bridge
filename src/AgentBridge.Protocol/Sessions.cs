@@ -110,6 +110,9 @@ public static class Limits
     public const int OptionId = 64;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
+    // activity.background.shells (v1-sessions.md "Background"): a shell whose latest start or "still running"
+    // mark is older than this stops counting, so a finished session whose shell never reported back reads idle (#1108).
+    public static readonly TimeSpan BackgroundShellStale = TimeSpan.FromHours(4);
     // Free text in an answer (session.answer's text, or a field's other), and the request.
     public const int AnswerText = 4 * 1024;
     public const int AnswerRequest = 16 * 1024;

@@ -45,7 +45,7 @@ of its own.
 | `startedAt`, `endedAt` | |
 | `line` | Its latest reasoning or response |
 | `currentTool`, `history` | As for a session, but its own |
-| `shells` | Background commands it started, counted here and not on the session (agent-ha-bridge#261) |
+| `shells` | Background commands it started, counted here and not on the session (agent-ha-bridge#261). The session's own `background.shells` ages a shell out after `Limits.BackgroundShellStale` (4 h) without a new start or "still running" mark ([v1-sessions.md, Background](../protocol/v1-sessions.md#background), #1108) |
 
 **What stays the session's own:** `status`, `userMessage`, `model`, `turnCount` and
 `compactions` are the main agent's, as today. The session's `response` and `reasoning`

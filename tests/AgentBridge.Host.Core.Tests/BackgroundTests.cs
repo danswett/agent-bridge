@@ -284,6 +284,60 @@ public class BackgroundTests
     }
 
     [Fact]
+    public async Task A_shell_that_never_reported_back_stops_counting_once_it_is_older_than_the_stale_limit_with_no_new_events()
+    {
+        await using var s = new Session_();
+        var started = await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        Assert.Equal(new Background { Shells = 1 }, started.Activity.Background);
+
+        // The fixture's clock starts an hour after the transcript's zero: the shell is already that old.
+        var age = s.F.Time.GetUtcNow() - Fixture.T0.AddSeconds(8);
+        s.F.Time.Advance(Limits.BackgroundShellStale - age - TimeSpan.FromMinutes(10));
+        await s.Source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+
+        // Only the clock moved: nothing was written to the transcript.
+        s.F.Time.Advance(TimeSpan.FromMinutes(20));
+        await s.Source.RefreshAsync();
+        Assert.Null(s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_shell_announced_again_counts_from_its_latest_mark_so_a_live_long_command_stays_counted()
+    {
+        await using var s = new Session_();
+        await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+
+        // The command keeps saying it is still running, every three hours: eight hours in all, twice the limit,
+        // and never more than three hours since its latest mark.
+        foreach (var hours in new[] { 3, 6, 7 })
+        {
+            await s.After(Copilot.ToolResult("c" + hours, "<command with shellId: ci is still running after 30 seconds. The command is still running. You will be automatically notified when it completes.>", hours * 3600));
+        }
+        s.F.Time.Advance(TimeSpan.FromHours(7)); // the fixture's clock started at hour 1: now is hour 8
+        await s.Source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+
+        // Silent from then on, it goes the same way once its latest mark is the limit old.
+        s.F.Time.Advance(Limits.BackgroundShellStale);
+        await s.Source.RefreshAsync();
+        Assert.Null(s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_stale_shell_leaves_a_working_agent_and_a_fresh_shell_counted()
+    {
+        await using var s = new Session_();
+        await s.After([.. Delegate("t1", "a1", 1), Copilot.ToolResult("c1", "<command started in background with shellId: old>", 8)]);
+        await s.After(Copilot.ToolResult("c2", "<command started in background with shellId: fresh>", 7000));
+
+        s.F.Time.Advance(Limits.BackgroundShellStale);
+        await s.Source.RefreshAsync();
+
+        Assert.Equal(new Background { Agents = 1, Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
     public async Task A_host_that_starts_after_the_CLI_was_replaced_does_not_count_the_old_CLIs_work()
     {
         using var f = new Fixture();

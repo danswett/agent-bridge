@@ -132,6 +132,14 @@ internal sealed class SessionTracker
         {
             changed = true;
         }
+        // A shell that never reported back stops counting once it is older than Limits.BackgroundShellStale (#1108):
+        // the clock alone changes the answer, with nothing written to the transcript, so ask again with what the
+        // last build counted, as for Stalled above.
+        if (!changed && _built?.Activity.Background is { Shells: > 0 } counted
+            && _state.Background.Running(Discovered.ProcessStartedAt, _time.GetUtcNow()).Shells != counted.Shells)
+        {
+            changed = true;
+        }
         // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
         // shows as asked (#780), though nothing it reads did.
         // The hook status a restored Claude session's registration carries when the boundary is
@@ -325,7 +333,7 @@ internal sealed class SessionTracker
         };
         var (response, responseCut) = Limits.KeepEnd(_state.Response, Limits.Response);
         var history = _state.Tools.Count > 0 ? _state.Tools.Latest(Limits.History) : null;
-        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt);
+        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt, _time.GetUtcNow());
         var (subagents, more) = _state.Background.Entries(d.ProcessStartedAt, Waiting());
         var source = _state.ResponseBy is null && _state.ReasoningBy is null ? null
             : new ActivitySource { Response = _state.ResponseBy, Reasoning = _state.ReasoningBy };
