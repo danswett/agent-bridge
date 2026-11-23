@@ -601,7 +601,9 @@ suites:
     triggers: [quality/ci-speed.ps1, quality/test-ci-speed.ps1]
     command: pwsh -NoProfile -File quality/test-ci-speed.ps1
     where: ci.yml light
-    status: exists
+    # planned until the ci.yml step lands (patches/ci-speed-step-4104.patch, applied by Quality): until then only a local run tests it.
+    # Flip to exists with that patch.
+    status: planned
 
   - id: arm64-waiver-script
     validation_plan: native
