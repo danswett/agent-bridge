@@ -112,4 +112,36 @@ public sealed class SharedReadTests
         Assert.Equal(2, await shared.GetAsync(other, () => { newReads++; return Task.FromResult(3); }, CancellationToken.None));
         Assert.Equal(1, newReads);
     }
+
+    static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
+
+    [Fact]
+    public async Task A_lost_reply_does_not_hold_the_readers_for_the_whole_read_timeout()
+    {
+        var reads = 0; var lost = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shared = new SharedRead<int>(time, Window, Patience);
+        Task<int> Read() { return ++reads == 1 ? lost.Task : Task.FromResult(42); }
+        var first = shared.GetAsync(connection, Read, CancellationToken.None);
+        var second = shared.GetAsync(connection, Read, CancellationToken.None);
+        await Task.Delay(50);
+        time.Advance(Patience);
+        Assert.Equal(42, await first.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(42, await second.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, reads);
+    }
+
+    [Fact]
+    public async Task A_read_given_up_on_never_replaces_the_newer_answer_when_it_finally_returns()
+    {
+        var reads = 0; var lost = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shared = new SharedRead<int>(time, Window, Patience);
+        Task<int> Read() { return ++reads == 1 ? lost.Task : Task.FromResult(42); }
+        var first = shared.GetAsync(connection, Read, CancellationToken.None);
+        await Task.Delay(50);
+        time.Advance(Patience);
+        Assert.Equal(42, await first.WaitAsync(TimeSpan.FromSeconds(5)));
+        lost.SetResult(7);
+        await Task.Delay(50);
+        Assert.Equal(42, await shared.GetAsync(connection, () => Task.FromResult(99), CancellationToken.None));
+    }
 }
