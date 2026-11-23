@@ -39,12 +39,38 @@ inputs in the same window, for comparison only.
 | Same request id again | The recorded outcome comes back; no second session starts |
 | Replay of the sealed envelope | Refused (`policy`); nothing starts |
 | First 2.5 minutes after the target restarts | Refused (`policy`, the warm-up); nothing starts; a fresh request after the window starts one session |
-| Target offline | `target-offline`; nothing is queued and nothing is sent to HA |
+| Target offline | `target-offline` (exit 5, only when delivery provably did not happen); nothing is queued and nothing is sent to HA |
 | Source credential revoked or process gone | Refused before any send; nothing is sent |
-| Grant revoked, kill switch on, scope or cap exceeded | Refused with `grant-revoked`, `policy`, `scope` as the receiver decides; counters do not move |
+| Grant revoked | Refused `grant-revoked` (exit 5); counters do not move |
+| Kill switch on (`launch.enabled` off or equivalent) | Refused `kill-switch` (exit 5); never another route |
+| Scope outside the grant or host policy | Refused `scope` (exit 5) |
+| Cap would be exceeded | Refused `grant-exhausted` (exit 5); counters do not move |
+| Another receiving-host safety gate (including replay and the warm-up) | Refused `policy` (exit 5) |
 | Response lost after the send | `unconfirmed` (exit 7); resolved with `launches status --request <uuid> --json` on the target; never resent with a fresh id |
-| Peer not an own-account host | Refused by the sender before any send |
+| Peer not a trusted own-account host | Refused `peer-not-trusted` (exit 5) by the sender before any send; never another route |
 | Same inputs over the HA transport (comparison) | Same `started` and `registered`, same refusals, same counters, no double launch |
+
+### What HA launch does today (the comparison baseline)
+
+So the comparison is fair, this is what the HA transport of `launch-remote.ps1` does for a launch now, and
+what the Host path is therefore measured against:
+
+- It checks the requested options against the target's HA `launch_options` and checks a new workspace, before it sends.
+- It takes a per-target launch lock and a launch lease, writes the prompt as an HA payload (which lifts the
+  255 character limit; prompts run from short up to about 60 KB), takes a snapshot of the target's HA entities,
+  and presses the target's `new_session` button once.
+- It reads the result from `new_session_result`. If the host is busy it waits and resubmits, up to 5 times, 30 s apart.
+- Concurrent launches to one target are serialized by that lock and lease.
+- An uncertain press is reported as uncertain and is not repeated.
+
+The Host path has no lock or lease, no payload entity and no resubmit loop: the receiver's own caps, counters, dedupe
+and refusals decide, and a busy or uncertain result is exit 7 or a refusal, never an automatic resend.
+
+### Flip scope: launch only
+
+The flip changes the **launch** default only. `-End`, `-List`, `-Options`, `-Resolve` and `-EndWhenIdle` stay on
+HA (the Host transport refuses them and throws), so they are not part of this gate and the `HA` value stays
+selectable for them. Their replacement is G10 and G11 B, and removal is E4.
 
 ### Which cases have an HA twin, and how a pair is compared
 
