@@ -799,6 +799,9 @@ public sealed record AnswerRequest
     public required string Request { get; init; }
     public IReadOnlyDictionary<string, JsonElement>? Fields { get; init; }
     public string? Text { get; init; }
+    // The session id the person's card showed, as the CLIENT reports it (ha-audit-client-field.md, owner decision on #4044). Evidence only:
+    // the host records it in the audit row and never reads it for a decision. Older hosts ignore it.
+    public string? CardTarget { get; init; }
     // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
     // result, and the result carries Timings. Absent, nothing about the exchange changes.
     public bool? Progress { get; init; }

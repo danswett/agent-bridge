@@ -7,8 +7,12 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null,
     ProcessInstance? LaunchProcess = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientKind = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null,
+    // CLIENT-REPORTED, evidence only (owner decision on #4044): the session id the answering card showed. Written as received once it has this plain
+    // shape, on person-client answer rows; read by no gate, grant, policy or projection (pinned by ClientReportedCardTargetPinTests).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientReportedCardTarget = null)
 {
+    internal static bool CardTargetShape(string value) => value.Length is >= 1 and <= 64 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
     // The client the host's verified roster says the principal device is (ha-audit-client-field.md): both or neither, from closed sets,
     // only on a relay person-client answer or stop. Omitted when absent, so a row written without it keeps its exact bytes and chain hash.
     static readonly HashSet<string> ClientKinds = new(["app", "pwa", "phone"], StringComparer.Ordinal);
@@ -25,6 +29,7 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
         && (GrantBinding is null ? action is not ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update")
             : action is ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && GrantBinding.Length == 64 && GrantBinding.All(char.IsAsciiHexDigit))
         && ClientValid(action)
+        && (ClientReportedCardTarget is null || action == "session.answer" && ActorKind == "person-client" && Phase != "control" && CardTargetShape(ClientReportedCardTarget))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")

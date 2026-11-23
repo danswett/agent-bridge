@@ -512,6 +512,7 @@ public sealed class SessionService
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
             gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            if (request.CardTarget is { } card && GateAuditMetadata.CardTargetShape(card)) { gate = gate with { ClientReportedCardTarget = card }; }
             if (channel is SecureChannel viaRelay && ClientOf?.Invoke(viaRelay) is { } client) { gate = gate with { ClientKind = client.Kind, ClientPlatform = client.Platform }; }
             var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
             var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
