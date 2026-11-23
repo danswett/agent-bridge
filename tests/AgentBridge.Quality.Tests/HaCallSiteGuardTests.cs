@@ -4,41 +4,76 @@ using System.Text.RegularExpressions;
 namespace AgentBridge.Quality.Tests;
 
 // HA retirement, "no new HA call sites" for this repo (Part of #1396; the design of the fleet's gate, slipgates-fleet #726).
-// Product and tooling code (not tests, docs or fixtures) that reaches Home Assistant, or hands agents its address, must be in
-// ha-callsite-allowlist.json with the slice that retires it. A new site fails here, and so does an allowance with nothing left in it,
-// so the list only shrinks. The connector project is one pinned directory entry: its file count must match, so a new file in it fails too.
+// Scope: EVERY tracked text file (files with no extension too), except a short explicit list of binary types and the top-level tests/,
+// docs/, design/, spikes/ and backlog/ folders (no bin, obj or node_modules exclusion: only tracked files are read, and a script in a folder
+// called bin must not be a hiding place; tests and prose of the connector
+// itself are not product call sites). No file is skipped for its name or for any other nested folder name, and only a file type's real
+// comment syntax hides a line. A file that names HA access must be in ha-callsite-allowlist.json with the COUNT of references it has today:
+// a higher count is red (a new call inside an allowlisted file), a lower one is stale, so the list only shrinks. The connector project is
+// one directory entry that pins its file NAMES: a new, renamed or removed file is red or stale (HA calls inside the connector's own files
+// are the connector, which S7 removes). KNOWN LIMIT: a text scan cannot catch a reference built by string concatenation ("/api/" + "states"),
+// by base64 or other encoding, or by reading the address from a file; and a count cannot catch adding a call while deleting another in the
+// same allowlisted file (the count stays equal; review the diff of an allowlisted file). The guard stops the plain, honest new call.
 public class HaCallSiteGuardTests
 {
     const string AllowlistPath = "tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json";
 
-    internal sealed record Allowance(string? Path, string? Directory, int? Files, string? Slice, string? Issue, string? Reason);
+    internal sealed record Allowance(string? Path, int? Sites, string? Directory, string[]? Names, string? Slice, string? Issue, string? Reason);
 
-    // HA access as text: the agent credential and address variables, HA's API paths, its client types, the MQTT and notify services
-    // the connector drives, and the host call that starts the connector. Variable names and API paths match in any case (PowerShell and
-    // Windows environment names are case-insensitive); client type names match with a prefix or suffix (IHomeAssistantClient, Retrying...Client).
+    // HA access as text, in any file: the agent credential and address variables (any AGENT_HA_* or FLEET_HA_* name), HA API paths, an HA
+    // host or port, the connector's types, the connector library by name (a using, a ProjectReference, a solution entry) and the MQTT and
+    // notify services it drives. Names and paths match in any case (PowerShell and Windows environment names are case-insensitive).
     static readonly Regex Access = new(
-        @"(?i:AGENT_HA_AGENT_TOKEN|AGENT_HA_URL|FLEET_HA_(URL|TOKEN)|/api/(states|services|websocket|image/serve)\b)|\w*HomeAssistantClient\b|\bIHomeAssistant\w*"
-        + @"|mqtt\.publish|mqtt/subscribe|mobile_app_notification_action|notify\.mobile_app|persistent_notification|\bHaRunning\.Start\b",
-        RegexOptions.CultureInvariant);
-    static readonly Regex TestFileName = new(@"(^|/)(test[-_][^/]*|[^/]*\.tests?\.[^/]*)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly string[] Extensions = [".cs", ".ps1", ".psm1", ".py", ".js", ".mjs", ".ts", ".sh"];
+        @"(?i:\b(AGENT|FLEET)_HA_\w+|\b(HASS|HOMEASSISTANT)_(URL|TOKEN)\b|\bHA_\w+|\bhass\.(services|states|bus)\b|\bSUPERVISOR_TOKEN\b|\bHASSIO_\w+"
+        + @"|\bapi/(states|services|websocket|image|config|events|template|history|logbook|camera_proxy\w*|error_log|core|webhook|mobile_app|hassio|stream|discovery_info|intent|calendars|tts_proxy)\b"
+        + @"|home-?assistant\.(local|invalid|lan|io|com|net|org)\b|(?<![\w.])home-?assistant\b|(?<=//)supervisor\b|:8123\b|supervisor/core)"
+        + @"|HomeAssistantClient\b|\bI?HomeAssistant\w*|\bHa[A-Z]\w*|\bAgentBridge\.HomeAssistant\b"
+        + @"|mqtt\.publish|mqtt/subscribe|mobile_app_notification_action|notify\.mobile_app|persistent_notification",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    static readonly string[] Binary =
+    [
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".icns", ".psd", ".zip", ".gz", ".tgz", ".7z", ".nupkg", ".jar", ".dll", ".exe",
+        ".pdb", ".so", ".dylib", ".lib", ".a", ".bin", ".pdf", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4", ".wav", ".mov", ".snk",
+        ".pfx", ".cer", ".p12", ".der", ".sqlite", ".db", ".class", ".wasm", ".dat",
+    ];
     static readonly string[] NotProduct = ["tests/", "docs/", "design/", "spikes/", "backlog/"];
-    static readonly string[] NotCode = ["fixtures", "bin", "obj", "node_modules"];
     const string Connector = "src/AgentBridge.HomeAssistant/";
 
     static bool InScope(string path) =>
-        Extensions.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase)
-        && !NotProduct.Any(prefix => path.StartsWith(prefix, StringComparison.Ordinal))
-        && !path.Split('/').Any(part => NotCode.Contains(part, StringComparer.OrdinalIgnoreCase))
-        && !TestFileName.IsMatch(path);
+        !Binary.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase)
+        && !NotProduct.Any(prefix => path.StartsWith(prefix, StringComparison.Ordinal));
 
-    // The code lines of a file: not blank lines, not // or # comment lines, and nothing inside a block comment (<# #> or /* */) that starts a line.
-    static IEnumerable<string> CodeLines(string text)
+    // A file type's real comment syntax; a type not listed has no comments, so every line of it counts.
+    internal sealed record Syntax(string[] Line, (string Open, string Close)[] Block, string[]? Multiline = null, bool HereStrings = false);
+    static readonly Syntax CFamily = new(["//"], [("/*", "*/")]);
+    static readonly Syntax Hash = new(["#"], []);
+    static readonly Syntax Xml = new([], [("<!--", "-->")]);
+    static readonly Syntax NoComments = new([], []);
+    static Syntax SyntaxOf(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".cs" or ".csx" => CFamily with { Multiline = ["\"\"\""] },
+        ".js" or ".mjs" or ".cjs" or ".ts" or ".mts" or ".tsx" or ".jsx" => CFamily with { Multiline = ["`"] },
+        ".fs" => new(["//"], [("(*", "*)")]),
+        ".ps1" or ".psm1" or ".psd1" => new(["#"], [("<#", "#>")], HereStrings: true),
+        ".py" => Hash with { Multiline = ["\"\"\"", "'''"] },
+        ".sh" or ".yml" or ".yaml" => Hash,
+        ".cmd" or ".bat" => new(["rem ", "::"], []),
+        ".csproj" or ".props" or ".targets" or ".slnx" or ".sln" or ".html" or ".xml" or ".xaml" or ".svg" or ".md" => Xml,
+        _ => NoComments,
+    };
+
+    // The code lines of a file: not blank lines, not comment lines, and nothing inside a block comment that starts a line. Inside a raw string
+    // ("""; C# and Python) or a PowerShell here-string (@' '@, @" "@) every line is text, even one that looks like a comment.
+    static IEnumerable<string> CodeLines(string text, Syntax syntax)
     {
         string? end = null;
-        foreach (var raw in text.Split('\n'))
+        string? here = null;
+        string? raw = null;
+        foreach (var source in text.Split('\n'))
         {
-            var line = raw;
+            var line = source.TrimEnd('\r');
+            if (raw is not null) { yield return line; if (line.Contains(raw, StringComparison.Ordinal)) { raw = null; } continue; }
+            if (here is not null) { yield return line; if (line.StartsWith(here, StringComparison.Ordinal)) { here = null; } continue; }
             if (end is not null)
             {
                 var close = line.IndexOf(end, StringComparison.Ordinal);
@@ -47,40 +82,65 @@ public class HaCallSiteGuardTests
                 end = null;
             }
             var trimmed = line.TrimStart();
-            var open = trimmed.StartsWith("<#", StringComparison.Ordinal) ? "#>" : trimmed.StartsWith("/*", StringComparison.Ordinal) ? "*/" : null;
-            if (open is not null)
+            foreach (var (blockOpen, blockClose) in syntax.Block)
             {
-                var close = trimmed.IndexOf(open, 2, StringComparison.Ordinal);
-                if (close < 0) { end = open; continue; }
-                line = trimmed[(close + open.Length)..];
+                // "(*)" is the F# multiplication operator, not a comment.
+                if (!trimmed.StartsWith(blockOpen, StringComparison.Ordinal) || trimmed.StartsWith("(*)", StringComparison.Ordinal)) { continue; }
+                var close = trimmed.IndexOf(blockClose, blockOpen.Length, StringComparison.Ordinal);
+                if (close < 0) { end = blockClose; trimmed = ""; break; }
+                line = trimmed[(close + blockClose.Length)..];
                 trimmed = line.TrimStart();
+                break;
             }
-            if (trimmed.Length > 0 && !trimmed.StartsWith("//", StringComparison.Ordinal) && !trimmed.StartsWith('#')) { yield return line; }
+            if (end is not null || trimmed.Length == 0 || syntax.Line.Any(prefix => trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) { continue; }
+            yield return line;
+            if (syntax.Multiline?.FirstOrDefault(token => Regex.Count(line, Regex.Escape(token)) % 2 == 1) is { } token) { raw = token; }
+            else if (syntax.HereStrings && line.TrimEnd().EndsWith("@'", StringComparison.Ordinal)) { here = "'@"; }
+            else if (syntax.HereStrings && line.TrimEnd().EndsWith("@\"", StringComparison.Ordinal)) { here = "\"@"; }
         }
     }
 
-    // The paths that are HA call sites: the connector project (every file in it) and any other file with a code line naming HA access.
-    internal static SortedSet<string> Sites(IReadOnlyDictionary<string, string> files) =>
-        new(files.Where(file => InScope(file.Key) && (file.Key.StartsWith(Connector, StringComparison.Ordinal)
-            || CodeLines(file.Value).Any(Access.IsMatch))).Select(file => file.Key), StringComparer.Ordinal);
+    // How many HA references each in-scope file has (code lines only; every match counts, so two on one line are two).
+    internal static SortedDictionary<string, int> Counts(IReadOnlyDictionary<string, string> files)
+    {
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (path, raw) in files.Where(file => InScope(file.Key)))
+        {
+            // A UTF-16 file read without its BOM has a NUL between its letters: drop them so it is scanned, not skipped.
+            var text = raw.Contains('\0') ? raw.Replace("\0", "") : raw;
+            var count = CodeLines(text, SyntaxOf(path)).Sum(line => Access.Matches(line).Count);
+            // Every file of the connector project is a site, whatever it holds.
+            if (count > 0 || path.StartsWith(Connector, StringComparison.Ordinal)) { counts[path] = count; }
+        }
+        return counts;
+    }
 
     internal static (string[] New, string[] Stale) Check(IReadOnlyDictionary<string, string> files, IReadOnlyList<Allowance> allowances)
     {
-        var sites = Sites(files);
+        var counts = Counts(files);
         var covered = new HashSet<string>(StringComparer.Ordinal);
+        var added = new List<string>();
         var stale = new List<string>();
         foreach (var allowance in allowances)
         {
             if (allowance.Directory is { } directory)
             {
-                var inside = sites.Where(site => site.StartsWith(directory, StringComparison.Ordinal)).ToList();
-                if (inside.Count != allowance.Files) { stale.Add($"{directory} holds {inside.Count} files, the allowance says {allowance.Files}"); }
-                covered.UnionWith(inside);
+                var actual = counts.Keys.Where(path => path.StartsWith(directory, StringComparison.Ordinal)).Select(path => path[directory.Length..]).ToList();
+                var pinned = allowance.Names ?? [];
+                added.AddRange(actual.Except(pinned).Select(name => directory + name));
+                stale.AddRange(pinned.Except(actual).Select(name => directory + name + " (no longer in the pinned directory)"));
+                covered.UnionWith(actual.Select(name => directory + name));
             }
-            else if (allowance.Path is { } path && sites.Contains(path)) { covered.Add(path); }
-            else { stale.Add(allowance.Path ?? "(entry with no path)"); }
+            else if (allowance.Path is { } path && counts.TryGetValue(path, out var count) && count > 0)
+            {
+                covered.Add(path);
+                if (count > allowance.Sites) { added.Add($"{path}: {count} HA references, the allowance says {allowance.Sites}"); }
+                else if (count < allowance.Sites) { stale.Add($"{path}: {count} HA references, the allowance says {allowance.Sites} (lower it)"); }
+            }
+            else { stale.Add((allowance.Path ?? "(entry with no path)") + " (no HA reference left)"); }
         }
-        return ([.. sites.Where(site => !covered.Contains(site))], [.. stale]);
+        added.AddRange(counts.Where(site => site.Value > 0 && !covered.Contains(site.Key)).Select(site => site.Key));
+        return ([.. added], [.. stale]);
     }
 
     static IReadOnlyDictionary<string, string> Read(string root) =>
@@ -91,16 +151,16 @@ public class HaCallSiteGuardTests
         JsonSerializer.Deserialize<Allowance[]>(File.ReadAllText(Path.Combine(root, AllowlistPath)), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 
     [Fact]
-    public void The_repo_has_no_HA_call_site_outside_the_allowlist_and_no_allowance_is_stale()
+    public void The_repo_has_no_new_HA_call_site_and_every_allowance_is_current()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var (added, stale) = Check(Read(root), Allowances(root));
-        Assert.True(added.Length == 0, "New HA call site (retire it, or allowlist it with its slice and the #1396 issue): " + string.Join(", ", added));
-        Assert.True(stale.Length == 0, "Allowance with nothing left in it (remove it): " + string.Join(", ", stale));
+        Assert.True(added.Length == 0, "New HA call site, or more references than allowed (retire it, or allowlist it with its slice, its count and the #1396 issue): " + string.Join("; ", added));
+        Assert.True(stale.Length == 0, "Allowance that no longer matches (lower or remove it): " + string.Join("; ", stale));
     }
 
     [Fact]
-    public void Every_allowance_names_a_slice_a_reason_and_an_agent_bridge_issue()
+    public void Every_allowance_names_a_slice_a_reason_a_count_and_an_agent_bridge_issue()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var allowances = Allowances(root);
@@ -110,13 +170,15 @@ public class HaCallSiteGuardTests
             Assert.False(string.IsNullOrWhiteSpace(a.Slice) || string.IsNullOrWhiteSpace(a.Reason), $"{a.Path ?? a.Directory} needs a Slice and a Reason");
             Assert.Matches(@"^https://github\.com/danswett/agent-bridge/issues/\d+$", a.Issue ?? "");
             Assert.True((a.Path is null) != (a.Directory is null), "an allowance is a Path or a Directory");
-            Assert.True(a.Directory is null || a.Files > 0, "a Directory allowance pins its file count");
+            Assert.True(a.Path is null || a.Sites > 0, "a Path allowance pins its HA reference count");
+            Assert.True(a.Directory is null || a.Names is { Length: > 0 }, "a Directory allowance pins its file names");
+            Assert.True(a.Directory is null || a.Directory.EndsWith('/'), "a Directory allowance ends with a slash, or it would also cover a sibling folder");
         });
     }
 
     static Dictionary<string, string> Files(params (string Path, string Text)[] files) => files.ToDictionary(f => f.Path, f => f.Text);
     static void AssertClean((string[] New, string[] Stale) result) { Assert.Empty(result.New); Assert.Empty(result.Stale); }
-    static Allowance Allow(string path) => new(path, null, null, "S7", "https://github.com/danswett/agent-bridge/issues/1396", "known");
+    static Allowance Allow(string path, int sites = 1) => new(path, sites, null, null, "S7", "https://github.com/danswett/agent-bridge/issues/1396", "known");
 
     [Fact]
     public void A_new_file_that_reaches_HA_fails_and_an_allowlisted_one_passes()
@@ -124,6 +186,19 @@ public class HaCallSiteGuardTests
         var files = Files(("tools/new/poke.ps1", "Invoke-RestMethod -Uri \"$base/api/states\""), ("src/Other/Clean.cs", "var x = 1;"));
         Assert.Equal(["tools/new/poke.ps1"], Check(files, []).New);
         AssertClean(Check(files, [Allow("tools/new/poke.ps1")]));
+    }
+
+    [Fact]
+    public void A_new_HA_call_inside_an_allowlisted_file_is_red_and_a_removed_one_is_stale()
+    {
+        var one = "var u = \"/api/states\";";
+        AssertClean(Check(Files(("src/X/Caller.cs", one)), [Allow("src/X/Caller.cs")]));
+        var more = Check(Files(("src/X/Caller.cs", one + "\nvar v = \"/api/services\";")), [Allow("src/X/Caller.cs")]);
+        Assert.Equal(["src/X/Caller.cs: 2 HA references, the allowance says 1"], more.New);
+        var sameLine = Check(Files(("src/X/Caller.cs", "var u = \"/api/states\" + \"/api/services\";")), [Allow("src/X/Caller.cs")]);
+        Assert.Single(sameLine.New);
+        var fewer = Check(Files(("src/X/Caller.cs", one)), [Allow("src/X/Caller.cs", 3)]);
+        Assert.Equal(["src/X/Caller.cs: 1 HA references, the allowance says 3 (lower it)"], fewer.Stale);
     }
 
     [Theory]
@@ -138,41 +213,130 @@ public class HaCallSiteGuardTests
     public void Each_kind_of_HA_access_is_a_call_site(string line) =>
         Assert.Equal(["src/Host/Caller.cs"], Check(Files(("src/Host/Caller.cs", "// header\n" + line)), []).New);
 
+    // Receipt on #4197 (P1-2): spellings of a new HA site that must be red, whatever the file type or name.
+    [Theory]
+    [InlineData("src/X/Caller.cs", "using AgentBridge.HomeAssistant;")]
+    [InlineData("src/X/Caller.cs", "var w = new HaWebSocket(url);")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/config\";")]
+    [InlineData("src/X/Caller.cs", "var u = \"api/template\";")]
+    [InlineData("tools/x/run.ps1", "$env:AGENT_HA_SECRET = 'x'")]
+    [InlineData("tools/x/run.ps1", "$h = 'homeassistant.local'")]
+    [InlineData("tools/x/run.ps1", "$u = 'http://box:8123/'")]
+    [InlineData(".github/workflows/x.yml", "        run: curl http://homeassistant.local/api/states")]
+    [InlineData("tools/x/run.cmd", "set AGENT_HA_URL=x")]
+    [InlineData("tools/x/data.psd1", "@{ Url = 'http://homeassistant.local' }")]
+    [InlineData("tools/x/config.json", "{ \"url\": \"http://box:8123\" }")]
+    [InlineData("src/X/X.csproj", "<ProjectReference Include=\"../AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj\" />")]
+    [InlineData("src/X/fixtures/Caller.cs", "var u = \"/api/states\";")]
+    [InlineData("tools/x/test-ha.ps1", "$env:AGENT_HA_URL")]
+    [InlineData("tools/x/Caller.Tests.ps1", "$env:AGENT_HA_URL")]
+    [InlineData("src/X/Raw.cs", "var s = \"\"\"\n// /api/states\n\"\"\";")]
+    [InlineData("tools/x/here.ps1", "$s = @'\n# AGENT_HA_URL\n'@")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/webhook/abc\";")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/mobile_app/registrations\";")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/hassio/info\";")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/camera_proxy_stream/x\";")]
+    [InlineData("src/X/Caller.cs", "var u = \"/api/discovery_info\";")]
+    [InlineData("tools/x/run.ps1", "$u = 'http://supervisor/addons'")]
+    [InlineData("tools/x/run.ps1", "$t = $env:SUPERVISOR_TOKEN")]
+    [InlineData("tools/x/run.ps1", "$t = $env:HASSIO_TOKEN")]
+    [InlineData("tools/x/run.ps1", "$t = $env:HA_TOKEN")]
+    [InlineData("tools/x/run.ps1", "$u = $env:HASS_URL")]
+    [InlineData("tools/x/run.ps1", "$u = $env:HOMEASSISTANT_URL")]
+    [InlineData("tools/x/run.ps1", "$u = 'http://homeassistant/'")]
+    [InlineData("src/X/Caller.cs", "var a = new HaCommands(x);")]
+    [InlineData("src/X/Caller.cs", "var a = new HaAnswerAudit(x);")]
+    [InlineData("src/X/Caller.cs", "var a = new HaClientFactory();")]
+    [InlineData("src/X/Caller.cs", "var a = HaShadowMode.On;")]
+    [InlineData("tools/x/run.py", "s = '''\n# AGENT_HA_URL\n'''")]
+    [InlineData("tools/x/run.js", "const s = `\n// AGENT_HA_URL\n`;")]
+    [InlineData("tools/x/app.swift", "let u = \"http://box:8123\"")]
+    [InlineData("tools/x/config.yml", "url: homeassistant")]
+    [InlineData("tools/x/config.json", "{ \"homeAssistant\": { \"url\": \"x\" } }")]
+    [InlineData("src/X/Caller.cs", "var s = root.GetProperty(\"homeAssistant\");")]
+    [InlineData("src/X/Caller.cs", "var o = new HomeAssistantOptions();")]
+    [InlineData("src/X/Caller.cs", "if (settings.HomeAssistantEnabled) { }")]
+    [InlineData("tools/x/run.ps1", "$u = $env:HA_BASE_URL")]
+    [InlineData("tools/x/run.ps1", "$t = $env:ha_token")]
+    [InlineData("tools/x/run.ps1", "mosquitto_pub -t homeassistant/sensor/x/config -m 1")]
+    [InlineData("tools/x/run.py", "hass.services.call('light', 'turn_on')")]
+    [InlineData("tools/bin/run.ps1", "$env:AGENT_HA_URL")]
+    [InlineData("build/obj/run.ps1", "$env:AGENT_HA_URL")]
+    [InlineData("tools/node_modules/p/index.js", "fetch('/api/states')")]
+    [InlineData("tools/x/utf16.ps1", "A\0G\0E\0N\0T\0_\0H\0A\0_\0U\0R\0L\0")]
+    [InlineData("src/X/Caller.fs", "(*) 1 2\nlet u = \"/api/states\"")]
+    [InlineData("tools/x/main.bicep", "param u string = 'http://box:8123'")]
+    public void Realistic_new_HA_sites_are_red_whatever_the_file_type_or_name(string path, string text) =>
+        Assert.Equal([path], Check(Files((path, text)), []).New);
+
+    // Every text file is scanned (an explicit binary skip list; a nested bin, obj or node_modules folder is not exempt), and only a file
+    // type's real comment syntax is a comment.
+    [Theory]
+    [InlineData("tools/x/README.md", "Posts to api/states on the box.")]
+    [InlineData("tools/x/run", "export AGENT_HA_URL=x")]
+    [InlineData("AgentBridge.slnx", "<Project Path=\"src/AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj\" />")]
+    [InlineData("tools/x/page.html", "<script>fetch('/api/states')</script>")]
+    [InlineData("src/X/Caller.cs", "# AGENT_HA_URL")]
+    [InlineData("tools/x/config.json", "// http://box:8123")]
+    [InlineData("tools/x/run.ps1", "// $env:AGENT_HA_URL")]
+    [InlineData("tools/x/run.py", "// AGENT_HA_URL")]
+    [InlineData("tools/x/run.js", "# AGENT_HA_URL")]
+    [InlineData("tools/x/run.cmd", "# AGENT_HA_URL")]
+    public void Every_text_file_is_scanned_and_only_real_comment_syntax_hides_a_line(string path, string text) =>
+        Assert.Equal([path], Check(Files((path, text)), []).New);
+
+    [Theory]
+    [InlineData("tools/x/run.yml", "# AGENT_HA_URL")]
+    [InlineData("tools/x/run.sh", "# AGENT_HA_URL")]
+    [InlineData("tools/x/run.py", "# AGENT_HA_URL")]
+    [InlineData("tools/x/run.js", "// AGENT_HA_URL")]
+    [InlineData("tools/x/run.js", "/* AGENT_HA_URL */")]
+    [InlineData("tools/x/run.cmd", "REM AGENT_HA_URL")]
+    [InlineData("tools/x/run.cmd", ":: AGENT_HA_URL")]
+    [InlineData("src/X/X.csproj", "<!-- AgentBridge.HomeAssistant -->")]
+    [InlineData("tools/x/README.md", "<!-- api/states -->")]
+    [InlineData("tools/x/logo.png", "AGENT_HA_URL")]
+    [InlineData("tools/x/blob.dat", "AGENT_HA_URL\0more")]
+    public void Real_comments_and_binary_files_are_not_call_sites(string path, string text) =>
+        Assert.Empty(Check(Files((path, text)), []).New);
+
     [Fact]
-    public void Comments_tests_docs_fixtures_and_unrelated_code_are_not_call_sites()
+    public void Comments_and_the_top_level_tests_docs_design_spikes_and_backlog_folders_are_not_call_sites()
     {
         var files = Files(
-            ("src/Host/Note.cs", "// talks to /api/states on Home Assistant\n/** AGENT_HA_URL in a doc block\n * AGENT_HA_AGENT_TOKEN */\n# AGENT_HA_AGENT_TOKEN"),
+            ("src/Host/Note.cs", "// talks to /api/states on Home Assistant\n/** AGENT_HA_URL in a doc block\n * AGENT_HA_AGENT_TOKEN */"),
             ("tests/AgentBridge.X.Tests/Uses.cs", "var c = new HomeAssistantClient(a, b, c);"),
-            ("docs/design/ha.md", "/api/states"), ("tools/agents/test-reply.ps1", "$env:AGENT_HA_URL"), ("tools/agents/wake.Tests.ps1", "$env:AGENT_HA_URL"),
-            ("tools/x/fixtures/rec.cs", "/api/states"), ("spikes/s1/Program.cs", "/api/states"), ("src/Net/Relay.cs", "new ClientWebSocket();"));
+            ("docs/design/ha.md", "/api/states"), ("design/x.cs", "/api/states"), ("backlog/x.ps1", "$env:AGENT_HA_URL"),
+            ("spikes/s1/Program.cs", "/api/states"), ("src/Net/Relay.cs", "new ClientWebSocket();"));
         Assert.Empty(Check(files, []).New);
     }
 
     [Fact]
     public void Block_comments_are_not_code_but_code_after_them_is()
     {
-        var help = "<#\n.NOTES\n  talks to /api/states on Home Assistant\n#>\nWrite-Output 'x'\n/* AGENT_HA_URL */\n";
+        var help = "<#\n.NOTES\n  talks to /api/states on Home Assistant\n#>\nWrite-Output 'x'\n";
         Assert.Empty(Check(Files(("tools/x/help.ps1", help)), []).New);
         Assert.Equal(["tools/x/help.ps1"], Check(Files(("tools/x/help.ps1", help + "irm \"$u/api/states\"")), []).New);
         Assert.Equal(["src/X/Block.cs"], Check(Files(("src/X/Block.cs", "/* one line */\nvar u = \"/api/states\";")), []).New);
+        Assert.Empty(Check(Files(("src/X/Block.cs", "/*\n AGENT_HA_URL\n*/\n")), []).New);
     }
 
     [Fact]
     public void An_allowance_with_nothing_left_in_it_is_stale()
     {
         var stale = Check(Files(("src/Host/Clean.cs", "var x = 1;")), [Allow("src/Host/Clean.cs"), Allow("tools/gone.ps1")]).Stale;
-        Assert.Equal(["src/Host/Clean.cs", "tools/gone.ps1"], stale);
+        Assert.Equal(["src/Host/Clean.cs (no HA reference left)", "tools/gone.ps1 (no HA reference left)"], stale);
     }
 
     [Fact]
-    public void The_connector_is_one_pinned_directory_so_a_new_file_in_it_fails_and_a_removed_one_is_stale()
+    public void The_connector_is_pinned_by_file_name_so_a_swap_a_new_file_and_a_removed_file_all_fail()
     {
-        var connector = new Allowance(null, Connector, 2, "S7", "https://github.com/danswett/agent-bridge/issues/1396", "the HA connector");
-        var two = Files((Connector + "A.cs", "class A {}"), (Connector + "B.cs", "class B {}"));
-        AssertClean(Check(two, [connector]));
-        var three = Files((Connector + "A.cs", "class A {}"), (Connector + "B.cs", "class B {}"), (Connector + "C.cs", "class C {}"));
-        Assert.NotEmpty(Check(three, [connector]).Stale);
-        Assert.NotEmpty(Check(Files((Connector + "A.cs", "class A {}")), [connector]).Stale);
+        var connector = new Allowance(null, null, Connector, ["A.cs", "B.cs"], "S7", "https://github.com/danswett/agent-bridge/issues/1396", "the HA connector");
+        AssertClean(Check(Files((Connector + "A.cs", "class A {}"), (Connector + "B.cs", "class B {}")), [connector]));
+        var swapped = Check(Files((Connector + "A.cs", "class A {}"), (Connector + "C.cs", "class C {}")), [connector]);
+        Assert.Equal([Connector + "C.cs"], swapped.New);
+        Assert.Equal([Connector + "B.cs (no longer in the pinned directory)"], swapped.Stale);
+        Assert.Equal([Connector + "C.cs"], Check(Files((Connector + "A.cs", "x"), (Connector + "B.cs", "x"), (Connector + "C.cs", "x")), [connector]).New);
+        Assert.NotEmpty(Check(Files((Connector + "A.cs", "x")), [connector]).Stale);
     }
 }
