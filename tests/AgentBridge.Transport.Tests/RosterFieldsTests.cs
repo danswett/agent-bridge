@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -346,6 +347,66 @@ public sealed class RosterFieldsTests
             Assert.False(f.GetProperty("online").GetBoolean());
             Assert.Equal(JsonValueKind.Null, f.GetProperty("record").ValueKind);
         });
+    }
+
+    // Counts the relay's one-second sweeper timers; every other call goes to the wrapped clock.
+    sealed class CountingTime(TimeProvider inner) : TimeProvider
+    {
+        public int Sweepers;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = inner.CreateTimer(callback, state, dueTime, period);
+            if (dueTime != TimeSpan.FromSeconds(1) || period != TimeSpan.FromSeconds(1)) { return timer; }
+            Interlocked.Increment(ref Sweepers);
+            return new Counted(timer, () => Interlocked.Increment(ref Disposed));
+        }
+
+        public int Disposed;
+
+        sealed class Counted(ITimer timer, Action disposed) : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => timer.Change(dueTime, period);
+            public void Dispose() { disposed(); timer.Dispose(); }
+            public ValueTask DisposeAsync() { disposed(); return timer.DisposeAsync(); }
+        }
+    }
+
+    [Fact]
+    public async Task However_many_devices_subscribe_the_relay_runs_one_sweeper_and_none_before_the_first()
+    {
+        var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        Assert.Equal(0, time.Sweepers);
+        var devices = new List<Device>();
+        try
+        {
+            for (var i = 0; i < 6; i++)
+            {
+                var d = await relay.ConnectAsync(relay.TokenFor(1, "octo"), $"win{i}", "app");
+                devices.Add(d);
+                await SubscribedAsync(d);
+            }
+            Assert.Equal(1, time.Sweepers);
+        }
+        finally { foreach (var d in devices) { await d.DisposeAsync(); } }
+    }
+
+    [Fact]
+    public async Task Draining_the_relay_disposes_its_sweeper()
+    {
+        var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        await using var d = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
+        await SubscribedAsync(d);
+        Assert.Equal(0, time.Disposed);
+
+        await relay.App.Services.GetRequiredService<AgentBridge.Relay.RelayHub>().DrainAsync();
+
+        Assert.Equal(1, time.Disposed);
     }
 
     [Fact]
