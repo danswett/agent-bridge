@@ -1,0 +1,109 @@
+diff --git a/.github/workflows/ab-ci-smoke.yml b/.github/workflows/ab-ci-smoke.yml
+new file mode 100644
+index 00000000..60cc83eb
+--- /dev/null
++++ b/.github/workflows/ab-ci-smoke.yml
+@@ -0,0 +1,63 @@
++name: ab-ci smoke
++
++# Proves an ab-ci runner's environment, as the runner itself (#4104): who runs the job, where dotnet, python, git, node,
++# gh and pwsh resolve, and that `dotnet tool restore` and a Release build of the solution pass through the runner's NuGet
++# mirror. Run it by hand on main with use_ab_ci ticked, once per VM's pool, before AB_CI_SELF_HOSTED is set again.
++# Without use_ab_ci it runs on a hosted runner, which proves nothing about the pool. No secret is read.
++on:
++  workflow_dispatch:
++    inputs:
++      use_ab_ci:
++        description: Run on the ab-ci pool (main only), to prove a runner's environment
++        type: boolean
++        default: false
++
++permissions:
++  contents: read
++
++jobs:
++  smoke:
++    # The one alternative to the guard: a run by hand on main with use_ab_ci (quality/README.md routing guard).
++    runs-on: ${{ (vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || 'windows-latest' }}
++    timeout-minutes: 40
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
++        shell: pwsh
++        run: |
++          $t = $env:RUNNER_TEMP
++          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
++          git clean -ffdx
++      - name: NuGet through the runner's mirror (self-hosted only)
++        if: runner.environment == 'self-hosted'
++        shell: pwsh
++        run: |
++          $src = "$env:AGENT_BRIDGE_NUGET_SOURCE"
++          if ($src -notmatch '^https://[A-Za-z0-9.-]+/[^\s"<>&]*$') { Write-Host '::error::this self-hosted runner names no https mirror in AGENT_BRIDGE_NUGET_SOURCE, and nuget.org is unreachable from it'; exit 1 }
++          $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
++          "<?xml version=`"1.0`" encoding=`"utf-8`"?><configuration><packageSources><clear /><add key=`"mirror`" value=`"$src`" /></packageSources></configuration>" | Set-Content -Encoding utf8 $cfg
++          "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
++      - name: Who runs this, and where the tools resolve
++        shell: pwsh
++        run: |
++          "runner: $env:RUNNER_NAME ($env:RUNNER_ENVIRONMENT), account: $([Environment]::UserName)"
++          foreach ($tool in 'dotnet', 'python', 'git', 'node', 'gh', 'pwsh') {
++            $c = Get-Command $tool -ErrorAction SilentlyContinue
++            "{0,-7} {1}" -f $tool, $(if ($c) { $c.Source } else { 'NOT FOUND' })
++          }
++          dotnet --version
++          python --version
++          $missing = @('dotnet', 'python', 'git', 'pwsh' | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
++          if ($missing) { Write-Host "::error::not on this runner's PATH: $($missing -join ', ')"; exit 1 }
++      - run: dotnet tool restore @(if ($env:NUGET_MIRROR_CONFIG) { '--configfile', $env:NUGET_MIRROR_CONFIG })
++        shell: pwsh
++      - run: dotnet build AgentBridge.slnx -c Release --nologo
++        shell: pwsh
++      - name: Stop this job's build servers
++        if: always()
++        run: dotnet build-server shutdown
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index c2684b14..3494f37b 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1092,6 +1092,19 @@ suites:
+     where: relay.yml production, rollback
+     status: exists
+ 
++  - id: ab-ci-smoke
++    validation_plan: native
++    kind: e2e
++    ring: 4
++    select: always
++    # By hand on main with use_ab_ci: proves an ab-ci runner's environment as the runner (PATH, NuGet mirror, a
++    # Release build), before AB_CI_SELF_HOSTED is set again (#4104).
++    platforms: [win-x64]
++    runner: lab
++    command: see ab-ci-smoke.yml smoke
++    where: ab-ci-smoke.yml smoke
++    status: exists
++
+   - id: release-feed-worker
+     validation_plan: native
+     kind: unit
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index d36aad03..6777ce76 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1082,9 +1082,10 @@ public class MergeRuleTests
+     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
+     //   verdict and a finished one needn't re-judge anything, #2454),
+     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
++    //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+     [
+-        "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
++        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+         "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+     ];
+ 
