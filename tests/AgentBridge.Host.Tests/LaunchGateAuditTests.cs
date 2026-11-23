@@ -52,6 +52,16 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task With_no_audit_log_the_HA_launch_delegate_refuses_instead_of_starting()
+    {
+        var request = JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!;
+
+        Assert.Equal(LaunchOutcome.Refused, (await HaRunning.LaunchDelegate(Launcher(Config()), null)(request, CancellationToken.None)).Outcome);
+
+        Assert.Empty(starter.Specs);
+    }
+
+    [Fact]
     public async Task A_fresh_launch_records_intent_before_start_and_one_confirmed_terminal()
     {
         JsonElement[] beforeStart = [];

@@ -192,6 +192,9 @@ All three HA actions (launch, stop, answer) now carry the one principal `ha:conn
 (`HaRunning`), and a test per action drives that composed delegate to its audit rows and to the gate's HA count.
 Launch rows written before this carry the principal `ha-component:local`; path `legacy-ha` and actorKind
 `ha-component` are unchanged, so those earlier rows still read as the same connector and still count.
+Old `ha-component:local` rows are still read and counted (the projection keys on path and actorKind, never on the principal; a test writes an old-format row and reads it back).
+An HA stop is two dispatches: the press that asks for confirmation and the press that confirms are two commands that reached the host over HA. A repeated confirming press is answered from its record and writes no row, so the gate does not count it twice.
+The HA files reach the answer, stop and launch services only through the three composed delegates; a source-scan test (mutation-checked) turns red on any direct call, so the press-parsing step needs no separate test. With no audit log the delegates refuse instead of acting unaudited (this is the OWNER CHANGE above, pending). This slice stays stacked behind the answer-audit slice and neither is armed before the owner answers.
 
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards

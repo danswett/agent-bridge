@@ -263,7 +263,12 @@ public sealed class StopFlowTests : IAsyncLifetime
         var arm = await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None);
         Assert.Equal(StopOutcome.Confirm, arm.Outcome);
 
-        Assert.Equal(StopOutcome.Ended, (await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm }, CancellationToken.None)).Outcome);
+        var confirm = new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm };
+        Assert.Equal(StopOutcome.Ended, (await stop(confirm, CancellationToken.None)).Outcome);
+        // The same press again is answered from its record: no new row, so the gate does not count it twice.
+        var rows = StopRows().Count;
+        Assert.Equal(StopOutcome.Ended, (await stop(confirm, CancellationToken.None)).Outcome);
+        Assert.Equal(rows, StopRows().Count);
 
         Assert.All(StopRows(), row =>
         {
@@ -272,6 +277,18 @@ public sealed class StopFlowTests : IAsyncLifetime
         });
         // Each press that reaches the host over HA is a dispatch: the one that asked for confirmation and the one that confirmed it.
         Assert.Equal(2, GateAuditProjection.ReadWindow(StopAuditProfile, clock.GetUtcNow().AddHours(-1)).LegacyHaDispatches);
+    }
+
+    [Fact]
+    public async Task With_no_audit_log_the_HA_stop_delegate_refuses_instead_of_stopping()
+    {
+        var stopper = Stopper();
+        await WorkingAsync();
+
+        Assert.Equal(StopOutcome.Refused, (await HaRunning.StopDelegate(stopper, source, null)!(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None)).Outcome);
+
+        Assert.Empty(injector.Plans);
+        Assert.Empty(control.Terminated);
     }
 
     [Fact]
