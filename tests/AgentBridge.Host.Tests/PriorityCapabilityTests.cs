@@ -24,9 +24,9 @@ public sealed class PriorityCapabilityTests
             Receiver, Clock.GetUtcNow(), Clock.GetUtcNow().AddHours(2), hourly);
         public void Issue(PriorityCapability cap) => Journal.IssuePriority(cap, Person, Receiver, () => true, Clock.GetUtcNow());
         public PriorityDecision Decide(Guid? id = null, DeliverySender? sender = null, GrantAudience? receiver = null,
-            DeliveryPriorityRequest? request = null, bool admit = true) =>
-            Journal.DecidePriority(id ?? Guid.NewGuid(), "target", sender ?? Agent, "body",
-                request ?? new("urgent", "stop wrong work"), receiver ?? Receiver, Clock.GetUtcNow(), _ => admit);
+            DeliveryPriorityRequest? request = null, bool admit = true, string body = "body", DateTimeOffset? now = null) =>
+            Journal.DecidePriority(id ?? Guid.NewGuid(), "target", sender ?? Agent, body,
+                request ?? new("urgent", "stop wrong work"), receiver ?? Receiver, now ?? Clock.GetUtcNow(), _ => admit);
         public DeliveryJournalRecord[] Records => Disk.Select(b => JsonSerializer.Deserialize<DeliveryJournalRecord>(b, ProtocolJson.Options)!).ToArray();
         public void Dispose() => Journal.Dispose();
     }
@@ -165,6 +165,107 @@ public sealed class PriorityCapabilityTests
         Assert.Equal("normal", replay.Decide().Priority);
         Assert.False(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
         Assert.Throws<InvalidOperationException>(() => replay.Issue(replay.Cap()));
+    }
+
+    [Fact]
+    public void A_final_revoke_with_a_missing_MAC_quarantines_instead_of_throwing()
+    {
+        using var f = new Fake(); var cap = f.Cap(); f.Issue(cap); var id = Guid.NewGuid(); f.Decide(id);
+        f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow());
+        var records = f.Records;
+        using var replay = new Fake(records[..^1].Append(records[^1] with { Hmac = null! }));
+        Assert.Equal("normal", replay.Decide().Priority);
+        Assert.False(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.Throws<InvalidOperationException>(() => replay.Issue(replay.Cap()));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_MAC_valid_zero_body_dropped_record_sharing_priority_evidence_stays_unconfirmed(bool capabilityId)
+    {
+        using var f = new Fake(); var cap = f.Cap(); f.Issue(cap); var request = Guid.NewGuid(); f.Decide(request);
+        var header = new DeliveryHeader(Agent.From, (capabilityId ? cap.Id : request).ToString("D"), null, f.Clock.GetUtcNow(), "normal", 0);
+        f.Journal.Write("legacy", header, "", DeliveryState.Dropped);
+        using var replay = new Fake(f.Records);
+        Assert.Equal(DeliveryState.Unconfirmed, replay.Journal.State("legacy", header.Id));
+        Assert.Equal("normal", replay.Decide().Priority);
+        Assert.False(replay.Journal.PriorityCurrent(request, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+    }
+
+    [Fact]
+    public void A_refused_retry_must_keep_the_canonical_body_and_exact_receiver_and_an_unchanged_retry_spends_once()
+    {
+        using var f = new Fake(); f.Issue(f.Cap());
+        var other = Receiver with { Profile = "other" };
+        f.Journal.IssuePriority(f.Cap() with { Audience = other }, Person, other, () => true, f.Clock.GetUtcNow());
+        var id = Guid.NewGuid(); Assert.False(f.Decide(id, admit: false).Accepted);
+        Assert.False(f.Decide(id, body: "different body").Accepted);
+        Assert.False(f.Decide(id, receiver: other).Accepted);
+        Assert.DoesNotContain(f.Records, r => r.Reason == "consumed");
+        using var replay = new Fake(f.Records);
+        Assert.False(replay.Decide(id, body: "different body").Accepted);
+        Assert.False(replay.Decide(id, receiver: other).Accepted);
+        Assert.True(replay.Decide(id, body: " body ").Accepted);
+        Assert.Single(replay.Records, r => r.Reason == "consumed");
+        Assert.Equal(1, replay.Records.Count(r => r.Reason == "granted" && r.Header.Id == id.ToString("D")));
+    }
+
+    [Fact]
+    public void A_successful_current_check_durably_advances_the_clock_so_a_rolled_back_clock_is_refused_after_replay()
+    {
+        using var f = new Fake(); f.Issue(f.Cap()); var id = Guid.NewGuid(); f.Decide(id);
+        var start = f.Clock.GetUtcNow(); f.Clock.Advance(TimeSpan.FromHours(1));
+        Assert.True(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()));
+        Assert.Throws<InvalidOperationException>(() => f.Decide(now: start));
+        using var replay = new Fake(f.Records);
+        Assert.Equal(start, replay.Clock.GetUtcNow());
+        Assert.Throws<InvalidOperationException>(() => replay.Decide());
+        Assert.False(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, start));
+        replay.Clock.Advance(TimeSpan.FromHours(1));
+        Assert.True(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.Contains(f.Records, r => r.Reason == "checked");
+    }
+
+    [Fact]
+    public void Successful_current_checks_coalesce_to_one_durable_append_per_second_per_receiver()
+    {
+        using var f = new Fake(); f.Issue(f.Cap()); var id = Guid.NewGuid(); f.Decide(id);
+        int Checked() => f.Records.Count(r => r.Reason == "checked");
+        foreach (var step in new[] { 100, 100, 700 })
+        {
+            f.Clock.Advance(TimeSpan.FromMilliseconds(step));
+            Assert.True(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()));
+            Assert.Equal(1, Checked());
+        }
+        f.Clock.Advance(TimeSpan.FromMilliseconds(200));
+        Assert.True(f.Journal.PriorityCurrent(id, "target", Agent, Receiver, f.Clock.GetUtcNow()));
+        Assert.Equal(2, Checked());
+        using var replay = new Fake(f.Records); replay.Clock.Advance(TimeSpan.FromMilliseconds(1200));
+        Assert.True(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.DoesNotContain(replay.Records, r => r.Reason == "checked");
+        replay.Clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(replay.Journal.PriorityCurrent(id, "target", Agent, Receiver, replay.Clock.GetUtcNow()));
+        Assert.Single(replay.Records, r => r.Reason == "checked");
+    }
+
+    [Fact]
+    public void Requested_priority_and_the_accepted_effective_priority_are_stored_in_the_record_headers()
+    {
+        using var f = new Fake(); f.Issue(f.Cap());
+        var urgent = Guid.NewGuid(); f.Decide(urgent);
+        var fyi = Guid.NewGuid(); f.Decide(fyi, request: new("fyi"));
+        var invalid = Guid.NewGuid(); f.Decide(invalid, request: new("bogus"));
+        var demoted = Guid.NewGuid(); f.Decide(demoted, sender: new("stranger"));
+        string[] Priorities(Guid id, string action) => f.Records.Where(r => r.Header.Id == id.ToString("D") && r.Reason == action)
+            .Select(r => r.Header.Priority).ToArray();
+        Assert.Equal(["urgent"], Priorities(urgent, "requested"));
+        Assert.Equal(["urgent"], Priorities(urgent, "granted"));
+        Assert.Equal(["urgent"], Priorities(urgent, "consumed"));
+        Assert.Equal(["fyi"], Priorities(fyi, "requested"));
+        Assert.Equal(["normal"], Priorities(invalid, "requested"));
+        Assert.Equal(["urgent"], Priorities(demoted, "requested"));
+        Assert.Equal(["normal"], Priorities(demoted, "demoted"));
     }
 
     [Theory]
@@ -343,5 +444,32 @@ public sealed class PriorityCapabilityTests
             Assert.Equal("normal", reopened.Decide().Priority);
             Assert.Throws<InvalidOperationException>(() => reopened.Issue(reopened.Cap() with { Principal = "fresh" }));
         }
+    }
+
+    [Theory]
+    [InlineData("decide")]
+    [InlineData("revoke")]
+    public void Admission_callback_cannot_reenter_the_priority_journal_and_spend_or_revoke_the_decision(string nested)
+    {
+        using var f = new Fake(); var cap = f.Cap(1); f.Issue(cap);
+        var now = f.Clock.GetUtcNow();
+        Assert.Throws<InvalidOperationException>(() => f.Journal.DecidePriority(Guid.NewGuid(), "target", Agent, "body",
+            new("urgent", "stop wrong work"), Receiver, now, _ =>
+            {
+                if (nested == "decide") { f.Decide(); } else { f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, now); }
+                return true;
+            }));
+        Assert.DoesNotContain(f.Records, r => r.Reason is "granted" or "consumed" or "revoked");
+        Assert.Equal("urgent", f.Decide().Priority);
+    }
+
+    [Fact]
+    public void Quota_uses_the_smallest_active_hourly_limit_for_the_same_principal_and_receiver()
+    {
+        using var f = new Fake(); f.Issue(f.Cap(3)); f.Issue(f.Cap(1));
+        Assert.Equal("urgent", f.Decide().Priority);
+        Assert.Equal("quota", f.Decide().Reason);
+        using var replay = new Fake(f.Records);
+        Assert.Equal("quota", replay.Decide().Reason);
     }
 }

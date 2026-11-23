@@ -1,4 +1,5 @@
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -13,7 +14,7 @@ internal sealed partial class DeliveryLaneScheduler
     public Func<ReplyRequest, CancellationToken, Task<ReplyResult>>? Dispatch { private get; init; }
 
     public DeliveryOfferStatus Offer(Guid request, string target, DeliverySender sender, string body, Func<bool> current,
-        Func<bool>? revoked = null)
+        Func<bool>? revoked = null, DeliveryPriorityRequest? priority = null, GrantAudience? receiver = null)
     {
         if (request == Guid.Empty || string.IsNullOrWhiteSpace(target) ||
             string.IsNullOrWhiteSpace(sender.Id) || string.IsNullOrWhiteSpace(body))
@@ -34,8 +35,27 @@ internal sealed partial class DeliveryLaneScheduler
             if (Dispatch is null || Revoked() || !current())
             { return new(DeliveryOfferState.Refused, $"Target {target}: no dispatcher or revoked authority."); }
             var header = new DeliveryHeader(sender.From, id, null, time.GetUtcNow(), "normal", 0);
+            GrantAudience? granted = null;
+            // Owner urgent and plain normal offers keep their existing path with no capability or quota.
+            if (!sender.Owner && priority is not null && priority.Priority != "normal")
+            {
+                if (uncertain) { throw new InvalidOperationException($"Target {target}: delivery journal uncertain."); }
+                // A malformed offer must fail before the decision can spend a grant.
+                var (prepared, text) = DeliveryEnvelope.Prepare(header, body);
+                _ = DeliveryEnvelope.Format(prepared with { Seq = "q1" }, text);
+                PriorityDecision decision;
+                try
+                {
+                    decision = journal.DecidePriority(request, target, sender, body, priority, receiver, header.At,
+                        effective => HasRoom(target, effective));
+                }
+                finally { LatchJournalUncertainty(); }
+                if (!decision.Accepted) { return new(DeliveryOfferState.Refused, $"Target {target}: priority {decision.Reason}."); }
+                header = header with { Priority = decision.Priority };
+                if (decision.Priority == "urgent") { granted = receiver; }
+            }
             fences[(target, id)] = (sender, current, Revoked);
-            if (!Enqueue(target, header, body, sender.Owner ? DeliveryClass.Owner : DeliveryClass.Agent))
+            if (!Enqueue(target, header, body, sender.Owner ? DeliveryClass.Owner : DeliveryClass.Agent, granted))
             { fences.Remove((target, id)); return new(DeliveryOfferState.Refused, $"Target {target}: lane full."); }
             return Query(request, target, sender);
         }
@@ -62,9 +82,29 @@ internal sealed partial class DeliveryLaneScheduler
                 DeliveryState.Dropped => DeliveryOfferState.Dropped,
                 _ => DeliveryOfferState.Pending,
             };
-            return new(state, record.Reason ?? (state == DeliveryOfferState.Pending ? "Memory only; not durable acceptance." :
-                state == DeliveryOfferState.Dropped ? "Restart: pending payload unavailable." : null));
+            var demoted = journal.PriorityOutcome(request) is { } outcome ? $"Priority demoted to normal: {outcome}. " : "";
+            // The demotion reason sits beside, never instead of, the delivery reason; a demoted record's own reason repeats it.
+            var latest = demoted.Length > 0 && record.State == "demoted" ? null : record.Reason;
+            var text = (demoted + (latest ?? (state == DeliveryOfferState.Pending ? "Memory only; not durable acceptance." :
+                state == DeliveryOfferState.Dropped ? "Restart: pending payload unavailable." : null))).Trim();
+            return new(state, text.Length > 0 ? text : null);
         }
+    }
+
+    bool HasRoom(string session, string priority)
+    {
+        sessions.TryGetValue(session, out var lanes);
+        return priority == "urgent" ? (lanes?.Urgent.Count ?? 0) < 10 :
+            (lanes?.Queueable.Count ?? 0) < 50 || lanes!.Queueable.Any(i => i.Header.Priority == "fyi");
+    }
+
+    // A grant that lapsed (revoked, expired, journal doubt) fails closed: the item may only wait as normal.
+    bool GrantLapsed(string session, Item item, DeliverySender sender)
+    {
+        if (item.Sender != DeliveryClass.Agent || item.Header.Priority != "urgent") { return false; }
+        try { return !journal.PriorityCurrent(Guid.Parse(item.Header.Id), session, sender, item.Receiver, time.GetUtcNow()); }
+        catch (InvalidOperationException) { return true; }
+        finally { LatchJournalUncertainty(); }
     }
 
     static bool SameSender(DeliveryJournalRecord record, string target, DeliverySender sender) =>
@@ -105,6 +145,11 @@ internal sealed partial class DeliveryLaneScheduler
                     notices.Add(new(session, head.Header, $"Target {session}: dropped id={head.Header.Id} reason=revoked authority."));
                     return LaneResult.Waiting;
                 }
+                if (GrantLapsed(session, head, authority.Sender))
+                {
+                    Demote(session, sessions[session], head, "priority no longer current", "lapsed priority", notices);
+                    return LaneResult.Waiting;
+                }
                 var box = screen(session);
                 if (QueueSubmitPolicy.Select(DeliveryTerminalKind.Unknown, box.Idle, box.Empty, head.Header.Priority == "urgent") is not { } key)
                 { return LaneResult.Waiting; }
@@ -119,6 +164,7 @@ internal sealed partial class DeliveryLaneScheduler
             {
                 var box = screen(session);
                 return !uncertain && !cancellation.IsCancellationRequested && !authority.Revoked() && authority.Current() &&
+                    !GrantLapsed(session, item, authority.Sender) &&
                     (handedOff is not null || ReferenceEquals(Head(session), item)) &&
                     QueueSubmitPolicy.Select(DeliveryTerminalKind.Unknown, box.Idle, box.Empty, item.Header.Priority == "urgent") == submit;
             }

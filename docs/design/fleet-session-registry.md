@@ -257,8 +257,9 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 The relay's own received-time/sequence checks are not independent reader verification
 (`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
-in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643). The 60 s
-`at` rule, `registry-subscribe` and signature checks are still to come.
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643).
+The relay's `registry-subscribe` and `registry-changed` (slice 2b) exist; the host reader's 60 s `at` rule
+and subscription handling (slice RC) and signature checks (#1776) are still to come.
 
 * A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
   (a session that ends is sent at once, never held for the debounce),
@@ -609,7 +610,7 @@ first draft of this note.
 |---|---|---|---|---|
 | 0 | This note (design slice, PR #1422) | S | none | Docs checks |
 | 1 | `fleet-registry.json` vectors and the records spec in roster.md (shape, allow-list, epoch and seq, truncation, paging, error codes, signing layout) | M* | 0 | C# writes and replays vectors; PWA and Apple mirror files assert the same bytes; a README table row |
-| R | **Roster v2 and `hostSign`** (agent-principals.md §8.10, #391). Not part of this epic's slices; needed for `verified` and for `found` | L, tracked in #391 | none | Its own suite |
+| R | **Roster v2 and `hostSign`** (#1776). Not part of this epic's slices; needed for `verified` and for `found` | L, tracked in #1776 | none | Its own suite |
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
@@ -725,6 +726,6 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 ## Not in this note
 
 The messaging cut-over (#728), the audit log (#1401), script credentials (#1402, #1414),
-pairing of non-person clients (S6), roster v2 and `hostSign` (#391) and the client protocol as a
+pairing of non-person clients (S6), roster v2 and `hostSign` (#1776) and the client protocol as a
 whole (#1406, `docs/design/client-protocol.md`). This note must fit that frame: the registry is a
 few ordinary frames and two ordinary ops, with the same auth for every caller.
