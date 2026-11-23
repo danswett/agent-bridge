@@ -91,9 +91,13 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         return await client.Hub.OpenAsync(host.Id);
     }
 
+    // How long a test waits for an answer's reply. The channel's default 15 s is a deadlock guard, and a full parallel run on one CPU
+    // starved the host for longer than that (#2558); a hung answer still fails, a minute later.
+    static readonly TimeSpan Hang = TimeSpan.FromMinutes(1);
+
     static async Task<(string Outcome, string? Reason)> AnswerAsync(SecureChannel ch, object fields, string? request = null, string question = "q1")
     {
-        var response = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question, request = request ?? Guid.NewGuid().ToString(), fields });
+        var response = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question, request = request ?? Guid.NewGuid().ToString(), fields }, Hang);
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         var result = response.GetProperty("result");
         return (result.GetProperty("outcome").GetString()!, result.TryGetProperty("reason", out var r) ? r.GetString() : null);
@@ -463,7 +467,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     static async Task<JsonElement> AnswerResultAsync(SecureChannel ch, object fields, string request, string question = "q2")
     {
-        var response = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question, request, fields });
+        var response = await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question, request, fields }, Hang);
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         return response.GetProperty("result");
     }
