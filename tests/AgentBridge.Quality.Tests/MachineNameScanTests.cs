@@ -36,7 +36,7 @@ public class MachineNameScanTests
     // can't catch, so it is cleaned with design/.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "docs/design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
+        "design/canvas/Proposal-600-Strip.dc.html", "docs/design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
     ];
 
     [Fact]

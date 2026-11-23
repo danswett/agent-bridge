@@ -72,8 +72,8 @@ button,textarea,input{font:inherit}
         </div>
         <div role="tablist" aria-label="Machine" style="display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid {{t.stroke}}">
           <button role="tab" aria-selected="true" style="position: relative; height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text}}; font-weight: 600; font-size: 14px">All<span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></button>
-          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">ULTRA</button>
-          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">DEV-VM1</button>
+          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">Machine B</button>
+          <button role="tab" aria-selected="false" style="height: 36px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 14px">Machine A</button>
         </div>
 
         <!-- Before: the Needs you lane, a second entry for each waiting session (ui.md §6.1 item 1). -->
@@ -87,7 +87,7 @@ button,textarea,input{font:inherit}
                 <span style="font-weight: 600">Ship 0.1.691 prerelease</span>
                 <span>Allow Copilot to run this command?</span>
                 <code style="display: block; margin-top: 4px; padding: 6px 8px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 12px; line-height: 18px">git push origin release/0.1.691</code>
-                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">ULTRA · Copilot · 2m</span>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Machine B · Copilot · 2m</span>
                 <span style="display: flex; gap: 8px; margin-top: 4px"><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-size: 14px">Approve once</button><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 14px">Deny</button></span>
               </div>
             </div>
@@ -96,7 +96,7 @@ button,textarea,input{font:inherit}
               <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
                 <span style="font-weight: 600">Release notes for 0.1.691</span>
                 <span>Which channel should the 0.1.691 notes go to?</span>
-                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">DEV-VM1 · Copilot · 4m</span>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Machine A · Copilot · 4m</span>
               </div>
             </div>
             <div style="display: flex; gap: 8px">
@@ -104,7 +104,7 @@ button,textarea,input{font:inherit}
               <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
                 <span style="font-weight: 600">Fluent V8 to V9 migration</span>
                 <span>Can I drop the v8 theme shim from Theme.tsx?</span>
-                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">DEV-VM1 · Copilot · Delegate Check ubuntu CI asks · 9m</span>
+                <span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Machine A · Copilot · Delegate Check ubuntu CI asks · 9m</span>
                 <span style="font-weight: 600; color: {{t.amberText}}">Answer at the machine</span>
               </div>
             </div>
@@ -127,7 +127,7 @@ button,textarea,input{font:inherit}
         <sc-if value="{{showPinned}}" hint-placeholder-val="{{true}}">
         <div style="padding: 16px 20px 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Pinned</div>
         <ul style="list-style: none; margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 2px">
-          <li><a href="#" style="display: flex; gap: 12px; padding: 10px 12px; border-radius: 4px; text-decoration: none; color: inherit"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="min-width: 0; flex: 1"><div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">now</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-top: 2px">3 delegates · DEV-VM1</div></div></a></li>
+          <li><a href="#" style="display: flex; gap: 12px; padding: 10px 12px; border-radius: 4px; text-decoration: none; color: inherit"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="min-width: 0; flex: 1"><div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Plan Migration to Windows App</span><span style="font-size: 12px; line-height: 16px; color: {{t.text2}}">now</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-top: 2px">3 delegates · Machine A</div></div></a></li>
         </ul>
         </sc-if>
 
@@ -152,7 +152,7 @@ button,textarea,input{font:inherit}
         <header style="padding: 20px 24px 16px 32px; display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid {{t.stroke}}">
           <div style="flex: 1; min-width: 0">
             <h2 style="margin: 0; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 20px; line-height: 28px; font-weight: 600">Release notes for 0.1.691</h2>
-            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import><span style="color: {{t.amberText}}">Waiting on you</span><span>·</span><span>DEV-VM1</span><span>·</span><span>agent-bridge</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import><span style="color: {{t.amberText}}">Waiting on you</span><span>·</span><span>Machine A</span><span>·</span><span>agent-bridge</span></div>
           </div>
           <div style="display: flex; gap: 4px">
             <button aria-label="Pin" title="Pin" style="width: 32px; height: 32px; border-radius: 4px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="pin" size="16" hint-size="16px,16px"></dc-import></button>
@@ -200,7 +200,7 @@ button,textarea,input{font:inherit}
           <h3 style="margin: 0 0 8px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Details</h3>
           <dl style="margin: 0; display: grid; grid-template-columns: 96px 1fr; gap: 4px 12px; font-size: 12px; line-height: 16px">
             <dt style="color: {{t.text2}}">Agent</dt><dd style="margin: 0">Copilot</dd>
-            <dt style="color: {{t.text2}}">Machine</dt><dd style="margin: 0">DEV-VM1</dd>
+            <dt style="color: {{t.text2}}">Machine</dt><dd style="margin: 0">Machine A</dd>
             <dt style="color: {{t.text2}}">Repository</dt><dd style="margin: 0">agent-bridge</dd>
             <dt style="color: {{t.text2}}">Branch</dt><dd style="margin: 0; font-family: {{mono}}">main</dd>
             <dt style="color: {{t.text2}}">Model</dt><dd style="margin: 0">claude-sonnet-5</dd>
@@ -262,12 +262,12 @@ class Component extends DCLogic {
       weight: o.unread ? 600 : 400, fill: o.selected ? t.sel : 'transparent', mark: !!o.mark, needs: glyph === 'needs'
     });
     const all = [
-      row('Ship 0.1.691 prerelease', 'needs', 'Waiting on you', 'ULTRA', '2m', { statusColor: t.amberText }),
-      row('Fix trust-wait banner', 'working', 'Editing LaunchView.xaml.cs', 'ULTRA', '', { unread: true }),
-      row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'DEV-VM1', '4m', { statusColor: t.amberText, selected: true, mark: before }),
-      row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'DEV-VM1', '9m', { statusColor: t.amberText }),
-      row('Nightly issue triage', 'idle', 'Driven by an agent', 'ULTRA', '1h', { driven: true, statusColor: t.violetText }),
-      row('Testing code functionality', 'idle', 'Idle', 'ULTRA', '32m')
+      row('Ship 0.1.691 prerelease', 'needs', 'Waiting on you', 'Machine B', '2m', { statusColor: t.amberText }),
+      row('Fix trust-wait banner', 'working', 'Editing LaunchView.xaml.cs', 'Machine B', '', { unread: true }),
+      row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'Machine A', '4m', { statusColor: t.amberText, selected: true, mark: before }),
+      row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'Machine A', '9m', { statusColor: t.amberText }),
+      row('Nightly issue triage', 'idle', 'Driven by an agent', 'Machine B', '1h', { driven: true, statusColor: t.violetText }),
+      row('Testing code functionality', 'idle', 'Idle', 'Machine B', '32m')
     ];
     return {
       theme, t,
