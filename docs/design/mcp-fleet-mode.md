@@ -33,7 +33,7 @@ are closed-set values, never text.
 - A new relay field or op for this; the existing `fleet.list` is enough.
 - A default of fleet scope.
 
-## Engineering rulings (R10), folded in
+## Engineering rulings (R10), folded in (proposals; see the departures below)
 
 1. **Local pass-through via the host.** The MCP process never holds a relay credential: fleet scope is answered by asking the local host,
    which makes the relay call with its own identity. The server stays local-only on the wire; no new trust edge.
@@ -42,6 +42,21 @@ are closed-set values, never text.
 
 Both stay inside the owner CHANGE rule: any departure (a credential in the MCP process, returning `machineName` by default, acting on a
 remote session) is an owner CHANGE routed through the Chief, not a builder choice.
+
+## Departures from the existing docs: UNAPPROVED owner CHANGE proposals
+
+This note is a **proposal**. Each point below departs from a canonical document as it stands today. Every one is an **unapproved owner CHANGE
+proposal**; none is decided, and **the canonical documents are edited only when the owner approves** (nothing in this PR edits them).
+
+| # | Existing source (as it stands) | What this proposal would change |
+|---|---|---|
+| 1 | `docs/design/mcp-s4-evidence.md`, cut **C6 / 27**: expose the existing `fleet.list` as an **explicit credentialed read, not a broadened local list**; depends on F, audit #1401 and the #55 account/roster contract | An opt-in `scope: "fleet"` argument on `list_agent_sessions` (the local list gains a mode) answered by the local host as a pass-through. C6 asks for a separate explicit credentialed read, and its dependencies (#1401, #55) are not met by this note |
+| 2 | `mcp/README.md` (not in this slice: ..., **other machines**) | The MCP server would list other machines' sessions |
+| 3 | `docs/protocol/local-pipe.md` (MCP: **this machine only**; `machine` arguments are refused) | A fleet-scoped list through the local pipe, which is no longer this machine only |
+| 4 | `docs/protocol/agent-operations.md` (`machineName` is the relay's display name, **independent of `include`**) | `machineName` returned only with `include: "content"` in MCP output (untrusted display text), where the relay contract returns it regardless |
+
+If the owner prefers the existing C6 shape (a separate credentialed read tool, not a mode of the local list), points 1 to 3 change to follow it and
+this note is rewritten; point 4 stands or falls on its own.
 
 ## Tests when built (tests first)
 
