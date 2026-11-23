@@ -444,7 +444,7 @@ static partial class SelfTest
                     : "wheel not received (issues 2471, 2476; quarantine requires missing canary before 2026-11-20T08:00:00Z)";
                 var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
                 const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
-                var quarantined = skipped is null && wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
+                var quarantined = wheelReceivedCount is null && skipped is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
                 {
                     wheelReady, wheeled, drawn, kept, count500, belowEnd, receipt,
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
@@ -469,18 +469,21 @@ static partial class SelfTest
                             "real ViewChanged callbacks remain detached after normal and exceptional cleanup");
                     }
                 }
-                if (skipped is not null)
+                if (!quarantined)
                 {
+                  if (skipped is not null)
+                  {
                     check(true, $"{tookMessage}: SKIPPED ({skipped})");
                     check(true, $"{keptMessage}: SKIPPED ({skipped})");
-                }
-                else if (!quarantined)
-                {
+                  }
+                  else
+                  {
                     CheckLatestNativeReceipt(away, wheelReceipt, check);
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
                         : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled}; {wheelTarget})");
                     check(ok, ok ? keptMessage
                         : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept}; {wheelTarget})");
+                  }
                 }
             }
             finally
