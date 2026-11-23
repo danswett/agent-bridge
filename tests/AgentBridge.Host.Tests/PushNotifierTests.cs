@@ -960,6 +960,113 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(4, SignInsSent());
     }
 
+    // Stuck-prompt owner decision B1 (fleet-session-registry.md, "Host-side evidence producer"): a launched agent waiting on a folder-trust
+    // answer is told to the owner by the host itself after TrustWaitAfter (2 minutes), once per question, in the existing needs-you class and
+    // question kind, in host-built words with nothing the agent said and no folder.
+    static TrustQuestion TrustAsk(string id, DateTimeOffset? at = null) => new()
+    {
+        Id = id, Agent = "claude", Kind = AgentKind.Claude, Label = "Claude", Workspace = "App", Folder = @"C:\private\folder",
+        Warning = "private agent warning", AskedAt = at ?? T, Answerable = false,
+    };
+
+    [Fact]
+    public async Task A_folder_trust_question_waiting_two_minutes_sends_one_host_built_needs_you_notice_per_device_and_not_again()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var asks = new List<TrustQuestion> { TrustAsk("t1") };
+        notifier.TrustQuestions = () => asks;
+        await After(TimeSpan.FromSeconds(119));
+        Assert.Empty(sender.Sent);
+
+        await After(TimeSpan.FromSeconds(1));
+
+        var sent = Received();
+        Assert.Equal([Phone, Laptop], sent.Select(r => r.Device).Order());
+        var (_, n, ttl, urgency, topic) = sent.Single(r => r.Device == Phone);
+        Assert.Equal(("Claude on DEV needs a folder-trust answer", "A launched session is waiting for a folder-trust answer"),
+            (n.GetProperty("title").GetString(), n.GetProperty("body").GetString()));
+        var data = n.GetProperty("data");
+        Assert.Equal(("question", "needsYou", Machine), (Kind(n), data.GetProperty("class").GetString(), data.GetProperty("machine").GetString()));
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&needsyou=1", n.GetProperty("navigate").GetString());
+        Assert.Equal((86400, "high"), (ttl, urgency));
+        // Nothing the agent said and nothing of the folder, in the notice or its tag.
+        Assert.DoesNotContain("private", n.GetRawText(), StringComparison.Ordinal);
+        Assert.False(n.TryGetProperty("silent", out _));
+
+        await After(TimeSpan.FromHours(3));
+        Assert.Equal(2, sender.Sent.Count);
+    }
+
+    [Fact]
+    public async Task A_trust_question_answered_in_time_sends_nothing_and_a_later_question_is_a_new_episode()
+    {
+        Start();
+        Subscribe(Phone);
+        var asks = new List<TrustQuestion> { TrustAsk("t1") };
+        notifier.TrustQuestions = () => asks;
+        await After(TimeSpan.FromSeconds(90));
+        asks.Clear();
+        await After(TimeSpan.FromMinutes(5));
+        Assert.Empty(sender.Sent);
+
+        asks.Add(TrustAsk("t2", time.GetUtcNow()));
+        await After(TimeSpan.FromSeconds(119));
+        Assert.Empty(sender.Sent);
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Single(sender.Sent);
+    }
+
+    [Fact]
+    public async Task With_no_device_to_tell_a_waiting_trust_question_says_nothing_and_the_first_device_to_subscribe_hears_it()
+    {
+        Start();
+        notifier.TrustQuestions = () => [TrustAsk("t1")];
+        await After(TimeSpan.FromMinutes(10));
+        Assert.Empty(sender.Sent);
+
+        Subscribe(Phone);
+        await After(TimeSpan.Zero);
+
+        Assert.Single(Received(), r => r.Device == Phone);
+    }
+
+    // The pump's return value is how long the host's loop sleeps before looking again. A trust question raises no session event, so the loop must wake
+    // on its own, every half minute, but only while this host can launch (the hook is set): otherwise an idle notifier sleeps until something happens.
+    [Fact]
+    public async Task The_pump_asks_to_be_woken_within_half_a_minute_only_while_the_trust_hook_is_set()
+    {
+        Start();
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+        notifier.TrustQuestions = () => [];
+        Assert.Equal(TimeSpan.FromSeconds(30), await notifier.PumpAsync());
+        notifier.TrustQuestions = null;
+        Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+    }
+
+    [Fact]
+    public async Task A_trust_question_that_raises_no_session_event_is_told_by_a_loop_that_sleeps_only_as_long_as_the_pump_asks()
+    {
+        Start();
+        Subscribe(Phone);
+        var asks = new List<TrustQuestion>();
+        notifier.TrustQuestions = () => asks;
+        var wait = await notifier.PumpAsync();
+        asks.Add(TrustAsk("t1", time.GetUtcNow()));
+        var asked = time.GetUtcNow();
+        // The host's loop, on the fake clock: sleep what the pump says, pump again, with no session event at all.
+        while (sender.Sent.Count == 0 && time.GetUtcNow() - asked < TimeSpan.FromMinutes(5))
+        {
+            Assert.InRange(wait, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+            time.Advance(wait);
+            wait = await notifier.PumpAsync();
+        }
+        Assert.Single(sender.Sent);
+        // Not before two minutes, and no later than the two minutes plus one sleep.
+        Assert.InRange(time.GetUtcNow() - asked, TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(150));
+    }
+
     [Fact]
     public async Task Once_every_session_is_signed_in_again_a_waiting_sign_in_notice_is_withdrawn_and_the_next_failure_notifies_at_once()
     {

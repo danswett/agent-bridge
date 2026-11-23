@@ -141,9 +141,14 @@ export function shownParts(t) {
 
 export function currentReply(snapshot, session) {
   const voice = liveVoice(session);
-  if (!session.activity.responseId || !voice.response) { return voice.response ?? ''; }
+  if (!voice.response) { return ''; }
   const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
-  return turn ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
+  if (!turn) { return voice.response; }
+  // Replies kept as parts by id read together. With no id (#3649) they read together only up to the last id-less live part the store held: a stored
+  // part after it is deferred, and a lone id-less reply is just the live words.
+  if (session.activity.responseId) { return shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n'); }
+  const live = turn.parts.findLastIndex((p) => p.live);
+  return live < 0 ? voice.response : turn.parts.slice(0, live + 1).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n');
 }
 
 export function turnView(t, inline = null) {

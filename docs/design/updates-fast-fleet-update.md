@@ -125,7 +125,7 @@ IP, shared by every machine behind it. §4 sets the budget; no machine credentia
 check (seconds) = about 2-3 minutes, or 6-7 without the token. A held machine gets the same, inside its windows.
 
 **Limited or unreachable.** Release relay down: no hints; the normal check as today. GitHub limits the
-release relay: it serves stale with `Age`; clients reject a copy older than 1 hour (`CdnOldest`, :55).
+release relay: it serves stale with `Age`; clients reject a copy older than 1 hour (`CdnOldest`), and a copy older than 10 minutes (`CdnFreshFor`) may only offer a newer release, never say "up to date" (docs/app-windows.md).
 GitHub limits a machine: the hold stays; its end goes out as a UTC instant (`checksHeldUntil`, slice 3);
 the card says "Checked 20 minutes ago · checking again soon". **Offline:** on reconnect the relay sends
 the latest hint. **Mixed versions:** a host without `releaseHint` gets no frame and keeps the tick.
