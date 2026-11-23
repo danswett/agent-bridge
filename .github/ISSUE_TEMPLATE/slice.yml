@@ -97,9 +97,9 @@ body:
       label: Model
       description: The dispatcher launches the builder on this model. For any other model, add a "### Model reason" section to the issue body by hand; without one the dispatcher skips the slice.
       options:
-        - gpt-6.1-sol
-        - claude-opus-5.5
         - claude-sonnet-5.5
+        - claude-opus-5.5
+        - gpt-6.1-sol
       default: 0
     validations:
       required: true
