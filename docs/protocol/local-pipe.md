@@ -570,7 +570,8 @@ With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` ke
 `hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
 With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
 
-`hookMigrated` (optional boolean; absent reads as `false`; owner-approved additive field, #783) is
+`hookMigrated` (optional boolean; absent reads as `false`; an additive field, owner-approved via Chief relay (ask_user),
+[agent-bridge #783 comment 7091078091](https://github.com/danswett/agent-bridge/issues/783#issuecomment-7091078091)) is
 `true` when `hookSetup` is `completed` because agent-ha-bridge's migration re-pointed this
 agent's hooks in this agent home (recorded in `migration.json`), not because this profile
 wrote an ownership record. Such an agent is Not tested yet until a hook is handled; clients
