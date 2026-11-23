@@ -210,10 +210,11 @@ static class MergeRuleCommand
         public bool Arm64Waiver { get; } = arm64Waiver;
         /// <summary>The catalog's post-merge job names (quality/README.md §4.9): shown, never counted.</summary>
         public IReadOnlySet<string> PostMerge { get; init; } = new HashSet<string>();
+        readonly object gate = new();
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
-        public Dictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public System.Collections.Concurrent.ConcurrentDictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Main's CI, read once at the start of the run (ReadMain), so every verdict in it sees the same main.</summary>
         public MainFact Main { get; set; } = new("error", "main's CI wasn't read");
@@ -221,19 +222,23 @@ static class MergeRuleCommand
         public JsonDocument GraphQL(string query, Dictionary<string, object> variables)
         {
             var doc = GitHub.GraphQL(query, variables);
-            if (doc.RootElement.GetProperty("data").TryGetProperty("rateLimit", out var rate) && rate.ValueKind == JsonValueKind.Object)
+            lock (gate)
             {
-                GraphQLPoints += rate.GetProperty("cost").GetInt32();
-                GraphQLRemaining = rate.GetProperty("remaining").GetInt32();
+                if (doc.RootElement.GetProperty("data").TryGetProperty("rateLimit", out var rate) && rate.ValueKind == JsonValueKind.Object)
+                {
+                    GraphQLPoints += rate.GetProperty("cost").GetInt32();
+                    GraphQLRemaining = rate.GetProperty("remaining").GetInt32();
+                }
+                else
+                    GraphQLPoints++;
             }
-            else
-                GraphQLPoints++;
             return doc;
         }
 
         public JsonDocument Rest(string path)
         {
-            RestCalls++;
+            lock (gate)
+                RestCalls++;
             return GitHub.Rest(path);
         }
 
@@ -352,9 +357,11 @@ static class MergeRuleCommand
                 .ToList();
 
         var rows = new List<string>();
-        foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
+        var heads = prs.GroupBy(p => p.HeadSha.ToLowerInvariant()).ToList();
+        var assessed = AssessTogether(session, heads);
+        foreach (var head in heads)
         {
-            var judged = Judged(head.Select(p => Assess(session, p)), head.Key);
+            var judged = Judged(assessed[head.Key], head.Key);
             if (judged.Count == 0)
                 continue;
             var combined = MergeRule.Combine(judged);
@@ -420,6 +427,33 @@ static class MergeRuleCommand
             File.AppendAllText(summary, md.ToString());
         }
         return problems == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// How many heads' reads are in flight at once: a head's full read is a query and a compare, each
+    /// a round trip, so the heads of a sweep are read together, a few at a time.
+    /// </summary>
+    internal const int HeadsAtOnce = 4;
+
+    /// <summary>
+    /// Every head's pull requests assessed, the heads together (a few at once, the pull requests of one
+    /// head one after another) and the answers in the heads' own order, so what is printed and posted
+    /// reads as it did when they were read one after another. A read that is not a read failure (those
+    /// become the head's verdict) ends the run as it did, with its own exception.
+    /// </summary>
+    static Dictionary<string, List<(PullRequestFacts Pr, MergeVerdict? Verdict)>> AssessTogether(Session session, List<IGrouping<string, PullRequestFacts>> heads)
+    {
+        var answers = new List<(PullRequestFacts Pr, MergeVerdict? Verdict)>[heads.Count];
+        try
+        {
+            Parallel.For(0, heads.Count, new ParallelOptions { MaxDegreeOfParallelism = HeadsAtOnce },
+                i => answers[i] = heads[i].Select(p => Assess(session, p)).ToList());
+        }
+        catch (AggregateException e)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.Flatten().InnerExceptions[0]).Throw();
+        }
+        return heads.Select((head, i) => (head.Key, answers[i])).ToDictionary(x => x.Key, x => x.Item2);
     }
 
     static int Report(TextWriter output, string? error)
@@ -657,6 +691,48 @@ static class MergeRuleCommand
     /// </summary>
     internal static TimeSpan UnreadableRetryAfter { get; set; } = TimeSpan.FromSeconds(3);
 
+    /// <summary>How many of main's older runs are read together once the newest has not answered.</summary>
+    internal const int RunsAtOnce = 4;
+
+    /// <summary>One run's job list, all its pages; or that it can't be read (skipped only when it may be).</summary>
+    static (List<JsonElement> Jobs, bool Unreadable) ReadRunJobs(Session session, JsonElement run)
+    {
+        var id = run.GetProperty("id").GetInt64();
+        var jobs = new List<JsonElement>();
+        for (var jobPage = 1; ; jobPage++)
+        {
+            JsonDocument listed;
+            JsonElement batch;
+            var jobsPath = $"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}";
+            try
+            {
+                (listed, batch) = ReadJobs(session, jobsPath);
+            }
+            // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
+            catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
+            {
+                // Skipped only once unreadable for over the grace, never a failure or a state not known (it would hide a red main),
+                // and never when the run's age isn't known: those error, as before. An old enough run is read once more first.
+                if (!MayBeSkipped(session, run)) { throw; }
+                Thread.Sleep(UnreadableRetryAfter);
+                try
+                {
+                    (listed, batch) = ReadJobs(session, jobsPath);
+                }
+                catch (Exception again) when (again is InvalidOperationException or JsonException or KeyNotFoundException)
+                {
+                    return (jobs, true);
+                }
+            }
+            using var held = listed;
+            jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
+            if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
+                return (jobs, false);
+            if (batch.GetArrayLength() == 0 || jobPage >= 20)
+                throw new InvalidOperationException("CI job list is incomplete");
+        }
+    }
+
     static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session, List<long>? skipped = null)
     {
         var config = session.Config;
@@ -665,44 +741,23 @@ static class MergeRuleCommand
         {
             using var doc = session.Rest($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}");
             var runs = doc.RootElement.GetProperty("workflow_runs");
-            foreach (var run in runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()))
+            // The newest run is read alone: it usually answers, and a read is a quota point. Once a run has
+            // not, the runs below it are read together, a few at a time, and each answer is used in order,
+            // so the answer is the one reading them one after another gave. A failed read of a run not yet
+            // reached is raised when that run is, not before.
+            var ordered = runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()).Select(r => r.Clone()).ToList();
+            var ahead = new Task<(List<JsonElement> Jobs, bool Unreadable)>?[ordered.Count];
+            for (var at = 0; at < ordered.Count; at++)
             {
+                if (ahead[at] is null)
+                    for (var next = at; next < Math.Min(ordered.Count, at + (at == 0 ? 1 : RunsAtOnce)); next++)
+                    {
+                        var readRun = ordered[next];
+                        ahead[next] = Task.Run(() => ReadRunJobs(session, readRun));
+                    }
+                var run = ordered[at];
                 var id = run.GetProperty("id").GetInt64();
-                var jobs = new List<JsonElement>();
-                var unreadable = false;
-                for (var jobPage = 1; ; jobPage++)
-                {
-                    JsonDocument listed;
-                    JsonElement batch;
-                    var jobsPath = $"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}";
-                    try
-                    {
-                        (listed, batch) = ReadJobs(session, jobsPath);
-                    }
-                    // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
-                    catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
-                    {
-                        // Skipped only once unreadable for over the grace, never a failure or a state not known (it would hide a red main),
-                        // and never when the run's age isn't known: those error, as before. An old enough run is read once more first.
-                        if (!MayBeSkipped(session, run)) { throw; }
-                        Thread.Sleep(UnreadableRetryAfter);
-                        try
-                        {
-                            (listed, batch) = ReadJobs(session, jobsPath);
-                        }
-                        catch (Exception again) when (again is InvalidOperationException or JsonException or KeyNotFoundException)
-                        {
-                            unreadable = true;
-                            break;
-                        }
-                    }
-                    using var held = listed;
-                    jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
-                    if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
-                        break;
-                    if (batch.GetArrayLength() == 0 || jobPage >= 20)
-                        throw new InvalidOperationException("CI job list is incomplete");
-                }
+                var (jobs, unreadable) = ahead[at]!.GetAwaiter().GetResult();
                 if (unreadable)
                 {
                     skipped?.Add(id);

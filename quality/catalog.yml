@@ -643,6 +643,18 @@ suites:
     where: ci.yml light; main-red.yml
     status: exists
 
+  - id: merge-rule-sweep
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/merge-rule-sweep.ps1, quality/test-merge-rule-sweep.ps1, .github/workflows/merge-rule-sweep.yml]
+    command: pwsh -NoProfile -File quality/test-merge-rule-sweep.ps1
+    where: ci.yml light; merge-rule-sweep.yml sweep
+    status: exists
+
   - id: revert-culprit
     validation_plan: native
     kind: unit

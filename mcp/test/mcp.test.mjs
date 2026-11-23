@@ -376,3 +376,37 @@ test('a read answered after more than a second still succeeds with no wait', asy
   assert.equal(out.response, 'hello');
   connection.close(); host.close();
 });
+
+// HA retirement rows 5 and 18: an agent behind this server can list, read, reply, launch and read usage, and
+// never answer, approve, trust or stop. The host refuses agent answers too (ScriptCredentialScopeTests); these
+// pins keep the server from ever offering or sending one.
+const ALL_CAPS = [...CAPS, 'usage'];
+const SURFACE = ['get_launch_options', 'launch_agent_session', 'list_agent_sessions', 'read_agent_session', 'read_agent_usage', 'read_launch_result', 'reply_to_agent_session'];
+const FORBIDDEN_OPS = ['session.answer', 'sessions.approve', 'trust.answer', 'session.stop', 'sessions.focus'];
+
+test('with every capability the tool surface is exactly the known seven, and none can answer, approve, trust or stop', async (t) => {
+  const host = await fakeHost({ hello: () => ({ capabilities: ALL_CAPS }), 'agent.hello': () => ({ principal: 'p' }) });
+  const { client, connection } = await clientFor(host);
+  t.after(() => { connection.close(); host.close(); });
+  const names = (await client.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual(names, SURFACE);
+  assert.equal(names.some((n) => /answer|approve|trust|stop|decision|focus/i.test(n)), false);
+});
+
+test('using every tool sends the host only list, read, reply, launch and usage operations, never an answer, approval, trust answer or stop', async (t) => {
+  const trap = (op) => () => { throw new Error(`${op} must never be sent`); };
+  const host = await fakeHost({
+    hello: () => ({ capabilities: ALL_CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'sessions.list': () => ({ sessions: [session()] }), 'session.get': () => session(), 'session.reply': () => ({ outcome: 'delivered' }),
+    'session.launch': () => ({ outcome: 'started', session: 's9' }), 'launch.options': () => ({}), 'usage.get': () => ({ agents: [] }),
+    ...Object.fromEntries(FORBIDDEN_OPS.map((op) => [op, trap(op)])),
+  });
+  const { client, connection } = await clientFor(host);
+  t.after(() => { connection.close(); host.close(); });
+  const args = { list_agent_sessions: {}, read_agent_session: { session_id: 's1' }, reply_to_agent_session: { session_id: 's1', text: 'hi' },
+    launch_agent_session: { prompt: 'go' }, read_launch_result: { request: 'r1' }, get_launch_options: {}, read_agent_usage: {} };
+  for (const name of SURFACE) { await client.callTool({ name, arguments: args[name] }); }
+  const sent = new Set(host.seen.map((r) => r.op));
+  for (const op of FORBIDDEN_OPS) { assert.equal(sent.has(op), false, op); }
+  assert.deepEqual([...sent].sort(), ['agent.hello', 'hello', 'launch.options', 'session.get', 'session.launch', 'session.reply', 'sessions.list', 'usage.get']);
+});
