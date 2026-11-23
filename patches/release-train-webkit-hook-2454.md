@@ -1,6 +1,6 @@
 # Release train: WebKit at the picked commit before publish (#2454 item B, prerequisite 2)
 
-For Quality. It turns on only with `PWA_WEBKIT_OFF_PUSH=true`; with the variable unset (the default), the train behaves as v8 does.
+For Quality. It turns on only with `PWA_WEBKIT_OFF_PUSH=true`; with the variable unset (the default), the train behaves as v9 does.
 
 **Apply in this order**, each with `git apply`, on main:
 1. `patches/release-train-3769.patch` (v9, branch `sg-patch/release-train-3769`, cee23c3b).
