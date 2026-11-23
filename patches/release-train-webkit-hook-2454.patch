@@ -1,0 +1,72 @@
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+index e5c7ad53..40679178 100644
+--- a/.github/workflows/release-train.yml
++++ b/.github/workflows/release-train.yml
+@@ -139,12 +139,25 @@ jobs:
+           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
+           exit $LASTEXITCODE
+ 
++  webkit:
++    name: The PWA in WebKit at the picked commit
++    # While PWA_WEBKIT_OFF_PUSH is on, CI's main pushes leave WebKit to pwa-webkit.yml (#2454 item B), so the train
++    # runs it on the exact commit it would publish, and publish waits for it. Off (the default), this is skipped:
++    # every main push already ran WebKit.
++    needs: [pick]
++    if: needs.pick.outputs.sha != '' && vars.PWA_WEBKIT_OFF_PUSH == 'true'
++    permissions:
++      contents: read
++    uses: ./.github/workflows/pwa-webkit.yml
++    with:
++      ref: ${{ needs.pick.outputs.sha }}
++
+   alert:
+     name: Alert when verification fails
+-    # Verification failing means nothing was published: this job fails the run with a named error so a
+-    # red train run is the alert (no other channel is wired here).
+-    needs: [pick, verify]
+-    if: always() && needs.verify.result == 'failure'
++    # Verification (or WebKit at the pick) failing means nothing was published: this job fails the run with a
++    # named error so a red train run is the alert (no other channel is wired here).
++    needs: [pick, verify, webkit]
++    if: always() && (needs.verify.result == 'failure' || needs.webkit.result == 'failure')
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     permissions: {}
+@@ -154,7 +167,7 @@ jobs:
+           SHA: ${{ needs.pick.outputs.sha }}
+           RUN_ID: ${{ needs.pick.outputs.run }}
+         run: |
+-          echo "::error title=release train::verification of CI run $RUN_ID (commit $SHA) failed; nothing was published"
++          echo "::error title=release train::verification or WebKit of CI run $RUN_ID (commit $SHA) failed; nothing was published"
+           echo "### Release train: verification failed, nothing published ($SHA, CI run $RUN_ID)" >> "$GITHUB_STEP_SUMMARY"
+           exit 1
+ 
+@@ -162,9 +175,13 @@ jobs:
+     name: Publish the picked commit
+     # contents: write is here only, and only for a verified pick. APP_SIGNING true never gets here: the
+     # pick job fails first. A failed verification skips this job (it needs verify to succeed).
+-    needs: [pick, verify]
++    needs: [pick, verify, webkit]
+     # A dry run (workflow_dispatch input) stops after verify: nothing is published, no manifest, no purge.
+-    if: needs.pick.outputs.sha != '' && !inputs.dry_run
++    # Explicit results, not the implicit success(): webkit is skipped while PWA_WEBKIT_OFF_PUSH is off, and a
++    # skipped need would otherwise skip publish. verify must still succeed, and webkit pass when it ran.
++    if: >-
++      !cancelled() && needs.pick.outputs.sha != '' && !inputs.dry_run && needs.verify.result == 'success'
++      && (needs.webkit.result == 'success' || needs.webkit.result == 'skipped')
+     runs-on: windows-latest
+     timeout-minutes: 30
+     permissions:
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index da0c076e..0b21e844 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -879,7 +879,7 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui; pwa-webkit.yml webkit
++    where: ci.yml pwa-ui; pwa-webkit.yml webkit; release-train.yml webkit
+     # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
+     # runs it hourly and before a release instead of on every main push (#2454).
+     tier: post-merge
