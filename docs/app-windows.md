@@ -1172,6 +1172,24 @@ starvation lasts until the train lands.
   `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
   (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
   change is the next verified commit's to publish.
+* **Verify before publishing** (workflow patch, #2225). The train never rebuilds: it publishes the exact bytes CI
+  built. Before it does, a `verify` job per architecture (`windows-latest` for x64, `windows-11-arm` for Arm64)
+  downloads that run's release files and installer input, refuses any that are missing, foreign or altered
+  (`Assert-AppInstallerInput`), installs the package per user and self-tests the installed app, as `ci.yml`'s
+  `app-installer` job does. `publish` needs both to succeed, so a failure in either **publishes nothing**, and
+  the `alert` job then fails the run with a named error (commit and CI run); a red train run is the alert, and no
+  other notification channel is wired here. A missing artifact fails that leg's download, so the train fails
+  closed.
+* **CDN refresh after publishing** (workflow patch, #3870 option A, #3880). A `purge` job runs after `publish`
+  in the `release-purge` environment (main only; the secret `CF_PURGE_TOKEN`, Cache Purge on the zone and nothing
+  else, and the variable `CF_ZONE_ID`). It purges the relay's `per_page=10` and `per_page=100` list URLs by URL,
+  re-fetches them for up to a minute, and fails the run loudly if either does not list the published tag with a
+  fresh copy. It never unpublishes: the release is out, the relay is just not yet showing it.
+* **Dry run** (workflow patch). Run the workflow by hand with the `dry_run` input set: it picks the commit and
+  verifies both architectures exactly as a real run does, then stops. `publish` is skipped, so there is no
+  release, no Beta manifest and no purge (`purge` needs `publish`), and a `dry-run-report` job writes what a
+  real run would have published to the run's summary, failing if verification would. It is the check to make
+  before `ci.yml`'s publish job is removed: a green dry run, then a real one, then the removal.
 * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
   unsigned, until it gains the sign step.
