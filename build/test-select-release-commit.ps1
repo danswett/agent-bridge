@@ -74,6 +74,41 @@ Check 'the notice says publish continued' ((Waived (Run 'sha103' 103 -fullConclu
 Check 'all green Arm64 checks have no notice' ((Waived (Run 'sha103' 103)) -eq $null) $true
 Check 'a red x64 installer is not in the notice: it is not waived' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' })) -match 'win-x64') $false
 Check 'the selection says what was waived' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' })) -Latest $out -IsDescendant $follows -Explain) -match 'selected sha103.*waived.*app-installer \(win-arm64\)') $true
+# The Arm64 jobs that RUN the app are waived whatever they are called (owner: only the Arm64 PACK is required): the Arm64 app job, and a sharded self-test.
+Check 'a red app (win-arm64) job is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
+Check 'a red sharded Arm64 self-test is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64) 2/3' = 'failure'; 'app-selftest (win-arm64) 3/3' = 'cancelled' }), (Run 'sha102' 102))) 'sha103'
+Check 'a red sharded x64 self-test is not waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-x64) 2/3' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'the notice names a sharded Arm64 self-test that was red' ((Format-WaivedNotice (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64) 2/3' = 'failure' })) -match 'app-selftest \(win-arm64\) 2/3: failure') $true
+# The x64 package is what the version is read from: without it the packages are incomplete (red), whatever else is there.
+Check 'FULL packages: no x64 package is incomplete' ((Get-FullPackages (@('agent-bridge-windows-arm64-0.1.103', 'sbom-win-x64-0.1.103', 'sbom-win-arm64-0.1.103')) 103).Complete) $false
+# The wiring of Get-ReleaseRuns, with a mock gh: a FULL run counts only if it is for this commit (head_sha), a push or workflow_run run on main, with its
+# packages and SBOMs (paginated) complete. A dispatch for another commit made at this head has this head_sha and fails closed (the go-live proof covers it).
+$script:mockFullRows = @()
+$script:mockArtifacts = @()
+function Invoke-ReleaseGh {
+    $call = $args -join ' '
+    if ($call -match 'workflows/ci\.yml/runs') { return "100`tsha103`t103`tsuccess" }
+    if ($call -match 'actions/runs/100/jobs') { return @("quality-gate`tsuccess`t1", "app (win-x64)`tsuccess`t2", "plan`tsuccess`t3") }
+    if ($call -match 'workflows/full\.yml/runs') { return $script:mockFullRows }
+    if ($call -match 'actions/runs/200/jobs') { return @("full-gate`tsuccess", "app-selftest (win-x64)`tsuccess", "app-pack (win-x64)`tsuccess", "app-installer (win-x64)`tsuccess", "app-pack (win-arm64)`tsuccess") }
+    if ($call -match 'actions/runs/200/artifacts') { if ($call -notmatch '--paginate') { throw 'the artifacts call is not paginated' }; return $script:mockArtifacts }
+    $null
+}
+$good = @('agent-bridge-windows-0.1.103', 'agent-bridge-windows-arm64-0.1.103', 'sbom-win-x64-0.1.103', 'sbom-win-arm64-0.1.103')
+function Gather($rows, $artifacts) { $script:mockFullRows = $rows; $script:mockArtifacts = $artifacts; @(Get-ReleaseRuns 'o/r' 1)[0] }
+$rowPush = "200`tsuccess`tsha103`tpush`tmain"
+Check 'wiring: a FULL run for this commit with complete packages and SBOMs is complete' (Gather @($rowPush) $good).Full.ArtifactsUnexpired $true
+Check 'wiring: the version is 0.1.<the FAST number>' (Gather @($rowPush) $good).Version '0.1.103'
+Check 'wiring: a missing Arm64 SBOM makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'sbom-win-arm64-0.1.103' })).Full.ArtifactsUnexpired $false
+Check 'wiring: a missing x64 package makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'agent-bridge-windows-0.1.103' })).Full.ArtifactsUnexpired $false
+Check 'wiring: more than a page of unrelated artifacts does not hide the packages' (Gather @($rowPush) (@(1..150 | ForEach-Object { "logs-$_" }) + $good)).Full.ArtifactsUnexpired $true
+Check 'wiring: a FULL run whose head_sha is another commit is not this commit''s' ((Gather @("200`tsuccess`tshaOther`tpush`tmain") $good).Full -eq $null) $true
+Check 'wiring: a workflow_dispatch run is not accepted (it fails closed)' ((Gather @("200`tsuccess`tsha103`tworkflow_dispatch`tmain") $good).Full -eq $null) $true
+Check 'wiring: a scheduled run is not accepted' ((Gather @("200`tsuccess`tsha103`tschedule`tmain") $good).Full -eq $null) $true
+Check 'wiring: a run on another branch is not accepted' ((Gather @("200`tsuccess`tsha103`tpush`tfeature") $good).Full -eq $null) $true
+Check 'wiring: a workflow_run run on main is accepted' ((Gather @("200`tsuccess`tsha103`tworkflow_run`tmain") $good).Full -ne $null) $true
+Check 'wiring: the first valid row is used when a newer one is not' ((Gather @("201`tfailure`tsha103`tworkflow_dispatch`tmain", $rowPush) $good).Full.Id) '200'
+Check 'wiring: no FULL run at all is no Full' ((Gather @() $good).Full -eq $null) $true
 Check 'an Arm64 pack that was skipped is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 installer that failed is still publishable: it installs and starts the app, the Arm64 self-test the owner waived (#4159)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
 Check 'a FULL run with no aggregate full-gate result is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = $null }), (Run 'sha102' 102))) 'sha102'

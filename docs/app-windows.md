@@ -1194,17 +1194,18 @@ pre-releases" in Settings stops it finding them until there are full releases.
 
 ### The release train (#2225)
 
-A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
-(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
-Merging never waits for it and it never blocks a merge.
+**Design, not yet built here:** `.github/workflows/release-train.yml` has never existed on `main`; what exists is the commit selector,
+`build/select-release-commit.ps1`, and its fixtures. The train is to be a second way to publish, apart from merging: it is to run hourly
+(and by hand, `workflow_dispatch`) and publish the newest `main` commit whose FAST lane and FULL lane both passed (below).
+Merging is never to wait for it, and it is never to block a merge. Everything below is that design unless it says the selector does it.
 
 **Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
 superseded run that went green still publishes nothing when `main`'s head has since changed the
 app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
+15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. **Per-commit groups
 (`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
 `ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
-starvation lasts until the train lands.
+starvation lasts until the train exists.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
@@ -1228,26 +1229,26 @@ starvation lasts until the train lands.
     not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (that commit's FULL run builds them and keeps them 30 days); the version is read from their names.
+  - the **packages and the SBOMs** of both architectures (x64 and Arm64) are all there, unexpired (that commit's FULL run builds them and keeps them 30 days), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
   **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
-* **How.** The train downloads that commit's FULL run's packages (the bytes CI built and checked, never a
+* **How (design).** The train is to download that commit's FULL run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
-  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  commit. It is to share `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
   train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
   `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
-  (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+  (`ci.yml`'s `publish` keeps it): the train is to publish the newest verified commit, and a later
   change is the next verified commit's to publish.
-* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
-  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
-  unsigned, until it gains the sign step.
+* **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+  unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 * **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
-  so a train release carries neither until they are added.
+  so a train release is to carry neither until they are added.
 
 ### Signing
 
