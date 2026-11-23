@@ -169,7 +169,7 @@ public sealed class LiteDeliver(
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
-        // send frees the slot; a send that typed nothing frees it and leaves no record; keys that went with no clear result stay held.
+        // send frees the slot; a result the replier marks NoKeysSent (it proves no key went: refused before typing, a stop or departure, a foreign request, an injector\r\n        // fence or an exception before any key) frees it and leaves no record; any other result that may have typed stays held. KeysGoing alone proves nothing, since it\r\n        // runs before the injector's own fence; only a thrown exception with no result falls back to it.
         void Record(ReplyResult? r)
         {
             if (store is null) { return; }
