@@ -738,6 +738,50 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal("scope", denied.Message);
     }
 
+    // G9b2a: the remote subject launches through the same queue, name gate, counters and audit, with no local credential.
+    [Fact]
+    public async Task A_remote_subject_launches_once_through_the_shared_pipeline_and_a_retry_replays_the_receipt()
+    {
+        using var key = P256KeyPair.Generate();
+        var (_, grant, subject) = RemoteGrant(key);
+        var pipe = Open(grantKey: key, grantOnly: true);
+        var first = await pipe.Launch.LaunchGrantedRemoteAsync(subject, RemoteInput(grant));
+        Assert.Equal(1, launcher.Launches);
+        Assert.Equal(LaunchOutcome.Unconfirmed, first.Result.Outcome);
+        Assert.Equal(grant.Id, first.Grant);
+        var again = await pipe.Launch.LaunchGrantedRemoteAsync(subject, RemoteInput(grant));
+        Assert.Equal(1, launcher.Launches);
+        Assert.Equal(first.Request, again.Request);
+    }
+
+    [Theory]
+    [InlineData("local", "policy")]
+    [InlineData("unnamed", "scope")]
+    public async Task A_bad_or_unnamed_remote_subject_is_refused_before_any_launch_side_effect(string bad, string reason)
+    {
+        using var key = P256KeyPair.Generate();
+        var (_, grant, subject) = RemoteGrant(key);
+        var pipe = Open(grantKey: key, grantOnly: true);
+        var broken = bad == "local" ? subject with { SourceHost = new('a', 32) } : subject with { Session = Guid.NewGuid().ToString("D") };
+        var receipt = await pipe.Launch.LaunchGrantedRemoteAsync(broken, RemoteInput(grant));
+        Assert.Equal(LaunchOutcome.Refused, receipt.Result.Outcome);
+        Assert.Equal(reason, receipt.Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_revoked_grant_stops_a_remote_launch_at_execution_time_without_launching()
+    {
+        using var key = P256KeyPair.Generate();
+        var (_, grant, subject) = RemoteGrant(key);
+        var pipe = Open(grantKey: key, grantOnly: true);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        Assert.True(store.Revoke(grant.Id, grant.Generation).Usable);
+        var receipt = await pipe.Launch.LaunchGrantedRemoteAsync(subject, RemoteInput(grant));
+        Assert.Equal("grant-revoked", receipt.Reason);
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;

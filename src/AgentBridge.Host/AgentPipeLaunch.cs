@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using AgentBridge.Host.Core.Launch;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -52,8 +53,18 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         return credentials.LaunchGate.CheckPolicy() is { Allowed: false } off ? off.Reason ?? "agent launch is off on this machine" : null;
     }
 
-    public Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data) => LaunchAsync(caller, data, null);
-    public async Task<FleetLaunchReceipt> LaunchGrantedAsync(AgentCredential caller, JsonElement data)
+    // Who is launching: a local credential, or (G9) a remote subject its source host attested, with no local credential.
+    internal readonly record struct LaunchCaller(string Principal, string[] Chain, AgentCredential? Credential);
+    LaunchCaller Local(AgentCredential caller) => new(credentials.PrincipalOf(caller), caller.Chain, caller);
+
+    public Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data) => LaunchAsync(Local(caller), data, null);
+    public Task<FleetLaunchReceipt> LaunchGrantedAsync(AgentCredential caller, JsonElement data) =>
+        GrantedAsync(Local(caller), data, (grants, input) => grants.PrepareAsync(caller, input));
+    internal Task<FleetLaunchReceipt> LaunchGrantedRemoteAsync(GrantSubject subject, FleetLaunchInput input) =>
+        GrantedAsync(new(AgentProtocol.Principal(subject.SourceHost, subject.Session), [], null),
+            JsonSerializer.SerializeToElement(input, ProtocolJson.Options), (grants, parsed) => grants.PrepareRemoteAsync(subject, parsed));
+    async Task<FleetLaunchReceipt> GrantedAsync(LaunchCaller caller, JsonElement data,
+        Func<FleetGrantLaunch, FleetLaunchInput, Task<FleetLaunchContext>> prepare)
     {
         FleetLaunchInput? input = null;
         FleetLaunchContext? context = null;
@@ -61,7 +72,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         {
             input = FleetGrantLaunch.Parse(data);
             if (fleetGrants is null) { throw new FleetLaunchDenied("unavailable"); }
-            context = await fleetGrants.PrepareAsync(caller, input);
+            context = await prepare(fleetGrants, input);
             if (context.Replay is { } replay) { return replay; }
             var result = await LaunchAsync(caller, JsonSerializer.SerializeToElement(context.Request, ProtocolJson.Options), context);
             return fleetGrants.Finish(context, result);
@@ -70,18 +81,18 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         {
             if (context?.Starting == true) { return fleetGrants!.Finish(context, new(LaunchOutcome.Unconfirmed)); }
             var reason = e is FleetLaunchDenied ? e.Message : e is JsonException ? "bad-argument" : "policy";
-            try { LocalApi.AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, LaunchProtocol.Launch, data, audit, reason, refusals); }
+            try { LocalApi.AuditRefusal(caller.Principal, caller.Chain, LaunchProtocol.Launch, data, audit, reason, refusals); }
             catch (InvalidOperationException) { reason = "audit-unavailable"; }
             return context?.Admitted == true ? fleetGrants!.Finish(context, new(LaunchOutcome.Refused, reason))
                 : FleetGrantLaunch.Receipt(context, new(LaunchOutcome.Refused), input, reason);
         }
     }
-    async Task<LaunchResult> LaunchAsync(AgentCredential caller, JsonElement data, FleetLaunchContext? fleet)
+    async Task<LaunchResult> LaunchAsync(LaunchCaller caller, JsonElement data, FleetLaunchContext? fleet)
     {
         // Grant refusals are audited once by the outer catch, using the same limiter as legacy launches.
         InvalidOperationException Refusal(string why) =>
-            fleet is null ? Refused(caller, data, why) : new($"refused: {why}");
-        var principal = credentials.PrincipalOf(caller);
+            fleet is null ? Refused(caller.Credential!, data, why) : new($"refused: {why}");
+        var principal = caller.Principal;
         if (store is null) { throw Refusal($"the launch request record can't be used ({storeProblem ?? "not open"}); no request with an id is launched"); }
         LaunchRequest? request = null;
         try { request = data.ValueKind == JsonValueKind.Object ? data.Deserialize<LaunchRequest>(ProtocolJson.Options) : null; }
@@ -98,7 +109,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         var approved = settings.Launch.Workspaces.Where(w => w.Isolate && grant is not null
             && (grant.Workspaces.Contains("approved", StringComparer.Ordinal) || grant.Workspaces.Contains(w.Label, StringComparer.Ordinal)))
             .Select(w => w.Label).ToArray();
-        if (callers.Check(caller, principal, request.Request, request.Workspace, approved) is { Allowed: false } denied)
+        // A remote subject has no local credential: its source host attested scope/depth, and the grant gate checks the workspace.
+        if (caller.Credential is { } local && callers.Check(local, principal, request.Request, request.Workspace, approved) is { Allowed: false } denied)
         { throw new InvalidOperationException($"refused: {denied.Reason}"); }
         if (grant is null || request.Agent is null || !grant.Agents.Contains(request.Agent, StringComparer.Ordinal))
         { throw Refusal("the launch must name an agent this machine lets agents start (agents.inbound.local.launch.agents)"); }
@@ -151,7 +163,8 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
         // An exception from here leaves the record launching and the slot held: something may have started.
         if (fleet is not null) { fleet.Starting = true; }
         var result = await sessions.LaunchAgentAsync(request with { Request = id.ToString("D") }, principal, audit,
-            () => fleet is null ? Still(caller, request) : fleetGrants!.Check(fleet, caller), fleet?.Input.Grant.ToString(),
+            () => fleet is null ? Still(caller.Credential!, request)
+                : caller.Credential is { } local ? fleetGrants!.Check(fleet, local) : fleetGrants!.CheckRemote(fleet), fleet?.Input.Grant.ToString(),
             confirmed: fleet is null ? null : session => Registered(id, session, confirmed: true));
         sessions.PublishLaunchAlias(principal, request.Request, request with { Request = id.ToString("D") }, result);
         if (result is { Outcome: LaunchOutcome.Started, Session: { } session })
