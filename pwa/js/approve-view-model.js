@@ -21,6 +21,7 @@ export class ApproveViewModel {
   state = 'waiting-for-code-1'; // waiting-for-code-1 | code-2-shown | ready-to-approve | cannot-approve | approved | ended | locked
   statusText = '';
   name;
+  #signing = false;
   #approver; #proof; #sign; #now;
 
   // pending is what the device said about itself: { name, kind, platform, id, signedInAt (ms) }; shown as given, never as a trusted name.
@@ -35,7 +36,7 @@ export class ApproveViewModel {
 
   get canApprove() { return this.#proof.kind === 'key' || this.#proof.kind === 'webauthn'; }
   // The id is what the device said: only hex is shown as an id, anything else as a fixed placeholder.
-  get idShown() { return /^[0-9a-f]{16,}$/i.test(this.pending.id ?? '') ? EnrollmentTexts.groups(this.pending.id.slice(0, 16)) : 'unknown'; }
+  get idShown() { return typeof this.pending.id === 'string' && /^[0-9a-f]{16,}$/i.test(this.pending.id) ? EnrollmentTexts.groups(this.pending.id.slice(0, 16)) : 'unknown'; }
   get banner() {
     const p = this.pending;
     return `A new device wants to join: ${p.name}, says it is ${ApproveTexts.kindText(p.kind, p.platform)}, id ${this.idShown}, `
@@ -66,12 +67,17 @@ export class ApproveViewModel {
     if (this.state === 'code-2-shown') this.state = 'ready-to-approve';
   }
 
-  approve() {
+  // `sign` may answer at once or later; only a true counts, and a refusal or a throw is a failure that can be tried again.
+  async approve() {
     if (!this.canApprove) { this.state = 'cannot-approve'; this.statusText = ApproveTexts.CANNOT_APPROVE; return 'cannot-approve'; }
     if (this.state !== 'ready-to-approve') return 'not-ready';
     const transcript = this.#approver.transcriptToSign;
     if (!transcript) { this.state = 'ended'; this.statusText = EnrollmentTexts.ENDED; return 'failed'; }
-    if (!this.#sign({ transcript, name: this.name, proof: this.#proof })) { this.statusText = EnrollmentTexts.GENERIC; return 'failed'; }
+    if (this.#signing) return 'not-ready';
+    this.#signing = true;
+    let signed = false;
+    try { signed = (await this.#sign({ transcript, name: this.name, proof: this.#proof })) === true; } catch { signed = false; } finally { this.#signing = false; }
+    if (!signed) { this.statusText = EnrollmentTexts.GENERIC; return 'failed'; }
     this.state = 'approved';
     this.statusText = '';
     return 'approved';

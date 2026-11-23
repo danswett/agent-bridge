@@ -21,7 +21,7 @@ const approve = (presence = 'key', over = {}) => {
   return { vm, ex, proof, signed };
 };
 
-test('the approver\'s code 2 stays hidden until code 1 is typed right, and anything else is not a match', () => {
+test('the approver\'s code 2 stays hidden until code 1 is typed right, and anything else is not a match', async () => {
   const { vm } = approve('key', { exchange: { results: ['wrong', 'match'] } });
   assert.equal(vm.code2, null);
   assert.equal(vm.enterCode1('12345'), 'wrong');
@@ -32,7 +32,7 @@ test('the approver\'s code 2 stays hidden until code 1 is typed right, and anyth
   assert.equal(vm.state, 'code-2-shown');
 });
 
-test('an ended or locked exchange ends the approver\'s attempt in fixed words', () => {
+test('an ended or locked exchange ends the approver\'s attempt in fixed words', async () => {
   const a = approve('key', { exchange: { results: ['ended'] } });
   a.vm.enterCode1('1');
   assert.deepEqual([a.vm.state, a.vm.statusText], ['ended', EnrollmentTexts.ENDED]);
@@ -42,7 +42,7 @@ test('an ended or locked exchange ends the approver\'s attempt in fixed words', 
   assert.deepEqual([b.vm.state, b.vm.statusText], ['locked', EnrollmentTexts.LOCKED]);
 });
 
-test('a name is one to sixty-four characters with no control characters, and a refusal keeps the old one', () => {
+test('a name is one to sixty-four characters with no control characters, and a refusal keeps the old one', async () => {
   const { vm } = approve();
   assert.equal(vm.setName('  Office PC  '), true);
   assert.equal(vm.name, 'Office PC');
@@ -53,7 +53,7 @@ test('a name is one to sixty-four characters with no control characters, and a r
   assert.equal(vm.setName('😀'.repeat(65)), false);
 });
 
-test('the banner names the device, its kind, its id and how long ago it signed in, in fixed phrases', () => {
+test('the banner names the device, its kind, its id and how long ago it signed in, in fixed phrases', async () => {
   assert.equal(approve().vm.banner, 'A new device wants to join: Kitchen laptop, says it is a Windows app, id 3f9a 2c71 b0de 4a5f, signed in 2 min ago');
   assert.equal(ApproveTexts.kindText('<script>', 'x'), 'a device of an unknown kind');
   assert.equal(ApproveTexts.kindText('pwa', 'x'), 'a browser app');
@@ -61,13 +61,13 @@ test('the banner names the device, its kind, its id and how long ago it signed i
   assert.equal(ApproveTexts.ago(2 * 3_600_000), '2 h ago');
 });
 
-test('with no presence proof approving ends in cannot-approve and never signs or asks the proof', () => {
+test('with no presence proof approving ends in cannot-approve and never signs or asks the proof', async () => {
   for (const kind of ['none', 'something-else']) {
     const { vm, proof, signed } = approve(kind);
     vm.enterCode1('123 456');
     vm.onJoinerOk();
     assert.equal(vm.canApprove, false);
-    assert.equal(vm.approve(), 'cannot-approve');
+    assert.equal(await vm.approve(), 'cannot-approve');
     assert.deepEqual([vm.state, vm.statusText], ['cannot-approve', ApproveTexts.CANNOT_APPROVE]);
     assert.equal(signed.length, 0);
     assert.equal(proof.signs, 0);
@@ -77,38 +77,38 @@ test('with no presence proof approving ends in cannot-approve and never signs or
   assert.equal(none.trySign(new Uint8Array([1])), null);
 });
 
-test('with a presence proof approving waits for the joiner\'s ok, then hands this exchange\'s transcript and the edited name to the caller', () => {
+test('with a presence proof approving waits for the joiner\'s ok, then hands this exchange\'s transcript and the edited name to the caller', async () => {
   const { vm, ex, proof, signed } = approve('key');
-  assert.equal(vm.approve(), 'not-ready');
+  assert.equal(await vm.approve(), 'not-ready');
   vm.enterCode1('123 456');
   vm.setName('Office PC');
-  assert.equal(vm.approve(), 'not-ready');
+  assert.equal(await vm.approve(), 'not-ready');
   assert.equal(signed.length, 0);
   vm.onJoinerOk();
-  assert.equal(vm.approve(), 'approved');
+  assert.equal(await vm.approve(), 'approved');
   assert.equal(signed.length, 1);
   assert.deepEqual([signed[0].transcript, signed[0].name, signed[0].proof], [ex.transcriptToSign, 'Office PC', proof]);
   assert.equal(vm.state, 'approved');
   assert.equal(proof.signs, 0, 'the model never signs itself');
 });
 
-test('a joiner ok before code 1 matched is ignored, and a failed signing can be tried again', () => {
+test('a joiner ok before code 1 matched is ignored, and a failed signing can be tried again', async () => {
   const { vm } = approve('webauthn', { signResult: false });
   vm.onJoinerOk();
   assert.equal(vm.state, 'waiting-for-code-1');
   vm.enterCode1('123 456');
   vm.onJoinerOk();
-  assert.equal(vm.approve(), 'failed');
+  assert.equal(await vm.approve(), 'failed');
   assert.deepEqual([vm.state, vm.statusText], ['ready-to-approve', EnrollmentTexts.GENERIC]);
   vm.setName('Office PC');
   assert.equal(vm.name, 'Office PC');
 });
 
-test('an exchange with no transcript ends the attempt instead of signing', () => {
+test('an exchange with no transcript ends the attempt instead of signing', async () => {
   const { vm, signed } = approve('key', { exchange: { transcriptToSign: null } });
   vm.enterCode1('123 456');
   vm.onJoinerOk();
-  assert.equal(vm.approve(), 'failed');
+  assert.equal(await vm.approve(), 'failed');
   assert.deepEqual([vm.state, vm.statusText, signed.length], ['ended', EnrollmentTexts.ENDED, 0]);
 });
 
@@ -120,7 +120,7 @@ test('the approve model signs nothing itself: it imports no signing path and cal
   }
 });
 
-test('a device that lies about its id or sign-in time shows a placeholder or "just now", never markup or NaN', () => {
+test('a device that lies about its id or sign-in time shows a placeholder or "just now", never markup or NaN', async () => {
   const { vm } = approve();
   const mk = (over) => new ApproveViewModel(approver(), pending(over), spyProof('key'), () => true, () => NOW);
   assert.equal(mk({ id: '<img src=x onerror=1>' }).idShown, 'unknown');
@@ -131,3 +131,41 @@ test('a device that lies about its id or sign-in time shows a placeholder or "ju
   assert.equal(ApproveTexts.ago(60 * 60_000), '1 h ago');
   assert.equal(vm.idShown, '3f9a 2c71 b0de 4a5f');
 });
+
+test('an asynchronous sign counts only when it answers true; a refusal or a throw fails and the same model can approve again', async () => {
+  const run = async (sign) => {
+    const vm = new ApproveViewModel(approver(), pending(), spyProof('key'), sign, () => NOW);
+    vm.enterCode1('123 456');
+    vm.onJoinerOk();
+    return vm;
+  };
+  for (const sign of [async () => false, async () => { throw new Error('denied'); }, () => { throw new Error('denied'); }, async () => 'yes', () => undefined]) {
+    const vm = await run(sign);
+    assert.equal(await vm.approve(), 'failed');
+    assert.deepEqual([vm.state, vm.statusText], ['ready-to-approve', EnrollmentTexts.GENERIC]);
+  }
+  let answer = false;
+  const vm = await run(async () => answer);
+  assert.equal(await vm.approve(), 'failed');
+  answer = true;
+  assert.equal(await vm.approve(), 'approved');
+  assert.equal(await vm.approve(), 'not-ready');
+});
+
+test('a second approve while the first is still signing does not sign twice', async () => {
+  let release; let calls = 0;
+  const vm = new ApproveViewModel(approver(), pending(), spyProof('key'), () => { calls++; return new Promise((r) => { release = r; }); }, () => NOW);
+  vm.enterCode1('123 456');
+  vm.onJoinerOk();
+  const first = vm.approve();
+  assert.equal(await vm.approve(), 'not-ready');
+  release(true);
+  assert.equal(await first, 'approved');
+  assert.equal(calls, 1);
+});
+
+test('an id that is a number shows the placeholder instead of throwing', () => {
+  const vm = new ApproveViewModel(approver(), pending({ id: 12345678901234567890 }), spyProof('key'), () => true, () => NOW);
+  assert.equal(vm.idShown, 'unknown');
+});
+
