@@ -562,7 +562,7 @@ exception. Assignments and rollout need separate briefs and review; this contrac
 | G8 | Windows app list/counters/revoke and pending/offline state; after G7 | Receiver counters, tombstone receipt, in-flight visibility and stale-state labeling |
 | G9 | Remote grant launch via signed FleetActionEnvelope v1; after G5 and existing own-peer messaging trust, no separate roster gate (Nov 21, 12:50 PT) | Wrong account/audience, envelope replay, stolen id, offline target and kill switch; receiver-side grant and same caps as local |
 | G10 | Remote grant stop and multi-receiver issuance partitions; after G6/G8/G9 | Generation/target fence, quota sums, no borrowing, partial issue/revoke receipts |
-| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation |
+| G11 | Fleet thin wrappers after app/local/remote acting proof; Allow-all policy belongs to G5, not a separate extension. Two slices: A launch-remote (after G9c2 and Host-transport evidence), B end wrappers (after G10); see [fleet-grants-cli.md](fleet-grants-cli.md) "G11 slices" | Policy-only wrappers call host verbs with explicit permissions; never HA fallback or person-confirmation automation; no wrapper is removed (G12) |
 | G12 | Retire wrappers/tools sync after approved cutover evidence; phone grant UI remains later | No surviving launch/end HA submissions; preserve separately authorized messaging and all person guards |
 
 Retirement targets are Fleet `launch-remote.ps1` launch-submit/MQTT/HA presses,
