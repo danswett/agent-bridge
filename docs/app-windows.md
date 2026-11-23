@@ -69,7 +69,9 @@ The record contains only opaque session/turn keys and scroll geometry, not trans
 This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
 following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
-records the first such storm with its count: a mitigation against a layout cycle (#3782), not a proven fix.
+records the first such storm with its count. They also run once, at low priority, after the layout event rather than in it,
+because setting the panel's scroll mode or the scroll offset there starts the next layout pass; layout that a correction itself
+causes runs it at most once more in that turn (#3782, the suspect named in #3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for

@@ -23,6 +23,29 @@ public sealed class LayoutStormGuardTests
     }
 
     [Fact]
+    public void The_peak_is_the_most_passes_seen_in_one_window()
+    {
+        var time = new FakeTimeProvider(); var guard = new LayoutStormGuard(time);
+        for (var i = 0; i < 5; i++) { guard.Pass(out _); }
+        time.Advance(TimeSpan.FromSeconds(2));
+        for (var i = 0; i < 3; i++) { guard.Pass(out _); }
+        Assert.Equal(5, guard.Peak);
+        Assert.Equal(0, guard.Storms);
+    }
+
+    [Fact]
+    public void Each_window_that_goes_over_the_limit_is_one_storm()
+    {
+        var time = new FakeTimeProvider(); var guard = new LayoutStormGuard(time);
+        for (var i = 0; i < 100; i++) { guard.Pass(out _); }
+        Assert.Equal(1, guard.Storms);
+        time.Advance(TimeSpan.FromSeconds(2));
+        for (var i = 0; i < LayoutStormGuard.Limit + 1; i++) { guard.Pass(out _); }
+        Assert.Equal(2, guard.Storms);
+        Assert.Equal(100, guard.Peak);
+    }
+
+    [Fact]
     public void A_quiet_second_ends_the_storm()
     {
         var time = new FakeTimeProvider(); var guard = new LayoutStormGuard(time);

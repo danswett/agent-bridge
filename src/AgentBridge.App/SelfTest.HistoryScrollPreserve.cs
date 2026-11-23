@@ -233,6 +233,10 @@ static partial class SelfTest
                     check(originalRows.Where(r => r.Id != mark.Id).All(old => currentRows.Any(row => ReferenceEquals(row, old))),
                         "scroll-preserve behavior: a late mark changes only its own stored row");
                 }
+                // The pinned, held and updated conversation (#3782): its corrections run after layout, not inside it.
+                AppLog.Write($"self-test: scroll-preserve layout passes: peak {view.ConversationLayoutPeak} in a second, {view.ConversationLayoutStorms} storms");
+                check(view.ConversationLayoutStorms == 0,
+                    $"scroll-preserve layout: pinned, held and updated, the conversation never reaches {LayoutStormGuard.Limit} layout passes in a second (peak {view.ConversationLayoutPeak})");
             }
             finally
             {

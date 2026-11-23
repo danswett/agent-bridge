@@ -12,6 +12,11 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
     // Monotonic stamps: a wall-clock step (sync, DST, manual) must not end or extend a storm.
     readonly Queue<long> passes = [];
 
+    // The most passes seen in one window, and how many times a window went over the limit: the self-test reads both.
+    public int Peak { get { lock (passes) { return peak; } } }
+    public int Storms { get { lock (passes) { return storms; } } }
+    int peak, storms;
+
     // True when this pass may run its corrections; count is the passes in the window, this one included.
     public bool Pass(out int count)
     {
@@ -21,6 +26,8 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
             while (passes.Count > 0 && clock.GetElapsedTime(passes.Peek(), now) >= Window) { passes.Dequeue(); }
             passes.Enqueue(now);
             count = passes.Count;
+            peak = Math.Max(peak, count);
+            if (count == Limit + 1) { storms++; }
             return count <= Limit;
         }
     }
