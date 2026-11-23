@@ -6,7 +6,7 @@ namespace AgentBridge.Host.Delivery.AgentReplies;
 // A prompt from the person that an agent recorded, by the offset of the line recording it,
 // which is what identifies it: two replies of the same words are two prompts. Files are the
 // paths the agent took in as attachments of it. At is the line's own timestamp, for timings only.
-public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files, DateTimeOffset? At = null);
+public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files, DateTimeOffset? At = null, bool Queued = false);
 
 public sealed record AgentPromptsSince(bool Readable, IReadOnlyList<AgentPrompt> Prompts, long ScannedTo);
 
