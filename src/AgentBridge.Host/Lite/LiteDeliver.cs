@@ -183,7 +183,7 @@ public sealed class LiteDeliver(
                 case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false); break;
                 case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); break;
                 default:
-                    if (keysWent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
+                    if (keysWent || r is not null && r.KeyDisposition != ReplyKeyDisposition.NoKeysSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
                     break;
             }
             // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
@@ -209,7 +209,8 @@ public sealed class LiteDeliver(
             AnswerOutcome.Delivered => new LiteDelivery(true, null),
             // Keys went but nothing was recorded: the sender is told unconfirmed (never delivered, never resent; docs/message-delivery.md, #3856).
             AnswerOutcome.Unconfirmed => new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed },
-            AnswerOutcome.Busy => Refused(LiteCodes.Busy),
+            // A non-delivered result whose keys may have gone is unconfirmed, never a refusal the sender could answer with a fallback (NoKeysSent, #3856).
+            _ when result.KeyDisposition != ReplyKeyDisposition.NoKeysSent => new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed },            AnswerOutcome.Busy => Refused(LiteCodes.Busy),
             AnswerOutcome.Stale => Refused(Signed() ? (byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession) : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };

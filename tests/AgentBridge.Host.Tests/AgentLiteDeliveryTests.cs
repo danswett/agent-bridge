@@ -1057,7 +1057,7 @@ public sealed class AgentLiteDeliveryTests
     [InlineData(AnswerOutcome.Refused, ReplyRefusal.Other, "notReplyTarget")]
     public async Task A_replier_that_does_not_deliver_is_reported_with_its_own_refusal_code(AnswerOutcome outcome, ReplyRefusal refusal, string code)
     {
-        var f = new Fixture { Outcome = outcome, Refusal = refusal }; f.Launch(LaunchProtocol.Ask);
+        var f = new Fixture { Outcome = outcome, Refusal = refusal, KeysGo = false }; f.Launch(LaunchProtocol.Ask);   // refused before any key: NoKeysSent keeps the code
         Assert.Equal(new LiteDelivery(false, code), await Send(f));
     }
     [Fact]
