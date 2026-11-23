@@ -320,6 +320,31 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     [Fact]
+    public async Task A_log_sink_that_throws_never_skips_saving_a_renewed_policy()
+    {
+        var body = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = new ReplyHandler(request => new(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(request.RequestUri!.AbsoluteUri == GitHubHaltListSource.Releases ? Metadata("2349", body) : body),
+        });
+        var http = new HttpClient(handler);
+        var discovery = new ReleaseDiscovery(folder, handler, time, random: () => 0, log: _ => throw new NotSupportedException("a sink that throws"));
+        clients.AddRange([http, discovery]);
+        var source = new GitHubHaltListSource(http, discovery);
+
+        await source.ReadAsync(default);
+
+        Assert.True(source.Snapshot.Fresh);
+        // Saved: a second reader of the same folder has it at once, without asking GitHub.
+        var noRequests = new ReplyHandler(_ => throw new InvalidOperationException("no request was expected"));
+        var again = new ReleaseDiscovery(folder, noRequests, time, random: () => 0);
+        var second = new HttpClient(noRequests);
+        clients.AddRange([second, again]);
+        await new GitHubHaltListSource(second, again).ReadAsync(default);
+        Assert.Empty(noRequests.Requests);
+    }
+
+    [Fact]
     public async Task A_policy_that_is_not_renewed_logs_no_renewal_line()
     {
         var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
@@ -478,7 +503,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
     }
 
     // halts.json is on the newest release, so the policy list is one small page: a hundred releases of a dozen assets each ran
-    // past the 4 MiB cap and the read failed outright, on every machine (VM2, v0.1.7522).
+    // past the 4 MiB cap and the read failed outright, on a machine running v0.1.7522.
     [Fact]
     public void The_policy_list_is_the_first_ten_releases_on_GitHub_and_on_the_relay()
     {

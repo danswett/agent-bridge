@@ -20,7 +20,7 @@ on a person's discovery check (`pressed`), and on fallback. Rate-limit-only rela
 grace is bounded to 24 hours; it is not an independent freshness authority.
 
 `HaltPolicy.cs` separately asks
-`https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10`: the first ten releases, because `halts.json` is on the newest and a hundred releases of a dozen assets each ran past the 4 MiB cap, so the read failed on every machine (VM2, v0.1.7522, Nov 23).
+`https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10`: the first ten releases, because `halts.json` is on the newest and a hundred releases of a dozen assets each ran past the 4 MiB cap, so the read failed on every machine (seen on one machine running v0.1.7522, Nov 23).
 `GitHubHaltListSource`, in `ReleaseEligibility.cs`, selects the highest numeric
 canonical `v0.1.N` with `draft: false`, including pre-releases. It requires exactly
 one asset named `halts.json` in that release, its exact repository/tag
@@ -67,7 +67,7 @@ that same unsigned response is not an independent trust root.
 ## Interim: renew from the relay's list while GitHub's policy read fails (owner-approved Nov 22 for refusals; widened Nov 23)
 
 The signed anchor below is slices 2 and 3 and is not built. Until it is, the policy read has a
-second source so a rate-limited machine does not age out of protection (VM2 logged "GitHub policy
+second source so a rate-limited machine does not age out of protection (a machine logged "GitHub policy
 unavailable; stored policy was not renewed" all day, and its release-list relay grace ends 24 hours
 after GitHub last answered).
 
@@ -86,8 +86,8 @@ GitHub last answered here, so its six hours of freshness (also at action time, i
 never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
 the read. GitHub's own answer always wins, and it is asked first every hour.
 
-**Widened Nov 23 (Engineering R8b, P0 on VM2, v0.1.7522): needs the owner's or Chief's acknowledgement.** The Nov 22 approval below
-names refusals (403 and 429). On VM2 the policy read failed for another reason (its 100-release list was past the 4 MiB cap, a
+**Widened Nov 23 (Engineering R8b, P0 on one machine, v0.1.7522): needs the owner's or Chief's acknowledgement.** The Nov 22 approval below
+names refusals (403 and 429). On that machine the policy read failed for another reason (its 100-release list was past the 4 MiB cap, a
 status-0 failure), so no refusal ever reached the relay and the policy aged out; the same would hold for a 5xx or a timeout. The
 relay is now tried on any failed GitHub policy read, with every bound above unchanged (open grace, `Age` at most an hour, the carrier
 downloaded from `github.com`, never clears a halt, stamped inside the grace), and the unrenewed line names what GitHub actually
@@ -100,9 +100,11 @@ beside its lock file), under the key `haltPolicy`: `policy` (the verified releas
 counts from; fresh for six hours after it, never past the relay grace), `notBefore` (the next ask), `attemptedAt`, `attempt`,
 `verified` and `eTag`; `gitHubAnsweredAt` beside it is when GitHub last answered the release list here. Every successful renewal
 also logs ONE line: `update policy: renewed from GitHub, release 0.1.N, At=<ISO time>` (`GitHub (not modified)` for a 304, and
-`the relay's list, its copy <age> old; <what GitHub answered>` for the relay path). A read that renews nothing logs the
-`GitHub policy unavailable (<what GitHub answered>); stored policy was not renewed` line instead, so a machine that is renewing
-shows the first and never the second.
+`the relay's list, its copy <age> old; <what GitHub answered>` for the relay path). A read that does not renew logs the
+`GitHub policy unavailable (<what GitHub answered>); stored policy was not renewed` line instead. Either can appear on a healthy
+machine (one failed attempt during an outage, with the relay or the next hourly try renewing it), so read a machine by its renewal
+lines: a policy that is current has a renewal line within the last six hours, and one with only `not renewed` lines for longer than
+that is the stale case.
 
 **Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay

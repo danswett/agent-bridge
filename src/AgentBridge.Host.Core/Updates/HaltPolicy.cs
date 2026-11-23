@@ -11,7 +11,7 @@ public sealed partial class ReleaseDiscovery
 {
     public static readonly TimeSpan PolicyInterval = TimeSpan.FromHours(1);
     // The first ten releases: halts.json is on the newest, and a hundred releases of a dozen assets each ran past PolicyLargest, so
-    // the read failed on every machine (VM2, v0.1.7522). A newest release outside the first ten renews nothing (fail closed).
+    // the read failed on a machine running v0.1.7522. A newest release outside the first ten renews nothing (fail closed).
     public const string HaltPolicyList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10";
     // The relay's copy of the same list (the Worker serves per_page 1-100), read only while GitHub's policy read fails and the relay grace is open.
     public const string CdnPolicyList = "https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10";
@@ -154,8 +154,12 @@ public sealed partial class ReleaseDiscovery
 
     // The fleet's positive signal: ONE info line on every successful renewal, with where it came from, the release the policy
     // names and the time it now counts from (At; it is fresh for six hours from it).
-    void Renewed(string from, HaltPolicyCache policy) =>
-        log?.Invoke($"update policy: renewed from {from}, release 0.1.{policy.Policy?.Release}, At={policy.At:O}");
+    // A log sink that throws never skips what follows: the renewed policy is saved after this, whatever the sink does.
+    void Renewed(string from, HaltPolicyCache policy)
+    {
+        try { log?.Invoke($"update policy: renewed from {from}, release 0.1.{policy.Policy?.Release}, At={policy.At:O}"); }
+        catch (Exception) { }
+    }
 
     // What GitHub really did, for the log: the status it sent, or that nothing came back (a timeout, a broken connection or a body past the cap).
     static string GitHubSaid(Answer answer) => answer.Status == 0 ? "GitHub gave no answer"
