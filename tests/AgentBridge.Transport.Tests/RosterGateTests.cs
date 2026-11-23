@@ -110,6 +110,34 @@ public class RosterGateTests
         Assert.Equal([$"{app.Id}:ping", $"{app.Id}:senior"], asked);
     }
 
+    // A gate that cannot answer is not an approval: it fails closed, and the peer is told the same words as for any refusal, never the
+    // exception's text.
+    [Fact]
+    public async Task A_gate_that_throws_refuses_over_XX_and_IK_and_says_only_approve_this_machine()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var lifetime = relay;
+        var (handler, runs) = Counting();
+        host.Hub.Handler = handler;
+        host.Hub.EarlyOps = ["ping"];
+        app.Hub.IkPatience = TimeSpan.FromSeconds(30);
+        app.Hub.KnownPeers = new KnownResponders();
+        await app.Hub.CloseAsync(await app.Hub.OpenAsync(host.Id));
+        host.Hub.RosterGate = (ch, op) => throw new InvalidOperationException("secret roster detail");
+
+        var xx = await (await app.Hub.OpenAsync(host.Id)).RequestAsync("sessions.list");
+        var ik = await app.Hub.OpenAsync(host.Id, early: new EarlyRequest("ping"));
+        var early = await ik.RequestAsync("ping");
+
+        foreach (var reply in new[] { xx, early })
+        {
+            Assert.False(reply.GetProperty("ok").GetBoolean());
+            Assert.Equal(ChannelHub.NotApproved, reply.GetProperty("error").GetString());
+            Assert.DoesNotContain("secret", reply.GetRawText());
+        }
+        Assert.Equal(0, runs());
+    }
+
     // "Off is today's behavior": with no gate, and with a gate that approves everyone, the frames the relay carries for an
     // open and two requests are the same in kind and length as before this slice (the golden below was recorded on main
     // before the gate existed). The handshake's introductions are not changed in any mode here: that is a later slice.

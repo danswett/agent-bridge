@@ -112,7 +112,12 @@ public sealed class ChannelHub
     // The roster gate (RosterGate), asked per op; refused, the handler never runs and the peer is told NotApproved.
     void RequireApproved(SecureChannel ch, string op)
     {
-        if (RosterGate is { } gate && !gate(ch, op)) { throw new InvalidOperationException(NotApproved); }
+        if (RosterGate is not { } gate) { return; }
+        // A gate that cannot answer is not an approval: any failure refuses, and the peer is told only NotApproved.
+        bool approved;
+        try { approved = gate(ch, op); }
+        catch (Exception e) when (e is not OutOfMemoryException) { approved = false; }
+        if (!approved) { throw new InvalidOperationException(NotApproved); }
     }
 
     public void RevalidatePeers()
