@@ -51,7 +51,7 @@ export class EnrollmentLockout {
 // The joining device's side: it commits to its nonce before it sees the approver's, shows code 1, and checks code 2.
 export class EnrollmentJoiner {
   #account; #h; #lockout; #now; #expires; #nN; #commit;
-  #transcript = null; #code1 = null; #code2 = null; #committed = false; #matched = false; #ended = false;
+  #transcript = null; #code1 = null; #code2 = null; #taking = false; #committed = false; #matched = false; #ended = false;
 
   // `expires` (ms) is an earlier deadline than the five minutes, such as the sign-in's own.
   static async create(account, h, lockout, now, { nonce = randomNonce(), expires = null } = {}) {
@@ -73,12 +73,15 @@ export class EnrollmentJoiner {
 
   // A → N: the offer. Returns the reveal (N's nonce); N then shows code 1.
   async onOffer(nA) {
-    if (!this.#committed || this.#transcript !== null || this.#lockout.isBlocked('attempt') || this.#over() || !bytes(nA, NONCE_BYTES)) return null;
-    const t = await transcriptOf(this.#account, this.#h, nA, this.#nN);
-    this.#code1 = await code1Of(t);
-    this.#code2 = await code2Of(t);
-    this.#transcript = t;
-    return this.#nN;
+    if (!this.#committed || this.#transcript !== null || this.#taking || this.#lockout.isBlocked('attempt') || this.#over() || !bytes(nA, NONCE_BYTES)) return null;
+    this.#taking = true; // taken before the first await: two offers at once must not both be answered
+    try {
+      const t = await transcriptOf(this.#account, this.#h, nA, this.#nN);
+      const [c1, c2] = [await code1Of(t), await code2Of(t)];
+      if (this.#over()) return null;
+      [this.#code1, this.#code2, this.#transcript] = [c1, c2, t];
+      return this.#nN;
+    } finally { this.#taking = false; }
   }
 
   get code1Shown() { return this.#transcript === null ? null : shown(this.#code1); }
@@ -89,7 +92,7 @@ export class EnrollmentJoiner {
     if (this.#matched) return 'match';
     if (this.#transcript === null) return 'ended';
     if (this.#lockout.isBlocked('attempt')) return 'locked';
-    if (matches(this.#code2, input)) { this.#matched = true; return 'match'; }
+    if (matches(this.#code2, typeof input === 'string' ? input : '')) { this.#matched = true; return 'match'; }
     if (this.#lockout.recordWrong('attempt')) { this.#ended = true; return 'ended'; }
     return 'wrong';
   }

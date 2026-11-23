@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rosterModeVisible, openDeviceApproval, EnrollmentTexts } from '../../js/device-approval.js';
 import { JoinViewModel } from '../../js/join-view-model.js';
+import { EnrollmentLockout, EnrollmentJoiner } from '../../js/enrollment-exchange.js';
 
 // The exchange stands in for the roster library's: it answers the way the library does (match, wrong, locked, ended).
 const joiner = (over = {}) => ({
@@ -100,14 +101,25 @@ test('the gate, the texts and the join model sign nothing: none imports a signin
   }
 });
 
-test('after a lock a new commit starts clean: the old code 1 and fingerprint are gone and the next offer is taken', async () => {
+test('a lock after the offer is final for the model: a new attempt is a new model', async () => {
   const ex = joiner({ results: ['locked'] });
   const vm = await joining(ex);
   assert.equal(vm.submit('1'), 'locked');
-  assert.deepEqual([vm.state, vm.code1 !== ''], ['locked', true]);
+  assert.equal(vm.commit(), null);
+  assert.deepEqual([vm.state, vm.statusText], ['locked', EnrollmentTexts.LOCKED]);
+});
+
+test('over the real joiner a lock after the offer cannot be restarted and a model never answers two offers', async () => {
+  const c = { t: 1_000_000 };
+  const lock = new EnrollmentLockout('ended-attempts', () => c.t);
+  const real = await EnrollmentJoiner.create('a', new Uint8Array(32), lock, () => c.t);
+  const vm = new JoinViewModel(real);
   assert.ok(vm.commit());
-  assert.deepEqual([vm.state, vm.code1, vm.fingerprint, vm.statusText], ['waiting-for-approver', '', '', '']);
-  assert.ok(await vm.onOffer(new Uint8Array([7])));
+  assert.ok(await vm.onOffer(new Uint8Array(32).fill(1)));
+  vm.showGenesis(new Uint8Array(8));
+  for (let i = 0; i < 3; i++) vm.submit('000000');
+  assert.equal(vm.state, 'ended');
+  assert.equal(vm.commit(), null);
 });
 
 test('an offer that is already being taken is not taken twice', async () => {

@@ -14,11 +14,12 @@ export class JoinViewModel {
 
   // The commitment to send first; null while joining is locked (three ended attempts in an hour).
   commit() {
-    if (this.state !== 'not-started' && this.state !== 'locked') return null; // one attempt at a time; a new attempt is a new model
+    // A new attempt is a new model: only a lock refused at this very commit (code1 unset) can be tried again.
+    if (this.state !== 'not-started' && !(this.state === 'locked' && this.code1 === '')) return null;
     const commit = this.#joiner.commit();
     if (commit === null) { this.state = 'locked'; this.statusText = EnrollmentTexts.LOCKED; return null; }
     this.state = 'waiting-for-approver';
-    this.code1 = ''; this.fingerprint = ''; this.statusText = ''; // a new attempt after a lock starts clean
+    this.statusText = '';
     return commit;
   }
 

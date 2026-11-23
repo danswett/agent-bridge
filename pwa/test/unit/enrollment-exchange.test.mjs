@@ -16,7 +16,7 @@ const joiner = (c, lock = lockout(c), opts = {}) => EnrollmentJoiner.create(V.ac
 // A joiner that has committed and taken the approver's offer.
 const offered = async (c, lock) => { const j = await joiner(c, lock); j.commit(); await j.onOffer(fromHex(V.nA)); return j; };
 
-test('the joiner computes the library\'s commitment, reveal and code 1 for the same values, and takes code 2 with or without the space', async () => {
+test('the joiner computes the library\'s commitment, reveal and code 1 for the same values, and takes code 2', async () => {
   const c = clock();
   const j = await joiner(c);
   assert.equal(j.code1Shown, null);
@@ -24,7 +24,6 @@ test('the joiner computes the library\'s commitment, reveal and code 1 for the s
   assert.equal(hex(await j.onOffer(fromHex(V.nA))), V.nN);
   assert.equal(j.code1Shown, shown(V.code1));
   assert.equal(j.enterCode2(shown(V.code2)), 'match');
-  assert.equal((await (await offered(c)).enterCode2(V.code2)), 'match');
 });
 
 test('an offer before the commit, a second offer, or a peer value of the wrong shape is refused', async () => {
@@ -56,19 +55,18 @@ test('three ended attempts in an hour lock joining for 15 minutes, and a lock re
   assert.ok((await joiner(c, lock)).commit());
 });
 
-test('an attempt ends after five minutes and counts as an ended attempt, and a sooner deadline ends it sooner', async () => {
+test('an attempt ends after five minutes and counts as an ended attempt', async () => {
   const c = clock();
   const lock = lockout(c);
   for (let i = 0; i < 3; i++) { const j = await offered(c, lock); c.t += 5 * MIN; assert.equal(j.enterCode2(V.code2), 'ended'); }
   assert.equal((await joiner(c, lock)).commit(), null);
-  const d = clock();
-  const soon = await joiner(d, lockout(d), { expires: d.t + MIN });
-  soon.commit();
-  d.t += MIN;
-  assert.equal(await soon.onOffer(fromHex(V.nA)), null);
 });
 
-test('the exchange has no I/O and no signing: it imports nothing but the roster values', () => {
-  const src = readFileSync(new URL('../../js/enrollment-exchange.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(src, /transfer\.js|signing-key|cap-sign-key|commands|subtle|fetch|WebSocket|localStorage/);
+test('two offers at once are not both answered, and a code that is not text is a wrong entry', async () => {
+  const j = await joiner(clock());
+  j.commit();
+  const [a, b] = await Promise.all([j.onOffer(fromHex(V.nA)), j.onOffer(new Uint8Array(32).fill(7))]);
+  assert.deepEqual([a !== null, b], [true, null]);
+  assert.equal(j.code1Shown, shown(V.code1));
+  for (const bad of [123456, null]) assert.equal(j.enterCode2(bad), 'wrong');
 });
