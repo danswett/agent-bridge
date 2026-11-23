@@ -10,8 +10,9 @@ permission. No machine name appears here or in any record the run keeps.
 ## Roles: every step names who presses
 
 - **SRE** runs the evidence, presses every control the run needs that is not listed under OWNER, and keeps the raw records.
-- **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy.
-- **OWNER** is live for exactly two things: **the launch grant (S1)** and **each induced host restart or relay reconnect (S8)**, plus
+- **Deploys are SRE-approved** (owner decision, about 08:27 PT): the owner is never asked to approve a deploy. But the host app update installs
+  through the app, and **the restart that finishes it is OWNER-only** (guard 67): the owner presses that restart on each disposable host.
+- **OWNER** is live for exactly these: **the launch grant (S1)**, **the restart that finishes each deploy (S-1)**, **each induced host restart or relay reconnect (S8)**, plus
   a restart if a lost-response fault needs one (S5). The owner types nothing and runs no terminal step: they use the host's own person
   surface (the app) when SRE asks.
 - **Quality** attests the receipt against the bars; **the lead** approves the flip from the attested receipt.
@@ -25,8 +26,9 @@ time. Anything else is out of bounds and stops the run.
 | Action | Who presses | Approved by |
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
-| Restart a disposable host (S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop and restore a disposable host's relay connection (S5, S8) | SRE, with the owner's approval of the event | The owner, per event, before it happens |
+| Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
+| Drop a disposable host's relay connection, then restore it (S5, S8) | SRE, running exactly these two commands on that host and only after the owner approves that event. Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
+| Cut the response read to the disposable HA (S5) | SRE, the same two commands with the disposable HA's address, on the disposable HA's side | SRE; the disposable HA belongs to the run, so no fleet host changes |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 
@@ -36,9 +38,12 @@ Home Assistant (the comparison runs on a disposable HA only).
 ## Preconditions (SRE checks, records each)
 
 1. The G9 stack is merged on main and every disposable host runs a build that contains it, deployed at S-1 (SRE-approved, never the owner). Record each host's build head.
-2. **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3, and 3 source-target pairs, each run in both directions.
-   A host with any live session that is not the run's own is not disposable.
-3. A **disposable HA instance** exists for the comparison; the real one is never used.
+2. **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3 from the fleet's existing idle VMs, and 3 source-target pairs,
+   each run in both directions. If fewer than 3 are idle, **the run waits**: draining another lead's sessions, or creating a new VM, needs the
+   owner's explicit approval first, and the lead who owns a host's sessions ends them (by list) before it counts as disposable. SRE verifies each
+   host shows no live session that is not the run's own. A host with any other live session is not disposable.
+3. A **disposable HA instance** exists for the comparison, provisioned by **SRE** from an existing disposable HA (or its existing image), with **no
+   new account and no new credential**. If none exists, the run waits and the owner is asked; nothing is improvised. The real one is never used.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
 5. **The run plan is frozen before request 1** and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
    every coverage floor, the live-session cap, the unique launch names (from the fixed `SG Builder <n>` / `SG Worker <n>` list), the batch
@@ -67,7 +72,7 @@ sha256, and the load readings before and after.
 
 | Step | Who | What | Evidence recorded |
 |---|---|---|---|
-| **S-1** | **SRE approves and deploys** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook | Each host's build head, the gate results, the health check, and the approving SRE |
+| **S-1** | **SRE approves and installs; OWNER presses the restart** | **Deploy** the G9 build to each disposable host. Deploys never need the owner (owner decision, about 08:27 PT): SRE approves each one after the gates pass, namely the Quality merge, staging and smoke green, and a health check, with rollback by the deploy runbook. The update installs through the app; **the OWNER presses the restart** on each host, once, when SRE asks | Each host's build head, the owner's restart press and its time, the gate results, the health check, and the approving SRE |
 | **S0** | SRE | Freeze the run plan (Preconditions 5) and take the baseline: build heads, session lists on every host (empty), the receiver counters, the HA fallback counter, load | The plan, the baseline reads |
 | **S1** | **OWNER** (SRE asks) | The owner issues and confirms the launch grant for the run in the app, after seeing its scope and caps | The grant id, scope and caps (no secret) |
 | **S2** | SRE | **Smoke:** one Host launch and its HA twin on one pair. Stop if it does not start and register exactly once | Both receipts, the three double-launch counts |
