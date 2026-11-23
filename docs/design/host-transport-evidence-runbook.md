@@ -27,7 +27,7 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly these two commands per event and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
+| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **NOT COVERED: there is no disposable HA**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says NOT COVERED |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
@@ -40,14 +40,49 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
 
 - **Its own approval.** It is launched later as its **own owner approval through the Chief**, not as part of any other approval here. This runbook does not
   launch it and the run does not start until it exists.
-- **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the two commands in the table above, the drop and then the
-  restore, with that event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
+- **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the command block below (arm the dead-man, drop, scope check, restore, disarm), in order, with the
+  event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
   any setting, trust, credential, key or ACL.
 - **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on  TCP 443, so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action  change. Every rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
   that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 Home Assistant (there is no disposable HA, so the HA comparison and the fallback checks are NOT COVERED).
+
+#### The final command block (what the owner sees)
+
+The values come from the frozen plan: **the address list** is the set of remote addresses the AgentBridge host process is connected to on TCP 443 at S0,
+read by SRE (a read, no elevation: `Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 | Select-Object -ExpandProperty RemoteAddress -Unique`);
+**N = 10 minutes**; **the dead-man task name is `SG-relay-drop-revert`**. Nothing else is in the block.
+
+Pre-check, reads only, recorded before the first event on each host, and the RDP access path (inbound 3389 or Azure Bastion) confirmed up:
+
+```powershell
+Get-NetFirewallProfile | Select-Object Name, DefaultInboundAction, DefaultOutboundAction          # recorded; must be unchanged after every event
+Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-NetFirewallPortFilter).LocalPort -eq 3389 }   # RDP inbound rules, recorded
+```
+
+Per event, in this order, by the elevated session, after the owner approves that event:
+
+```powershell
+# 1. Arm the dead-man FIRST: it deletes the whole group after N minutes whatever happens to the session.
+$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
+Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(10)) -User 'SYSTEM' -RunLevel Highest
+# 2. Drop: outbound only, host program AND the relay addresses on TCP 443, in the one group.
+New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>
+# 3. Scope check (read): must show only Outbound, the host program, TCP 443, and no 3389.
+Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ | Get-NetFirewallApplicationFilter).Program; ($_ | Get-NetFirewallPortFilter) | Select-Object Protocol, LocalPort, RemotePort }
+# 4. Restore, one command:
+Remove-NetFirewallRule -Group 'SG-relay-drop'
+# 5. Disarm the dead-man:
+Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false
+```
+
+**RDP is unaffected** because the rule is outbound only and scoped to the host program and the relay addresses: nothing inbound and no other program is
+blocked, and the profile defaults are untouched. SRE re-reads the profile defaults and the RDP inbound rules after every event and they must match the
+pre-check, otherwise the run stops. **The exact rollback**, if anything looks wrong at any point, is the same single command
+`Remove-NetFirewallRule -Group 'SG-relay-drop'`, then `Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false`; even if the session is lost,
+the dead-man task runs that removal after N minutes.
 
 ## Preconditions (SRE checks, records each)
 
