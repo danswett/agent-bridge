@@ -851,7 +851,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_subject_the_grant_does_not_name_is_scope_and_a_stale_generation_is_refused()
+    public async Task A_subject_the_grant_does_not_name_is_scope_and_the_senders_generation_is_not_authority()
     {
         using var key = P256KeyPair.Generate();
         var r = OpenRemote(key);
@@ -863,7 +863,19 @@ public sealed class AgentPipeLaunchTests : IDisposable
             DateTimeOffset.UtcNow.AddSeconds(60), FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(
                 new FleetLaunchInput(1, Guid.Parse(request), r.Grant.Id, "SG Builder 266", "App", "claude", Model: "small", Effort: "medium",
                     Context: "default", Permissions: "ask", Prompt: "hello"), ProtocolJson.Options))));
-        Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, stale)).Reason);
+        // A different claimed generation changes nothing: the receiving host's own current grant decides.
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.Receiver.ReceiveAsync(r.Channel, stale)).Result.Outcome);
+        Assert.Equal(1, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task Revoking_the_grant_between_prepare_and_dispatch_refuses_a_remote_launch_as_grant_revoked()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        launcher.BeforeDispatch = () => Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
+        Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
         Assert.Equal(0, launcher.Launches);
     }
 
