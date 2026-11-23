@@ -7,7 +7,7 @@ const LATENCY_MS = 400;
 
 async function start(page, { short = false, height = 800 } = {}) {
   await page.setViewportSize({ width: 1440, height });
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate(({ ID, count, latency, short }) => {
     const demo = window.agentBridgeDemo;

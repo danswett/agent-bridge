@@ -8,7 +8,7 @@ const EXACT = /\d{1,2}:\d{2}:\d{2}/;
 
 async function turns(page) {
   await page.clock.install({ time: new Date() });
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await open(page, 'signin-1');
   return view(page, 'signin-1').locator('.history-turn').first();

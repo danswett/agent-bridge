@@ -185,9 +185,9 @@ test('a held kind this device does not know is said as unknown and never named',
 });
 
 const reasonLines = [
-  ['pinning-off', 'Diagnose needs device approval turned on \u00B7 the owner of DEV-VM1 (shadow) can turn it on'],
-  ['no-person-lease', 'Diagnose needs this device approved \u00B7 the owner of DEV-VM1 (shadow) can approve it'],
-  ['not-offered', 'Diagnose is not offered here \u00B7 the owner of DEV-VM1 (shadow) can check its settings'],
+  ['pinning-off', 'Diagnose needs device approval turned on \u00B7 the owner of BOX-A01 (shadow) can turn it on'],
+  ['no-person-lease', 'Diagnose needs this device approved \u00B7 the owner of BOX-A01 (shadow) can approve it'],
+  ['not-offered', 'Diagnose is not offered here \u00B7 the owner of BOX-A01 (shadow) can check its settings'],
 ];
 
 for (const [reason, line] of reasonLines) {
@@ -264,7 +264,7 @@ test('readOnly set with an unknown newer-host reason shows no hint and leaves th
   await setReason(page, SHADOW, 'future-diagnostics-reason');
   const shadow = item(page, SHADOW);
   await expect(shadow.locator('.machine-diagnose-hint')).toHaveCount(0);
-  await expect(shadow.locator('.machine-name')).toHaveText('DEV-VM1 (shadow)');
+  await expect(shadow.locator('.machine-name')).toHaveText('BOX-A01 (shadow)');
   await expect(shadow.locator('.machine-button')).toBeVisible();
   expect(await demo(page, SHADOW, 'calls')).not.toContain('diagnostics.get');
 });

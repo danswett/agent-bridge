@@ -81,7 +81,7 @@ export const DOTS = /[\u00b7\u0387\u1427\u16eb\u2022\u2027\u2219\u22c5\u2e31\u2e
 const QUOTE = '[\\p{Pi}\\p{Pf}\\p{Quotation_Mark}\\u2032-\\u2037\\u2057\\u05f3\\u05f4\\u02b9-\\u02bc\\u02dd\\u02ee\\u275b-\\u275e\\u{1f676}-\\u{1f678}]';
 const QUOTES = new RegExp(QUOTE, 'gu');
 // "," and the commas drawn like it. A label read aloud (ui.md §9) joins its facts with ", ", so a
-// name with one of its own ("x, idle, DEV-VM2") would read as facts to a screen reader. The app's
+// name with one of its own ("x, idle, BOX-C02") would read as facts to a screen reader. The app's
 // DelegateLabel.Commas (#303's security review).
 const COMMAS = /[\u002c\u055d\u060c\u066b\u07f8\u1363\u1802\u1808\u201a\u2e41\u2e4c\u3001\ua4fe\ua60d\ua6f5\ufe10\ufe11\ufe50\ufe51\uff0c\uff64]/gu;
 // ";" and a run of . ! ? before whitespace or the end: a sentence stop to a screen reader. A dot

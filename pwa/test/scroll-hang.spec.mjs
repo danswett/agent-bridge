@@ -25,7 +25,7 @@ test.use({
 });
 
 async function openLong(page) {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate((turnCount) => {
     const at = new Date().toISOString();
@@ -105,7 +105,7 @@ test('a scroll right after a new turn arrives responds within 100 ms', async ({ 
 });
 
 test(`scrolling a ${TURNS}-turn session on an iPhone never runs a task over ${BUDGET_MS} ms`, async ({ page }) => {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
   await page.evaluate((turnCount) => {
     const at = new Date().toISOString();

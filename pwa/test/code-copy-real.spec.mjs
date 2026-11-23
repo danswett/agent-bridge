@@ -67,9 +67,9 @@ for (const [what, code] of Object.entries(SAMPLES)) {
 }
 
 test('Copy puts the sign-in code on the clipboard, with its sheet open, and says Code copied', async ({ page }) => {
-  await page.goto('?demo=1&static=1&signin=1&name=DEV-VM1#/sessions');
+  await page.goto('?demo=1&static=1&signin=1&name=BOX-A01#/sessions');
   await page.waitForSelector('html[data-demo-ready]');
-  await page.getByRole('button', { name: 'Sign in to Copilot on DEV-VM1' }).click();
+  await page.getByRole('button', { name: 'Sign in to Copilot on BOX-A01' }).click();
   const sheet = page.locator('dialog.sign-in-sheet');
   await expect(sheet.locator('.sign-in-code')).toHaveText('WDJB-MJHT');
   // The sheet is modal: the page behind it is inert, so the paste field is inside it.
@@ -79,7 +79,7 @@ test('Copy puts the sign-in code on the clipboard, with its sheet open, and says
     field.setAttribute('aria-label', 'Paste here');
     d.append(field);
   });
-  await sheet.getByRole('button', { name: 'Copy code for Copilot on DEV-VM1' }).click();
+  await sheet.getByRole('button', { name: 'Copy code for Copilot on BOX-A01' }).click();
   await expect(sheet.locator('.sign-in-copied')).toHaveText('Code copied');
   expect(await pasted(page, sheet.locator('#paste-target'))).toBe('WDJB-MJHT');
 });
