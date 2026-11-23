@@ -34,6 +34,9 @@ param(
     [switch] $MainPush,
     [Parameter(Mandatory)]
     [string] $Base,
+    # The range the -Narrow jobs (app, app-installer) read, when it is wider than -Base: release debt (#1910) reaches back to the latest
+    # published release so earlier unpaid app changes still package, while every other job reads only -Base (#2454, item A). Empty: -Base.
+    [string] $PackagingBase = '',
     [Parameter(Mandatory)]
     [string] $Head,
     # The ci.yml jobs the plan gates; each gets a true or false output.
@@ -66,9 +69,9 @@ if ($FastRing) {
 # and each job's runners come from that.
 $platform = if ($FastRing) { 'linux-x64' } else { $null }
 
-function Select-Suites([int] $ring) {
+function Select-Suites([int] $ring, [string] $base = $Base) {
     $platformArgs = if ($platform) { @('--platform', $platform) } else { @() }
-    $json = (dotnet $tool select --repo $root --ring $ring --base $Base --head $Head @platformArgs) -join "`n"
+    $json = (dotnet $tool select --repo $root --ring $ring --base $base --head $Head @platformArgs) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "The selector failed (exit $LASTEXITCODE)." }
     $json | ConvertFrom-Json -AsHashtable
 }
@@ -77,6 +80,9 @@ function ConvertTo-JsonArray($items) { ConvertTo-Json -InputObject @($items) -Co
 
 $selection = Select-Suites $Ring
 $ci = $selection.jobs['ci.yml'] ?? @{}
+# What the -Narrow jobs read: the same selection, unless release debt widened their range.
+$packBase = if ($PackagingBase) { $PackagingBase } else { $Base }
+$packCi = if ($packBase -ceq $Base) { $ci } else { (Select-Suites $Ring $packBase).jobs['ci.yml'] ?? @{} }
 $suites = @($selection.suites)
 $ids = @($suites | ForEach-Object { $_.id })
 $productIds = @($ci['product'] ?? @())
@@ -103,24 +109,28 @@ function Test-NotOwn([string] $rule) {
 $Narrow = @($Narrow -split '[,\s]+' | Where-Object { $_ })
 # Ring 1's selection, for -Narrow and -CompareRing1 both.
 $ring1 = $null
-if ($Ring -gt 1 -and ($Narrow.Count -gt 0 -or $CompareRing1)) { $ring1 = Select-Suites 1 }
-$ring1Ci = if ($ring1) { $ring1.jobs['ci.yml'] ?? @{} } else { @{} }
+$packRing1 = $null
+if ($Ring -gt 1 -and ($Narrow.Count -gt 0 -or $CompareRing1)) {
+    $ring1 = Select-Suites 1
+    $packRing1 = if ($packBase -ceq $Base) { $ring1 } else { Select-Suites 1 $packBase }
+}
+$ring1Ci = if ($packRing1) { $packRing1.jobs['ci.yml'] ?? @{} } else { @{} }
 # ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a change
 # to either must still package the app, which the workflows-wide global trigger can't say.
 $packagingEdited = $false
-if ($ring1) {
-    $edited = @(git -C $root diff --name-only "$Base...$Head")
+if ($packRing1) {
+    $edited = @(git -C $root diff --name-only "$packBase...$Head")
     $packagingEdited = @($edited | Where-Object { $_ -eq '.github/workflows/ci.yml' -or $_ -like '.github/actions/install-trivy/*' }).Count -gt 0
 }
 function Test-OwnReason([string] $job) {
     if ($packagingEdited -and $job -in 'app', 'app-installer') { return $true }
     $own = @($ring1Ci[$job] ?? @())
-    @($ring1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
+    @($packRing1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
 }
 
 $outputs = [ordered]@{}
 foreach ($job in $Jobs) {
-    $runs = if ($job -in $Narrow -and $ring1) { Test-OwnReason $job } else { $ci.ContainsKey($job) }
+    $runs = if ($job -in $Narrow -and $packRing1) { Test-OwnReason $job } elseif ($job -in $Narrow) { $packCi.ContainsKey($job) } else { $ci.ContainsKey($job) }
     if ($MainPush -and $job -eq 'product' -and -not $whole -and $selection.nonProductOnly -eq $true) { $runs = $false }
     $outputs[$job] = if ($runs) { 'true' } else { 'false' }
 }

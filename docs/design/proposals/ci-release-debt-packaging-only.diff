@@ -1,0 +1,63 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index bae282f7..86902cde 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -232,6 +232,9 @@ jobs:
+             $readable = $LASTEXITCODE -eq 0
+             $latest = @($published | Where-Object { $_ -cmatch '^v\d+\.\d+\.\d+$' } | Sort-Object { [semver]$_.Substring(1) } -Descending | Select-Object -First 1)
+             $releaseKnown = $false
++            # Release debt widens only what packages (app, app-installer): their base reaches back to the latest published release, while every
++            # other job, and the whole-ring decision, read $base, the passed or in-flight base (#2454, item A).
++            $packagingBase = $base
+             if ($readable -and $latest.Count -eq 1) {
+               $releaseBase = git rev-parse "$($latest[0])^{commit}"
+               if ($LASTEXITCODE -eq 0 -and $releaseBase -cmatch '^[0-9a-f]{40}$') {
+@@ -239,14 +242,14 @@ jobs:
+                 if ($LASTEXITCODE -eq 0) {
+                   $releaseKnown = $true
+                   if ($known) {
+-                    $base = git merge-base $base $releaseBase
+-                    if ($LASTEXITCODE -ne 0 -or $base -cnotmatch '^[0-9a-f]{40}$') { $known = $false }
++                    $packagingBase = git merge-base $base $releaseBase
++                    if ($LASTEXITCODE -ne 0 -or $packagingBase -cnotmatch '^[0-9a-f]{40}$') { $known = $false }
+                   }
+                 }
+               }
+             }
+             if (-not $releaseKnown -or -not $known) {
+-              $known = $false; $base = 'HEAD^1'
++              $known = $false; $base = 'HEAD^1'; $packagingBase = 'HEAD^1'
+               "::warning title=plan::no proven CI/released ancestor for $env:SHA; the whole ring includes app packaging"
+             }
+             $said = if ($known) { "Main's change since ``$base``, covering passed CI and published $($latest[0]); unpaid app changes publish from this head." } else { "**No proven CI/released base**, so the whole ring runs." }
+@@ -261,10 +264,11 @@ jobs:
+           $whole = if (-not $known) { $true } elseif ($env:DRAFT -eq 'true') { $false } else { $touched.Count -gt 0 }
+           "whole-ring=$($whole.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+           "base=$base" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
++          "packaging-base=$(if ($packagingBase) { $packagingBase } else { $base })" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+           "base-known=$($known.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+           if ($env:EVENT -eq 'push') {
+             # What the judges read (merge rule, main_green, the train selector): the commit this run diffed from, and the in-flight parent
+-            # run it relied on to test only its own change (none when the base is a passed run or release debt widened it). An annotation, because the
++            # run it relied on to test only its own change (none when the base is a passed run). An annotation, because the
+             # judges already read a plan job's annotations through the API and a job output isn't served.
+             $recorded = git rev-parse $base
+             if ($LASTEXITCODE -ne 0) { throw "git rev-parse $base failed ($LASTEXITCODE)" }
+@@ -290,6 +294,8 @@ jobs:
+           WHOLE_RING: ${{ steps.whole-ring.outputs.whole-ring }}
+           # HEAD^1 on a pull request (its merge commit's base); on main, its last passed commit.
+           BASE: ${{ steps.whole-ring.outputs.base }}
++          # What app and app-installer read: the base, widened by release debt (main only).
++          PACKAGING_BASE: ${{ steps.whole-ring.outputs.packaging-base }}
+           BASE_KNOWN: ${{ steps.whole-ring.outputs.base-known }}
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+@@ -307,7 +313,7 @@ jobs:
+           } elseif ($env:EVENT -eq 'push' -and $env:BASE_KNOWN -eq 'true') {
+             # Main keeps every selected platform; proven docs/ordinary tests need no product run.
+             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
+-            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
++            ./quality/plan.ps1 -MainPush -Ring $ring -Base $env:BASE -PackagingBase $env:PACKAGING_BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app,app-installer -Jobs $jobs
+           } else {
+             # Unknown main base: HEAD^1 alone cannot prove earlier app changes were packaged.
+             # Keep full packaging, as on a manual whole-ring run.

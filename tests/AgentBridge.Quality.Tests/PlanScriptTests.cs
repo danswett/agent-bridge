@@ -47,6 +47,11 @@ public class PlanScriptTests
     public Task A_green_but_unpublished_app_change_is_carried_by_the_next_main_head(string changed) =>
         CheckPlan("push", changed, true, false, unpaidApp: true);
 
+    // The whole ring (a change under quality/) still packages an earlier unpaid app change: the packaging base reaches back to the release.
+    [Fact]
+    public Task A_whole_ring_run_still_packages_an_earlier_unpaid_app_change() =>
+        CheckPlan("push", "quality/notes.md", true, true, unpaidApp: true);
+
     [Theory]
     [InlineData("windows-latest", true)]
     [InlineData("windows-11-arm", true)]
@@ -190,6 +195,7 @@ public class PlanScriptTests
             start.Environment["DRAFT"] = "false";
             start.Environment["WHOLE_RING"] = wholeRing ? "true" : "false";
             start.Environment["BASE"] = anotherFile is null ? "HEAD^1" : "HEAD~2";
+            start.Environment["PACKAGING_BASE"] = anotherFile is null ? "HEAD^1" : "HEAD~2";
             start.Environment["BASE_KNOWN"] = "true";
             start.Environment["GITHUB_OUTPUT"] = output;
             start.Environment["GITHUB_STEP_SUMMARY"] = Path.Combine(folder, "summary");
@@ -210,10 +216,12 @@ public class PlanScriptTests
                              & ([scriptblock]::Create($env:CI_PLAN_TEST_WHOLE))
                              $whole = Get-Content $env:GITHUB_OUTPUT -Raw | ConvertFrom-StringData
                              $env:BASE = $whole['base']
+                             $env:PACKAGING_BASE = $whole['packaging-base']
                              $env:WHOLE_RING = $whole['whole-ring']
                              $env:BASE_KNOWN = $whole['base-known']
                              if ($env:CI_PLAN_TEST_RUNS -eq 'release-debt') {
-                                 if ($env:BASE -ne (git rev-parse v0.1.1) -or $env:BASE_KNOWN -ne 'true') { throw 'A green CI must not erase unpublished app changes.' }
+                                 if ($env:PACKAGING_BASE -ne (git rev-parse v0.1.1) -or $env:BASE_KNOWN -ne 'true') { throw 'A green CI must not erase unpublished app changes.' }
+                                 if ($env:BASE -ne (git rev-parse HEAD^1)) { throw 'Only packaging carries the release debt: every other job diffs from the passed base.' }
                              } elseif ($env:BASE -ne 'HEAD^1' -or $env:WHOLE_RING -ne 'true') { throw 'Unknown base must run the whole ring over the tip fallback.' }
                              Clear-Content $env:GITHUB_OUTPUT
                          }
@@ -234,8 +242,8 @@ public class PlanScriptTests
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
             foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
-                    && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
-                    : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
+                    && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                    : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
             Assert.Equal("true", outputs["light"]);
             // An unknown tier (app's post_merge) plans as blocking; only exact post-merge names are listed.
             Assert.Equal(new Dictionary<string, string> { ["app"] = "blocking", ["app-installer"] = "blocking", ["app-installer (win-arm64)"] = "post-merge" },

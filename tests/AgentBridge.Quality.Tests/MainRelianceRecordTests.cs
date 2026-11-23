@@ -12,7 +12,7 @@ public class MainRelianceRecordTests
     // The real whole-ring step, run in a small repository with a stubbed gh. Commits: c0, c1, c2 (tagged v0.1.1, the published release), c3 = HEAD.
     // passed: the shas of main's passed CI runs, newest first (run ids 1000, 1001, ...). relied: for a passed run's sha, the plan-base record its
     // plan job annotated ("none" or a parent sha; absent = no record). broken: shas whose annotations cannot be read.
-    static async Task<(string Stdout, string[] Commits)> RunStep(string passedAt, Func<string[], string>? passed = null,
+    static async Task<(string Stdout, string[] Commits, Dictionary<string, string> Outputs)> RunStep(string passedAt, Func<string[], string>? passed = null,
         Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null, string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
@@ -82,7 +82,8 @@ public class MainRelianceRecordTests
             var stdout = process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
             Assert.True(process.ExitCode == 0, (await error) + (await stdout));
-            return (await stdout, [.. commits]);
+            var outputs = File.ReadAllLines(Path.Combine(folder, "outputs")).Select(line => line.Split('=', 2)).ToDictionary(p => p[0], p => p[1], StringComparer.Ordinal);
+            return (await stdout, [.. commits], outputs);
         }
         finally
         {
@@ -93,7 +94,7 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task A_main_push_records_the_base_it_diffs_from_and_that_it_relied_on_no_parent()
     {
-        var (stdout, commits) = await RunStep("", shas => shas[1]);
+        var (stdout, commits, _) = await RunStep("", shas => shas[1]);
 
         Assert.Contains($"::notice title=plan-base::base={commits[1]} relied-parent=none", stdout, StringComparison.Ordinal);
     }
@@ -105,7 +106,7 @@ public class MainRelianceRecordTests
     static async Task<string> BaseOf(Func<string[], string> passed, Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null,
         string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false)
     {
-        var (stdout, commits) = await RunStep("", passed, relied, broken, parentRuns, releaseAt, parentUnreadable);
+        var (stdout, commits, _) = await RunStep("", passed, relied, broken, parentRuns, releaseAt, parentUnreadable);
         var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
         var found = commits.Select((sha, i) => (sha, i)).FirstOrDefault(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
         return found.sha is null ? line : $"c{found.i}";
@@ -140,7 +141,7 @@ public class MainRelianceRecordTests
     static async Task<(string Base, string Relied)> Shortcut(string parentRuns, int releaseAt = 2, bool parentUnreadable = false,
         Func<string[], string>? passed = null)
     {
-        var (stdout, commits) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, parentUnreadable);
+        var (stdout, commits, _) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, parentUnreadable);
         var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
         var baseSha = commits.Select((sha, i) => (sha, i)).First(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
         var relied = line.Contains("relied-parent=none", StringComparison.Ordinal) ? "none"
@@ -171,17 +172,38 @@ public class MainRelianceRecordTests
     public async Task First_parent_runs_that_cannot_be_read_fall_back_to_the_passed_base()
         => Assert.Equal(("c1", "none"), await Shortcut("in_progress:10", parentUnreadable: true));
 
-    // Release debt is untouched: a published release older than the parent still widens the base, so the run covers the parent's change itself
-    // and relies on nothing.
+    // A2: release debt no longer lowers the base the shortcut and every job but packaging use. A release older than the parent widens only
+    // the packaging base (below), so the run still relies on its parent.
     [Fact]
-    public async Task A_release_older_than_the_parent_keeps_the_release_base_and_the_run_relies_on_nothing()
-        => Assert.Equal(("c0", "none"), await Shortcut("in_progress:10", releaseAt: 0));
+    public async Task A_release_older_than_the_parent_no_longer_lowers_the_base_the_run_relies_on_its_parent()
+        => Assert.Equal(("c2", "2"), await Shortcut("in_progress:10", releaseAt: 0));
+
+    static async Task<(string Base, string Packaging)> Bases(int releaseAt, string parentRuns = "", Func<string[], string>? passed = null)
+    {
+        var (_, commits, outputs) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, false);
+        string Name(string sha) => "c" + Array.IndexOf(commits, sha);
+        return (Name(outputs["base"]), Name(outputs["packaging-base"]));
+    }
+
+    // Release debt (#1910): earlier untested or unpaid app changes still build. It now widens ONLY packaging: the app and installer jobs read the
+    // packaging base, the older of the base and the latest published release; every other job reads the base.
+    [Fact]
+    public async Task Release_debt_widens_only_the_packaging_base()
+        => Assert.Equal(("c1", "c0"), await Bases(releaseAt: 0));
+
+    [Fact]
+    public async Task A_release_newer_than_the_base_leaves_both_the_same()
+        => Assert.Equal(("c1", "c1"), await Bases(releaseAt: 2));
+
+    [Fact]
+    public async Task The_shortcut_base_is_the_parent_while_packaging_still_reaches_back_to_the_release()
+        => Assert.Equal(("c2", "c0"), await Bases(releaseAt: 0, "in_progress:10"));
 
     [Fact]
     public async Task A_main_push_with_no_proven_base_records_the_first_parent_as_a_base_it_does_not_vouch_for()
     {
         // No passed run readable at all: the whole ring runs over HEAD^1; the record still says what the diff was taken from.
-        var (stdout, commits) = await RunStep("");
+        var (stdout, commits, _) = await RunStep("");
 
         Assert.Contains($"::notice title=plan-base::base={commits[2]} relied-parent=none", stdout, StringComparison.Ordinal);
     }

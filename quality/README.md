@@ -314,11 +314,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    **The first-parent shortcut.** On main the plan selects against the first parent while that parent's own run is still going (queued,
    in progress or waiting, for under 2 hours): a main commit's run is never cancelled by a later push, so it will test the parent's change,
    and this run tests only its own diff, recording the parent as `relied-parent`. A parent that failed, was cancelled, ran past 2 hours (a
-   zombie) or whose runs can't be read is not relied on: its change carries forward through the passed base, as before. **Release debt is
-   unchanged**: the base is still the older of that and the latest published release, so while a release lags, the run covers everything since
-   it and relies on nothing (`relied-parent=none`); the shortcut only pays once releases keep up (or the release debt is narrowed to the
-   app jobs, a separate decision). The record came first, the judges next, and this shortcut last: it is armed only after the guard has
-   a green run on main.
+   zombie) or whose runs can't be read is not relied on: its change carries forward through the passed base, as before. **Release debt
+   now widens only packaging** (below): the base the shortcut and every job but app and app-installer use is never lowered by a lagging
+   release, so the run still relies on its parent. The record came first, the judges next, then this shortcut, which is armed only after the
+   guard has a green run on main; narrowing release debt to packaging is a separate step that needs the owner's yes.
    The planner honours it too: a passed run is a base for the next run's diff only if every parent it relied on, back to a run that
    relied on none, passed as well (a parent that failed or was cancelled never tested its change, so that change stays in the next diff);
    an unreadable record is not proved, so an older base tests more, never less.
@@ -327,9 +326,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    with a proven base pass
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
    packages or installers. App source and dependencies, packaging inputs, shared build roots,
-   ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. Selection covers
-   the entire range since the CI/released common ancestor when that base is known, so earlier
-   untested or unpaid app changes still build. If no proven ancestor is found or the evidence is
+   ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. **Only these two jobs
+   carry release debt (#2454, item A).** Their selection covers the entire range since the CI/released
+   common ancestor when that base is known (the *packaging base*: the older of the run's base and the latest
+   published release), so earlier untested or unpaid app changes still build; every other job, and the
+   whole-ring decision, read only the run's own base (the passed run, or the in-flight first parent), so a
+   lagging release no longer makes every main run re-test everything since it. If no proven ancestor is found or the evidence is
    unreadable, main runs the whole ring without narrowing: the HEAD^1 fallback cannot prove
    that earlier app changes were packaged. Main keeps the `windows-11-arm` product leg;
    manual whole-ring runs remain un-narrowed. A proven docs-only range skips packaging
