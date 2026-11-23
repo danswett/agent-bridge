@@ -776,7 +776,7 @@ public sealed class AutoUpdater
 
     // #2869 (owner, "Yes, at a quiet moment"): the app newer than its OWN host, whose files for the app's
     // release are already installed beside it, restarts that host onto them once quiet. The old host
-    // outlived an update (VM1, 3, 6 and 7 ran app 0.1.7845 over hosts on 0.1.7684, and "Check for updates"
+    // outlived an update (four test machines ran app 0.1.7845 over hosts on 0.1.7684, and "Check for updates"
     // said up to date). Not an install: no release is downloaded, nothing stops but the host's own
     // restart (host.restart: it ends with code 75 once fully stopped, and the launcher starts the
     // replacement from current\), and Restart to update is unchanged. Only this machine's host, over its

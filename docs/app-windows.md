@@ -637,7 +637,7 @@ controls consume that same contract; this extraction does not disable or remove 
     effect at once (the app looks again). Setting it from the phone is #801's.
   * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
     moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
-    release with its own host still running the old one (VM1, 3, 6 and 7 ran app 0.1.7845 over hosts on
+    release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
     0.1.7684, and "Check for updates" said up to date). When the host is older than the app, the host files
     for the app's release are already installed beside it (the version of `current\agent-bridge-host.exe`,
     read at the time), no release is waiting to install, the halt policy allows it (a stale policy, or the
