@@ -43,7 +43,7 @@ public sealed class LiteDeliver(
         var target = body.Target.Session ?? "";
         var outcome = await DecideAsync(envelope, text, target, ct);
         var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
-        log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code)}");
+        log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code ?? outcome.Outcome?.ToString().ToLowerInvariant())}");
         return outcome;
     }
 
@@ -142,7 +142,9 @@ public sealed class LiteDeliver(
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
         return result.Outcome switch
         {
-            AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
+            AnswerOutcome.Delivered => new LiteDelivery(true, null),
+            // Keys went but nothing was recorded: the sender is told unconfirmed (never delivered, never resent; docs/message-delivery.md, #3856).
+            AnswerOutcome.Unconfirmed => new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed },
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
             AnswerOutcome.Stale => Refused(Signed() ? (byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession) : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
