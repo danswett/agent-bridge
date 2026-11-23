@@ -13,10 +13,10 @@ index 63a6053..e725310 100644
      types: [completed] # the only type Actions accepts here
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..3390e75
+index 0000000..e5c7ad5
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,304 @@
 +name: Release train
 +
 +# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
@@ -28,6 +28,11 @@ index 0000000..3390e75
 +  schedule:
 +    - cron: '17 * * * *'
 +  workflow_dispatch:
++    inputs:
++      dry_run:
++        description: 'Dry run: pick and verify only, with no publish, Beta manifest or CDN purge'
++        type: boolean
++        default: false
 +
 +concurrency:
 +  group: release-train
@@ -177,7 +182,8 @@ index 0000000..3390e75
 +    # contents: write is here only, and only for a verified pick. APP_SIGNING true never gets here: the
 +    # pick job fails first. A failed verification skips this job (it needs verify to succeed).
 +    needs: [pick, verify]
-+    if: needs.pick.outputs.sha != ''
++    # A dry run (workflow_dispatch input) stops after verify: nothing is published, no manifest, no purge.
++    if: needs.pick.outputs.sha != '' && !inputs.dry_run
 +    runs-on: windows-latest
 +    timeout-minutes: 30
 +    permissions:
@@ -289,8 +295,34 @@ index 0000000..3390e75
 +            exit 1
 +          }
 +          Write-Host "the relay serves $env:TAG"
++
++  dry-run-report:
++    name: Dry run report
++    # Only for a dry run: says what the train would have published and whether verification passed.
++    needs: [pick, verify]
++    if: always() && inputs.dry_run
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: What a real run would do
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++          VERIFY: ${{ needs.verify.result }}
++        run: |
++          if [ -z "$SHA" ]; then
++            echo "### Release train dry run: nothing to publish (no new verified commit)" >> "$GITHUB_STEP_SUMMARY"
++            exit 0
++          fi
++          echo "### Release train dry run: would publish v$VERSION (commit $SHA, CI run $RUN_ID); verification: $VERIFY" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$VERIFY" != "success" ]; then
++            echo "::error title=release train dry run::verification would fail: nothing would be published"
++            exit 1
++          fi
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 65f3eac..d7ea0bd 100644
+index 65f3eac..8d0f4ed 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -961,6 +961,22 @@ suites:
@@ -310,7 +342,7 @@ index 65f3eac..d7ea0bd 100644
 +    runner: hosted
 +    triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
 +    command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
-+    where: release-train.yml pick, verify, alert, publish, purge
++    where: release-train.yml pick, verify, alert, publish, purge, dry-run-report
 +    status: exists
 +
    - id: pwa-iphone
