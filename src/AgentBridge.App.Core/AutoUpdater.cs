@@ -330,6 +330,32 @@ public sealed class AutoUpdater
     // failure): never offered when pressing it could not install it.
     public string? Ready => installing || updater.InstalledVersion is null || seenSource != updater.Source || updater.Ready != Pending ? null : Pending;
 
+    // #2869 G2 (option B, no policy change): whether the app and the host being on different versions has a fix waiting, by VersionSkewHeal. Only
+    // shown (the banner, the log): nothing here installs, since Restart to update installs nothing by itself (#516); the person's press does.
+    // G1's CONTRACT: the cached version passed is Ready, the release downloaded and marked ready only once it matched its feed's checksum, never
+    // Found (not downloaded) or Pending as such. A host that is not connected has no version to compare. No heal is attempted here, so no failures count.
+    public SkewHealDecision SkewHeal => VersionSkewHeal.Decide(updater.InstalledVersion, host.State == LinkState.Connected ? host.Status?.Version : null, Ready, 0, null, time.GetUtcNow());
+
+    string? skewNoted;
+
+    // Said once when it changes, not at every tick; nothing when there is no skew or it cannot be told.
+    void NoteSkew()
+    {
+        var d = SkewHeal;
+        string? line = null;
+        if (d.Kind != SkewHealKind.Converged && d.Reason != "version-unknown")
+        {
+            var both = $"the app ({updater.InstalledVersion}) and the host ({host.Status?.Version}) are on different versions";
+            line = d.Kind == SkewHealKind.Heal
+                ? $"auto-update: {both}; {d.Target} is downloaded, and Restart to update fixes it"
+                : $"auto-update: {both}; there is no downloaded update that would fix it yet";
+        }
+        if (line == skewNoted) { return; }
+        skewNoted = line;
+        if (line is not null) { log(line); }
+        Changed();
+    }
+
     // What a restart now would interrupt on this machine, for the warning Restart to update gives
     // first; null when nothing here is waiting on the person.
     public string? WaitingOnYou => RestartWarning.For(host);
@@ -765,6 +791,7 @@ public sealed class AutoUpdater
             {
                 Volatile.Write(ref again, 0);
                 await TickOnceAsync();
+                NoteSkew();
             }
             while (Volatile.Read(ref again) == 1);
         }

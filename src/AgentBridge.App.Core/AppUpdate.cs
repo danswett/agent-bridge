@@ -55,6 +55,7 @@ public sealed class AppUpdateViewModel : Observable
     readonly Func<string?> ready;
     readonly Func<Func<string, Task<bool>>?, Task<string?>> restart;
     readonly Func<string?> updating;
+    readonly Func<bool> skewed;
     string? problem;
     bool restarting;
 
@@ -64,14 +65,15 @@ public sealed class AppUpdateViewModel : Observable
     // restart(confirm): AutoUpdater.RestartToUpdateAsync, which asks confirm(warning) itself, last,
     // when a session here is busy. updating: the release the Updating screen names (AutoUpdater
     // .Updating), while there is one.
-    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart, Func<string?>? updating = null)
+    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart, Func<string?>? updating = null, Func<bool>? skewed = null)
     {
+        this.skewed = skewed ?? (() => false);
         this.ready = ready;
         this.restart = restart;
         this.updating = updating ?? (() => null);
     }
 
-    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync, () => auto.Updating);
+    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync, () => auto.Updating, () => auto.SkewHeal.Kind == SkewHealKind.Heal);
 
     // The Updating screen (#1167): the window's content while the release is handed to Velopack,
     // only where the window was open when the install began. Its words are the screen's whole say:
@@ -118,7 +120,7 @@ public sealed class AppUpdateViewModel : Observable
     public string Message => restarting ? "Restarting to update\u2026"
         : problem is { } p ? DidNotInstall(p, Version is not null)
         : couldNot is { } c ? c
-        : Version is { } v ? Ready(v)
+        : Version is { } v ? (skewed() ? SkewReady(v) : Ready(v))
         : "";
     // The bar's state, for its severity and its button (Creative on #719, 6675195544): a failed
     // install is a warning, and its button is Try again; while restarting, the button shows its
@@ -130,6 +132,7 @@ public sealed class AppUpdateViewModel : Observable
 
     // The bar's words, and Settings' (ui.md §8: what it is and the next step, nothing to explain).
     public static string Ready(string version) => $"Version {version} is ready. Restart to update.";
+    public static string SkewReady(string version) => $"Version {version} is ready. The app and the host are on different versions; Restart to update fixes it.";
 
     // An install that failed, in one sentence: a known profile blocker includes its name and PID;
     // other reasons stay a kind, never a path or an error's own text. While the release is still

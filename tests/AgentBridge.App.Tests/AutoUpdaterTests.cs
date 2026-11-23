@@ -5080,4 +5080,80 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(await restart);
         Assert.True(updater.Applied);
     }
+
+    // #2869 G2 (option B): the app and the host on different versions, with a downloaded update that would end it. Nothing here installs by itself (#516):
+    // the decision (VersionSkewHeal) is computed, logged once, and worded on the banner, whose Restart to update, the person's press, is what installs.
+    async Task SkewedAsync(string appVersion, string hostVersion, string? downloaded)
+    {
+        updater.InstalledVersion = appVersion;
+        updater.Found = downloaded;
+        await StartAsync(FakeHost.StatusOf() with { Version = hostVersion });
+        await auto.TickAsync();
+    }
+
+    [Fact]
+    public async Task A_host_on_another_version_than_the_app_with_a_downloaded_update_is_a_heal_worded_on_the_banner_and_installs_nothing()
+    {
+        await SkewedAsync("0.1.7684", "0.1.7522", "0.1.7700");
+
+        Assert.Equal("0.1.7700", auto.Ready);
+        Assert.Equal((SkewHealKind.Heal, "0.1.7700"), (auto.SkewHeal.Kind, auto.SkewHeal.Target));
+        Assert.Equal(AppUpdateViewModel.SkewReady("0.1.7700"), AppUpdateViewModel.For(auto).Message);
+        Assert.Contains("Restart to update", AppUpdateViewModel.For(auto).Message);
+        Assert.Single(log, l => l.Contains("0.1.7684") && l.Contains("0.1.7522") && l.Contains("Restart to update fixes it"));
+
+        // Idle for hours, in the default mode: it is never installed by itself, and the line is not repeated at every tick.
+        for (var i = 0; i < 14; i++)
+        {
+            time.Advance(AutoUpdater.IdleFor);
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.CheckEvery - AutoUpdater.IdleFor);
+            await auto.TickAsync();
+        }
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Single(log, l => l.Contains("Restart to update fixes it"));
+    }
+
+    [Fact]
+    public async Task The_host_on_the_apps_own_version_is_no_skew_and_the_banner_keeps_its_plain_words()
+    {
+        await SkewedAsync("0.1.7684", "0.1.7684", "0.1.7700");
+
+        Assert.Equal(SkewHealKind.Converged, auto.SkewHeal.Kind);
+        Assert.Equal(AppUpdateViewModel.Ready("0.1.7700"), AppUpdateViewModel.For(auto).Message);
+        Assert.DoesNotContain(log, l => l.Contains("fixes it"));
+    }
+
+    [Fact]
+    public async Task A_release_that_is_found_but_not_downloaded_is_never_a_heal_target_so_a_skew_says_there_is_no_downloaded_update()
+    {
+        updater.DownloadFails = new IOException("the feed is down");
+        await SkewedAsync("0.1.7684", "0.1.7522", "0.1.7700");
+
+        Assert.Null(auto.Ready);
+        Assert.Equal((SkewHealKind.Hold, "no-verified-package"), (auto.SkewHeal.Kind, auto.SkewHeal.Reason));
+        Assert.Null(auto.SkewHeal.Target);
+        Assert.Equal("", AppUpdateViewModel.For(auto).Message);
+        Assert.Single(log, l => l.Contains("0.1.7522") && l.Contains("no downloaded update"));
+    }
+
+    [Fact]
+    public async Task A_downloaded_update_older_than_the_newer_side_of_the_skew_is_not_a_heal()
+    {
+        await SkewedAsync("0.1.7684", "0.1.7522", "0.1.7600");
+
+        Assert.Equal("0.1.7600", auto.Ready);
+        Assert.Equal((SkewHealKind.Hold, "no-verified-package"), (auto.SkewHeal.Kind, auto.SkewHeal.Reason));
+        Assert.Equal(AppUpdateViewModel.Ready("0.1.7600"), AppUpdateViewModel.For(auto).Message);
+    }
+
+    [Fact]
+    public async Task A_development_copy_with_no_installed_version_is_unknown_never_a_heal()
+    {
+        await SkewedAsync("0.1.7684", "0.1.7522", "0.1.7700");
+        updater.InstalledVersion = null;
+
+        Assert.Equal((SkewHealKind.Hold, "version-unknown"), (auto.SkewHeal.Kind, auto.SkewHeal.Reason));
+    }
 }

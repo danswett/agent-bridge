@@ -437,6 +437,16 @@ Results retain the operation step, target/observed versions, actual exit/native 
 code when available, offset-bearing observation time and monotonic elapsed time,
 without copying exception messages or inventing holder PID/path evidence.
 
+**Version skew** ([#2869](https://github.com/danswett/agent-bridge/issues/2869), problem 3; `VersionSkewHeal`, wired by `AutoUpdater.SkewHeal`):
+when the app and the connected host report different releases, a pure decision says whether a downloaded update would end it.
+Releases are ordered by `ReleaseVersions.TryRun` (`0.1.N`, by number), the comparer the updater already trusts; a prerelease or any other
+scheme is unknown and never a heal target. The only cached version it is given is `AutoUpdater.Ready`, the release downloaded and marked
+ready once it matched its feed's checksum, never one found but not downloaded. A heal is **shown, never run**: the banner reads "Version
+*v* is ready. The app and the host are on different versions; Restart to update fixes it.", and the log says so once; nothing installs by
+itself in Restart to update mode (#516), so the person's press does it. With no such update the log says there is none yet. Installing by
+itself on a skew would override that mode and is the owner's call (not built). A heal attempt that fails is not counted here: none is
+started.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they never skew.
