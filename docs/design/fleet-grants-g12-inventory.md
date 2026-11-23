@@ -11,8 +11,8 @@ from this table and the gate that unlocked them. Wrapper rules come from
 fleet-grants.md fixes the order: G9 lands remote launch, the default flips to the Host
 transport, the dispatcher stops its HA calls, G10 and G11 follow for end and wrappers, and
 G12 removes the HA launch path "after approved cutover evidence". The owner answered F1 to
-F9 on #1396 that nothing in HA survives, so every row below is deleted eventually. What the
-table adds is *when*: a row is deletable only after the slice that replaces it has landed
+F9 on #1396 that nothing in HA survives. That answer is the **permission** to remove the
+connector once its gate has passed; it is never an unlock by itself. What the table adds is *when*: a row is deletable only after the slice that replaces it has landed
 **and** its evidence gate has passed. Deleting a path before its replacement is proven is how
 a person ends up with neither.
 
@@ -25,7 +25,7 @@ Quality/SRE owns the evidence on disposable VMs, never a builder and never this 
 | **E1 Host launch proof** | G9 (envelope, receiver, sender, `fleet.launch` op) is merged, and a disposable-VM run shows a remote launch over the Host transport that starts a registered session, with the receiver's own caps, kill switch and counters |
 | **E2 Launch dual run** (not slice 11) | Over an agreed window, every launch is issued on the Host transport while the HA path is still present, and the two paths' outcomes are compared per request: same `started` and `registered`, same refusals, no double launch, no HA press made as a fallback. The window and pass count are Quality's to set |
 | **E3 End proof** | G10 (remote stop) is merged and a disposable-VM run shows `fleet end` per session with a fresh request id each, matching what the HA stop press did |
-| **E4 Connector-removal gate** | **All** of: (a) **slice 11**, the 24 h session-registry dual run, which is an **owner gate** before any HA connector removal, passed and accepted by the owner; (b) the load proof (#1949, fleet #314); (c) the HA-off rehearsal: the fleet runs with HA switched off and launch, end, and messaging all work; (d) the owner's sign-off, in writing, after E1 to E3 and (a) to (c) have Quality/SRE receipts. G12 deletion of the HA entities is covered by the owner's F1 to F9 answer but goes **last** |
+| **E4 Connector-removal gate** | **All** of: (a) **slice 11**, the 24 h session-registry dual run, which is an **owner gate** before any HA connector removal, passed and accepted by the owner; (b) the load proof (#1949, fleet #314); (c) the HA-off rehearsal: the fleet runs with HA switched off and launch, end, and messaging all work; (d) the owner's sign-off, in writing, after E1 to E3 and (a) to (c) have Quality/SRE receipts. The owner's F1 to F9 answer is the permission to remove the connector, not a gate that unlocks it; removal goes **last** |
 
 E2 is a launch comparison only. It is not slice 11 and does not stand in for it. Rows that remove a
 fleet tool's HA press (section A) need the gate named in the row. Every row that removes the HA
@@ -45,8 +45,7 @@ A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt
 | A2 | `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | E2 |
 | A3 | `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | E3 |
 | A4 | `end-one.ps1`, `end-many.ps1`, `end-sessions.ps1`, `end-remote.ps1` HA stop presses and their `AGENT_HA_AGENT_TOKEN` reads | Ending presses over HA | One `fleet end` per session (G10, G11 B) | E3 |
-| A5 | `FleetLifecycle.ps1` pressing audit (`Write-FleetEndAudit ... 'pressing'`) and its press-bound helpers | Audit line written before an HA press | The host's own audit of the verb (G10) | E3 |
-| A6 | `FleetLaunchLedger.psm1` and the launch mutex/duplicate/counter logic in `launch-remote.ps1` | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2 |
+| A6 | The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2, **and** only after A3 has stopped reading the ledger (E3) |
 | A7 | The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | E1, then E2 |
 | A8 | `launch-remote.ps1 -Transport` value `HA` and its default | Selects HA | Default `Host` first (cutover row 1); the `HA` value is removed last | Default flip: E1. Value removed: E4 |
 
@@ -84,6 +83,10 @@ These stay. A deletion PR that touches one is wrong.
   `FleetStopCommands`, `FleetEndCommands`, `FleetRemoteLaunch`, `FleetRemoteLaunchSender`,
   `FleetActionEnvelope`, `Fleet/FleetLaunchNames` and `AgentPipeLaunch`: they are the
   replacement.
+- **`FleetLifecycle.ps1` pressing audit (formerly A5).** `Write-FleetEndAudit ... 'pressing'` is the
+  Slipgates `session.stop` audit, not an HA path. It stays; only the HA press call next to it goes with A3/A4.
+- **`FleetLaunchLedger.psm1` (formerly part of A6).** It is used by `FleetLifecycle.ps1` and the end-ownership
+  check, so it is not an HA target. It may change only in a PR that shows those users no longer read it.
 - **Person gates.** Every phone and person-device approval, the roster and signer gates, and
   person-required confirmations. No row removes or bypasses one.
 - **Messaging.** `reply-session.ps1`, its HA fallback, lookup scripts and the outbox are
@@ -97,11 +100,12 @@ These stay. A deletion PR that touches one is wrong.
 
 1. **Default flip** (A8, value left in place): after E1, in its own small Fleet PR.
 2. **Dispatcher** (A7): after E1; it stops the three HA calls and calls the host verb.
-3. **Wrapper bodies** (A1, A2, A6): after E2, replaced by the G11 A thin wrapper.
-4. **End path** (A3 to A5): after E3, replaced by the G11 B thin wrappers.
-5. **Host HA launch surface** (B1 to B5 with C1 to C4): after E4, last, one family of PRs in
+3. **Wrapper bodies** (A1, A2): after E2, replaced by the G11 A thin wrapper.
+4. **End path** (A3, A4): after E3, replaced by the G11 B thin wrappers.
+5. **Launch bookkeeping** (A6): only after step 4, once A3 no longer reads the ledger.
+6. **Host HA launch surface** (B1 to B5 with C1 to C4): after E4, last, one family of PRs in
    the order B1/C1/C3, B2/B4, then B3/C2, then docs C4.
-6. **`-Transport HA`** (A8 value): with step 5.
+7. **`-Transport HA`** (A8 value): with step 6.
 
 Each PR is at most 250 lines (a large file deletion counts as its own PR, per the cap rule),
 tests first where code changes, and carries the gate receipt it relies on.
@@ -109,9 +113,9 @@ tests first where code changes, and carries the gate receipt it relies on.
 ## Open items for Quality/SRE (not decided here)
 
 - The E2 window length and pass count.
-- Whether Fleet's `FleetLaunchLedger.psm1` history must be archived before A6 goes.
+- The slice 11 (24 h session-registry dual run) window and owner acceptance format.
 - Which existing HA entities a phone dashboard still reads; the owner's F1 to F9 answer says
-  none survive, so this is a check, not a blocker.
+  none survive, so this is a check to run before E4, not an unlock.
 
 ## Doc status
 
