@@ -23,9 +23,10 @@ rows"); the remote launch it proves is described there and in [fleet-grants-cli.
    sender with its relay link.
 2. Both hosts run a build that contains it, are signed in to the same account, and are own-account
    peers that trust each other (the existing own-peer trust).
-3. The target host holds a receiver-side grant for the source agent session, with caps and a kill switch
-   the run can read back.
-4. Disposable hosts only. No run uses a person's grant, a person's session or a machine in daily use.
+3. The target host holds a receiver-side grant for the source agent session, with caps and a kill switch the run can
+   read back. The grant is **person-issued** for the run; no builder or script creates, widens or reuses one. Any
+   person action the run needs (the grant, an induced restart or reconnect) is approved by that person **at run time**.
+4. Disposable hosts only. No run uses a person's own grant, a person's session or a machine in daily use.
 
 ## What runs
 
@@ -56,8 +57,9 @@ So the comparison is fair, this is what the HA transport of `launch-remote.ps1` 
 what the Host path is therefore measured against:
 
 - It checks the requested options against the target's HA `launch_options` and checks a new workspace, before it sends.
-- It takes a per-target launch lock and a launch lease, writes the prompt as an HA payload (which lifts the
-  255 character limit; prompts run from short up to about 60 KB), takes a snapshot of the target's HA entities,
+- It takes a per-target launch lock (a mutex on the sending machine) and honours an HA launch lease: it reads the lease
+  and the HA server date and waits up to three minutes for a foreign lease. It writes the prompt as an HA payload (which lifts
+  the 255 character limit; prompts run from short up to about 60 KB), takes a snapshot of the target's HA entities,
   and presses the target's `new_session` button once.
 - It reads the result from `new_session_result`. If the host is busy it waits and resubmits, up to 5 times, 30 s apart.
 - Concurrent launches to one target are serialized by that lock and lease.
@@ -76,7 +78,13 @@ selectable for them. Their replacement is G10 and G11 B, and removal is E4.
 
 **With an HA twin** (compared, counted in the 100): granted launch, same request id again, response lost, long prompts,
 and the concurrent bursts. Each HA twin is the same inputs sent over the HA transport to the same target in the same
-window, with its own request id.
+window, with its own request id. The three less obvious twins are:
+
+- **Burst twin:** the same K launches issued at the same moment over HA to one target (HA serializes them by its lock
+  and lease); compared on how many sessions result and each request's outcome, not on timing.
+- **Same-id twin:** the same HA request id sent twice; HA must show one session and the recorded outcome, as Host does.
+- **Lost-response twin:** an HA press whose result is unreadable (reported uncertain, not repeated), resolved by reading
+  what the target actually started; it matches a Host exit 7 resolved by `launches status`.
 
 **Host only, no twin** (counted against their own floors, not the 100): replay of the sealed envelope, the warm-up
 refusal, grant revoked, kill switch, scope or cap exceeded, peer not trusted or not own-account, target offline, and
@@ -136,8 +144,8 @@ Quality sets these floors:
   reconnect. Each induced event needs the owner's approval **at run time**; this document grants none.
 - **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request id.
 2. **0 double launches**: for each request (its unique launch name), at most one session exists on the target, and the live-session, started-row and counter-rise counts agree.
-3. **0 HA fallbacks**: zero HA presses made as a fallback on any Host-path request (the HA fallback counter stays at zero for
-   Host-path requests).
+3. **0 HA fallbacks**: the HA fallback counter stays at zero. That counter is the windowed count of HA launch calls made by a Host-path request, as built by `ha-gate-counters.md` (#3813); it is read before and after each request and for the whole window. Unreadable is INCONCLUSIVE. (It counts zero for
+   Host-path requests.)
 4. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
 5. No token, key, credential or prompt text appears in any receipt, log or output the run keeps.
 6. The receipts carry the request id, so any case can be read back with `launches status`.
@@ -150,17 +158,24 @@ failed request is never excused as load or retried until it passes.
 ## Witness and receipt
 
 - **Quality/SRE runs the evidence and signs a receipt.** A builder who wrote the code never witnesses it.
-- The receipt names: the source and target build heads, the date and window, N, each case's result, the
-  request ids, and where the raw logs are kept. It carries no secret.
+- The receipt **copies the run plan's numbers** (N, every floor, the window, the hosts and pairs) and attaches the
+  plan, then records the **actual** count against each one. It also names the source and target build heads, the date,
+  each case's result and the request ids. It carries no secret.
+- **Raw records and hashes.** The receipt lists every raw record it relies on (command outputs, receipts, session
+  lists, counter reads, host logs) with a sha256 each, and where they are kept. The launch status store keeps an
+  outcome only 15 minutes, so each `launches status` and `launches list` output is copied at request time, not read later.
 - The lead approves the flip from the receipt. The flip is a separate small Fleet PR that cites the receipt;
   this document does not authorize it.
 
 ## Rollback
 
-Rollback is **HA kept**: set the default back to `HA` (a one-line Fleet change) and the HA path, which
-this gate leaves untouched, works as before. Nothing on this gate deletes HA code; deletion needs E4 in
-the G12 inventory (design.md P7). If a Host-path request is `unconfirmed`, rolling back does not resend
-it: the request is resolved by `launches status` first.
+Rollback is **HA kept**: nothing on this gate deletes HA code (deletion needs E4 in the G12 inventory, design.md P7).
+
+- **Launch default:** set the `launch-remote.ps1` default back to `HA` (a one-line Fleet change); the HA path, which
+  this gate leaves untouched, works as before.
+- **Dispatcher:** revert the dispatcher's switch in its own small Fleet PR so `FleetLaunch` makes its three HA calls
+  again; those calls stay in the code until E4, so this is a revert, not a rewrite.
+- If a Host-path request is `unconfirmed`, rolling back does not resend it: it is resolved by `launches status` first.
 
 ## Out of scope
 
