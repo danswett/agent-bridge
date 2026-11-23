@@ -13,7 +13,7 @@ public class MainRelianceRecordTests
     // passed: the shas of main's passed CI runs, newest first (run ids 1000, 1001, ...). relied: for a passed run's sha, the plan-base record its
     // plan job annotated ("none" or a parent sha; absent = no record). broken: shas whose annotations cannot be read.
     static async Task<(string Stdout, string[] Commits)> RunStep(string passedAt, Func<string[], string>? passed = null,
-        Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null)
+        Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null, string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -33,7 +33,7 @@ public class MainRelianceRecordTests
                 ChangedFiles.Git(folder, "add", "--", name + ".txt");
                 ChangedFiles.Git(folder, "-c", "user.name=quality", "-c", "user.email=quality@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", name);
                 commits.Add(ChangedFiles.Git(folder, "rev-parse", "HEAD").Trim());
-                if (name == "c2") { ChangedFiles.Git(folder, "tag", "v0.1.1"); }
+                if (name == "c" + releaseAt) { ChangedFiles.Git(folder, "tag", "v0.1.1"); }
             }
 
             var start = new ProcessStartInfo("pwsh") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -41,6 +41,8 @@ public class MainRelianceRecordTests
             start.Environment["CI_PLAN_TEST_PASSED"] = passed is null ? passedAt : passed([.. commits]);
             start.Environment["CI_PLAN_TEST_RELIED"] = relied is null ? "" : string.Join(",", relied([.. commits]).Select(r => $"{r.Key}={r.Value}"));
             start.Environment["CI_PLAN_TEST_BROKEN"] = broken is null ? "" : broken([.. commits]);
+            start.Environment["CI_PLAN_TEST_PARENT"] = parentRuns;
+            start.Environment["CI_PLAN_TEST_PARENT_FAILS"] = parentUnreadable ? "1" : "";
             start.Environment["EVENT"] = "push";
             start.Environment["DRAFT"] = "false";
             start.Environment["REPO"] = "o/r";
@@ -55,7 +57,14 @@ public class MainRelianceRecordTests
                          foreach ($pair in ($env:CI_PLAN_TEST_RELIED -split ',' | Where-Object { $_ })) { $k, $v = $pair -split '=', 2; $stubRelied[$k] = $v }
                          function global:gh {
                              $global:LASTEXITCODE = 0
-                             if ($args[1] -like '*actions/workflows/*') { for ($i = 0; $i -lt $stubPassed.Count; $i++) { "$(1000 + $i)`t$($stubPassed[$i])" } }
+                             if ($args[1] -like '*head_sha=*') {
+                                 if ($env:CI_PLAN_TEST_PARENT_FAILS) { $global:LASTEXITCODE = 1; return }
+                                 foreach ($row in ($env:CI_PLAN_TEST_PARENT -split ',' | Where-Object { $_ })) {
+                                     $status, $age = $row -split ':'
+                                     "$status`t$([datetime]::UtcNow.AddMinutes(-[int]$age).ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+                                 }
+                             }
+                             elseif ($args[1] -like '*actions/workflows/*') { for ($i = 0; $i -lt $stubPassed.Count; $i++) { "$(1000 + $i)`t$($stubPassed[$i])" } }
                              elseif ($args[1] -match '/actions/runs/(\d+)/jobs\?') { $Matches[1] }
                              elseif ($args[1] -match '/check-runs/(\d+)/annotations\?') {
                                  $stubSha = $stubPassed[[int]$Matches[1] - 1000]
@@ -93,9 +102,10 @@ public class MainRelianceRecordTests
     // (it is among the passed runs). Otherwise the parent's change was never tested, so the next run's diff carries it forward.
     static readonly string Gone = new('f', 40);
 
-    static async Task<string> BaseOf(Func<string[], string> passed, Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null)
+    static async Task<string> BaseOf(Func<string[], string> passed, Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null,
+        string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false)
     {
-        var (stdout, commits) = await RunStep("", passed, relied, broken);
+        var (stdout, commits) = await RunStep("", passed, relied, broken, parentRuns, releaseAt, parentUnreadable);
         var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
         var found = commits.Select((sha, i) => (sha, i)).FirstOrDefault(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
         return found.sha is null ? line : $"c{found.i}";
@@ -124,6 +134,48 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task A_passed_run_whose_record_cannot_be_read_is_not_a_base_so_more_is_tested_not_less()
         => Assert.Equal("c1", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[1]] = "none" }, c => c[2]));
+
+    // Item A, the shortcut: while the first parent's run is still going, this run tests only its own diff (base = the parent) and records the
+    // parent as what it relied on. Anything else keeps the passed base: a failed or cancelled parent carries its change forward, as now.
+    static async Task<(string Base, string Relied)> Shortcut(string parentRuns, int releaseAt = 2, bool parentUnreadable = false,
+        Func<string[], string>? passed = null)
+    {
+        var (stdout, commits) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, parentUnreadable);
+        var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
+        var baseSha = commits.Select((sha, i) => (sha, i)).First(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
+        var relied = line.Contains("relied-parent=none", StringComparison.Ordinal) ? "none"
+            : commits.Select((sha, i) => (sha, i)).First(c => line.Contains($"relied-parent={c.sha}", StringComparison.Ordinal)).i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return ($"c{baseSha.i}", relied);
+    }
+
+    [Theory]
+    [InlineData("in_progress:10")]
+    [InlineData("queued:3")]
+    [InlineData("waiting:40")]
+    public async Task A_first_parent_still_running_is_relied_on_so_this_run_tests_only_its_own_diff(string parentRuns)
+        => Assert.Equal(("c2", "2"), await Shortcut(parentRuns));
+
+    [Theory]
+    [InlineData("in_progress:180")]
+    [InlineData("completed:10")]
+    [InlineData("completed:600")]
+    [InlineData("")]
+    public async Task A_first_parent_not_running_within_the_cap_is_not_relied_on_the_passed_base_stands(string parentRuns)
+        => Assert.Equal(("c1", "none"), await Shortcut(parentRuns));
+
+    [Fact]
+    public async Task A_first_parent_that_is_running_again_after_an_earlier_run_is_relied_on()
+        => Assert.Equal(("c2", "2"), await Shortcut("completed:90,in_progress:5"));
+
+    [Fact]
+    public async Task First_parent_runs_that_cannot_be_read_fall_back_to_the_passed_base()
+        => Assert.Equal(("c1", "none"), await Shortcut("in_progress:10", parentUnreadable: true));
+
+    // Release debt is untouched: a published release older than the parent still widens the base, so the run covers the parent's change itself
+    // and relies on nothing.
+    [Fact]
+    public async Task A_release_older_than_the_parent_keeps_the_release_base_and_the_run_relies_on_nothing()
+        => Assert.Equal(("c0", "none"), await Shortcut("in_progress:10", releaseAt: 0));
 
     [Fact]
     public async Task A_main_push_with_no_proven_base_records_the_first_parent_as_a_base_it_does_not_vouch_for()

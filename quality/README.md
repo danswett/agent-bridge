@@ -310,9 +310,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    **A main run records what it relied on (#2454).** Its plan job emits the notice annotation
    `plan-base: base=<sha> relied-parent=<sha|none>`: the commit the run diffed from, and the in-flight
    parent run it counted on to test only its own change. The judges (the merge rule, main_green and the
-   train selector) read it, so a run counts green only if what it relied on is green too. Today every run
-   records `relied-parent=none`: it diffs from a passed base. The record comes first, the judges next, and the
-   first-parent shortcut that makes a run rely on its parent last, so nothing changes until the judges honour it.
+   train selector) read it, so a run counts green only if what it relied on is green too.
+   **The first-parent shortcut.** On main the plan selects against the first parent while that parent's own run is still going (queued,
+   in progress or waiting, for under 2 hours): a main commit's run is never cancelled by a later push, so it will test the parent's change,
+   and this run tests only its own diff, recording the parent as `relied-parent`. A parent that failed, was cancelled, ran past 2 hours (a
+   zombie) or whose runs can't be read is not relied on: its change carries forward through the passed base, as before. **Release debt is
+   unchanged**: the base is still the older of that and the latest published release, so while a release lags, the run covers everything since
+   it and relies on nothing (`relied-parent=none`); the shortcut only pays once releases keep up (or the release debt is narrowed to the
+   app jobs, a separate decision). The record came first, the judges next, and this shortcut last: it is armed only after the guard has
+   a green run on main.
    The planner honours it too: a passed run is a base for the next run's diff only if every parent it relied on, back to a run that
    relied on none, passed as well (a parent that failed or was cancelled never tested its change, so that change stays in the next diff);
    an unreadable record is not proved, so an older base tests more, never less.
