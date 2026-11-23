@@ -884,12 +884,16 @@ start within about a minute; a queue that grows is the signal to add runners or 
   expression: the pool is reachable only through `<guard> && <self-hosted label> || <hosted label>`, other `&&` conditions
   only narrowing. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner group, a bare
   self-hosted label, a runner from a variable, input or event field, an unparseable file, and a self-hosted job where
-  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It fails
-  closed: only a GitHub-hosted label (`ubuntu-*`, `windows-latest`/`20xx`/`11-arm`, `macos-*`) passes unguarded, and only a
-  literal label set (a literal, `fromJSON` of a literal, or a matrix whose strategy lists literals) may name the pool, even
-  behind the guard. A matrix or job output built from `vars`, `inputs`, `env`, `secrets` or the event, any other function
-  (`format`, `join`), and a partial label set such as `[windows, x64]` are flagged. This lint passing is a precondition of
-  setting `AB_CI_SELF_HOSTED` to `true`.
+  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It
+  fails closed: a runner is hosted only when every value it can take is on the hosted allowlist (`ubuntu-*`,
+  `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a literal, and the one runtime
+  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. This lint
+  passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  **The one alternative to the guard: a run by hand on main.** `(<guard>) || github.event_name == 'workflow_dispatch' &&
+  github.ref == 'refs/heads/main' && inputs.use_ab_ci` may also reach the pool, to try it before `AB_CI_SELF_HOSTED` flips.
+  `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
+  fails a workflow that reads it otherwise, since a string `'false'` is non-empty and so true. Only people with write
+  access can dispatch, and only main's workflow file runs.
   **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
   lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
   neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork

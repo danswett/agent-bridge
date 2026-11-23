@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
 
@@ -10,27 +11,37 @@ namespace AgentBridge.Quality;
 /// <c>pull_request_target</c> or <c>workflow_run</c> can run. Each <c>runs-on</c> is read as a GitHub expression: every
 /// value it can resolve to that may name a self-hosted runner must be reached only through both whole conjuncts of
 /// <see cref="Guard"/>, compared after normalizing spacing and parentheses. A runner group, a bare self-hosted label,
-/// or a runner named by something the workflow doesn't hold (a variable, an input, the event) is a violation.
+/// or a runner named by something the workflow doesn't hold (a variable, an input, the event) is a violation. It fails
+/// closed (R8b, Quality B221/B222 on #3831): a value is hosted only when it resolves to a known hosted label, a matrix
+/// only when every value (include: too) does, or it is the one named key, ci.yml product's product-os, whose values
+/// CiRunnerResolutionTests pins to <see cref="ProductRunners"/>. The self-hosted value itself must be a literal.
 /// </summary>
 static partial class RunnerRouting
 {
     // The whole guard, as quality/README.md gives it. The repository variable lets one setting flip the pool off.
-    internal const string Guard ="vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)";
+    internal const string Guard = "vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)";
     static readonly string[] Privileged = ["pull_request_target", "workflow_run"];
+    // What plan.ps1 may put in ci.yml product's matrix (CiPlan pins the binding; the test pins plan.ps1 and CiPlan).
+    internal static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
+    const string ProductMatrix = "${{ fromJSON(needs.plan.outputs.product-os) }}";
     static readonly HashSet<string> Needed = [.. Conjuncts(Expr.Parse(Guard)).Select(c => c.ToString())];
+    // The one alternative (R8b): a run by hand on main with use_ab_ci, to try the pool before the variable flips. Only
+    // people with write access can dispatch, and only main's workflow runs. Exactly "(guard) || <this>", as one conjunct.
+    internal const string Dispatch = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci";
+    static readonly string GuardOrDispatch = Expr.Parse($"({Guard}) || {Dispatch}").ToString();
 
     // The labels only: not "--deny-self-hosted-runners", which names an option, not a runner.
     [GeneratedRegex(@"(?<![\w-])(ab-ci|self-hosted)(?![\w-])", RegexOptions.IgnoreCase)]
     private static partial Regex Label();
     [GeneratedRegex(@"^\s*\$\{\{(.*)\}\}\s*$", RegexOptions.Singleline)]
     private static partial Regex WholeExpression();
-    // GitHub-hosted labels. Any other label (windows, x64, a custom one) can match the pool's labels, so it needs the guard.
-    [GeneratedRegex(@"^\s*(ubuntu-(latest|\d{2}\.\d{2}(-arm)?)|windows-(latest|\d{4}|11-arm)|macos-(latest|\d{2}(-large|-xlarge|-intel)?))\s*$", RegexOptions.IgnoreCase)]
+    // An allowlist of GitHub-hosted forms (R8b): ubuntu-*, windows-latest, windows-20xx, windows-11-arm, macos-*.
+    // Anything else, "windows-x64" included, may be a self-hosted pool's label.
+    [GeneratedRegex(@"^(ubuntu-[a-z0-9.-]+|windows-(latest|20\d\d|11-arm)|macos-[a-z0-9.-]+)$")]
     private static partial Regex Hosted();
-    // Sources the workflow doesn't hold: a matrix or a job output built from them may name any runner (R4zzB226 P1-1).
-    [GeneratedRegex(@"(?<![\w.])(vars|inputs|env|secrets)\.|(?<![\w.])github\.event(?!\w)")]
-    private static partial Regex Untrusted();
-    static bool MaySelfHost(string label) => Label().IsMatch(label) || !Hosted().IsMatch(label);
+    // What a matrix built by an expression may read and still count as literals: github.event_name, nothing else.
+    [GeneratedRegex(@"\b(needs|vars|inputs|steps|env|secrets|matrix|jobs|strategy|runner)\.|github\.(?!event_name\b)")]
+    private static partial Regex ContextRead();
 
     public static IReadOnlyList<string> Violations(string yaml, string file)
     {
@@ -42,12 +53,9 @@ static partial class RunnerRouting
         if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode map) { return []; }
         var jobs = map.Children.Where(p => p.Key is YamlScalarNode && p.Value is YamlMappingNode)
             .ToDictionary(p => ((YamlScalarNode)p.Key).Value!, p => (YamlMappingNode)p.Value, StringComparer.Ordinal);
-        // The jobs whose own text names a label, or whose outputs read a source the workflow doesn't hold: a runner chosen
-        // from their outputs can carry anything. A job whose outputs come from its own steps (ci.yml's plan) stays allowed.
-        var labelled = jobs.Where(p => Label().IsMatch(Text(p.Value))
-                || p.Value.Children.TryGetValue(new YamlScalarNode("outputs"), out var outputs) && Untrusted().IsMatch(Text(outputs)))
-            .Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         var privileged = Triggers(root).Intersect(Privileged).ToList();
+        // The dispatch alternative reads inputs.use_ab_ci: only a boolean input is safe ('false' as a string is truthy).
+        var booleanDispatch = DispatchInputType(root, "use_ab_ci") == "boolean";
         var problems = new List<string>();
         foreach (var (name, job) in jobs)
         {
@@ -59,10 +67,11 @@ static partial class RunnerRouting
             {
                 routes.AddRange(inputs.Children.Values.Where(v => Label().IsMatch(Text(v))));
             }
-            var strategy = job.Children.TryGetValue(new YamlScalarNode("strategy"), out var s) ? Text(s) : "";
-            // A matrix value is a literal set when its strategy lists literals: nothing the workflow doesn't hold, no output.
-            var literalMatrix = !Untrusted().IsMatch(strategy) && !labelled.Any(other => other != name && strategy.Contains($"needs.{other}.", StringComparison.Ordinal));
-            var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, strategy, labelled, name), literalMatrix)).OfType<string>().ToList();
+            var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, job, name, file))).OfType<string>().ToList();
+            if (!booleanDispatch && routes.Any(r => Text(r).Contains("inputs.use_ab_ci", StringComparison.Ordinal)))
+            {
+                problems.Add($"{file} job {name} reads inputs.use_ab_ci, which must be a workflow_dispatch input of type: boolean (as a string, 'false' is truthy)");
+            }
             if (whys.Count == 0) { continue; }
             if (whys.FirstOrDefault(w => w.Length > 0) is { } why) { problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({Guard}) around it: {why}"); }
             foreach (var trigger in privileged) { problems.Add($"{file} job {name} can take a self-hosted runner in a workflow that a {trigger} can run"); }
@@ -71,39 +80,33 @@ static partial class RunnerRouting
     }
 
     // null: never self-hosted. "": self-hosted only behind the whole guard. Otherwise why not.
-    static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost, bool literalMatrix)
+    static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost)
     {
         if (runsOn is YamlMappingNode mapping)
         {
             if (mapping.Children.ContainsKey(new YamlScalarNode("group"))) { return "a runner group"; }
-            return mapping.Children.TryGetValue(new YamlScalarNode("labels"), out var labels) ? Unguarded(labels, maySelfHost, literalMatrix) : null;
+            return mapping.Children.TryGetValue(new YamlScalarNode("labels"), out var labels) ? Unguarded(labels, maySelfHost) : null;
         }
         if (runsOn is YamlSequenceNode sequence)
         {
-            var each = sequence.Children.Select(item => Unguarded(item, maySelfHost, literalMatrix)).Where(w => w is not null).ToList();
+            var each = sequence.Children.Select(item => Unguarded(item, maySelfHost)).Where(w => w is not null).ToList();
             return each.Count == 0 ? null : each.FirstOrDefault(w => w!.Length > 0) ?? "";
         }
         var text = (runsOn as YamlScalarNode)?.Value ?? "";
-        if (!text.Contains("${{", StringComparison.Ordinal)) { return MaySelfHost(text) ? $"the label {text.Trim()}" : null; }
+        if (!text.Contains("${{", StringComparison.Ordinal)) { return Hosted().IsMatch(text.Trim()) ? null : $"the label {text.Trim()}, not a known hosted one"; }
         var whole = WholeExpression().Match(text);
         Expr expr;
         try { expr = whole.Success && !whole.Groups[1].Value.Contains("${{", StringComparison.Ordinal) ? Expr.Parse(whole.Groups[1].Value) : throw new FormatException(); }
         catch (FormatException) { return $"{text.Trim()} isn't one expression this check can read"; }
-        // A label used as a condition is never the value GitHub returns, but it is no guard either: say so.
-        if (Tested(expr).FirstOrDefault(NamesLabel) is { } tested) { return $"{tested} is tested, not guarded"; }
         var reachable = Values(expr, []).Where(v => maySelfHost(v.Value)).ToList();
-        if (reachable.Count == 0) { return null; }
-        var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions));
+        // A label anywhere but the guarded value (tested, say) is no guard: fail.
+        if (reachable.Count == 0) { return Label().IsMatch(text) ? $"{text.Trim()} names the pool, but not as the guarded value" : null; }
+        var open = reachable.FirstOrDefault(v => !Needed.IsSubsetOf(v.Conditions) && !v.Conditions.Contains(GuardOrDispatch));
         if (open.Value is not null) { return $"{open.Value} is reached without it"; }
-        // Even behind the guard, only a literal label set may name the pool: a variable, input, event field, matrix or
-        // output from them, or a built string could name any runner, so it fails closed (R4zzB226 P1-1).
-        var dynamic = reachable.FirstOrDefault(v => v.Value is not Expr.Literal && !(literalMatrix && v.Value is Expr.Path { Text: var m } && m.StartsWith("matrix.", StringComparison.Ordinal))
-            && !(v.Value is Expr.Call { Args: [Expr.Literal] } call && call.Name.Equals("fromJSON", StringComparison.OrdinalIgnoreCase)));
-        if (dynamic.Value is not null) { return $"{dynamic.Value} isn't a literal label set, so even behind the guard it could name any runner"; }
         // The whole shape: GUARD (with any narrowing && conditions) && <the one self-hosted value> || <one hosted fallback>.
         // A second ||, a second self-hosted arm or no hosted fallback is a violation even when each piece is guarded.
         var shaped = expr is Expr.Or { Arms: [Expr.And pool, var fallback] } && reachable.Count == 1
-            && ReferenceEquals(reachable[0].Value, pool.Arms[^1]) && fallback is not (Expr.Or or Expr.And) && !maySelfHost(fallback);
+            && ReferenceEquals(reachable[0].Value, pool.Arms[^1]) && PoolLiteral(pool.Arms[^1]) && fallback is not (Expr.Or or Expr.And) && !maySelfHost(fallback);
         return shaped ? "" : $"{text.Trim()} isn't {Guard} && <self-hosted label> || <hosted label>";
     }
 
@@ -115,56 +118,144 @@ static partial class RunnerRouting
         _ => [(expr, conditions)],
     };
 
-    // The parts of an expression that are only tested, never returned: every && arm but the last, and what ! negates.
-    static IEnumerable<Expr> Tested(Expr expr) => expr switch
-    {
-        Expr.Or or => or.Arms.SelectMany(Tested),
-        Expr.And and => and.Arms[..^1].SelectMany(a => a is Expr.Or or Expr.And or Expr.Not ? Tested(a).Append(a) : [a]).Concat(Tested(and.Arms[^1])),
-        Expr.Not not => Tested(not.Operand).Append(not.Operand),
-        _ => [],
-    };
-
-    static bool NamesLabel(Expr expr) => expr switch
-    {
-        Expr.Literal { Value: string s } => Label().IsMatch(s),
-        Expr.Call call => call.Args.Any(NamesLabel),
-        _ => false,
-    };
-
     static IEnumerable<Expr> Conjuncts(Expr expr) => expr is Expr.And and ? and.Arms.SelectMany(Conjuncts) : [expr];
 
-    // The labels a fromJSON literal holds (a string or an array of strings), or null if it holds anything else.
-    static string[]? JsonLabels(string json)
+    // The self-hosted value: a literal label, or fromJSON of a literal list naming one. Nothing computed.
+    static bool PoolLiteral(Expr value) => value is Expr.Literal { Value: string s } && Label().IsMatch(s)
+        || value is Expr.Call { Name: var n, Args: [Expr.Literal { Value: string json }] } && n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) && Label().IsMatch(json);
+
+    // Whether a value may be anything but a known hosted label. Unknown, unresolved or computed: yes (fail closed).
+    static bool MaySelfHost(Expr value, YamlMappingNode job, string name, string file) => value switch
+    {
+        Expr.Literal { Value: string s } => !Hosted().IsMatch(s),
+        Expr.Literal or Expr.Compare or Expr.Not => false,
+        Expr.Call { Name: var n, Args: [Expr.Literal { Value: string json }] } when n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) => !HostedJson(json),
+        Expr.Path { Text: var p } when p.StartsWith("matrix.", StringComparison.Ordinal) => !HostedMatrix(job, p["matrix.".Length..], name, file),
+        _ => true,
+    };
+
+    static bool HostedJson(string json)
     {
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            return doc.RootElement.ValueKind switch
-            {
-                System.Text.Json.JsonValueKind.String => [doc.RootElement.GetString()!],
-                System.Text.Json.JsonValueKind.Array when doc.RootElement.EnumerateArray().All(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
-                    => [.. doc.RootElement.EnumerateArray().Select(e => e.GetString()!)],
-                _ => null,
-            };
+            using var doc = JsonDocument.Parse(json);
+            var values = doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.EnumerateArray().ToList() : [doc.RootElement];
+            return values.Count > 0 && values.All(v => v.ValueKind == JsonValueKind.String && Hosted().IsMatch(v.GetString()!));
         }
-        catch (System.Text.Json.JsonException) { return null; }
+        catch (JsonException) { return false; }
     }
 
-    static bool MaySelfHost(Expr value, string strategy, HashSet<string> labelled, string self) => value switch
+    // A matrix key is hosted when every value it can take is a literal hosted label: its list, each include: row, and
+    // rows an expression builds from literals alone. Or it is ci.yml product's named key, pinned by the tests.
+    static bool HostedMatrix(YamlMappingNode job, string key, string name, string file)
     {
-        Expr.Literal { Value: string s } => MaySelfHost(s),
-        Expr.Literal or Expr.Compare or Expr.Not => false,
-        // fromJSON of a literal is that literal's labels; of anything else, whatever that is. Any other function (format,
-        // join) can build a label from pieces, so it fails closed (R4zzB226 P2-3).
-        Expr.Call { Name: var n, Args: [Expr.Literal { Value: string json }] } when n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) => JsonLabels(json) is { } labels ? labels.Any(MaySelfHost) : true,
-        Expr.Call { Name: var n } call when n.Equals("fromJSON", StringComparison.OrdinalIgnoreCase) => call.Args.Any(a => MaySelfHost(a, strategy, labelled, self)),
-        Expr.Call => true,
-        Expr.Path { Text: var p } when p.StartsWith("matrix.", StringComparison.Ordinal) =>
-            Label().IsMatch(strategy) || Untrusted().IsMatch(strategy) || labelled.Any(other => other != self && strategy.Contains($"needs.{other}.", StringComparison.Ordinal)),
-        Expr.Path { Text: var p } when p.StartsWith("needs.", StringComparison.Ordinal) => labelled.Any(other => p.StartsWith($"needs.{other}.", StringComparison.Ordinal)),
-        // A variable, an input, the event or anything else the workflow doesn't hold may name any runner.
-        _ => true,
-    };
+        if (!job.Children.TryGetValue(new YamlScalarNode("strategy"), out var st) || st is not YamlMappingNode strategy
+            || !strategy.Children.TryGetValue(new YamlScalarNode("matrix"), out var m) || m is not YamlMappingNode matrix) { return false; }
+        var values = new List<string>();
+        var include = matrix.Children.TryGetValue(new YamlScalarNode("include"), out var inc) ? inc : null;
+        // GitHub reads context keys case-insensitively: OS and os are one key, so both spellings count, and two fail.
+        var owns = matrix.Children.Where(p => p.Key is YamlScalarNode { Value: { } k } && k.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (owns.Count > 1) { return false; }
+        switch (owns.Count == 1 ? owns[0].Value : null)
+        {
+            case YamlScalarNode { Value: var v } when Regex.Replace(v ?? "", @"\s+", " ").Trim() == ProductMatrix:
+                return file == "ci.yml" && name == "product" && key == "os" && include is null;
+            case YamlScalarNode { Value: var v } when v is null || v.Contains("${{", StringComparison.Ordinal): return false;
+            case YamlScalarNode { Value: { } v }: values.Add(v); break;
+            case YamlSequenceNode list when list.Children.All(i => i is YamlScalarNode { Value: { } x } && !x.Contains("${{", StringComparison.Ordinal)):
+                values.AddRange(list.Children.Select(i => ((YamlScalarNode)i).Value!)); break;
+            case null: break;
+            default: return false;
+        }
+        switch (include)
+        {
+            case YamlSequenceNode rows:
+                foreach (var row in rows.Children)
+                {
+                    if (row is not YamlMappingNode r) { return false; }
+                    var cells = r.Children.Where(p => p.Key is YamlScalarNode { Value: { } k } && k.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (cells.Count == 0) { continue; }
+                    if (cells.Count > 1 || cells[0].Value is not YamlScalarNode { Value: { } c } || c.Contains("${{", StringComparison.Ordinal)) { return false; }
+                    values.Add(c);
+                }
+                break;
+            // Rows an expression builds from literals: every string it can yield is parsed as JSON, never scraped (B421 P2-1).
+            case YamlScalarNode { Value: { } built }:
+                if (ContextRead().IsMatch(built) || BuiltRows(built, key) is not { } rowValues) { return false; }
+                values.AddRange(rowValues);
+                break;
+            case null: break;
+            default: return false;
+        }
+        return values.Count > 0 && values.All(v => Hosted().IsMatch(v));
+    }
+
+    // The key's values in rows built by ${{ fromJSON(<literals>) }}, or null if anything can't be read: a string other than
+    // a JSON array of objects, a non-string value, or the key twice in one row (OS and os are one key).
+    static List<string>? BuiltRows(string built, string key)
+    {
+        var whole = WholeExpression().Match(built);
+        Expr expr;
+        try { expr = whole.Success ? Expr.Parse(whole.Groups[1].Value) : throw new FormatException(); }
+        catch (FormatException) { return null; }
+        if (expr is not Expr.Call { Name: var fn, Args: [var arg] } || !fn.Equals("fromJSON", StringComparison.OrdinalIgnoreCase)) { return null; }
+        var found = new List<string>();
+        foreach (var json in Strings(arg) ?? [])
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) { return null; }
+                foreach (var row in doc.RootElement.EnumerateArray())
+                {
+                    if (row.ValueKind != JsonValueKind.Object) { return null; }
+                    var cells = row.EnumerateObject().Where(p => p.Name.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (cells.Count > 1 || cells.Count == 1 && cells[0].Value.ValueKind != JsonValueKind.String) { return null; }
+                    if (cells.Count == 1) { found.Add(cells[0].Value.GetString()!); }
+                }
+            }
+            catch (JsonException) { return null; }
+        }
+        return Strings(arg) is null ? null : found;
+    }
+
+    // Every string a literal-only expression can yield (a literal, format of literals, or the arms of && and ||), or null
+    // if any arm is something else.
+    static List<string>? Strings(Expr expr)
+    {
+        var all = new List<string>();
+        foreach (var (value, _) in Values(expr, []))
+        {
+            switch (value)
+            {
+                case Expr.Literal { Value: string s }: all.Add(s); break;
+                // format of literal-only arguments (ci.yml's app include): every combination of the strings each can yield.
+                case Expr.Call { Name: var n, Args: [Expr.Literal { Value: string f }, .. var rest] } when n.Equals("format", StringComparison.OrdinalIgnoreCase):
+                    var combos = new List<object[]> { Array.Empty<object>() };
+                    foreach (var a in rest)
+                    {
+                        if (Strings(a) is not { } options) { return null; }
+                        combos = [.. combos.SelectMany(c => options.Select(o => (object[])[.. c, o]))];
+                        if (combos.Count > 64) { return null; }
+                    }
+                    try { all.AddRange(combos.Select(c => string.Format(System.Globalization.CultureInfo.InvariantCulture, f, c))); }
+                    catch (FormatException) { return null; }
+                    break;
+                default: return null;
+            }
+        }
+        return all;
+    }
+
+    // The declared type of a workflow_dispatch input, or null when there is no such input or type.
+    static string? DispatchInputType(YamlMappingNode root, string input)
+    {
+        var on = root.Children.FirstOrDefault(p => p.Key is YamlScalarNode { Value: "on" or "true" or "True" }).Value;
+        return on is YamlMappingNode triggers && triggers.Children.TryGetValue(new YamlScalarNode("workflow_dispatch"), out var d) && d is YamlMappingNode dispatch
+            && dispatch.Children.TryGetValue(new YamlScalarNode("inputs"), out var i) && i is YamlMappingNode inputs
+            && inputs.Children.TryGetValue(new YamlScalarNode(input), out var x) && x is YamlMappingNode spec
+            && spec.Children.TryGetValue(new YamlScalarNode("type"), out var type) && type is YamlScalarNode { Value: { } kind } ? kind : null;
+    }
 
     static HashSet<string> Triggers(YamlMappingNode root)
     {
