@@ -23,17 +23,17 @@ permissions:
 
 # A newer push to a pull request cancels that pull request's older run: only the latest head's
 # result counts, and a superseded run only holds runners other work is queued for. First attempts
-# of pushes to main share one group, ci-main, and are never cancelled once running: at most one of
-# them runs and one waits, a newer waiting push run cancelling the one waiting before it starts
-# (re-runs, below, run beside them). GitHub promises no order
-# between them, so nothing here relies on one: each run plans from the last commit main's CI
+# of pushes to main each have a group of their own, ci-main-<sha>, and are never cancelled: every
+# merge gets its full run, and a merge never cancels another's (one shared group kept one running and
+# one waiting run, a newer waiting push run cancelling the one waiting before it started: 3 of 10 main
+# runs on Nov 22; quality/README.md, "CI: speed, runners and what gates main"). GitHub promises no
+# order between them, so nothing here relies on one: each run plans from the last commit main's CI
 # passed on and the latest published release, so untested and unpaid app changes reach a later run, merge-rule
 # ignores cancelled or unfinished product evidence (quality/README.md §4.9), and publish's checks keep
-# releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
-# ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
-# own run id, never cancelled.
+# releases in version and commit order (publish-gate). A re-run (attempt 2 on) has a group of
+# its own too, its run id, never cancelled.
 concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && format('ci-main-{0}', github.sha) || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -141,7 +141,7 @@ jobs:
       # ring; its gate is not the required check. Its own step, so nothing the change runs can
       # write these outputs, the base included.
       # Main's CI base is the newest commit main's CI passed on (a push run, at any attempt) that is
-      # an ancestor of this one: a pending run replaced in ci-main tested nothing, and a failed
+      # an ancestor of this one: a run cancelled before it tested anything proved nothing, and a failed
       # one proved nothing, so their changes are in this diff. A base found but older than
       # needed only tests more. None found, or the runs unreadable, never reads as "no change":
       # the whole ring runs.
@@ -1088,8 +1088,8 @@ jobs:
       contents: write
     # One publish at a time: the checks against what is already out, and the delta's base, hold
     # until the release is up. queue: max keeps every waiting publish, up to 100, where the
-    # default keeps one and lets the next to arrive replace it: a re-run of an old run (which
-    # isn't in ci-main) could otherwise replace a newer run's waiting publish, leaving that run's
+    # default keeps one and lets the next to arrive replace it: a re-run of an old run
+    # could otherwise replace a newer run's waiting publish, leaving that run's
     # app unpublished (#938). A 101st is cancelled, never one already waiting. GitHub doesn't
     # promise the order waiting publishes start in, and it needn't be commit or run order, so the
     # release order is publish-prerelease.ps1's to keep (publish-gate). actionlint 1.7.12 doesn't
