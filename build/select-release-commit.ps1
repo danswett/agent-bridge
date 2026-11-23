@@ -1,8 +1,12 @@
 # Which main commit the release train publishes (docs/app-windows.md, "The release train"):
-# the newest whose CI passed, that follows the latest release's commit, whose run number is
-# above every published version and whose package artifacts for both architectures are still
-# there. Nothing at all when that commit is already out, so an hourly run with nothing new does
+# the newest whose FAST lane (ci.yml: the merge gate) AND FULL lane (full.yml: the x64 self-test, pack and installer,
+# WebKit, spikes, Arm64) both passed, that follows the latest release's commit, whose run number is
+# above every published version and whose FULL run's package artifacts for both architectures are still
+# there. Nothing at all when that commit is already out, or has no FULL run yet, so an hourly run with nothing new does
 # nothing. Pure over its inputs; build/test-select-release-commit.ps1 checks it.
+#
+# A run's Full property is the FULL run for the same commit (its latest attempt): Conclusion, AllJobs (job name -> conclusion)
+# and ArtifactsUnexpired (both architectures' packages, which FULL builds); absent or null when it has none yet.
 #
 # Runs are main's push CI runs, newest first, each as its latest attempt:
 #   Sha, Number (the run number, which is the version's last part), Conclusion,
@@ -34,6 +38,25 @@ function Get-RunRedReason($run) {
     if ($null -eq $allJobs) { return "the jobs' results are unknown" }
     $red = @('failure', 'timed_out', 'startup_failure', 'action_required') + @(if ($run.Conclusion -ceq 'failure') { 'cancelled' })
     $others = @($allJobs.GetEnumerator() | Where-Object { $_.Value -cin $red -and $_.Key -cnotin 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)' } | ForEach-Object { "$($_.Key) ($($_.Value))" })
+    if ($others) { return $others -join ', ' }
+    $null
+}
+
+# The FULL lane (full.yml) gates the release, never a merge (S2, #4104): its x64 self-test, pack and installer must have succeeded, and no
+# other job there may be red, Arm64's apart (owner decision, #2454: Arm64 runs and reports but does not gate). A run with no FULL run
+# yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
+$script:FullRequiredJobs = @('app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)')
+$script:ArmJobs = @('app (win-arm64)', 'app-selftest (win-arm64)', 'app-pack (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
+function Get-FullRedReason($run) {
+    $full = $run.PSObject.Properties['Full']?.Value
+    if ($null -eq $full) { return 'no FULL run for this commit yet' }
+    if ($full.Conclusion -cnotin 'success', 'failure') { return "the FULL run's conclusion is '$($full.Conclusion)'" }
+    $jobs = $full.PSObject.Properties['AllJobs']?.Value
+    if ($null -eq $jobs) { return "the FULL run's jobs' results are unknown" }
+    $missing = @($script:FullRequiredJobs | Where-Object { $jobs[$_] -cne 'success' })
+    if ($missing) { return "FULL: $($missing -join ', ') did not succeed" }
+    $red = @('failure', 'timed_out', 'startup_failure', 'action_required', 'cancelled')
+    $others = @($jobs.GetEnumerator() | Where-Object { $_.Value -cin $red -and $_.Key -cnotin $script:ArmJobs } | ForEach-Object { "FULL: $($_.Key) $($_.Value)" })
     if ($others) { return $others -join ', ' }
     $null
 }
@@ -77,7 +100,9 @@ function Select-ReleaseCommit {
         if ($red) { $why.Add("$($run.Sha) run $($run.Number): $red"); continue }
         $reliedRed = Get-ReliedRedReason $run $Runs
         if ($reliedRed) { $why.Add("$($run.Sha) run $($run.Number): $reliedRed"); continue }
-        if (-not $run.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
+        $fullRed = Get-FullRedReason $run
+        if ($fullRed) { $why.Add("$($run.Sha) run $($run.Number): $fullRed"); continue }
+        if (-not $run.Full.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
         if ($Explain) { return "selected $($run.Sha)" }
@@ -122,12 +147,27 @@ function Get-ReleaseRuns([string]$Repository, [int]$Count = 20) {
             if ($key) { $jobs[$key] = $result }
             $allJobs[$name] = $result
         }
-        $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
-        $prefix = ($names | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$number$") { $Matches[1] } } | Select-Object -First 1)
-        $both = $prefix -and ($names -contains "agent-bridge-windows-$prefix.$number") -and ($names -contains "agent-bridge-windows-arm64-$prefix.$number")
+        # The FULL run for this commit (full.yml; its newest run, latest attempt), and the packages it built: FULL builds under this run's
+        # number (0.1.<number>), so its artifacts carry the version the selector floors against. None yet: Full is $null.
+        $fullRow = @(Invoke-ReleaseGh api "repos/$Repository/actions/workflows/full.yml/runs?head_sha=$sha&per_page=1" --jq '.workflow_runs[] | [.id, .conclusion] | @tsv') | Select-Object -First 1
+        $full = $null
+        $both = $false
+        $prefix = $null
+        if ($fullRow) {
+            $fullId, $fullConclusion = $fullRow -split "`t"
+            $fullJobs = @{}
+            foreach ($job in (Invoke-ReleaseGh api "repos/$Repository/actions/runs/$fullId/jobs?filter=latest&per_page=100" --paginate --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
+                $name, $result = $job -split "`t"
+                $fullJobs[$name] = $result
+            }
+            $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$fullId/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
+            $prefix = ($names | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$number$") { $Matches[1] } } | Select-Object -First 1)
+            $both = $prefix -and ($names -contains "agent-bridge-windows-$prefix.$number") -and ($names -contains "agent-bridge-windows-arm64-$prefix.$number")
+            $full = [pscustomobject]@{ Id = $fullId; Conclusion = $fullConclusion; AllJobs = $fullJobs; ArtifactsUnexpired = [bool]$both }
+        }
         # The in-flight parent this run relied on, from its plan job's plan-base notice (none when there is no record).
         $record = if ($planJob) { @(Invoke-ReleaseGh api "repos/$Repository/check-runs/$planJob/annotations?per_page=100" --jq '.[] | select(.title == "plan-base") | .message') | Select-Object -First 1 } else { $null }
         [pscustomobject]@{ Id = $id; Sha = $sha; Number = [int]$number; Conclusion = $conclusion; Jobs = $jobs; AllJobs = $allJobs
-            Version = $(if ($both) { "$prefix.$number" } else { '' }); ArtifactsUnexpired = [bool]$both; ReliedParent = (ConvertFrom-PlanBase $record) }
+            Version = $(if ($both) { "$prefix.$number" } else { '' }); ArtifactsUnexpired = [bool]$both; Full = $full; ReliedParent = (ConvertFrom-PlanBase $record) }
     }
 }
