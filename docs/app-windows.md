@@ -1112,6 +1112,40 @@ offers **Restart to update**, or Settings, **Check for updates**, then **Restart
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
+### The release train (#2225)
+
+A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
+(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
+Merging never waits for it and it never blocks a merge.
+
+**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
+superseded run that went green still publishes nothing when `main`'s head has since changed the
+app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
+15:36 on Nov 22. The train publishes what was verified, whatever has merged since.
+
+* **Which commit** (`build/select-release-commit.ps1`, fixtures in
+  `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
+  attempt (a successful re-run counts). The first that has all of these:
+  - `quality-gate` and both `app` jobs (x64 and Arm64) succeeded; a cancelled or superseded run
+    counts only if those all did;
+  - its commit follows the latest release's commit;
+  - its run number, the version's last part, is above every published version;
+  - the package artifacts of both architectures are unexpired (7 days).
+
+  One that fails a rule is skipped for the next newest. If the first one found is already
+  released, nothing is published and the run does nothing, so an hourly run with nothing new is
+  a no-op.
+* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+  rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
+  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  refuses a version already out, an older one, or a commit behind the latest release, so the
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice.
+* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is `true` it refuses and fails the run, never publishing
+  unsigned, until it gains the sign step.
+* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+  so a train release carries neither until they are added.
+
 ### Signing
 
 The owner chose **Azure Artifact Signing** (formerly Trusted Signing), reached from CI over
