@@ -37,6 +37,8 @@ export class Relay {
   // known: the account's machines that are offline, from the relay's roster
   // (docs/protocol/roster.md); null from a relay that keeps none.
   onPresence = null;
+  // (frame) => void, for each `registry` and `registry-changed` frame (docs/protocol/roster.md); see watchRegistry().
+  onRegistry = null;
   onClose = null;     // ({code, reason}) => void, once, after ready
   onReceive = null;   // () => void, as each frame arrives, before it is handled
   onLog = null;
@@ -106,6 +108,8 @@ export class Relay {
         ready();
       } else if (m.t === 'presence') {
         this.onPresence?.(Array.isArray(m.devices) ? m.devices : [], Array.isArray(m.known) ? m.known : null);
+      } else if (m.t === 'registry' || m.t === 'registry-changed') {
+        this.onRegistry?.(m);
       } else if (m.t === 'forget-result') {
         const p = this.#forgets.get(m.id);
         if (p) {
@@ -193,6 +197,14 @@ export class Relay {
       this.#forgets.set(id, { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } });
       this.#ws.send(JSON.stringify({ t: 'forget', id, machine }));
     });
+  }
+
+  // The subscription first, then the get: the get's reply proves the subscription is already in place, so
+  // nothing changes between them unseen. A relay from before the registry ignores both frames.
+  watchRegistry() {
+    if (!this.open) { return; }
+    this.#ws.send(JSON.stringify({ t: 'registry-subscribe' }));
+    this.#ws.send(JSON.stringify({ t: 'registry-get', id: 1 }));
   }
 
   close(code = 1000, reason = '') {
