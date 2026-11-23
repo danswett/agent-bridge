@@ -846,12 +846,14 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
 pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
 `true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
 start within about a minute; a queue that grows is the signal to add runners or flip it back.
-  `tools/AgentBridge.Quality/RunnerRouting.cs` reads each `runs-on` as an expression: every value it can resolve to
-  that may name a self-hosted runner (a self-hosted label, or a variable, input or event field the workflow doesn't
-  hold) must be reached only through both whole conjuncts of that guard, compared after normalizing spacing and
-  parentheses, so a swapped or or-chained fallback fails. A runner group, a bare self-hosted label, and any self-hosted
-  job in a workflow that `pull_request_target` or `workflow_run` can run fail too (`CiRunnerRoutingTests`,
-  `CiRunnerGuardProbeTests`).
+  `tools/AgentBridge.Quality/RunnerRouting.cs` parses each `runs-on`, and each `with:` input naming the pool that a
+  reusable workflow's caller passes, as a GitHub expression. The pool is reachable only through the whole shape
+  `<guard> && <self-hosted label> || <hosted label>`: both guard conjuncts exact, other `&&` conditions only narrowing,
+  one `||`, one hosted fallback. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner
+  group, a bare self-hosted label, a runner from a variable, input or event field, a file it can't parse, and a
+  self-hosted job in a workflow `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`,
+  `CiRunnerGuardProbeTests`). Fork-PR approval is not the guard: it only holds a fork's run until someone approves it,
+  and an approved fork run reaches hosted runners only because the guard sends it there.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
@@ -908,7 +910,7 @@ before it publishes (#3769); `publish` moves to the train. Quality alone
 pushes `ci.yml` and the merge rule: this document is the design, step (1) is written as a patch (`docs/design/proposals/ci-per-sha-main-concurrency.diff` on
 branch `sg-ci-gate-diff`: `ci.yml`, the plan's pinned concurrency expression in `tools/AgentBridge.Quality/CiPlan.cs`,
 `CiPlanTests` and the text that named the old group; `git apply` it, the Quality tests pass with it), and step (2)'s `runs-on` is
-the CI builder's: it must carry the exact guard above, which `CiRunnerRoutingTests` checks.
+the CI builder's: it must have the whole shape above, which `RunnerRouting` checks on every workflow.
 
 ### Independent review depth
 

@@ -126,7 +126,7 @@ public sealed class CiRunnerRoutingTests
         var root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output."); }
 
-        var violations = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+        var violations = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.y*ml").Where(f => f.EndsWith(".yml", StringComparison.Ordinal) || f.EndsWith(".yaml", StringComparison.Ordinal))
             .SelectMany(file => RunnerRouting.Violations(File.ReadAllText(file), Path.GetFileName(file))).ToList();
 
         Assert.Empty(violations);
