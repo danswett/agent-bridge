@@ -43,6 +43,7 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
 - **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the command block below (arm the dead-man, drop, scope check, restore, disarm), in order, with the
   event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
   any setting, trust, credential, key or ACL.
+- **Owner's OK (about 09:20 PT).** The owner presses **Restart host** in the app right after each relay-drop block is in place; that restart is what ends the  established relay connection. **No relay-link restart command is added**: none is supported, and this run does not create one.
 - **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on  TCP 443, so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action  change. Every rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
   that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
@@ -72,7 +73,7 @@ Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (N
 New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>
 # 3. Scope check (read): must show only Outbound, the host program, TCP 443, and no 3389.
 Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ | Get-NetFirewallApplicationFilter).Program; ($_ | Get-NetFirewallPortFilter) | Select-Object Protocol, LocalPort, RemotePort }
-# 3b. END the existing relay connection. A block rule is checked when a connection is SET UP, so it does not cut a socket that is already established.
+# 3b. END the existing relay connection (the owner pressing Restart host right after each block was approved by the owner, about 09:20 PT). A block rule is checked when a connection is SET UP, so it does not cut a socket that is already established.
 #     No host command restarts only the relay link (the host CLI has: stop, which ends a session, grants, fleet, launches, sessions, audit, approve, devices,
 #     host-sign, roster-pin, ha and serve), so the OWNER presses the host restart in the app (person-only, guard 67). The restarted host must set up a NEW
 #     connection, and the rule blocks it. Without this press the drop does not happen and the step is not runnable.
@@ -80,10 +81,13 @@ Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ 
 #     nothing; if it returns a row, the drop did not happen: restore (step 4) and void the event.
 Get-NetTCPConnection -OwningProcess <new host process id> -RemotePort 443 -State Established | Where-Object { $_.RemoteAddress -in '<relay addresses from the frozen plan>' }
 # 4. Restore, one command:
-Remove-NetFirewallRule -Group 'SG-relay-drop'
+Remove-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue    # tolerant: the dead-man may already have deleted the group
 # 4b. PROOF of the reconnect (read): the host sets up a new connection by itself (it reconnects with backoff); the same read as 3c now returns a relay address.
 # 5. Disarm the dead-man:
-Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false
+Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false -ErrorAction SilentlyContinue    # tolerant: the dead-man task may be gone already
+# 5b. READ that both are gone (each must return nothing):
+Get-ScheduledTask -TaskName 'SG-relay-drop-revert' -ErrorAction SilentlyContinue
+Get-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue
 ```
 
 **RDP is unaffected** because the rule is outbound only and scoped to the host program and the relay addresses: nothing inbound and no other program is
