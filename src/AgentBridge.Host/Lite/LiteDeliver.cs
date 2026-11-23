@@ -36,6 +36,8 @@ public sealed class LiteDeliver(
     internal LaneComposition? Composition { get; init; }
     // The pump that drains Composition; held so S6 can stop it. Nothing else reads it.
     internal DeliveryDispatchPump? Pump { get; init; }
+    // S5: what the lane tells a sender about an item it dropped or could not confirm; read through Query and Status.
+    internal LaneNoticeSink? Notices { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -84,6 +86,7 @@ public sealed class LiteDeliver(
         var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
             $"{body.Principal.Machine}/{body.Principal.SenderId}");
         var request = Guid.Parse(body.Request);
+        LiteDelivery Told(DeliveryOfferStatus status) => FromLane(status) is var told && Notices?.Describe(request) is { } notice ? told with { Code = notice } : told;
         // Journal NFKC must not restore an escaped attachment token.
         var laneBody = safe.Replace("\uFF20", "(at)", StringComparison.Ordinal);
         // The text was signed for one account, and a local send checks it only before this await (#3595): an account
@@ -96,8 +99,8 @@ public sealed class LiteDeliver(
             if (history.BoundTarget(request, sender) is { } bound && HaContract.NodeId(bound) == target) { id = bound; }
             var prior = history.Query(request, id, sender);
             // A false fence forbids new admission while Offer verifies the existing body's HMAC.
-            if (prior.State != DeliveryOfferState.Refused) { return FromLane(Offer(request, id, sender, laneBody, () => false)); }
-            if (query) { return FromLane(prior); }
+            if (prior.State != DeliveryOfferState.Refused) { return Told(Offer(request, id, sender, laneBody, () => false)); }
+            if (query) { return Told(prior); }
         }
         if (lane is not null) { Resolve(); }
         if (session is null) { return Refused(LiteCodes.NoSuchSession); }
@@ -118,7 +121,7 @@ public sealed class LiteDeliver(
                 source.Get(id) is { Agent: AgentKind.Copilot, Question: null } live && live.ProcessId == pid &&
                 live.Status is SessionStatus.Idle or SessionStatus.Working;
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
-            return FromLane(Offer(request, id, sender, laneBody, Current, Revoked));
+            return Told(Offer(request, id, sender, laneBody, Current, Revoked));
         }
         if (!Idle(session)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(session.Agent, pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }

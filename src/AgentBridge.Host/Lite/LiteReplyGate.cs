@@ -49,13 +49,14 @@ public static class LiteComposition
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
         // The lane (S4) exists only when the host supplies its delivery gate. It stays off until laneDelivery is on; the one pump
         // wakes on the composition's Offered event, and S6 owns stopping it.
-        LaneComposition? lane = null; DeliveryDispatchPump? pump = null;
+        LaneComposition? lane = null; DeliveryDispatchPump? pump = null; LaneNoticeSink? notices = null;
         if (gate is not null)
         {
             lane = new LaneComposition(currentSettings, modeOn, gate, replier, LaneScreens.Create(source, injector, TimeProvider.System), folder, log);
             pump = new DeliveryDispatchPump(lane, source, log);
+            notices = new LaneNoticeSink(lane);
         }
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, Composition = lane, Pump = pump };
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, Composition = lane, Pump = pump, Notices = notices };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)

@@ -651,6 +651,7 @@ async Task<int> ServeAsync(HostHandover handover)
     plannedStops.StopHeld = () => liteDeliver.Pump?.BeginStop();
     using var laneComposition = liteDeliver.Composition;
     await using var lanePump = liteDeliver.Pump;
+    using var laneNotices = liteDeliver.Notices;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an

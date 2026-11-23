@@ -150,6 +150,18 @@ the journal refused, a send is refused busy and never falls back to legacy typin
 pump. Phase 1 S6 stops it: BeginStop runs once a planned stop holds the delivery fence, or a restart commits, and never before,
 because a stop the host then refuses (a delivery outlasting 15 s) leaves it running and BeginStop cannot be undone. An admitted
 delivery is never aborted; the pump and its composition are disposed when the host run ends, the pump first.
+Phase 1 S5 tells the sender what the lane did with a message it dropped or could not confirm, and types into no session (owner
+decision, Nov 22 PT, relayed by Engineering Lead R9: changes A, B and C approved; an owner push is out of S5 and becomes a
+"Delivery failures" setting in the PWA notifications work). A LaneNoticeSink, built beside the pump and disposed with it (S6), is
+the one subscriber of LaneComposition.Notices. Each notice carries a closed DeliveryNoticeCause, and the sink reads only that,
+never the reason text. For an overflow drop, a revoked-authority drop or an unconfirmed handoff it keeps one bounded in-memory
+line (request id and cause, never message text), deduplicated per id and cause. A sender who asks again (Query, Status or a replay)
+gets `dropped id=<id> reason=<r>`, or for an unconfirmed handoff `unconfirmed id=<id>: may have been delivered; not retried`.
+**Change A:** the sender is told through that pull path, not a typed `from=system` fyi to its `reply_to`, which needs a host-authority
+sender and the urgent lane and loops when the lane is full; a typed notice is a later slice.
+**Change B:** notices live in memory for the host run and are not rebuilt on replay (authority is memory-only, Option A); the journal
+drop record survives a restart.
+**Change C:** S5 adds no 120 s unconfirmed timer and no status-surface warning; a notice is raised when the handoff fails.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
