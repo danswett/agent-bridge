@@ -511,7 +511,14 @@ The sender's envelope `generation` is diagnostic only: the receiver fences on it
 Wire operation (G9c2). `fleet.launch` is listed in `RemoteAuthorization.HostOperations`, so it is served only to a
 host peer of the same account, over the relay channel, and never on this machine's own pipe. A launch that is
 accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
-documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse. Every refused use is audited on the `relay` path, including a verified caller's refusal before the shared pipeline (grant missing or revoked, subject not named): the row names the source host and the grant; if it cannot be written the refusal is `audit-unavailable`.
+documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse.
+
+Sender gates (G9c2), as `AgentLiteSender` does for messaging. The sending host checks the lite kill and the settings switch (the host settings with launch, agents or
+inbound launch on and not read-only: the same conditions the receiving gate refuses as `kill-switch`) before AND after signing, and rechecks the agent credential after the
+signer returns, so a kill, a settings change or a lapsed caller signs and sends nothing. A cancel, or a kill while waiting for the reply, after the send is `unconfirmed`
+(exit 7), never a refusal and never a resend. The source host audits its own refusals before anything is sent (the row names the request, grant, caller and reason, and
+the refusal is `audit-unavailable` if it cannot be written). Only the fixed receipt codes of the CLI refusal table are believed: a reply naming another reason is
+`unconfirmed`.
 
 Receiver order:
 

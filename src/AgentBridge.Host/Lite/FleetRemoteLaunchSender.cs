@@ -22,7 +22,8 @@ public interface IFleetLaunchLink
 // local agent credential afresh (the AP1 check the receiver relies on), seals a FleetActionEnvelope with the host key, sends once,
 // and reports a typed receipt. It never retries, never queues for an offline peer and never falls back to HA.
 public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredentials credentials,
-    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, TimeProvider? clock = null)
+    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, TimeProvider? clock = null, ILiteMode? mode = null, Func<bool>? settingsOn = null,
+    AgentAuditLog? audit = null, TimeSpan? watchEvery = null)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
     readonly TimeProvider time = clock ?? TimeProvider.System;
@@ -31,15 +32,32 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
     public bool IsRemote(string? target) =>
         target is not null && !(link.Self.Length >= 16 && (target == link.Self || target == "agent_bridge_" + link.Self[..16]));
 
+    // The lite kill (ILiteMode.On) and the settings switch (launch/agents enabled, not read-only) are the remote-launch kill switches on the source host,
+    // checked before AND after signing, as AgentLiteSender does for messaging. Unset means no extra gate (tests); Program sets both.
+    bool On() => (mode?.On ?? true) && (settingsOn?.Invoke() ?? true);
+
     public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, CancellationToken ct)
     {
-        FleetLaunchReceipt Refuse(string reason) => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);
+        // A refusal before anything is sent is the source host's own refused use: it is audited here. If the row cannot be written, that is the refusal.
+        FleetLaunchReceipt Refuse(string reason)
+        {
+            if (audit is not null && !audit.Append(new AgentAuditEntry("local", input.Request.ToString("D"), credentials.PrincipalOf(caller), caller.Chain,
+                LaunchProtocol.Launch, "remote", "refused", reason) { Grant = input.Grant.ToString("D") }))
+            { return FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "audit-unavailable"); }
+            return FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);
+        }
+        if (!On()) { return Refuse("kill-switch"); }
         var account = link.Account;
         if (string.IsNullOrEmpty(account)) { return Refuse("target-offline"); }
         GrantSubject subject;
         try { subject = FleetGrantLaunch.Subject(credentials, account, link.Self, caller); }
         catch (FleetLaunchDenied) { return Refuse("policy"); }
-        if (signer() is not { } sign) { return Refuse("policy"); }
+        var signed = signer();
+        // Making the key can wait on its file lock: a kill, a settings change or a caller that lapsed meanwhile signs and sends nothing.
+        if (!On()) { return Refuse("kill-switch"); }
+        if (signed is not { } sign) { return Refuse("policy"); }
+        try { FleetGrantLaunch.Subject(credentials, account, link.Self, caller); }
+        catch (FleetLaunchDenied) { return Refuse("policy"); }
         var device = Resolve(input.Target);
         if (device is null) { return Refuse(input.Target is null ? "policy" : "target-offline"); }
         if (device == link.Self) { return Refuse("policy"); }
@@ -57,19 +75,36 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
         }
         catch (ArgumentException) { return Refuse("policy"); }
 
-        // From here a request may have reached the peer: any failure is unconfirmed, never a resend with a fresh nonce.
+        // From here a request may have reached the peer: any failure, a cancel, or a kill while waiting is unconfirmed, never a resend with a fresh nonce.
+        using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var watching = new CancellationTokenSource();
+        var watcher = mode is null && settingsOn is null ? Task.CompletedTask : Task.Run(async () =>
+        {
+            try
+            {
+                using var tick = new PeriodicTimer(watchEvery ?? TimeSpan.FromMilliseconds(500));
+                while (await tick.WaitForNextTickAsync(watching.Token))
+                {
+                    if (!On()) { flight.Cancel(); return; }
+                }
+            }
+            catch (OperationCanceledException) { }
+        });
         try
         {
-            var reply = await link.RequestAsync(device, account, FleetRemoteLaunch.Op, request, ct);
+            var reply = await link.RequestAsync(device, account, FleetRemoteLaunch.Op, request, flight.Token);
             var receipt = reply.ValueKind == JsonValueKind.Object && reply.TryGetProperty("result", out _)
                 ? reply.Deserialize<FleetLaunchReceipt>(ProtocolJson.Options) : null;
-            return receipt is not null && receipt.Request == input.Request && receipt.Grant == input.Grant ? receipt : Unconfirmed();
+            // Only the fixed receipt codes are believed: a reply that names another reason is not a result this host can show.
+            return receipt is not null && receipt.Request == input.Request && receipt.Grant == input.Grant
+                && (receipt.Reason is null || FleetLaunchCommands.Reasons.Contains(receipt.Reason, StringComparer.Ordinal)) ? receipt : Unconfirmed();
         }
         catch (LitePeerNotTrustedException) { return Refuse("peer-not-trusted"); }
         catch (LitePeerOfflineException) { return Refuse("target-offline"); }
-        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { return Unconfirmed(); }
+        catch (Exception) { return Unconfirmed(); }
+        finally { watching.Cancel(); await watcher; }
 
-        FleetLaunchReceipt Unconfirmed() => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Unconfirmed), input, "unconfirmed");
+        FleetLaunchReceipt Unconfirmed() => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Unconfirmed), input, null);
     }
 
     // A 32-hex device id, or the 29-character node id (agent_bridge_ + first 16 hex) resolved against present hosts only.
