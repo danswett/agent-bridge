@@ -781,8 +781,9 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
-            foreach (var send in plan.Sends)
+            for (var next = 0; next < plan.Sends.Count;)
             {
+                var send = plan.Sends[next];
                 if (send.After is { } after)
                 {
                     try { box = await AwaitBoxAsync(agent, pid, after); }
@@ -797,7 +798,11 @@ public sealed partial class ReplyService : ISessionReplier
                         return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
-                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
+                // The sends that follow with no wait for the box (a long Claude reply's chunks) go to the worker as one plan,
+                // each attached, typed and paused in turn, the screen check on the first only: nothing has changed it but its own keys.
+                var group = new List<KeySend> { AgentReply.Key(send, box.Rows) };
+                for (next++; next < plan.Sends.Count && plan.Sends[next].After is null; next++) { group.Add(AgentReply.Key(plan.Sends[next], null)); }
+                var keys = new KeyPlan(group) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
                 // Once, with the typing slot held and every fence passed, just before the first key (the Copilot path's call).

@@ -74,10 +74,9 @@ sealed class MergeRuleConfig
             missing.Add("copilot_waiver.second_review");
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
-        if (config.Arm64Waiver is { } arm64 && (arm64.Switch != "ARM64_WAIVER" || arm64.Until == default
-            || arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
+        if (config.Arm64Waiver is { } arm64 && (arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
-            throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the three arm64 jobs.");
+            throw new FormatException("arm64_waiver needs exactly the three arm64 jobs.");
         if (config.CodexWaiver is { } codex && (codex.Switch != "CODEX_WAIVER" || string.IsNullOrEmpty(codex.Description) || codex.Description != codex.Description.Trim()))
             throw new FormatException("codex_waiver needs CODEX_WAIVER and a description with no surrounding spaces.");
         return config;
@@ -119,10 +118,9 @@ sealed class MainGreenConfig
 sealed class Arm64WaiverConfig
 {
     public List<string> Jobs { get; set; } = [];
-    public DateTimeOffset Until { get; set; }
-    public string Switch { get; set; } = "";
 
-    public bool Active(DateTimeOffset now, string? value) => Switch == "ARM64_WAIVER" && value == "on" && now < Until;
+    // Permanent (owner, Nov 22, #2454): Arm64 jobs run and report but never gate. Exact names only.
+    public bool Active() => true;
 
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
         && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")

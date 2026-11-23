@@ -1946,30 +1946,27 @@ public class MergeRuleTests
         }
     }
 
-    const string WaiverYaml = """
-        arm64_waiver:
-          switch: ARM64_WAIVER
-          until: 2026-11-27T08:00:00Z
-          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
-        """;
+    // A fixed clock for the tests (the waiver itself no longer expires, owner decision #2454).
     static readonly DateTimeOffset WaiverExpiry = new(2026, 11, 27, 8, 0, 0, TimeSpan.Zero);
 
+    const string WaiverYaml = """
+        arm64_waiver:
+          jobs: [app (win-arm64), app-installer (win-arm64), product (windows-11-arm)]
+        """;
+
     [Theory]
-    [InlineData("2026-11-27T07:59:59Z", "on", "app (win-arm64)", true)]
-    [InlineData("2026-11-27T08:00:00Z", "on", "app (win-arm64)", false)]
-    [InlineData("2026-11-27T08:00:01Z", "on", "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "on", "app (win-arm64)", true)]
-    [InlineData("2026-11-20T08:00:01Z", null, "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "off", "app (win-arm64)", false)]
-    [InlineData("2026-11-20T08:00:01Z", "on", "light", false)]
-    public void The_repository_arm64_waiver_obeys_the_renewed_window_and_exact_job_scope(
-        string now, string? setting, string job, bool allowed)
+    [InlineData("app (win-arm64)", true)]
+    [InlineData("app-installer (win-arm64)", true)]
+    [InlineData("product (windows-11-arm)", true)]
+    [InlineData("light", false)]
+    [InlineData("app (win-x64)", false)]
+    public void The_repository_arm64_waiver_is_permanent_and_has_an_exact_job_scope(string job, bool allowed)
     {
+        // Owner, Nov 22 (#2454): Arm64 jobs run and report but never gate; no switch, no expiry.
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
         var waiver = Assert.IsType<Arm64WaiverConfig>(config.Arm64Waiver);
 
-        Assert.Equal(allowed, waiver.Active(DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture), setting)
-            && waiver.Allows(job, "failure"));
+        Assert.Equal(allowed, waiver.Allows(job, "failure"));
     }
 
     [Fact]
@@ -1992,13 +1989,23 @@ public class MergeRuleTests
     }
 
     [Theory]
-    [InlineData("ARM64_WAIVER", "ARM64_WAIVER_TYPO")]
-    [InlineData("2026-11-27T08:00:00Z", "0001-01-01T00:00:00Z")]
     [InlineData("app-installer (win-arm64)", "app-installer (win-x64)")]
     public void An_incomplete_or_broadened_waiver_config_is_rejected(string before, string after)
     {
         var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
         Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace(before, after, StringComparison.Ordinal)));
+    }
+
+    // The waiver is permanent (#2454): the block takes only its jobs, so a leftover until: or switch: fails the load.
+    [Theory]
+    [InlineData("until: 2026-11-27T08:00:00Z")]
+    [InlineData("switch: ARM64_WAIVER")]
+    public void A_leftover_until_or_switch_in_the_arm64_waiver_block_fails_the_config_load(string leftover)
+    {
+        var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        Assert.Contains("\n  jobs:", yaml.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+
+        Assert.ThrowsAny<Exception>(() => MergeRuleConfig.Parse(yaml.ReplaceLineEndings("\n").Replace("\n  jobs:", "\n  " + leftover + "\n  jobs:", StringComparison.Ordinal)));
     }
 
     static string WaiverPullRequest(string name = "app (win-arm64)", string result = "FAILURE",
@@ -2010,25 +2017,21 @@ public class MergeRuleTests
                 createdAt = "2026-11-03T20:01:00Z", creator = new { login = "danswett" } }]);
 
     [Theory]
-    [InlineData("on", -1, "success")]
-    [InlineData("on", 0, "failure")]
-    [InlineData("on", 1, "failure")]
-    [InlineData(null, -1, "failure")]
-    [InlineData("off", -1, "failure")]
-    [InlineData("ON", -1, "failure")]
-    public void The_arm64_waiver_reads_clock_and_switch_once_and_expires_at_the_exact_boundary(string? value, int seconds, string state)
+    [InlineData(null, -1)]
+    [InlineData("on", -1)]
+    [InlineData("on", 1)]
+    [InlineData("off", 3650)]
+    [InlineData("ON", 400)]
+    public void The_arm64_waiver_ignores_the_clock_and_any_switch_value(string? value, int days)
     {
+        // Owner, Nov 22 (#2454): permanent. A failed Arm64 job never blocks, whatever ARM64_WAIVER says or the date.
         var config = WriteConfig(arm64Waiver: true);
         var github = new FakeGitHub(WaiverPullRequest());
-        var clocks = 0;
-        var switches = 0;
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain,
-                () => { clocks++; return WaiverExpiry.AddSeconds(seconds); },
-                name => { switches++; Assert.Equal("ARM64_WAIVER", name); return value; });
-            Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.Equal((1, 1), (clocks, switches));
+                () => new DateTimeOffset(2026, 11, 27, 8, 0, 0, TimeSpan.Zero).AddDays(days), _ => value);
+            Assert.Contains(" success merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
         }
         finally { File.Delete(config); }
     }
@@ -2038,6 +2041,8 @@ public class MergeRuleTests
     [InlineData("app-installer (win-arm64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("product (windows-11-arm)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "success")]
     [InlineData("app (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("relay-image-sarif", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
+    [InlineData("pwa-e2e", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("app-installer (win-x64)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("product (ubuntu-latest)", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
     [InlineData("lint", "FAILURE", "CI", "SUCCESS", "500", "FAILURE", "github-actions", "failure")]
@@ -2266,8 +2271,9 @@ public class MergeRuleTests
     [InlineData("product (windows-11-arm)", -1, "success")]
     [InlineData("app (win-x64)", -1, "failure")]
     [InlineData("product (windows-latest)", -1, "failure")]
-    [InlineData("app (win-arm64)", 0, "failure")]
-    public void Main_green_waives_only_the_exact_failed_arm64_instances_while_active(string failed, int seconds, string state)
+    [InlineData("app (win-arm64)", 0, "success")]
+    [InlineData("product (ubuntu-latest)", -1, "failure")]
+    public void Main_green_waives_only_the_exact_failed_arm64_instances(string failed, int seconds, string state)
     {
         var jobs = new[] { "plan", "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", failed }
             .Distinct().Select((name, id) => new { id, name, status = "completed", conclusion = name == failed ? "failure" : "success", run_attempt = 1 }).ToArray();
@@ -2497,9 +2503,9 @@ public class MergeRuleTests
     [InlineData("deterministic-note", "success", "failure")]
     [InlineData("zero-jobs-cancelled", "success", "success")]
     [InlineData("arm-waiver-on", "failure", "success")]
-    [InlineData("arm-waiver-off", "failure", "failure")]
+    [InlineData("arm-waiver-off", "failure", "success")]
     [InlineData("arm-waiver-on-retried", "success", "success")]
-    [InlineData("arm-waiver-off-retried", "success", "failure")]
+    [InlineData("arm-waiver-off-retried", "success", "success")]
     public void A_newer_run_without_a_real_result_never_hides_an_older_failure_or_a_deterministic_one(string scenario, string older, string state)
     {
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
@@ -2557,7 +2563,7 @@ public class MergeRuleTests
             File.WriteAllText(config, File.ReadAllText(config).Replace("jobs: [light",
                 "infra_steps: { product: [Set up job, Post Run actions/checkout@*], light: [Set up job], app: [Set up job] }, jobs: [light", StringComparison.Ordinal));
             var output = new StringWriter();
-            // The waiver is active only when its switch is on, as Green already honours it.
+            // The waiver ignores the switch: with the config present it is always on (off scenarios prove it).
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain,
                 () => WaiverExpiry.AddSeconds(-1), _ => scenario.StartsWith("arm-waiver-on", StringComparison.Ordinal) ? "on" : null);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);

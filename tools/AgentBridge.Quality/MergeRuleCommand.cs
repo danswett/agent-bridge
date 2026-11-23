@@ -249,8 +249,7 @@ static class MergeRuleCommand
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
-        var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
-        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true)
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active() == true)
         {
             CodexWaiver = config.CodexWaiver is { } codexWaiver && codexWaiver.Switch == "CODEX_WAIVER" && (variable ?? Environment.GetEnvironmentVariable)(codexWaiver.Switch) == "on",
             PostMerge = PostMergeJobs(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "catalog.yml"), output),
