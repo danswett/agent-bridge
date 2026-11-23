@@ -46,6 +46,37 @@ inputs in the same window, for comparison only.
 | Peer not an own-account host | Refused by the sender before any send |
 | Same inputs over the HA transport (comparison) | Same `started` and `registered`, same refusals, same counters, no double launch |
 
+### Which cases have an HA twin, and how a pair is compared
+
+**With an HA twin** (compared, counted in the 100): granted launch, same request id again, response lost, long prompts,
+and the concurrent bursts. Each HA twin is the same inputs sent over the HA transport to the same target in the same
+window, with its own request id.
+
+**Host only, no twin** (counted against their own floors, not the 100): replay of the sealed envelope, the warm-up
+refusal, grant revoked, kill switch, scope or cap exceeded, peer not trusted or not own-account, target offline, and
+source credential revoked. HA has no equivalent of these, so they are judged against the table above, not a twin.
+
+**Pairing.** A Host request and its HA twin are paired by a run-plan row that records both request ids, the inputs
+hash, the source and target, and the time. A request without its twin is not compared and is not counted.
+
+**Outcome mapping** (a pair matches only when both sides land in the same row):
+
+| Host receipt (`fleet launch --json`) | Exit | HA outcome it must match |
+|---|---|---|
+| `outcome` `started`, `registered` true | 0 | `started` and the session registered |
+| `outcome` `refused` or `failed`, with a `reason` | 5 | the same refusal or failure; the Host reason is a documented refusal code |
+| host, pipe or audit not usable | 6 | HA reports the target unavailable |
+| `accepted` or `unconfirmed` (may have started) | 7 | HA `unconfirmed`; both are resolved with `launches status` before they are counted |
+
+**Denominators.** The 100 is compared pairs. A pair that ends exit 7 is counted only after it is resolved to one of the
+other rows. A mismatch is any pair that lands in different rows, or in the same row with a different reason. Pairs
+dropped for a run fault (a host down for a reason outside the case) are listed in the receipt and replaced; they are
+never silently excluded, and more than the plan's stated number dropped makes the run INCONCLUSIVE.
+
+**Counting doubles.** At the end of each request, and again after the 5 minute late wait, list the target's launches
+with `launches list --json` and count entries by request id (`rid`). More than one started session for a request id,
+or a session that appears only after the late wait, is a double launch and fails the run.
+
 ## Pass bar
 
 A run passes only if **all** of the following hold. Quality/SRE sets the numbers and writes them into the
