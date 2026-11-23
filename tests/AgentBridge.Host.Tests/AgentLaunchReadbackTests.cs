@@ -14,9 +14,11 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
     {
         var credentials = new AgentCredentials(f.Root, "machine");
         var channel = new Chan();
-        var token = credentials.Mint("parent", "launch", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeRead);
+        // One start time for the credential and the caller's process: Check refuses them more than 1 s apart, and two reads can straddle a stall (#2558).
+        var started = DateTimeOffset.UtcNow;
+        var token = credentials.Mint("parent", "launch", 100, started, AgentProtocol.ScopeRead);
         credentials.Accept(channel, credentials.Check(token,
-            new AgentBridge.Local.ProcessAncestry([new AgentBridge.Local.PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!);
+            new AgentBridge.Local.ProcessAncestry([new AgentBridge.Local.PeerProcess(100, started, "agent.exe")], true)).Accepted!);
         var service = new SessionService(source, new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
         return (LocalApi.Handler(service, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
             credentials: credentials, audit: new AgentAuditLog(f.Root)), credentials, channel);

@@ -77,12 +77,37 @@ public sealed partial class AgentAuditLog
     {
         profile = profileFolder;
         this.time = time ?? TimeProvider.System;
-        this.log = log ?? (_ => { });
+        // The diagnostic log is a fallback the audit relies on: if it throws, nothing may escape into the caller.
+        this.log = s => { try { log?.Invoke(s); } catch (Exception) { } };
         this.maxBytes = maxBytes;
     }
 
-    // text is only measured and hashed, never kept. Returns whether the line was written.
+    int unauditedHa;
+    internal int PendingUnauditedHa => Volatile.Read(ref unauditedHa);
+
+    // An HA action was performed although its audit row could not be written (owner decision: send anyway and log the failure,
+    // design/ha-gate-counters.md). The event goes to the host diagnostic log, never to the audit file that just failed, and an
+    // in-memory count that the next successful write flushes into the audit as one audit_write_failed row. Only a closed action
+    // kind and a sanitized session id are logged: no answer text, no token, no request body.
+    internal void RecordUnauditedHa(string kind, string? session)
+    {
+        Interlocked.Increment(ref unauditedHa);
+        var id = new string((session ?? "").Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').Take(64).ToArray());
+        log($"audit_write_failed kind={kind} session={(id.Length == 0 ? "unknown" : id)} at={time.GetUtcNow().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)}");
+    }
+
+    // text is only measured and hashed, never kept. Returns whether the line was written. A successful write also flushes any pending
+    // unaudited-HA count, once (the count is taken before it is written and put back if that write fails).
     public bool Append(AgentAuditEntry entry, string? text = null)
+    {
+        var written = AppendCore(entry, text);
+        if (written && Interlocked.Exchange(ref unauditedHa, 0) is var count and > 0
+            && !AppendCore(new AgentAuditEntry("local", Guid.NewGuid().ToString(), "ha:connector", [], "audit_write_failed", count.ToString(CultureInfo.InvariantCulture), "recorded")))
+        { Interlocked.Add(ref unauditedHa, count); }
+        return written;
+    }
+
+    bool AppendCore(AgentAuditEntry entry, string? text = null)
     {
         var now = time.GetUtcNow();
         try

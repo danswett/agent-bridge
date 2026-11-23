@@ -6,6 +6,8 @@ namespace AgentBridge.Protocol;
 // Shared ingress/read validation; only this closed projection can become extension data.
 public sealed class SessionEvidence
 {
+    // The relay advertises this in ready.capabilities when its allow-list takes the evidence members; a host sends them only then.
+    public const string RelayCapability = "rosterEvidence";
     public static IReadOnlyCollection<string> Members { get; } = Array.AsReadOnly(new[]
         { "stale", "attention", "openAsks", "unsentLength", "unsentHash", "observedAt", "lastReplyAt", "provenance", "senderVerified", "owner", "pr", "finished" });
     readonly Dictionary<string, JsonElement> fields;

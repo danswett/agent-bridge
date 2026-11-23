@@ -73,10 +73,14 @@ function scheduleName(raw) {
 export function promptOrigin(session, { repeat = false } = {}) {
   const a = session?.activity ?? {};
   const kind = a.kind === 'notification' ? 'notification' : a.kind === 'scheduled' ? 'schedule' : a.userMessageFrom ?? 'person';
-  // The relay's envelope is typed into the session, so the host may call the text the person's:
-  // a message that carries one is an agent's, whoever typed it, and its envelope is not the body.
-  const relay = a.userMessage && (kind === 'person' || kind === 'agent') ? relayEnvelope(a.userMessage) : null;
-  const from = relay ? 'agent' : kind;
+  const legacy = kind === 'person' && a.userMessageFrom == null && a.userMessageLabel == null;
+  const relay = a.userMessage && (legacy || kind === 'agent') ? relayEnvelope(a.userMessage) : null;
+  if (legacy && relay) {
+    const text = reveal(a.userMessage);
+    const label = `Unverified sender: ${relay.label}`;
+    return { from: 'unverified', icon: null, by: null, repeat: false, text, preview: text.replace(/\s+/gu, ' ').trim(), facts: [label], spoken: aloud(label) };
+  }
+  const from = kind;
   if (from === 'person' || !a.userMessage) { return null; }
   const text = reveal(relay ? relay.body : a.userMessage);
   const preview = text.replace(/\s+/gu, ' ').trim();
@@ -91,7 +95,7 @@ export function promptOrigin(session, { repeat = false } = {}) {
   }
   if (from === 'notification') { return { from, icon: 'driven', by: null, repeat: false, text, preview, facts: ['Notification'], spoken: 'Notification' }; }
   const by = from === 'agent' && session.driver === 'agent' && session.driverPrincipal ? promptFact(session.driverPrincipal, 128) || null : null;
-  const label = from === 'agent' ? promptFact(a.userMessageLabel) || relay?.label || '' : '';
+  const label = from === 'agent' ? promptFact(a.userMessageLabel) : '';
   return from === 'agent'
     ? { from, icon: 'driven', by, repeat: false, text, preview, facts: [label ? `From: ${label}` : 'Sent by an agent'], spoken: label ? aloud(`From: ${label}`) : 'Prompt sent by an agent' }
     : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
