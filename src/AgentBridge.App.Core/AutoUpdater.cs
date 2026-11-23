@@ -767,10 +767,97 @@ public sealed class AutoUpdater
                 await TickOnceAsync();
             }
             while (Volatile.Read(ref again) == 1);
+            await HealHostAsync();
         }
         finally { work.Release(); }
         // One that arrived between the last look and letting go.
         if (Volatile.Read(ref again) == 1) { await TickAsync(); }
+    }
+
+    // #2869 (owner, "Yes, at a quiet moment"): the app newer than its OWN host, whose files for the app's
+    // release are already installed beside it, restarts that host onto them once quiet. The old host
+    // outlived an update (VM1, 3, 6 and 7 ran app 0.1.7845 over hosts on 0.1.7684, and "Check for updates"
+    // said up to date). Not an install: no release is downloaded, nothing stops but the host's own
+    // restart (host.restart: it ends with code 75 once fully stopped, and the launcher starts the
+    // replacement from current\), and Restart to update is unchanged. Only this machine's host, over its
+    // own pipe, is ever restarted: never one reached through the relay. The decision is
+    // VersionSkewHeal.Decide with the installed files' release as the package it needs: a Heal, and the
+    // host the older, goes ahead once the usual quiet moment (no turn running, no question waiting, over
+    // a whole snapshot, settled for SettleFor) has come; once for a release, and a restart that fails
+    // backs off as Decide says (an hour at most), and one that answers is the one for that release.
+    // The halt policy still holds it, as it holds an install between turns: a stale policy, or the
+    // app's release halted.
+    public static readonly TimeSpan HealConfirmWithin = TimeSpan.FromMinutes(2);
+
+    // Restarts that failed (the host did not answer, or refused) before it is left to the person for this release.
+    public const int HealAttemptsMax = 3;
+
+    // The release of the host files installed beside the app (current\), read at the call; null when
+    // they can't be read. A test says it.
+    public Func<string?>? InstalledHostVersion { get; init; }
+
+    string? HostFilesRelease()
+    {
+        try
+        {
+            if (InstalledHostVersion is { } read) { return read(); }
+            var exe = manager.Layout.HostExe;
+            return File.Exists(exe) && System.Diagnostics.FileVersionInfo.GetVersionInfo(exe) is var info ? info.ProductVersion ?? info.FileVersion : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { return null; }
+    }
+
+    string? healApp;
+    string? healSentFor;
+    DateTimeOffset? healSentAt, healLast;
+    int healFailures;
+    bool healSaid;
+
+    async Task HealHostAsync()
+    {
+        try
+        {
+            var now = time.GetUtcNow();
+            // A release waiting, or an install under way: that path is the one that restarts the host.
+            if (Pending is not null || installing || manager.UpdateUnderWay || Volatile.Read(ref claimed) == 1) { return; }
+            if (updater.InstalledVersion is not { } app || host.State != LinkState.Connected || host.Status?.Version is not { } running) { return; }
+            if (healApp != app) { (healApp, healSentFor, healSentAt, healLast, healFailures, healSaid) = (app, null, null, null, 0, false); }
+            var identity = UpdateVersions.Identity(app);
+            if (PolicyUnchecked || (identity is not null && updater.HaltPolicy?.Policy?.Halted?.Contains(identity, StringComparer.Ordinal) == true)) { return; }
+            var decision = VersionSkewHeal.Decide(app, running, HostFilesRelease(), healFailures, healLast, now);
+            if (decision.Kind == SkewHealKind.Converged) { (healSentFor, healSentAt, healLast, healFailures, healSaid) = (null, null, null, 0, false); return; }
+            // Only the host older than the app: a newer host is the app that is behind, which is not this.
+            if (decision.Kind != SkewHealKind.Heal || UpdateVersions.Identity(running) is not { } hostRelease
+                || !ReleaseVersions.TryRun(hostRelease, out var hostRun) || identity is null || !ReleaseVersions.TryRun(identity, out var appRun) || hostRun >= appRun) { return; }
+            // Asked once for this release, and the host answered: that is the one restart. If it still runs the old
+            // release after HealConfirmWithin the files are not what they were read as, and asking again would
+            // only loop: said once, and left for the person (the banner still says it).
+            if (healSentFor == decision.Target && healSentAt is { } sent)
+            {
+                if (now - sent >= HealConfirmWithin && !healSaid)
+                {
+                    healSaid = true;
+                    log($"auto-update: the host still runs {running} after it was restarted onto {decision.Target}; not restarting it again for this release");
+                }
+                return;
+            }
+            if (healFailures >= HealAttemptsMax)
+            {
+                if (!healSaid) { healSaid = true; log($"auto-update: the host restart onto {app} failed {healFailures} times; giving up for this release (the banner still says it)"); }
+                return;
+            }
+            if (!IdleSince(now, SettleFor)) { return; }
+            log($"auto-update: this app runs {app} and its host {running}, whose files for {app} are installed: restarting the host onto them (no install)");
+            (healSentFor, healSentAt) = (decision.Target, now);
+            try { await host.CallAsync(HostOps.Restart, timeout: TimeSpan.FromSeconds(10)); }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                (healSentFor, healSentAt, healLast) = (null, null, now);
+                healFailures++;
+                log($"auto-update: the host did not restart onto {app} ({e.Message}); not trying again for a while");
+            }
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log($"auto-update: the host restart check failed: {e.Message}"); }
     }
 
     async Task TickOnceAsync()

@@ -49,6 +49,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     Func<string?>? preflight;
     // What the updater reads of the window as an install begins (#1167): open, or hidden in the tray.
     bool windowOpen;
+    // The release of the host files installed beside the app (current\), when a test says (#2869).
+    string? hostFiles;
     sealed class Updater : IUpdater
     {
         public int Checks;
@@ -131,6 +133,213 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     // The host as it is when the app starts: its status and sessions, then connected.
+    // #2869 (owner, "Yes, at a quiet moment"): the app newer than its OWN host, whose files for the app's release are
+    // already installed beside it (the old host outlived an update), restarts that host onto them once quiet. Not an
+    // install: no release, no Stop, and Restart to update is unchanged. The host restart is the host's own (exit 75, the
+    // launcher starts the replacement).
+    const string AppRelease = "0.1.7845", OldHost = "0.1.7684";
+
+    async Task StartOldHostAsync(bool betweenTurns = false, string? files = AppRelease, string? hostRelease = OldHost, params Session[] sessions)
+    {
+        if (betweenTurns) { InstallBetweenTurns(); }
+        updater.InstalledVersion = AppRelease;
+        updater.Found = null;
+        hostFiles = files;
+        host.On(HostOps.Restart, _ => new { });
+        await StartAsync(FakeHost.StatusOf() with { Version = hostRelease! }, sessions);
+    }
+
+    async Task QuietTicksAsync(int times = 2)
+    {
+        for (var i = 0; i < times; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.SettleFor);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task An_app_newer_than_its_host_restarts_the_host_onto_its_installed_files_once_quiet_in_either_mode(bool betweenTurns)
+    {
+        await StartOldHostAsync(betweenTurns);
+
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        // Not an install: nothing applied, no Stop, no release.
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+        Assert.Contains(log, l => l.Contains("restarting the host onto", StringComparison.Ordinal));
+    }
+
+    // #3002: an install is refused while another host runs from the installation, and that probe takes the host
+    // that is still exiting for another profile's. The restart here is the host's own (host.restart), over its own
+    // pipe, and touches no other profile: it never asks that probe, so an old host still exiting (or any other
+    // host from the same installation) does not stop it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_restart_is_not_blocked_by_another_host_from_the_same_installation_such_as_its_own_exiting_one()
+    {
+        await StartOldHostAsync();
+        othersProbe = () => "another bridge host (pid 4242) runs from this installation";
+
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        // The install path's gate was never consulted.
+        Assert.Null(othersAskedFor);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task It_is_asked_at_most_once_for_a_version_though_the_host_still_reports_the_old_one()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync();
+
+        for (var i = 0; i < 12; i++) { await QuietTicksAsync(1); time.Advance(TimeSpan.FromMinutes(1)); }
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task It_waits_for_a_quiet_moment_a_turn_running_or_a_question_waiting_is_not_one()
+    {
+        await StartOldHostAsync(false, AppRelease, OldHost, Make.Session("s1", SessionStatus.Working), Make.Session("s2", SessionStatus.Waiting));
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        await GoIdleAsync("s1");
+        await GoIdleAsync("s2");
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    // A question or an approval waiting is not a quiet moment whatever its session's status says: the host carries it,
+    // and a restart would take it from the devices it is waiting on (the owner's "quiet", not only "no turn running").
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_question_or_an_approval_waiting_is_not_a_quiet_moment_even_with_no_turn_running()
+    {
+        await StartOldHostAsync(false, AppRelease, OldHost, Make.Session("s1") with { Status = SessionStatus.Idle, Question = Make.Approval() });
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        await GoIdleAsync("s1");
+        // The session was idle already: wait for its question to be gone from what the app reads.
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Question is null, "the question answered");
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    [Theory]
+    [InlineData("0.1.7684", "0.1.7684", "the files installed are the host's own old ones: there is nothing newer to run")]
+    [InlineData(null, "0.1.7684", "the version of the files can't be read")]
+    [InlineData("0.1.7845", "0.1.7845", "the host already runs the app's release")]
+    [InlineData("0.1.7845", "0.1.7900", "the host is newer than the app: it is the app that is behind")]
+    [InlineData("0.1.7845", "0.0.0", "the host's release is not known")]
+    [InlineData("0.1.7845-dev", "0.1.7684", "a prerelease is not a release it can order")]
+    [Trait("Category", "Network")]
+    public async Task Nothing_restarts_unless_the_host_is_older_and_the_apps_files_are_installed(string? files, string hostRelease, string because)
+    {
+        await StartOldHostAsync(false, files, hostRelease);
+
+        await QuietTicksAsync(4);
+
+        Assert.True(host.Sent(HostOps.Restart).Count == 0, because);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_release_waiting_to_install_takes_the_install_path_not_this()
+    {
+        await StartOldHostAsync();
+        updater.Found = "0.1.7900";
+
+        await QuietTicksAsync(4);
+
+        Assert.Equal("0.1.7900", auto.Pending);
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Network")]
+    public async Task The_halt_policy_holds_it_a_halted_release_and_a_policy_that_is_stale(bool halted)
+    {
+        await StartOldHostAsync();
+        updater.HaltPolicy = halted
+            ? new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", [AppRelease]), time.GetUtcNow(), Fresh: true)
+            : new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", []), time.GetUtcNow().AddDays(-3), Fresh: false);
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_that_fails_is_not_tried_again_until_its_backoff_has_passed()
+    {
+        await StartOldHostAsync();
+        host.On(HostOps.Restart, _ => throw new InvalidOperationException("the host could not restart"));
+
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        // However often it is looked at meanwhile, not before the backoff ends.
+        for (var i = 0; i < 6; i++) { await QuietTicksAsync(1); }
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        time.Advance(UpdateBackoff.Cap);
+        await QuietTicksAsync();
+        Assert.Equal(2, host.Sent(HostOps.Restart).Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_that_keeps_failing_is_tried_three_times_for_a_release_and_then_left_to_the_person()
+    {
+        await StartOldHostAsync();
+        host.On(HostOps.Restart, _ => throw new InvalidOperationException("the host could not restart"));
+
+        // Each backoff passes in full, many times over: still only three.
+        for (var i = 0; i < 10; i++)
+        {
+            await QuietTicksAsync();
+            time.Advance(UpdateBackoff.Cap);
+        }
+
+        Assert.Equal(AutoUpdater.HealAttemptsMax, host.Sent(HostOps.Restart).Count);
+        Assert.Equal(3, AutoUpdater.HealAttemptsMax);
+        Assert.Single(log, l => l.Contains("giving up for this release", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_the_host_answers_but_that_leaves_it_old_is_not_asked_again_for_that_release()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        // The host never reports the new release: said once, and not asked again, however long it goes on.
+        for (var i = 0; i < 180; i++) { time.Advance(TimeSpan.FromMinutes(1)); await QuietTicksAsync(1); }
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        Assert.Single(log, l => l.Contains("not restarting it again for this release", StringComparison.Ordinal));
+    }
+
     async Task StartAsync(HostStatus? status = null, params Session[] sessions)
     {
         host.Status = status ?? FakeHost.StatusOf();
@@ -156,6 +365,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, _ => preflight?.Invoke())
         {
             WindowOpen = () => windowOpen,
+            InstalledHostVersion = () => hostFiles,
         };
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
