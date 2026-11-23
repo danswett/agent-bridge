@@ -132,6 +132,39 @@ public sealed class SkewBannerTests
         Assert.Equal(1, rig.Restarts);
     }
 
+    // The host connection reports every change (its sessions, its state): the banner is told of each, and
+    // says and redraws only when the two versions are not the ones it last read.
+    [Fact]
+    public void A_host_change_that_leaves_the_versions_as_they_were_redraws_nothing()
+    {
+        var rig = new Rig();
+        rig.Bar.HostMayHaveChanged();
+        var raised = 0;
+        rig.Bar.PropertyChanged += (_, _) => raised++;
+
+        for (var i = 0; i < 20; i++) { rig.Bar.HostMayHaveChanged(); }
+
+        Assert.Equal(0, raised);
+        Assert.Equal(1, rig.Said);
+    }
+
+    [Fact]
+    public void A_host_that_comes_up_on_another_release_shows_the_note_and_one_that_catches_up_clears_it()
+    {
+        var rig = new Rig { Host = null };
+        rig.Bar.HostMayHaveChanged();
+        Assert.False(rig.Bar.Shown);
+
+        rig.Host = "0.1.7522";
+        rig.Bar.HostMayHaveChanged();
+        Assert.True(rig.Bar.Shown);
+        Assert.Equal(1, rig.Said);
+
+        rig.Host = rig.App;
+        rig.Bar.HostMayHaveChanged();
+        Assert.False(rig.Bar.Shown);
+        Assert.Equal(1, rig.Said);
+    }
     [Fact]
     public void A_banner_made_without_versions_never_shows_a_skew()
     {

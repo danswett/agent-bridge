@@ -259,4 +259,16 @@ public sealed class AppUpdateViewModel : Observable
         Notify();
     }
     string? problemWith;
+
+    // The host connection reports every change, its sessions' among them: this redraws, and may say the
+    // skew, only when the app's release or the host's is not the pair last read (a host that connects,
+    // restarts onto another release, or goes). The updater's own changes come through Changed.
+    public void HostMayHaveChanged()
+    {
+        var now = versions();
+        if (now == seenVersions) { return; }
+        seenVersions = now;
+        Changed();
+    }
+    (string? App, string? Host) seenVersions;
 }

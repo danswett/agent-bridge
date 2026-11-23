@@ -249,6 +249,9 @@ public partial class App : Application
             // whichever thread made them.
             var appUpdate = AppUpdateViewModel.For(autoUpdater);
             autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
+            // An app and a host on different releases is said in the same bar (#2869 G2): when the host
+            // connects, restarts onto another release or goes.
+            connection.Changed += () => ui.Post(appUpdate.HostMayHaveChanged);
             updater.Changed += () => ui.Post(settings.UpdatesChanged);
             main.AppUpdate = appUpdate;
             // How the update went (#1167): where the window was open for it, it opens again and says

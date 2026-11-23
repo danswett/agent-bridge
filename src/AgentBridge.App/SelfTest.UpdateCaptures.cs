@@ -103,6 +103,9 @@ static partial class SelfTest
                 check(againPlate is null, $"draws Try again in Highlight and HighlightText only{where} ({againPlate})");
             }
 
+            // #2869 G2: the app and its host on different releases, said in this bar, words only.
+            await CaptureSkew(window, main, check, where);
+
             // #1167: the Updating screen, the open window's while the release is handed to
             // Velopack, and the new version's Updated bar, and an install that didn't take.
             await CaptureUpdating(window, main, check, File, Under, Looks, where, contrast);
@@ -180,6 +183,30 @@ static partial class SelfTest
             if (!contrast) { window.RootElement.RequestedTheme = ElementTheme.Default; }
             window.ShowPage("sessions");
         }
+    }
+
+    // The version skew (#2869 G2, owner: banner only): in the update bar's slot, with its words and no
+    // button, then gone once the host is on the app's release.
+    static async Task CaptureSkew(MainWindow window, MainViewModel main, Action<bool, string> check, string where)
+    {
+        var before = main.AppUpdate;
+        try
+        {
+            var host = "0.1.7522";
+            var skew = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null), null, () => ("0.1.7684", host));
+            main.AppUpdate = skew;
+            var bar = ById<InfoBar>(window.RootElement, "UpdateReady");
+            const string words = "The bridge host is on version 0.1.7522 and this app on 0.1.7684. Restart the host in Settings to bring it to 0.1.7684.";
+            var drawn = await Until(() => bar is { IsOpen: true } && bar.Message == words && bar.ActualHeight > 0, TimeSpan.FromSeconds(5));
+            check(drawn, $"draws the version-skew note in the update bar{where} ({bar?.Message})");
+            var action = bar is null ? null : ById<Button>(bar, "RestartToUpdate");
+            check(bar is { Severity: not (InfoBarSeverity.Warning or InfoBarSeverity.Error) } && (action is null || action.Visibility == Visibility.Collapsed),
+                $"draws the skew note as plain information with no button{where}");
+            host = "0.1.7684";
+            skew.HostMayHaveChanged();
+            check(await Until(() => bar is { IsOpen: false }, TimeSpan.FromSeconds(5)), $"takes the skew note away once the host is on the app's release{where}");
+        }
+        finally { main.AppUpdate = before; }
     }
 
     // #1167's captures: the Updating screen (one centred state, no buttons, its title a heading said
