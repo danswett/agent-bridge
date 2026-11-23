@@ -124,6 +124,20 @@ public class AnswerTests
         Assert.Contains("expected a list", Answers.Check(q, Answer("""{"pick":"a"}""")));
     }
 
+    // Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent. An optional one may
+    // still be empty (a Copilot list's minItems then decides, host-answers.md).
+    [Fact]
+    public void A_required_multi_takes_at_least_one_choice_and_an_optional_one_may_be_empty()
+    {
+        var required = Form(new Field { Name = "pick", Type = FieldType.Multi, Options = [new("a"), new("b")], Required = true });
+        Assert.Equal("\"pick\" needs an answer", Answers.Check(required, Answer("""{"pick":[]}""")));
+        Assert.Null(Answers.Check(required, Answer("""{"pick":["a"]}""")));
+        var withOther = Form(new Field { Name = "pick", Type = FieldType.Multi, Options = [new("a")], AllowOther = true, Required = true });
+        Assert.Null(Answers.Check(withOther, Answer("""{"pick":[{"other":"c"}]}""")));
+        var optional = Form(new Field { Name = "pick", Type = FieldType.Multi, Options = [new("a"), new("b")] });
+        Assert.Null(Answers.Check(optional, Answer("""{"pick":[]}""")));
+    }
+
     [Fact]
     public void Booleans_numbers_and_text_must_have_their_own_json_type()
     {

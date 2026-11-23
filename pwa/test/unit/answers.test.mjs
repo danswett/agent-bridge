@@ -48,6 +48,17 @@ test('a multi choice takes a list with at most one other', () => {
   assert.match(checkAnswer(q, fields({ pick: ['z'] })), /not one of the choices/);
 });
 
+// Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent; an optional one may be empty.
+test('a required multi takes at least one choice and an optional one may be empty', () => {
+  const required = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }], required: true });
+  assert.equal(checkAnswer(required, fields({ pick: [] })), '"pick" needs an answer');
+  assert.equal(checkAnswer(required, fields({ pick: ['a'] })), null);
+  const withOther = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }], allowOther: true, required: true });
+  assert.equal(checkAnswer(withOther, fields({ pick: [{ other: 'c' }] })), null);
+  const optional = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }] });
+  assert.equal(checkAnswer(optional, fields({ pick: [] })), null);
+});
+
 test('booleans, numbers and text must have their own JSON type', () => {
   const q = form({ name: 'ok', type: 'boolean' }, { name: 'n', type: 'number' }, { name: 't', type: 'text' });
   assert.equal(checkAnswer(q, fields({ ok: true, n: 3, t: 'hi' })), null);
