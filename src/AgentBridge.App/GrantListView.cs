@@ -18,6 +18,7 @@ public sealed class GrantListView : UserControl
     Action? newGrantRequested, backRequested;
     Button? parked;
     bool working;
+    string shownStatus = "";
     public event Action? NewGrantRequested {
         add { newGrantRequested += value; DispatcherQueue.TryEnqueue(Draw); } remove { newGrantRequested -= value; DispatcherQueue.TryEnqueue(Draw); }
     }
@@ -27,11 +28,12 @@ public sealed class GrantListView : UserControl
     public GrantListView() {
         var panel = new StackPanel { MaxWidth = 920, Padding = new Thickness(24, 20, 24, 24), Spacing = 12 };
         AutomationProperties.SetName(refresh, "Refresh grants"); AutomationProperties.SetName(newGrant, "New grant"); AutomationProperties.SetName(back, "Back to Fleet");
+        AutomationProperties.SetLiveSetting(status, AutomationLiveSetting.Polite);
         foreach (var element in new UIElement[] { back, heading, newGrant, refresh, status, empty, rows }) { panel.Children.Add(element); }
         panel.Children.Add(Words("Revoke blocks new reservations and queued operations. Work already in flight may finish; previously launched sessions are not stopped.", "AbTypeMeta"));
         Content = new ScrollViewer { Content = new Grid { Children = { panel } }, HorizontalScrollMode = ScrollMode.Disabled, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         refresh.Click += async (_, _) => await RefreshAsync();
-        newGrant.Click += (_, _) => { if (!working && viewModel is { Available: true, Busy: false }) { newGrantRequested?.Invoke(); } };
+        newGrant.Click += (_, _) => { if (!working && viewModel is { Busy: false } vm && (vm.Available || vm.CanIssueFirst)) { newGrantRequested?.Invoke(); } };
         back.Click += (_, _) => backRequested?.Invoke();
         Loaded += (_, _) => { if (viewModel is { } vm) { vm.PropertyChanged -= Changed; vm.PropertyChanged += Changed; } Draw(); };
         Unloaded += (_, _) => { if (viewModel is { } vm) { vm.PropertyChanged -= Changed; } };
@@ -50,10 +52,11 @@ public sealed class GrantListView : UserControl
     }
     void Draw() {
         var vm = viewModel; var busy = working || vm?.Busy == true;
-        SetEnabled(refresh, vm is not null && !busy, heading); SetEnabled(newGrant, newGrantRequested is not null && vm?.Available == true && !busy, heading); SetEnabled(back, backRequested is not null, heading);
-        status.Text = string.Join("\n", new[] { vm?.Error ?? "Grants unavailable: no receiver connected.", busy ? "Waiting for the receiver..." : "" }.Where(s => !string.IsNullOrEmpty(s)));
+        SetEnabled(refresh, vm is not null && !busy, heading); SetEnabled(newGrant, newGrantRequested is not null && vm is not null && (vm.Available || vm.CanIssueFirst) && !busy, heading); SetEnabled(back, backRequested is not null, heading);
+        status.Text = string.Join("\n", new[] { vm?.Error ?? "Grants unavailable: no receiver connected.", vm?.FirstIssueNotice ?? "", busy ? "Waiting for the receiver..." : "" }.Where(s => !string.IsNullOrEmpty(s)));
         AutomationProperties.SetName(status, status.Text); status.Visibility = Ui.Some(status.Text); empty.Visibility = Ui.Show(vm is not null && !busy && vm.Rows.Count == 0 && status.Text.Length == 0);
         ReceiptMarkView.SetAnnouncement(status, status.Text);
+        if (shownStatus != status.Text) { shownStatus = status.Text; DispatcherQueue.TryEnqueue(() => FrameworkElementAutomationPeer.CreatePeerForElement(status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged)); }
         while (cards.Count > (vm?.Rows.Count ?? 0)) {
             var last = cards[^1]; if (last.Head.FocusState != FocusState.Unfocused || last.Revoke.FocusState != FocusState.Unfocused) { parked = null; FocusHeading(heading, FocusState.Programmatic); }
             rows.Children.Remove(last.Panel); cards.RemoveAt(cards.Count - 1);
