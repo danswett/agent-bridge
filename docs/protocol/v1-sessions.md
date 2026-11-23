@@ -1752,6 +1752,7 @@ silently (ui.md §7.0; later #913 work).
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
 | `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
+| `failures` | **New (S2b of the push filters).** The machine's delivery lane dropped messages, or could not confirm a handoff, in the last 60 s window: `data.failures` is how many. One per machine per window, a count only (never a session, id or text), sent at the end of the window and only to a device whose `notify.deliveryFailures` is on, always alerting. It opens the machine; an older client reads it as a question and does the same | Delivery lane |
 | `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
@@ -1897,6 +1898,7 @@ Every notice about one session on one machine shares:
 | `signIn` | 6 h | `high` |
 | `restored` | 24 h | `normal` |
 | `group` | 24 h | `high`; `normal` when it changes silently or is withdrawn |
+| `failures` | 6 h | `normal` |
 | `hostGone` (#970, proposed) | 6 h | `high` |
 | `hostBack` (#970, proposed) | 6 h | `normal` |
 
@@ -2355,7 +2357,7 @@ both are sent.
 | Field | Type | Notes |
 |---|---|---|
 | `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message, at any depth. One between runs (a `subagents` entry `idle`) is not counted |
-| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
+| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background. A shell counts from its latest start or "still running" mark, from the session's current process only, and stops counting once that mark is 4 hours old. Copilot refreshes a mark each time it says the command is "still running"; **Claude Code writes no such mark, so a Claude command is never refreshed and stops counting 4 hours after its start, running or not** (`Limits.BackgroundShellStale`): one whose end the transcript never shows would otherwise keep a finished session out of `idle` for ever, and a stuck reader still clears the same day (#1108, #1396). The host drops it only when both clocks agree: the wall clock against the mark, and the host's own monotonic clock against when it first saw that mark, so a clock step (a resumed VM, a time sync) can never end a running shell and a host that starts late counts it until it has watched the limit pass itself; nothing is written to the transcript. **Risk, accepted:** a command that runs silently for more than 4 hours, with no new start or "still running" mark, stops counting and its session reads `idle`. The host adds no process check (a transcript holds no shell process id), and an agent's End still needs the launcher's or Quality's attestation; what a person's End then stops is the person's decision. **What stays unaged:** the shown, relayed and busy-checked `background` is aged, but an AGENT's End (`StopService`, the `person-required` rule) still reads the host-only, never-sent `Session.BackgroundUnaged` and refuses a session holding a shell that merely aged out, so a command that still runs is never ended by an agent as idle |
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
 `background` says why it is not finished. A client shows a session that is `idle` with
@@ -2576,7 +2578,7 @@ that added `background`).
   quoted text (a command printing a transcript, say) and are ignored. Detached shells
   (`started in detached background`) are services meant to outlive the session and are
   not counted. A subagent's shells are its own work, covered by its agent, and do not
-  report their ends to the session.
+  report their ends to the session. A shell whose latest start or "still running" mark is `Limits.BackgroundShellStale` (4 h) old stops counting in what is shown (see `background` above); an agent's End still sees it.
 * **Nothing outlives its CLI process.** `session.shutdown` ends everything, and work
   that began before the session's current process started is dropped: a CLI that was
   replaced can never report back what it started.
@@ -2636,7 +2638,7 @@ command); the shapes are in `tests/fixtures/claude`.
   its `description` and `prompt`, `model` its `resolvedModel`. 2.1.316 launches every
   `Agent` call that way; a result of any other shape lists nothing.
 * **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
-  `run_in_background`) starts one, counted in `background.shells`.
+  `run_in_background`) starts one, counted in `background.shells`. Claude writes no "still running" mark, so it is never refreshed: it stops counting 4 h (`Limits.BackgroundShellStale`) after its start, and a command that runs longer shows as idle there. An agent's End still refuses a session holding it (host-only `Session.BackgroundUnaged`, never sent).
 * **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
   Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
   (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's
