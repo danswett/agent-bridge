@@ -15,7 +15,9 @@ export default defineConfig({
   testIgnore: process.env.PWA_SKIP_E2E ? '**/e2e/**' : undefined,
   timeout: 60000,
   fullyParallel: false,
-  workers: process.env.CI ? 2 : undefined,
+  // Two workers on CI. A trial (#2454) gives Chromium three; WebKit stays at two (a third made it slower
+  // on these 4-CPU runners). The project is the one on the command line, which every CI run passes.
+  workers: process.env.CI ? (process.argv.includes('--project=chromium') ? 3 : 2) : undefined,
   // CI also writes a JSON report, which tools/flaky-report.mjs reads to list every test that
   // passed only on a retry (quality/README.md §5): a retry must not hide a flake.
   reporter: process.env.CI
