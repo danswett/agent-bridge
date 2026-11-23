@@ -98,9 +98,9 @@ public sealed class AgentLiteDeliveryTests
             // As ReplyService: the fence is run once the typing slot is held, and a stale one types nothing.
             OnReply?.Invoke();
             OnWait?.Invoke(request.Text!);
-            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
-            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage });
+            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
@@ -914,6 +914,22 @@ public sealed class AgentLiteDeliveryTests
         var rec = f.Store.Records().Single();
         Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
         Assert.False(f.Store.SlotHeld(Target));
+    }    // NoKeysSent (#3856, reply-deduplication.md "Preserve delivery outcomes"): a refusal whose keys may have gone is unconfirmed, never a refusal code
+    // the sender could answer with a fallback; a refusal that proves no key went stays a refusal.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_refusal_whose_keys_may_have_gone_is_unconfirmed_not_a_refusal_code(bool flag)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = flag ? SessionStatus.Working : SessionStatus.Idle, BusyQueue = flag, Outcome = AnswerOutcome.Refused, Refusal = ReplyRefusal.Busy };
+        f.Launch(LaunchProtocol.Ask);                                                      // KeysGo defaults to true: the keys may have gone
+        Assert.Equal(new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed }, await Send(f));
+    }
+    [Fact]
+    public async Task A_refusal_that_proves_no_key_went_stays_a_refusal_code()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Outcome = AnswerOutcome.Refused, Refusal = ReplyRefusal.Busy, KeysGo = false }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "busy"), await Send(f));
     }    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {

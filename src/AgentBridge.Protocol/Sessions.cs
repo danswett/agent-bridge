@@ -908,6 +908,8 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public ClearedComposer? Cleared { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ReplyRefusal Refusal { get; init; }
+    [JsonIgnore]
+    public ReplyKeyDisposition KeyDisposition { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
     public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Cleared, other.Cleared);
     public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared);
@@ -915,6 +917,10 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 
 [UnknownAs(Other)]
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy, Occupied }
+
+// Whether any key could have reached the session (docs/design/reply-deduplication.md "Preserve delivery outcomes"). Host-only, never on the wire.
+// MayHaveBeenSent is the default and the zero value: NoKeysSent is set only where the code proves no key could have gone, never inferred from a refusal.
+public enum ReplyKeyDisposition { MayHaveBeenSent = 0, NoKeysSent }
 
 public static class Ops
 {

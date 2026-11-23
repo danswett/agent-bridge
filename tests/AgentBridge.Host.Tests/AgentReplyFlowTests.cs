@@ -238,6 +238,31 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)null), (result.Outcome, result.Stage));
     }
 
+    // NoKeysSent (#3856): set only where no key could have gone; a typed reply, or an injector failing after keys, stays MayHaveBeenSent.
+    [Fact]
+    public async Task A_Claude_reply_stopped_before_any_key_is_NoKeysSent_whatever_stopped_it()
+    {
+        console.Rows = ClaudeIdle();
+        var busy = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (busy.Outcome, busy.KeyDisposition));
+        var gone = await ReplyAsync("no-such-session", "Ship it");
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (gone.Outcome, gone.KeyDisposition));
+        var current = true; console.BeforeInject = () => current = false;
+        var stale = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current }, Peer);
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (stale.Outcome, stale.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task A_Claude_reply_that_was_typed_or_whose_injector_failed_after_keys_is_MayHaveBeenSent()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Delivered, ReplyKeyDisposition.MayHaveBeenSent), (typed.Outcome, typed.KeyDisposition));
+        console.OnInject = _ => throw new IOException("the worker died after typing");
+        var failed = await ReplyAsync(ClaudeId, "Ship it again");
+        Assert.Equal((AnswerOutcome.Unconfirmed, ReplyKeyDisposition.MayHaveBeenSent), (failed.Outcome, failed.KeyDisposition));
+    }
     [Fact]
     public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
     {
