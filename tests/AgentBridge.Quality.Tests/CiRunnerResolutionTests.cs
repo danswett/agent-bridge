@@ -59,6 +59,11 @@ public sealed partial class CiRunnerResolutionTests
     [InlineData("{ os: '${{ fromJSON(needs.other.outputs.os) }}' }", false)]
     [InlineData("{ include: \"${{ fromJSON(format('[{0}]', '{\\\"os\\\":\\\"windows-latest\\\"}')) }}\" }", true)]
     [InlineData("{ include: \"${{ fromJSON(format('[{0}]', vars.ROW)) }}\" }", false)]
+    // B226: any read of something the workflow doesn't hold makes the matrix self-hosted-capable.
+    [InlineData("{ include: \"${{ fromJSON(inputs.rows) }}\" }", false)]
+    [InlineData("{ include: \"${{ fromJSON(github.event.inputs.rows) }}\" }", false)]
+    [InlineData("{ include: \"${{ fromJSON(env.ROWS) }}\" }", false)]
+    [InlineData("{ os: ['${{ secrets.RUNNER }}'] }", false)]
     public void A_matrix_runner_is_hosted_only_when_every_value_resolves(string matrix, bool hosted)
         => Assert.Equal(hosted, Check(Workflow("${{ matrix.os }}", matrix)).Count == 0);
 

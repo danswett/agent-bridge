@@ -47,19 +47,16 @@ public sealed class CiRunnerGuardProbeTests
     [InlineData("${{ " + Guard + " && 'ab-ci' || 'windows-latest' || 'ab-ci' }}")]
     [InlineData("${{ " + Guard + " && 'ab-ci' || vars.RUNNER }}")]
     [InlineData("${{ " + Guard + " || 'ab-ci' }}")]
-    // The flag missing, the origin test missing, weakened, negated or widened.
     [InlineData("${{ " + Origin + " && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ " + Flag + " && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ (" + Guard + " || true) && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ !(" + Guard + ") && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ " + Flag + " && (github.event_name == 'push' || github.event_name == 'pull_request') && 'ab-ci' || 'windows-latest' }}")]
     [InlineData("${{ vars.AB_CI_SELF_HOSTED != 'false' && " + Origin + " && 'ab-ci' || 'windows-latest' }}")]
-    // A runner named by something the workflow doesn't hold: a variable, an input, the event.
     [InlineData("${{ vars.RUNNER }}")]
     [InlineData("${{ inputs.runner }}")]
     [InlineData("${{ github.event.pull_request.head.ref }}")]
     [InlineData("${{ format('{0}', vars.RUNNER) }}")]
-    // Text around an expression, which this check can't follow.
     [InlineData("ab-ci-${{ github.run_id }}")]
     // B216's shapes: the pool in both arms, the guard folded into format(), a second runner entry.
     [InlineData("${{ " + Guard + " && 'ab-ci' || 'ab-ci' }}")]
