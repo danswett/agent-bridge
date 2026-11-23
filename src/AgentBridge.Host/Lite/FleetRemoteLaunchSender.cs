@@ -27,7 +27,7 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
     readonly TimeProvider time = clock ?? TimeProvider.System;
 
-    public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, long generation, CancellationToken ct)
+    public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, CancellationToken ct)
     {
         FleetLaunchReceipt Refuse(string reason) => FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);
         var account = link.Account;
@@ -35,14 +35,15 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
         GrantSubject subject;
         try { subject = FleetGrantLaunch.Subject(credentials, account, link.Self, caller); }
         catch (FleetLaunchDenied) { return Refuse("policy"); }
-        if (signer() is not { } sign || generation < 0) { return Refuse("policy"); }
+        if (signer() is not { } sign) { return Refuse("policy"); }
         var device = Resolve(input.Target);
         if (device is null) { return Refuse(input.Target is null ? "policy" : "target-offline"); }
         if (device == link.Self) { return Refuse("policy"); }
 
+        // Generation 0: the sender never learns the grant generation (person-only state); the receiver fences on its own (G5).
         var body = new FleetActionBody(account, link.Self, FleetActionEnvelope.SubjectDigest(subject.Account, subject.SourceHost,
             subject.Session, subject.Credential, subject.ProcessInstance.Pid, subject.ProcessInstance.StartedAt.UtcTicks), device,
-            FleetActionEnvelope.LaunchAction, input.Grant.ToString("D"), generation, input.Request, FleetActionEnvelope.NewNonce(),
+            FleetActionEnvelope.LaunchAction, input.Grant.ToString("D"), 0, input.Request, FleetActionEnvelope.NewNonce(),
             time.GetUtcNow() + Lifetime, FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
         JsonElement request;
         try

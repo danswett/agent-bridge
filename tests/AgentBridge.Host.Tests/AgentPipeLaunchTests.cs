@@ -931,7 +931,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
     {
         using var key = P256KeyPair.Generate();
         var s = OpenSender(key);
-        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), s.Grant.Generation, CancellationToken.None);
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal(1, launcher.Launches);
         Assert.Equal(LaunchOutcome.Unconfirmed, receipt.Result.Outcome);
         Assert.Equal(1, s.Link.Calls);
@@ -947,7 +947,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var s = OpenSender(key, present: case_ != "absent");
         var target = case_ == "own-host" ? s.Link.Self : null;
         if (case_ == "revoked") { s.Pipe.Credentials.Revoke(s.Caller.Session, "test"); }
-        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant, target), s.Grant.Generation, CancellationToken.None);
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant, target), CancellationToken.None);
         Assert.Equal(LaunchOutcome.Refused, receipt.Result.Outcome);
         Assert.Equal(case_ == "absent" ? "target-offline" : "policy", receipt.Reason);
         Assert.Equal(0, s.Link.Calls);
@@ -962,7 +962,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         using var key = P256KeyPair.Generate();
         var s = OpenSender(key, serve: _ => unreadable ? Task.FromResult(JsonSerializer.SerializeToElement(new { nope = 1 }))
             : Task.FromException<JsonElement>(new IOException("lost")));
-        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), s.Grant.Generation, CancellationToken.None);
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal(LaunchOutcome.Unconfirmed, receipt.Result.Outcome);
         Assert.Equal(1, s.Link.Calls);
         Assert.Equal(0, launcher.Launches);
@@ -973,7 +973,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
     {
         using var key = P256KeyPair.Generate();
         var s = OpenSender(key, serve: _ => Task.FromException<JsonElement>(new LitePeerOfflineException("gone")));
-        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), s.Grant.Generation, CancellationToken.None);
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal((LaunchOutcome.Refused, "target-offline"), (receipt.Result.Outcome, receipt.Reason));
         Assert.Equal(1, s.Link.Calls);
     }
