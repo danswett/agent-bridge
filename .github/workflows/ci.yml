@@ -302,26 +302,18 @@ jobs:
           git clean -ffdx
       # The ab-ci runners can't reach nuget.org (run 45277647321, NU1301). On a self-hosted runner only, this job's
       # restores use a config in RUNNER_TEMP (MSBuild reads RestoreConfigFile from the environment; the tool restore
-      # below gets --configfile) that lists only the runner's mirror (AGENT_BRIDGE_NUGET_SOURCE in its .env, https),
-      # clears every fallback folder, and requires every package to carry nuget.org's repository signature: the mirror
-      # can serve nuget.org's own bytes or nothing (NU3034). A mirror that is down fails the restore (NU1301), with no
-      # other source to fall back on. nuget.config, the cache key and every hosted runner's restore are unchanged.
-      # nuget.org's repository certificate (SHA-256 below) rotates rarely and announced: a rotation fails closed here.
+      # below gets --configfile), written by quality/nuget-mirror.ps1 (New-AbCiNuGetConfig, NuGetMirrorTests): the
+      # runner's mirror (AGENT_BRIDGE_NUGET_SOURCE in its .env) must be https://packagefeedproxy.microsoft.io/... with
+      # no user info, port or query; it is the only package and audit source, with no fallback folder; and every
+      # package must carry a nuget.org repository signature, so the mirror serves nuget.org's own bytes or nothing
+      # (NU3034). A mirror that is down fails the restore (NU1301). nuget.config and every hosted restore are unchanged.
       - name: NuGet through the runner's mirror, nuget.org-signed packages only (self-hosted only)
         if: runner.environment == 'self-hosted'
         shell: pwsh
         run: |
-          $src = "$env:AGENT_BRIDGE_NUGET_SOURCE"
-          if ($src -notmatch '^https://[A-Za-z0-9.-]+/[^\s"<>&]*$') { Write-Host '::error::this self-hosted runner names no https mirror in AGENT_BRIDGE_NUGET_SOURCE, and nuget.org is unreachable from it'; exit 1 }
+          . ./quality/nuget-mirror.ps1
           $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
-          @(
-            '<?xml version="1.0" encoding="utf-8"?>', '<configuration>',
-            '  <config><add key="signatureValidationMode" value="require" /></config>',
-            "  <packageSources><clear /><add key=`"mirror`" value=`"$src`" /></packageSources>",
-            '  <fallbackPackageFolders><clear /></fallbackPackageFolders>',
-            '  <trustedSigners><repository name="nuget.org" serviceIndex="https://api.nuget.org/v3/index.json">',
-            '    <certificate fingerprint="1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D" hashAlgorithm="SHA256" allowUntrustedRoot="false" />',
-            '  </repository></trustedSigners>', '</configuration>') | Set-Content -Encoding utf8 $cfg
+          try { New-AbCiNuGetConfig -Source "$env:AGENT_BRIDGE_NUGET_SOURCE" -Path $cfg } catch { Write-Host "::error::$($_.Exception.Message)"; exit 1 }
           "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
       - name: Choose what to test
         # The whole solution when the whole ring runs (a change to the solution, a workflow or
@@ -352,8 +344,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/nuget-packages
-          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
-          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
+          # A self-hosted leg's packages get their own key (the suffix is empty on a hosted runner, whose key is as before).
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ runner.environment == 'self-hosted' && 'ab-ci-' || '' }}${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-{3}', github.job, runner.os, runner.arch, runner.environment == 'self-hosted' && 'ab-ci-' || '') || '' }}
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json. Hosted: this step, as before.
       - run: dotnet tool restore
         if: env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG == ''

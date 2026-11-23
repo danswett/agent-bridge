@@ -901,6 +901,19 @@ start within about a minute; a queue that grows is the signal to add runners or 
   (those machines also run fleet sessions: a runner uses its own account with none of theirs, and a job that needs a secret gets
   it from the workflow, as now). Tests that bind a fixed port, a named pipe or a machine-wide mutex name must take a
   per-job name: a clash there is a bug this move exposes, not one to retry.
+* **NuGet on an ab-ci leg goes through the runner's mirror, and only nuget.org's signed bytes.** The ab-ci machines
+  can't reach nuget.org. Each runner's `.env` names `AGENT_BRIDGE_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json`
+  (set, with the PATH the jobs need, by the owner's `setup/fix-abci-env.ps1`, #4104). On a self-hosted leg only,
+  `ci.yml`'s product writes its restore config with `New-AbCiNuGetConfig` (`quality/nuget-mirror.ps1`,
+  `NuGetMirrorTests`, `CiNuGetMirrorTests`):
+  - that host alone, https, with no user info, port or query, as the only package and audit source;
+  - no fallback folder;
+  - every package required to carry nuget.org's repository signature (its current and two earlier certificates).
+
+  A missing or other mirror, a mirror that is down, or a package nuget.org didn't sign fails the leg; nothing falls
+  back to another source. A hosted leg restores from nuget.org as before. Only product runs on ab-ci: `app` (vpk,
+  publish) has no mirror config and would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
+  an `ab-ci-` part, so it never shares packages with the hosted Windows leg.
 
 **Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
 (`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on
