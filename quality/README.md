@@ -859,6 +859,16 @@ request is otherwise reviewed.
   `independent-review-2` from two different model families, the depth table above applies, and a
   security-subject document is read in full by both reviewers, whichever entitlement ran them.
   Each receipt's description names its model, so a failover is visible afterwards.
+- **Codex outage: the owner waiver (owner decision, #2454, Nov 22 15:25).** While Codex is down, a second receipt
+  (`independent-review-2`) whose description is **exactly** `owner-waiver (Nov 22 15:25)` (the whole description, case-sensitive; one
+  that merely contains it does not count) stands in for the second model family on a sensitive change, next to a successful
+  first receipt (`independent-review`) on the exact head that names a model family (a clean Sonnet FULL review). It never stands
+  in for the first receipt, only an allowed poster's counts, and the merge-rule status says `One model family's review and the
+  owner waiver (owner-waiver (Nov 22 15:25))` when it was used. **Off switch:** the repository variable `CODEX_WAIVER` must be
+  exactly `on`; unset is off and the rule is as before (`codex_waiver` in `quality/merge-rule.yml`; `merge-rule.yml` passes the
+  variable, as it does `ARM64_WAIVER`). **Revert when Codex returns:** delete the `codex_waiver` block, or unset the variable.
+  The rule does not compare the receipt's poster with the PR's author: every receipt and PR here is posted through `danswett`, so
+  that comparison would refuse them all; reviewer independence stays Quality's manual check (AGENTS.md rule 4).
 - **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
   EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
   owner renews it. Never `/login` per session: EMU sign-ins revoke each other.

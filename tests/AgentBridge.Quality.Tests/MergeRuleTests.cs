@@ -9,7 +9,7 @@ public class MergeRuleTests
     const string Head = "abcdef0123456789abcdef0123456789abcdef01";
     const string Older = "0000000123456789abcdef0123456789abcdef01";
 
-    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse("""
+    const string ConfigYaml = """
         base: main
         status_poster: github-actions
         copilot_reviewer: copilot-pull-request-reviewer
@@ -33,11 +33,16 @@ public class MergeRuleTests
           labels: [copilot-waived]
           second_review: independent-review-2
           one_review_paths: [docs/status.md]
+        codex_waiver:
+          switch: CODEX_WAIVER
+          description: "owner-waiver (Nov 22 15:25)"
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
           - src/**pair**
-        """);
+        """;
+
+    static readonly MergeRuleConfig Config = MergeRuleConfig.Parse(ConfigYaml);
 
     static readonly MainFact MainGreen = new("success", "main's CI 2222222 passed");
 
@@ -284,6 +289,86 @@ public class MergeRuleTests
 
         Assert.Equal("failure", verdict.State);
         Assert.Equal([RedMain], verdict.Reasons);
+    }
+
+    // Owner decision (#2454): while Codex is down, a second receipt whose description is EXACTLY the token stands in for the
+    // second model family, next to a clean first receipt that names a family, and only with the CODEX_WAIVER switch on.
+    const string OwnerWaiver = "owner-waiver (Nov 22 15:25)";
+    static readonly string[] WorkflowFiles = [".github/workflows/ci.yml"];
+    static readonly ReviewFact[] Quota = [Copilot with { Body = QuotaError }];
+
+    static StatusFact Token(string description = OwnerWaiver, string state = "success", string creator = "danswett") =>
+        new("independent-review-2", state, description, creator, new DateTimeOffset(2026, 11, 3, 12, 1, 0, TimeSpan.Zero));
+
+    static MergeVerdict Judge(StatusFact[] statuses, bool switchOn = true) =>
+        MergeRule.Evaluate(Config, MainGreen, Pr(WorkflowFiles, reviews: Quota, statuses: statuses) with { CodexWaiverOn = switchOn })!;
+
+    [Fact]
+    public void The_owner_waiver_stands_in_for_the_second_family_next_to_a_clean_first_receipt_when_the_switch_is_on()
+    {
+        var verdict = Judge([First("claude-sonnet-5.5"), Token()]);
+
+        Assert.Equal("success", verdict.State);
+        Assert.Contains(OwnerWaiver, verdict.Description);
+        Assert.Contains("every check passed", verdict.Description);
+    }
+
+    [Fact]
+    public void With_the_switch_off_the_waiver_changes_nothing_and_a_real_second_family_still_passes()
+    {
+        var off = Judge([First("claude-sonnet-5.5"), Token()], switchOn: false);
+        Assert.Equal("failure", off.State);
+        Assert.DoesNotContain(OwnerWaiver, off.Description);
+
+        foreach (var on in new[] { true, false })
+        {
+            var real = Judge([First(), Second()], switchOn: on);
+            Assert.Equal(("success", "Two model families' reviews on file; every check passed"), (real.State, real.Description));
+        }
+    }
+
+    [Theory]
+    [InlineData("owner-waiver (Nov 22 15:25) and more")]
+    [InlineData("see owner-waiver (Nov 22 15:25)")]
+    [InlineData("Owner-waiver (Nov 22 15:25)")]
+    [InlineData("owner-waiver (Nov 22 15:25) ")]
+    [InlineData("owner-waiver (nov 22 15:25)")]
+    [InlineData("owner-waiver")]
+    [InlineData("")]
+    public void Only_the_whole_description_matching_exactly_counts_never_one_that_contains_it(string description)
+    {
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(description)]).State);
+    }
+
+    [Fact]
+    public void The_waiver_never_stands_in_for_the_first_receipt_and_needs_a_clean_first_that_names_a_family()
+    {
+        // No first receipt at all.
+        Assert.Equal("failure", Judge([Token()]).State);
+        // The token as the FIRST receipt's description.
+        Assert.Equal("failure", Judge([new StatusFact("independent-review", "success", OwnerWaiver, "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero)), Token()]).State);
+        // A first receipt that is not a success.
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5", state: "failure"), Token()]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5", state: "pending"), Token()]).State);
+        // A first receipt that names no model family.
+        Assert.Equal("failure", Judge([new StatusFact("independent-review", "success", "CLEAN ENTIRE: security-review (Engineering)", "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero)), Token()]).State);
+    }
+
+    [Fact]
+    public void A_waiver_from_a_poster_who_may_not_review_or_in_a_failed_state_does_not_count()
+    {
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(creator: "someone-else")]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(state: "failure")]).State);
+        Assert.Equal("failure", Judge([First("claude-sonnet-5.5"), Token(state: "pending")]).State);
+    }
+
+    [Fact]
+    public void The_codex_waiver_block_needs_its_switch_and_a_description_or_the_config_refuses_to_load()
+    {
+        var yaml = ConfigYaml;
+        Assert.NotNull(MergeRuleConfig.Parse(yaml).CodexWaiver);
+        Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace("switch: CODEX_WAIVER", "switch: ARM64_WAIVER")));
+        Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace("description: \"owner-waiver (Nov 22 15:25)\"", "description: \"\"")));
     }
 
     [Fact]
