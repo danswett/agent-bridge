@@ -44,10 +44,21 @@ A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt
 | A1 | `launch-remote.ps1` HA transport: the `Call button press` on the machine's `new_session` button, the `new_prompt_payload` write, and the pre-launch snapshot of the HA `new_session_result` and `sessions` entities | Submits a launch as an HA payload plus a button press | `fleet launch --target` (G9c2, then G11 A) | E2 |
 | A2 | `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | E2 |
 | A3 | `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | E3 |
-| A4 | `end-one.ps1`, `end-many.ps1`, `end-sessions.ps1`, `end-remote.ps1` HA stop presses and their `AGENT_HA_AGENT_TOKEN` reads | Ending presses over HA | One `fleet end` per session (G10, G11 B) | E3 |
+| A4 | `end-sessions.ps1`: its `button/press` of `button.<target>_stop` and its `AGENT_HA_AGENT_TOKEN` read. `end-one.ps1`, `end-many.ps1` and `end-remote.ps1` are already thin wrappers with no HA press of their own; they change only in G11 B | Ending press over HA | One `fleet end` per session (G10, G11 B) | E3 |
 | A6 | The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2, **and** only after A3 has stopped reading the ledger (E3) |
 | A7 | The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | E1, then E2 |
 | A8 | `launch-remote.ps1 -Transport` value `HA` and its default | Selects HA | Default `Host` first (cutover row 1); the `HA` value is removed last | Default flip: E1. Value removed: E4 |
+
+Other allowlisted HA call sites that touch launch but are **not** retired by the G9 to G11 stack. They
+are listed so no deletion PR assumes they are covered; each belongs to its own fleet slice and issue
+(the allowlist in fleet `ops/ha-retirement`, tracked in fleet #106, #107, #104, #267 and #1414), and a
+PR that removes one names the issue and the gate that issue's slice sets:
+
+| # | Item | Why it is listed |
+|---|---|---|
+| A9 | `dispatcher/Invoke-DispatcherCycle.ps1` reads of `launch_options` and `new_workspace` | The dispatcher still reads HA launch entities; A7 moves only its `FleetLaunch` calls. These reads must be replaced before B2 can go, so B2 also waits on this row |
+| A10 | `messenger/FleetMessenger.psm1` and its tests, and `tools/handover-updaters/waiting-list-watch.ps1` | HA token reads for messaging; messaging has separate umbrella slices (see "not retired") |
+| A11 | `tools/find-nodes.ps1` and the roster/lookup scripts | Lookup over HA; separate slice, and G9 `--target` resolves from relay presence, not from them |
 
 ### B. Host (agent-bridge): the HA connector's launch surface
 
@@ -57,9 +68,10 @@ A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt
 | B2 | `HaConnector.Launch.cs` `LaunchOptionsSensorAsync` and the `launch_options` sensor it publishes | Read-only list of every agent's launchable options | `fleet launch` and `launch options` on the Host (G9) | E4 |
 | B3 | `HaContract.Launch.cs` (170 lines) and the launch entries in `HaContract.cs`: the card controls, `new_session_result`, `launch_options` discovery | The discovery contract for the launch entities | Nothing; the entities go | E4 |
 | B4 | `new_session_result` sensor and its `recent` attribute, including the expiry read in `ExpireLaunchNoteAsync` | Published launch outcomes (the old read of an outcome) | `launches status --request --json` (#3533) | E4 |
+| B6 | The `HaLauncher` wiring: its parameter on `HaConnector` (`HaConnector.cs`), the construction and hand-over in `Program.cs`, and `src/AgentBridge.Host/HaRunning.cs` where it is held | The seam that gives the HA connector the host's launcher | Nothing; the seam goes with B1 | E4 |
 | B5 | Dispatcher-side HA prompt payload (`newsession/promptpayload`, `newsession/outcome` retained topics) | Carries the launch prompt past HA's 255-character limit | The signed envelope's payload hash and the host launch request | E4 |
 
-B1 to B5 are one deletion PR family: B3 cannot go before B1 (it would not compile), and B1
+B1 to B6 are one deletion PR family: B3 cannot go before B1 (it would not compile), and B1
 cannot go before the dispatcher (A7) has stopped calling it.
 
 ### C. Tests, fixtures and docs that go with them
@@ -71,6 +83,8 @@ cannot go before the dispatcher (A7) has stopped calling it.
 | C3 | Launch cases in `UpkeepTests.cs` and `LiveHomeAssistantTests.cs` | B1, B3 | E4 |
 | C4 | `docs/ha-connector.md` launch sections (`launch_options`, `new_session_result`, the launch card, the purple-edge note for a launched session) and the launch rows in `docs/parity.md` | B1 to B4 | E4 |
 | C5 | Fleet tests that exercise the HA press paths (`Test-LaunchEvidence.ps1` HA cases) | A1 to A4 | The row that unlocks the code |
+| C6 | `tests/AgentBridge.Host.Tests/LaunchFlowTests.HomeAssistant.cs` (launch flow over the HA connector) | B1, B6 | E4 |
+| C7 | `docs/design/ha-gate-counters.md` HA launch parts, and `docs/protocol/local-pipe.md` / `docs/parity.md` lines naming the HA launch entities | B1 to B4, B6 | E4 |
 
 Each deletion PR removes its tests in the same PR, so the suite never tests a path that no
 longer exists and never loses coverage of one that does.
@@ -103,11 +117,11 @@ These stay. A deletion PR that touches one is wrong.
 3. **Wrapper bodies** (A1, A2): after E2, replaced by the G11 A thin wrapper.
 4. **End path** (A3, A4): after E3, replaced by the G11 B thin wrappers.
 5. **Launch bookkeeping** (A6): only after step 4, once A3 no longer reads the ledger.
-6. **Host HA launch surface** (B1 to B5 with C1 to C4): after E4, last, one family of PRs in
-   the order B1/C1/C3, B2/B4, then B3/C2, then docs C4.
+6. **Host HA launch surface** (B1 to B6 with C1 to C7; B2 also needs A9 replaced): after E4, last, one family of PRs in
+   the order B1/B6/C1/C3/C6, B2/B4, then B3/C2, then docs C4/C7.
 7. **`-Transport HA`** (A8 value): with step 6.
 
-Each PR is at most 250 lines (a large file deletion counts as its own PR, per the cap rule),
+Each PR is at most 400 lines against its approved parent (target 250; a large file deletion is judged under the cap rule),
 tests first where code changes, and carries the gate receipt it relies on.
 
 ## Open items for Quality/SRE (not decided here)
