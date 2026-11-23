@@ -348,8 +348,9 @@ only exact item IDs correlate within the still-known readable prompt.
 Legacy text dedup counts currently retained texts only.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
-It omits identity for composite legacy text, text after a tool in the same record,
-duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
+Text after a tool or question in the same record keeps its identity: the index counts those
+parts as history does, once per call id in the readable turn. It omits identity for composite
+legacy text (text, tool, text of one message), duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
 in a turn. A readable new prompt reestablishes identity; text never supplies an id.
 Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
 the first record's part id across both streams and updates. Distinct ids retain equal
