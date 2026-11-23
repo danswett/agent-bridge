@@ -326,7 +326,7 @@ so the bucket is spent on distinct work.
   before each caller's own filtering and authorization.
 * **Not changed:** the sender's refusal when the target is not live in the read, the expected-node fence and the
   name fence (now fresh by the rule above). A held discovery pass on the target is a separate refusal
-  (`sessionResolutionIncomplete`, #3802). The 30 s pin on a lost reply is not changed here (follow-up).
+  (`sessionResolutionIncomplete`, #3802). A lost reply does not hold sharers for the read's own 30 s timeout: a sharer waits at most 5 s (`SharedRead` patience) for a flight, then gives up on it and asks again, and a flight given up on never stores its answer.
 
 ## Offline machines and the cache
 
