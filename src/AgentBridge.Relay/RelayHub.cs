@@ -50,6 +50,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     public Task DrainAsync()
     {
         Draining = true;
+        lock (registryGate) { registrySweeper?.Dispose(); registrySweeper = null; }
         return TimedCloseAllAsync();
     }
 
@@ -94,6 +95,15 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public int RosterInFlight;
         public long RegistryGetAt = -2000;
         public volatile bool RegistrySubscribed;
+        readonly object tailGate = new();
+        Task registryTail = Task.CompletedTask;
+
+        // Registry frames leave a socket in the order they were queued, off the sender's receive loop,
+        // so a slow subscriber delays only its own frames. Each send keeps the 10 s limit.
+        public void EnqueueRegistry(byte[] data)
+        {
+            lock (tailGate) { registryTail = registryTail.ContinueWith(_ => SendAsync(data, WebSocketMessageType.Text), TaskScheduler.Default).Unwrap(); }
+        }
 
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
@@ -197,7 +207,6 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
         string end = "closed";
         Exception? endedBy = null;
-        var dropped = false;
         try
         {
             using var hints = conn.ReleaseHint ? await releaseHints.SubscribeAsync(data => conn.SendAsync(data, WebSocketMessageType.Text)) : null;
@@ -211,7 +220,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             lock (devices)
             {
                 roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
-                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { dropped = registry.Drop(conn.Account.Id, conn.DeviceId); }
+                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { lock (registryGate) { if (registry.Drop(conn.Account.Id, conn.DeviceId)) { NotifyRegistry(conn.Account.Id, new { t = "registry-changed", machine = conn.DeviceId, online = false, record = (object?)null }); } } }
                 ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
             }
             // Read before our own close below: this is what the device sent, not our answer.
@@ -221,7 +230,6 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             socketLog.Information("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
                 conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut, cause);
             await BroadcastPresenceAsync(conn.Account.Id);
-            if (dropped) { await ChangedAsync(conn.Account.Id, new { t = "registry-changed", machine = conn.DeviceId, online = false, record = (object?)null }); }
         }
     }
 
@@ -395,12 +403,21 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         var account = conn.Account.Id;
         if (put)
         {
-            string? error = conn.Kind != "host" ? "not-allowed"
-                : m.TryGetProperty("record", out var rec) ? registry.Put(account, conn.DeviceId, rec) : "bad-record";
+            string? error;
+            // Put and announce together, so frames leave in the order the registry changed.
+            lock (registryGate)
+            {
+                if (conn.Kind != "host") { error = "not-allowed"; }
+                else if (!m.TryGetProperty("record", out var rec)) { error = "bad-record"; }
+                else
+                {
+                    error = registry.Put(account, conn.DeviceId, rec);
+                    if (error is null) { NotifyRegistry(account, new { t = "registry-changed", machine = conn.DeviceId, online = true, record = rec }); }
+                }
+            }
             // Only the outcome is logged, never the record.
             log.LogInformation("registry-put {Conn}: {Outcome}", conn.Tag, error ?? "ok");
             await conn.SendJsonAsync(new { t = "registry-result", id, error });
-            if (error is null) { await ChangedAsync(account, new { t = "registry-changed", machine = conn.DeviceId, online = true, record = JsonDocument.Parse(m.GetProperty("record").GetRawText()).RootElement }); }
             return;
         }
         var now = Environment.TickCount64;
@@ -424,28 +441,35 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await conn.SendJsonAsync(new { t = "registry", id, known }, RegistryJson);
     }
 
-    // registry-changed to the account's subscribed sockets, one at a time so a machine's frames keep
-    // their order. A slow socket costs at most the 10 s send limit; one that fails just misses it.
-    async Task ChangedAsync(string account, object frame)
+    // registry-changed to the account's subscribed sockets. Callers hold registryGate, so the order
+    // frames are queued is the order the registry changed; nothing here waits on a socket.
+    void NotifyRegistry(string account, object frame)
     {
         if (!accounts.TryGetValue(account, out var devices)) { return; }
-        foreach (var c in devices.Values.Where(c => c.RegistrySubscribed).ToList())
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(frame, RegistryJson);
+        foreach (var c in devices.Values) { if (c.RegistrySubscribed) { c.EnqueueRegistry(bytes); } }
+    }
+
+    readonly object registryGate = new();
+    ITimer? registrySweeper;
+
+    // Started by the first subscriber, once: nothing runs for a relay that nobody watches. Disposed on drain.
+    void EnsureRegistrySweeper()
+    {
+        lock (registryGate)
         {
-            try { await c.SendJsonAsync(frame, RegistryJson); } catch (Exception) { }
+            if (registrySweeper is null && !Draining) { registrySweeper = options.Roster.Time.CreateTimer(_ => SweepRegistry(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)); }
         }
     }
 
-    ITimer? registrySweeper;
-
-    // Started by the first subscriber: nothing runs for a relay that nobody watches.
-    void EnsureRegistrySweeper() =>
-        Interlocked.CompareExchange(ref registrySweeper, options.Roster.Time.CreateTimer(_ => _ = SweepRegistryAsync(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)), null);
-
-    async Task SweepRegistryAsync()
+    void SweepRegistry()
     {
         try
         {
-            foreach (var (account, machine) in registry.Expire()) { await ChangedAsync(account, new { t = "registry-changed", machine, online = false, record = (object?)null }); }
+            lock (registryGate)
+            {
+                foreach (var (account, machine) in registry.Expire()) { NotifyRegistry(account, new { t = "registry-changed", machine, online = false, record = (object?)null }); }
+            }
         }
         catch (Exception e) { log.LogWarning(e, "registry sweep failed"); }
     }
@@ -467,7 +491,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
-        if (error is null) { await RosterChangedAsync(conn.Account.Id); await ChangedAsync(conn.Account.Id, new { t = "registry-changed", machine = machine!.ToLowerInvariant(), removed = true }); }
+        if (error is null) { await RosterChangedAsync(conn.Account.Id); lock (registryGate) { NotifyRegistry(conn.Account.Id, new { t = "registry-changed", machine = machine!.ToLowerInvariant(), removed = true }); } }
     }
 
     // The signed device roster (docs/protocol/devices.md): read it, or offer entries to it. Open to
