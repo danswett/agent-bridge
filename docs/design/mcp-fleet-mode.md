@@ -43,6 +43,39 @@ are closed-set values, never text.
 Both stay inside the owner CHANGE rule: any departure (a credential in the MCP process, returning `machineName` by default, acting on a
 remote session) is an owner CHANGE routed through the Chief, not a builder choice.
 
+## Contributor-workflow questions (docs/contributor-workflow.md, "nothing tied to a machine")
+
+1. **Where does it run?** Nothing new runs anywhere. The MCP server is the per-client local process it already is; the fleet list is
+   answered by the **existing host pipe op** `fleet.list` on whichever host the client is already connected to (any one live node
+   is enough). No watcher, scheduler, cache or designated machine is added.
+2. **What happens when that node leaves?** The MCP process ends with its client; another client starts its own. If the host it talks to leaves,
+   the call fails with a typed refusal (never a guess, never a stale answer); the other machines are unaffected and, when a host is back
+   or another is used, the same call works. A machine that has left shows as `machineOnline: false` or `complete: false`, not as empty.
+3. **Where does its state live?** **Nowhere new.** The MCP process stores nothing and caches nothing; the relay's account-scoped registry
+   is the only source, and the audit record belongs to the host's audit log (#1401), not to the MCP process.
+
+## Hardening rules for the proposal (each follows the existing contracts; none is an additional departure)
+
+- **The op is the host's existing pipe op.** `fleet.list` needs a connection that has passed `agent.hello` with at least the `read` scope
+  (`local-pipe.md`, `agent-operations.md`). An **unattributed connection is refused**: it is never served locally, never served from a
+  cached copy and never answered through Home Assistant.
+- **Exact row allowlist.** A fleet row is exactly `machine`, `machineName` (see next point), `node`, `state`, `since`, `secondsInState`,
+  `machineOnline`, `name` (content only) and, when the relay sends them, the closed-set `attention.kind`, `openAsks` and `observedAt`. A
+  machine row is exactly `machine`, `state`, `machineName`, `lastSeen`, `complete`. Any other member the host returns is dropped by the server,
+  not passed on.
+- **`machineName` and `name` are plain text.** They render as text only: no markup, no link, no formatting. The MCP server **strips** control,
+  format, line/paragraph-separator and bidirectional characters from both before returning them (the relay already rejects most for
+  `machineName`; the server does not rely on that), caps their length, and never uses either to route, select or decide.
+- **Audit.** Each accepted fleet list is audited by the host through the existing `AuditFleetList` hook with the agent's principal (it records
+  nothing until #1401 is assigned to it; this proposal does not change that).
+- **Role limits are enforced by the host**, as for every other agent op: the MCP server does not decide who may list, and a role or scope the
+  host refuses is refused to the MCP caller unchanged.
+
+## Terms
+
+- **R10** is the **Engineering Lead**: the Slipgates Engineering Lead session that reviews and routes builder work, and sends owner CHANGE
+  proposals to the owner through the Chief. It is a role, not a machine or a person.
+
 ## Departures from the existing docs: UNAPPROVED owner CHANGE proposals
 
 This note is a **proposal**. Each point below departs from a canonical document as it stands today. Every one is an **unapproved owner CHANGE
@@ -62,6 +95,6 @@ this note is rewritten; point 4 stands or falls on its own.
 
 Default scope is local and byte-identical to today; `scope: "fleet"` returns only the fields above; `name` absent without
 `include: "content"`; no `cwd` in any fleet row under any option; an unknown `scope` is refused; a partial machine is reported
-with `complete: false`. Source-scan row in the HA-off evidence set that the fleet path adds no HA reference.
+with `complete: false`. Failure and audit tests: a connection that has not passed `agent.hello` is refused (and not served locally or by Home Assistant); one with no `read` scope is refused; the audit hook is called once per accepted call with the principal and not on a refusal; a relay or host failure returns a typed error and never falls back to a local list; a member outside the row allowlist is dropped; control and bidirectional characters in `machineName` and `name` are stripped. Source-scan row in the HA-off evidence set that the fleet path adds no HA reference.
 
 Not verified: that the relay's `fleet.list` reply matches `agent-operations.md` on a live relay; this note was written from the document.
