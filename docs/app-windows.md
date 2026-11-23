@@ -444,10 +444,9 @@ without copying exception messages or inventing holder PID/path evidence.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they skew only when an
+into one folder with one version. An app update is a host update, so they skew mostly when an
 update did not finish: the app restarted onto the new release while the host kept running the old one (or
-the reverse). The app restarts its own host onto files already installed once the machine is quiet
-(below); any other skew is said, not repaired by itself.
+the reverse). That is said, not repaired by itself (the version-skew banner, under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -698,11 +697,9 @@ controls consume that same contract; this extraction does not disable or remove 
     the person's press for this too. With no release ready it is words only, no button: "The bridge host
     is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
     older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
-    card keeps its own Restart advice. **Nothing is installed because of a skew, in either
-    mode:** the one thing done unasked is restarting the host onto files already installed, once the
-    machine is quiet (the bullet above on the host restarted onto its installed files, #2869, owner decision of
-    2026-11-23, which changes this paragraph's first "banner only"); every other skew is only said, and the
-    person's press is Restart to update. What counts as skew is `VersionSkewHeal.Decide` (a version that
+    card keeps its own Restart advice. **A skew is only shown, never repaired by itself:** nothing is
+    installed or restarted because of it, in either mode, and the person's press is the only action,
+    Restart to update when a release is ready, or Settings' host Restart. What counts as skew is `VersionSkewHeal.Decide` (a version that
     is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
     screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
     installed release and the connected host's.

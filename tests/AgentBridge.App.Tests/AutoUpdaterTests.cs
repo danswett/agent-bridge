@@ -130,7 +130,6 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    // The host as it is when the app starts: its status and sessions, then connected.
     // #2869 G2 (owner: banner only): the app and the host on different releases is said, never acted on. With no
     // release downloaded, nothing installs and the host is never stopped, in either mode, however long it waits.
     [Theory]
@@ -150,10 +149,14 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             time.Advance(AutoUpdater.WaitAtMost);
         }
 
+        // An install stops the host before it applies, so the Stop assertion is the one that would fail first;
+        // Applied alone could not (it is only set after the stop), and is here for what it says.
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.Equal(("0.1.7684", "0.1.7522"), auto.Versions);
     }
+
+    // The host as it is when the app starts: its status and sessions, then connected.
     async Task StartAsync(HostStatus? status = null, params Session[] sessions)
     {
         host.Status = status ?? FakeHost.StatusOf();
