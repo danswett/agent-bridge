@@ -148,12 +148,14 @@ Three runs per client/stage; keep relay/client roster before/after and refusal r
 
 | Client | Built evidence | Live evidence | Gap keys |
 |---|---|---|---|
-| PWA | P section 10 documents Web Push; current background parity unresolved by supplied brief | Historical phone question/finished/withdrawal claims in P; not every browser/OS | PWA-PUSH, L-PWA, L-ANDROID |
-| Windows | Built: W tray question/finished toasts, dedupe, withdrawal and quiet behavior | Historical question toast in P; full current lifecycle untested live | L-WIN |
-| Apple | Partial: A open-app notices; iOS/iPadOS APNs background transport missing | Mac/iOS OS delivery/authorization untested live | IOS-PUSH, L-MAC, L-IOS |
+| PWA | P section 10 documents Web Push; current background parity unresolved by supplied brief. **HA off, scanned and run without a connector:** `HaOffNotificationTests` (a source scan: the push code names no Home Assistant type, API or notify service) and `PushFlowTests.A_question_its_withdrawal_and_a_finished_turn_reach_the_phone_with_no_Home_Assistant_connector_in_the_process` (question, withdrawal and finished turn reach a PWA phone through the relay with no connector in the process; it does not detect a call to Home Assistant); `PushNotifierTests.After_a_relay_reconnect_a_question_and_a_finished_turn_already_shown_are_not_pushed_again` | Historical phone question/finished/withdrawal claims in P; not every browser/OS | PWA-PUSH, L-PWA, L-ANDROID |
+| Windows | Built: W tray question/finished toasts, dedupe, withdrawal and quiet behavior. **HA off, scanned only:** `HaOffNotificationTests` reads the toast code (`Toasts.cs`, `ToastResponder.cs`) for Home Assistant names; no HA-off flow runs it, and the toast behaviour itself is `ToastTests` | Historical question toast in P; full current lifecycle untested live | L-WIN |
+| Apple | **Missing** for background push: only open-app notices are built; the iOS/iPadOS APNs background transport is not built, so no HA-off test applies | Mac/iOS OS delivery/authorization untested live | IOS-PUSH, L-MAC, L-IOS |
 | MCP agent | Partial (M row 16): read snapshots/polling exist; pipe drops events, no push subscription | Untested live; snapshots do not prove delivery, withdrawal or reconnect/dedup | I-MCP, L-MCP |
 | Host CLI | Unknown question/turn notification client | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H uses paired-person notification path, not HA action events | Legacy disposable-HA notification test is not component proof | HA |
+
+**Still OPEN: live per-client counts.** This row's tests show the PWA and Windows push paths work and name no Home Assistant; they are not delivery evidence. The inventory minimum below (ten finished-turn and ten question notices per notifying client, away from the home network, with screen or OS evidence) is not recorded for any client, and Apple has no background path to record.
 
 Pass: question and completed main-agent turn each notify once per session, including
 the required background/locked lifecycle; answering elsewhere withdraws the question
