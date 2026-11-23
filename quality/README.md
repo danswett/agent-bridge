@@ -817,7 +817,9 @@ path-filter extension, the reused-machine rules, the cost figures and the order 
 `ci.yml` **keeps** packing, the installer check, `sign`, `attest` and `vpk` as **non-required jobs**: they run beside the
 gate, upload the bytes they built, and hold neither main nor a merge. The release train (#3769) **never rebuilds**: it
 installs and self-tests those exact bytes before it publishes, and when that fails it publishes nothing and raises an alert,
-so a bad installer blocks the release, never a merge. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
+so a bad installer blocks the release, never a merge. **`ci.yml` packs:** its non-required pack jobs (x64 and Arm64) upload
+`agent-bridge-windows-<ver>` and `agent-bridge-windows-arm64-<ver>`, the artifacts `build/select-release-commit.ps1` requires
+unexpired before the train takes a commit; without them the train publishes nothing. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
 of "Releases and updates" in docs/app-windows.md describes what runs.
 
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
