@@ -231,6 +231,20 @@ public sealed class ReplyClearTests
         Assert.Equal(AnswerOutcome.Stale, result.Outcome);
     }
 
+    [Fact]
+    public async Task KeysGoing_is_called_once_just_before_the_keys_and_not_at_all_for_a_request_refused_before_them()
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        var going = new List<int>();
+        var typed = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, KeysGoing = () => going.Add(h.Replies) };
+        Assert.Equal(AnswerOutcome.Delivered, (await h.Replier.ReplyAsync(typed)).Outcome);
+        Assert.Equal([0], going);
+        Assert.Equal(1, h.Replies);
+        var stale = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => false, KeysGoing = () => going.Add(-1) };
+        Assert.Equal(AnswerOutcome.Stale, (await h.Replier.ReplyAsync(stale)).Outcome);
+        Assert.Equal([0], going);
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

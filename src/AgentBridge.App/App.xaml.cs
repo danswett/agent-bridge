@@ -30,7 +30,7 @@ public partial class App : Application
     ToastResponder? responder;
     RegisteredWaitHandle? showWait;
     bool quitting;
-    readonly UiExceptionGuard uiGuard = new();
+    readonly UiExceptionGuard uiGuard = new(TimeProvider.System);
 
     internal App(AppOptions options, SingleInstance single, bool installed)
     {
@@ -41,7 +41,7 @@ public partial class App : Application
         {
             CrashLog.Write(e.Exception);
             if (options.SelfTest is not null) { ExitCode = 2; }
-            else if (uiGuard.Allow(DateTimeOffset.UtcNow))
+            else if (uiGuard.Allow())
             {
                 // Last chance: a few UI-thread exceptions are written down and survived; a storm ends the app as before.
                 e.Handled = true;

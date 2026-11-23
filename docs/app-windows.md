@@ -1119,6 +1119,49 @@ offers **Restart to update**, or Settings, **Check for updates**, then **Restart
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
+### The release train (#2225)
+
+A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
+(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
+Merging never waits for it and it never blocks a merge.
+
+**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
+superseded run that went green still publishes nothing when `main`'s head has since changed the
+app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
+
+* **Which commit** (`build/select-release-commit.ps1`, fixtures in
+  `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
+  attempt (a successful re-run counts). The first that has all of these:
+  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
+    `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
+    publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
+    cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
+    reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - its commit follows the latest release's commit;
+  - its run number, the version's last part, is above every published version;
+  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
+
+  One that fails a rule is skipped for the next newest. If the first one found is already
+  released, nothing is published and the run does nothing, so an hourly run with nothing new is
+  a no-op.
+
+  **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
+* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+  rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
+  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  refuses a version already out, an older one, or a commit behind the latest release, so the
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
+  `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
+  (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+  change is the next verified commit's to publish.
+* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
+  unsigned, until it gains the sign step.
+* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+  so a train release carries neither until they are added.
+
 ### Signing
 
 The owner chose **Azure Artifact Signing** (formerly Trusted Signing), reached from CI over
@@ -1403,6 +1446,12 @@ finishes and fails checks makes the app exit normally with code 1: it leaves no 
 no event, and its cause is the failed checks the app wrote to `result.json`, which the
 wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
 capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
