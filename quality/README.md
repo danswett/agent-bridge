@@ -845,19 +845,29 @@ test only; per-commit main concurrency; the `ab-ci` labels behind `AB_CI_SELF_HO
 the app UI self-test jobs hosted. *Proposed* (not yet recorded as decisions, marked below): the cache policy, the shards, the
 path-filter extension, the reused-machine rules, the cost figures and the order of work.
 
-**What gates main (decided, Nov 23; Eng R8b's ruling).** Main is green on **build and test only**: the required jobs are
-`plan`, `product`, the `app` job's build and UI self-test, the PWA, Home Assistant and light jobs, and `quality-gate`.
-`ci.yml` **keeps** packing, the installer check, `sign`, `attest` and `vpk` as **non-required jobs**: they run beside the
-gate, upload the bytes they built, and hold neither main nor a merge. The release train never rebuilds: #3769 (merged) is its
-commit selector only, `build/select-release-commit.ps1`, and the train publishes the bytes `ci.yml` built. **Proposed, a separate
-change (not #3769):** the train installs and self-tests those exact bytes before it publishes, and when that fails it publishes
-nothing and raises an alert, so a bad installer blocks the release, never a merge. **`ci.yml` packs:** its non-required pack jobs
-(x64 and Arm64) upload `agent-bridge-windows-<ver>` and `agent-bridge-windows-arm64-<ver>`, and the selector requires **both**
-architectures' artifacts unexpired before it takes a commit; without them the train publishes nothing. Only the Arm64 *jobs* may
-be red (owner decision A, via Eng R8b: Arm64 does not gate); neither packing, `sign`, `attest` nor the installer check is
-required for main to be green. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, the text
-of "Releases and updates" in docs/app-windows.md describes what runs.
-
+**What gates main: two lanes (decided, owner, Nov 23, S2, #4104).** `ci.yml` is the **FAST lane**, the only one the merge rule, main-red and
+the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on Linux),
+`ha-integration`, `light`, and `app (win-x64)` as a **build only** (it compiles; it neither self-tests nor packs). **No `pwa-ui` or
+`pwa-e2e` is in it:** the owner's decision A moved WebKit and `pwa-ui` off the merge path. A second workflow, `full.yml`, is the
+**FULL lane**, which never gates a merge: the x64 app self-test (sharded), `app-pack` and `app-installer` for x64 and Arm64,
+`app (win-arm64)`, `product (windows-11-arm)`, `pwa-ui` and `pwa-e2e` (Chromium and WebKit), `spikes` and `spikes-linux`.
+* **When FULL runs.** After each push to `main` whose FAST run passed (a `workflow_run` of `CI`, so it packs as
+  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1); a newer push
+  cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
+  with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
+* **A red FULL lane opens an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
+  **never holds a merge**: merges continue.
+* **What reads which.** The merge rule's `main_green.jobs` and `main-red` name the FAST jobs only, and the catalog marks the FULL
+  suites `lane: full` with their `full.yml` job names (the validators read both workflows). The ruleset still requires only
+  `quality-gate` and the merge-rule status.
+* **The release train gates publish on FULL** (docs/app-windows.md, "The release train"): it takes the newest `main` commit whose FAST
+  lane **and** FULL lane are green (FULL's required jobs are the x64 self-test, pack and installer, and no other job red, Arm64's
+  apart: Arm64 stays waived, owner, #2454) and publishes FULL's packages, never rebuilding. `publish` is the train's, not `ci.yml`'s.
+  Until the train publishes by itself, "Releases and updates" in docs/app-windows.md describes what runs.
+* **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text; (2) the catalog's
+  `lane` and the validators reading both workflows; (3) `spikes` and `spikes-linux` to `full.yml`; (4) `pwa-ui` and `pwa-e2e`;
+  (5) the `app` job split into the FAST build and the FULL self-test, pack and installers; (6) `full-red.yml`, `main_green` and
+  `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (3) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 `ci-main` group holds one running and one waiting run, and a newer arrival replaces the waiting one: that is how 3 of 10

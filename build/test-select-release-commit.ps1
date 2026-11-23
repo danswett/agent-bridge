@@ -2,10 +2,11 @@
 #
 #   pwsh build/test-select-release-commit.ps1
 #
-# What it guards: the release train publishes the newest main commit whose CI passed whole
-# (quality-gate and both app jobs), that is a descendant of the latest release's commit, whose
-# artifacts for both architectures are unexpired and whose run number is above every published
-# version; and publishes nothing when that commit is already out.
+# What it guards: the release train publishes the newest main commit whose FAST lane passed (ci.yml's
+# quality-gate and the x64 app build) AND whose FULL lane passed (full.yml: the x64 self-test, pack and
+# installer; Arm64 may be red), that is a descendant of the latest release's commit, whose FULL run's
+# packages for both architectures are unexpired and whose run number is above every published version;
+# and publishes nothing when that commit is already out, or has no FULL run yet.
 #Requires -Version 7
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -15,12 +16,15 @@ $failures = 0
 function Check([string]$name, $actual, $expected) {
     if ($actual -ceq $expected) { Write-Host "PASS $name" } else { $script:failures++; Write-Host "FAIL ${name}: expected '$expected', got '$actual'" }
 }
-function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}, [string]$relied = '') {
+function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}, [string]$relied = '', [bool]$noFull = $false, [string]$fullConclusion = 'success', [bool]$fullFresh = $true, [hashtable]$fullMore = @{}) {
+    $fullJobs = @{ 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success'; 'app-installer (win-arm64)' = 'success'; 'pwa-ui (webkit 1/3)' = 'success'; 'spikes' = 'success' }
+    foreach ($key in $fullMore.Keys) { if ($null -eq $fullMore[$key]) { $fullJobs.Remove($key) } else { $fullJobs[$key] = $fullMore[$key] } }
+    $full = if ($noFull) { $null } else { [pscustomobject]@{ Conclusion = $fullConclusion; AllJobs = $fullJobs; ArtifactsUnexpired = ($fullFresh -and $fresh) } }
     $all = @{ 'quality-gate' = $gate; 'app (win-x64)' = $x64; 'app (win-arm64)' = $arm }
     foreach ($key in $more.Keys) { $all[$key] = $more[$key] }
     [pscustomobject]@{ Sha = $sha; Number = $number; Conclusion = $conclusion
         Jobs = @{ 'quality-gate' = $gate; 'app-x64' = $x64; 'app-arm64' = $arm }; ArtifactsUnexpired = $fresh; AllJobs = $all
-        ReliedParent = $(if ($relied) { $relied } else { $null }) }
+        ReliedParent = $(if ($relied) { $relied } else { $null }); Full = $full }
 }
 $out = [pscustomobject]@{ Tag = 'v0.1.100'; Commit = 'sha100' }
 $follows = { param($sha, $base) $sha -cne 'stray' }
@@ -29,8 +33,25 @@ function Pick($runs, $latest = $out) { $r = Select-ReleaseCommit -Runs $runs -La
 Check 'newest passing commit wins' (Pick @((Run 'sha103' 103), (Run 'sha102' 102))) 'sha103'
 Check 'a red newest run is skipped for the next passing one' (Pick @((Run 'sha103' 103 -gate failure), (Run 'sha102' 102))) 'sha102'
 Check 'an arm64 app job failure does not stop the pick when quality-gate and x64 passed' (Pick @((Run 'sha103' 103 -arm failure), (Run 'sha102' 102))) 'sha103'
-Check 'a run with no arm64 job result at all is still picked' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{} }))) 'sha103'
-Check 'a failed x64 app job is not a pass' (Pick @((Run 'sha103' 103 -x64 failure), (Run 'sha102' 102))) 'sha102'
+Check 'a run with no arm64 job result at all is still picked' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{}; Full = [pscustomobject]@{ Conclusion = 'success'; AllJobs = @{ 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success' }; ArtifactsUnexpired = $true } }))) 'sha103'
+# The FULL lane (full.yml, never a merge gate) gates the release: the newest commit whose FAST lane passed AND whose FULL
+# run passed, its required jobs (the x64 self-test, pack and installer) green. Arm64 stays waived.
+Check 'a commit with no FULL run yet is not picked, the next one with a FULL run is' (Pick @((Run 'sha103' 103 -noFull $true), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run whose x64 self-test failed is not picked' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-x64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run whose x64 installer failed is not picked' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'a required FULL job that did not run at all is not a pass' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-x64)' = $null }), (Run 'sha102' 102))) 'sha102'
+Check 'a required FULL job that was skipped is not a pass' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-selftest (win-x64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run red only for Arm64 is publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure'; 'app-selftest (win-arm64)' = 'failure'; 'product (windows-11-arm)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
+Check 'a FULL run red in WebKit is not picked (FULL gates the release, not only its Windows jobs)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'pwa-ui (webkit 1/3)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run red in a spikes job is not picked' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'spikes' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run still running is not picked' (Pick @((Run 'sha103' 103 -fullConclusion ''), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run that timed out is not picked' (Pick @((Run 'sha103' 103 -fullConclusion timed_out), (Run 'sha102' 102))) 'sha102'
+Check 'FULL packages that expired skip to the next commit, whatever FAST built' (Pick @((Run 'sha103' 103 -fullFresh $false), (Run 'sha102' 102))) 'sha102'
+Check 'a green FAST lane is no pass without FULL' (Pick @((Run 'sha103' 103 -noFull $true))) $null
+Check 'a FULL run with a FAST red lane is still no pass' (Pick @((Run 'sha103' 103 -gate failure), (Run 'sha102' 102))) 'sha102'
+Check 'nothing picked says there is no FULL run' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -noFull $true)) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*no FULL run') $true
+Check 'nothing picked names the FULL job that failed' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-x64)' = 'failure' })) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*app-selftest \(win-x64\)') $true
+Check 'a run with no Full property at all (an older record) is not a pass' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success'; 'app-arm64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{ 'quality-gate' = 'success' } }), (Run 'sha102' 102))) 'sha102'Check 'a failed x64 app job is not a pass' (Pick @((Run 'sha103' 103 -x64 failure), (Run 'sha102' 102))) 'sha102'
 Check 'a cancelled run counts when quality-gate and both apps succeeded' (Pick @((Run 'sha103' 103 -conclusion cancelled))) 'sha103'
 Check 'an arm64-only failed run (conclusion failure, gate and x64 green) is publishable' (Pick @((Run 'sha103' 103 -arm failure -conclusion failure), (Run 'sha102' 102))) 'sha103'
 Check 'a failed run with quality-gate red is not publishable' (Pick @((Run 'sha103' 103 -gate failure -conclusion failure), (Run 'sha102' 102))) 'sha102'

@@ -411,6 +411,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
   request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
   (`LocalChannel.RequestOrderedAsync`).
+  On the host's end (#4134), the action a client asked for and the host accepted (Stop, Restart, a remote restart's Leave: a `ChannelReply` marked
+  `RunsIfUnsent`) runs once the request is accepted, whether or not the answer reached the client: a client that reads the answer and hangs up
+  at once, or is gone before it is sent, no longer leaves a host that said "stopping" running. The send failure is logged
+  (`local pipe: the reply to host.stop could not be sent ... its action runs anyway`); a follow-up that is not such an action (a subscribe's
+  snapshot) still needs its answer on the wire first. Stop's lease on deliveries is therefore not given back when its answer fails.
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -444,7 +449,11 @@ without copying exception messages or inventing holder PID/path evidence.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they never skew.
+into one folder with one version. An app update is a host update, so they skew mostly when an
+update did not finish: the app restarted onto the new release while the host kept running the old one (or
+the reverse). The app restarts its own host onto files already installed once the machine is quiet
+(the host restart, below); any other skew is said, not repaired by itself (the version-skew banner,
+under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -562,6 +571,15 @@ controls consume that same contract; this extraction does not disable or remove 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
+  **An old relay copy may offer a newer release but never says "up to date"** (`ReleaseDiscovery.CdnFreshFor`, 10 minutes, the check
+  interval). A copy up to an hour old (`CdnOldest`) is still used, but once it is older than `CdnFreshFor` it counts only if it names a
+  release newer than the one installed: an offer meets the halt and digest checks as any does. A copy that shows nothing newer is "unknown",
+  because it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed): it is refused like an over-age
+  copy, so the check fails with words, GitHub is asked or its backoff says when, and the next check tries again. The copy kept here is judged
+  the same way by its true age on every check, and the log says why (`its copy was N minutes old and names nothing newer ...`). The halt
+  rules, `CdnOldest` and the 72 hour cap are unchanged. The log's fallback line says GitHub is asked first and the relay is the fallback
+  if GitHub refuses, which is what happens.
+
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
@@ -632,6 +650,29 @@ controls consume that same contract; this extraction does not disable or remove 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
+    moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
+    release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
+    0.1.7684, and "Check for updates" said up to date). When the host is older than the app, the host files
+    for the app's release are already installed beside it (the version of `current\agent-bridge-host.exe`,
+    read at the time, and exactly the app's own release: files newer than the app are not restarted onto), no
+    release is waiting to install, the halt policy allows it (a stale policy, or the app's release halted,
+    holds it), "Download updates automatically" is on (off, nothing happens unasked), and the machine is
+    quiet (no turn running and no question or approval waiting, over a whole snapshot settled for
+    `SettleFor`, 5 seconds, as for Install between turns), the app asks the
+    host to restart (`host.restart`: it ends with code 75 once fully stopped, and the launcher starts the
+    replacement from `current\`). **Not an install,** and in either mode: nothing is downloaded, and
+    Restart to update is unchanged. Only this machine's own host, over its own pipe, is ever restarted,
+    never a remote one. `VersionSkewHeal.Decide` decides (the installed files as the release it needs),
+    once for a release: a restart that fails backs off (an hour at most) and is given up on after three; one
+    the host answers that leaves it old is not asked again until the app restarts (what is remembered is
+    the run's). A skew it does not heal (the files missing or not the app's release, the host newer) is only
+    said, in the banner. **Quiet is decided at the moment of the ask,** as for Stop and an install between
+    turns: the host then settles its usage probes and holds its delivery gate (up to 15 seconds) before it
+    exits, so a delivery or typing in progress is waited for, but a turn or question that begins in that
+    window is not looked for again. That is acceptable for the same reason it is for those: the agents'
+    consoles are separate processes and keep running, and what the host was carrying (a question or
+    approval) is the cost the restart warning already names.
   * **Update now, from another device** (#1159; design in
     [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
     the clients' buttons not yet): the
@@ -689,6 +730,20 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only, but for the one case in the bullet above): the app and
+    its host on different releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+    (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
+    the person's press for this too. With no release ready it is words only, no button: "The bridge host
+    is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
+    older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
+    card keeps its own Restart advice. **The banner only shows it:** nothing is installed because of a skew, in
+    either mode, and the one thing done unasked is the host restart in the bullet above (the host's files
+    for the app's release installed, the machine quiet); every other skew is only shown, and the person's
+    press is the only action, Restart to update when a release is ready, or Settings' host Restart.
+    What counts as skew is `VersionSkewHeal.Decide` (a version that
+    is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
+    screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
+    installed release and the connected host's.
   * **Every package is checked against its release** (`DownloadMark`, Engineering's
     second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
     folder under the release's file name for the release without checking its bytes, so one
@@ -1154,8 +1209,11 @@ starvation lasts until the train lands.
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
-  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
-    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
+  - **FAST:** `quality-gate` and the x64 `app` job (the build) succeeded; a cancelled or superseded run counts only if those
+    both did. **And FULL** (`full.yml`, S2, #4104: the lane that never gates a merge): the same commit's FULL run finished with the
+    x64 self-test, pack and installer (`app-selftest (win-x64)`, `app-pack (win-x64)`, `app-installer (win-x64)`) succeeded and no
+    other job red, Arm64's apart. A commit with no FULL run yet is not publishable; the train dispatches one, and a later hourly
+    run picks it up. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, `app-selftest`, and
     `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
     publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
@@ -1167,14 +1225,14 @@ starvation lasts until the train lands.
     not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
+  - the package artifacts of both architectures are unexpired (that commit's FULL run builds them and keeps them 30 days); the version is read from their names.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
   **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
-* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+* **How.** The train downloads that commit's FULL run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the

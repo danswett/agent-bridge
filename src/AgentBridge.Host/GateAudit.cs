@@ -7,7 +7,10 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null,
     ProcessInstance? LaunchProcess = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientKind = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Generation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PayloadDigest = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GrantCaps? Caps = null)
 {
     // The client the host's verified roster says the principal device is (ha-audit-client-field.md): both or neither, from closed sets,
     // only on a relay person-client answer or stop. Omitted when absent, so a row written without it keeps its exact bytes and chain hash.
@@ -25,6 +28,12 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
         && (GrantBinding is null ? action is not ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update")
             : action is ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && GrantBinding.Length == 64 && GrantBinding.All(char.IsAsciiHexDigit))
         && ClientValid(action)
+        // Stop rows may also record the grant generation, the request payload digest and the caps in force, all
+        // three or none. Rows written before they existed carry none and stay valid; a reader that does not know
+        // the fields ignores them (the line hash covers the raw line, not the parsed row).
+        && (Generation is null && PayloadDigest is null && Caps is null
+            || action == "session.stop" && Phase is "intent" or "terminal" && Generation is > 0
+            && PayloadDigest is { Length: 64 } digest && digest.All(char.IsAsciiHexDigit) && GrantValidator.Positive(Caps))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")

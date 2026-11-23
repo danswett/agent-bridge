@@ -170,7 +170,7 @@ public sealed class LocalServer : IAsyncDisposable
 
     void Serve(Stream stream, string peerId, string name, PipePeer peer)
     {
-        var channel = new LocalChannel(stream, peerId, name, "local", handler, json) { Peer = peer };
+        var channel = new LocalChannel(stream, peerId, name, "local", handler, json) { Peer = peer, Log = log };
         lock (gate) { channels.Add(channel); }
         _ = channel.Closed.ContinueWith(_ => { lock (gate) { channels.Remove(channel); } }, TaskScheduler.Default);
         channel.Start();
