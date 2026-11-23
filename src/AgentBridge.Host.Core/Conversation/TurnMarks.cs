@@ -27,7 +27,7 @@ internal sealed class TurnMarks
     // The exclusion is structural, a block's type: a prompt that is just the words "tool_result"
     // is the bare token "tool_result" too (found in review of #292). A writer that put a space
     // after the colon is only parsed and then refused, never missed.
-    public static readonly TurnMarks Claude = new(["\"user\""], ["\"type\":\"tool_result\""]);
+    public static readonly TurnMarks Claude = new(["\"user\"", "\"queued_command\""], ["\"type\":\"tool_result\""]);
     public static readonly TurnMarks Codex = new(["\"user_message\"", "\"UserMessage\""], []);
 
     // The longest marker: a window this long less one either side of a boundary between two
