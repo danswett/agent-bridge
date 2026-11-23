@@ -998,10 +998,15 @@ async Task<int> ServeAsync(HostHandover handover)
     AgentPipeLaunch? grantPipe = null;
     FleetStopCommands? fleetStop = null;
     AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null;
+    AgentBridge.Host.Lite.FleetRemoteEndSender? remoteEnd = null;
     if (agentCredentials is { } grantCredentials)
     {
         remoteLaunch = new AgentBridge.Host.Lite.FleetRemoteLaunchSender(liteLink, grantCredentials,
             AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill));
+        // G10 PR2: DORMANT. Built only when the host is started with AGENT_BRIDGE_FLEET_REMOTE_END=on, which nothing sets until the launch-flip
+        // evidence run (#3924) and the owner's go; with it off a remote-target end is refused by the local gate as before.
+        if (Environment.GetEnvironmentVariable("AGENT_BRIDGE_FLEET_REMOTE_END") == "on")
+        { remoteEnd = new AgentBridge.Host.Lite.FleetRemoteEndSender(liteLink, grantCredentials, AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill), () => true); }
         var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
             : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
@@ -1017,7 +1022,7 @@ async Task<int> ServeAsync(HostHandover handover)
                 Wire.DeviceId(identity.Key.Public), grantCredentials, service, source, fleetStopper);
         }
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, remoteLaunch: remoteLaunch), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, remoteLaunch: remoteLaunch, remoteEnd: remoteEnd), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

@@ -209,6 +209,8 @@ public sealed class SessionService
     public Lite.LiteKill? LiteKill { get; init; }
     // G9: fleet.launch from another host of this account, through the relay only (never this machine's pipe).
     public FleetRemoteLaunch? FleetRemoteLaunch { get; init; }
+    // G10 PR2: dormant. Nothing serves fleet.end to a host peer unless the host sets this.
+    public FleetRemoteEnd? FleetRemoteEnd { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -308,6 +310,8 @@ public sealed class SessionService
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
             case FleetRemoteLaunch.Op when FleetRemoteLaunch is not null && channel is SecureChannel secure:
                 return await FleetRemoteLaunch.ReceiveAsync(Lite.LiteChannel.Of(secure), data);
+            case FleetRemoteEnd.Op when FleetRemoteEnd is not null && channel is SecureChannel secure:
+                return await FleetRemoteEnd.ReceiveAsync(Lite.LiteChannel.Of(secure), data);
             case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
                 return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's

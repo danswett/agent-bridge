@@ -20,14 +20,14 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
         RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
-        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null,
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null, AgentBridge.Host.Lite.FleetRemoteEndSender? remoteEnd = null,
         AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null) =>
-                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, remoteLaunch);
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, remoteLaunch, remoteEnd);
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
         AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop,
-        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch) => async (channel, op, data) =>
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch, AgentBridge.Host.Lite.FleetRemoteEndSender? remoteEnd) => async (channel, op, data) =>
     {
         try
         {
@@ -207,6 +207,9 @@ public static class LocalApi
             var ending = callers.Classify(channel, fresh: true);
             if (fleetStop is null || credentials is null || ending.Kind != CallerKind.Agent || credentials.Of(channel) is not { Kind: "session" } ender)
             { throw Refuse(op, ending, "fleet end needs a live agent session credential", log); }
+            // G10 PR2 (dormant: the host builds a sender only when it is turned on): a target that is another host goes to the sender.
+            if (remoteEnd is not null && FleetStopCommands.TryParse(data) is { } named && remoteEnd.IsRemote(named.Target))
+            { return await remoteEnd.SendAsync(ender, named, CancellationToken.None); }
             return await fleetStop.HandleAsync(ender, data);
         }
         if (grantLaunch is not null && op == LaunchProtocol.Launch && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("grant", out _)

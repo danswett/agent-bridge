@@ -100,6 +100,98 @@ public sealed class FleetStopTests : IDisposable
             signPoint = AgentBridge.Roster.Codec.Base64Url([4, .. q.X!, .. q.Y!]) }, ProtocolJson.Options);
     }
 
+    // G10 PR2: the sending host. DORMANT: off unless the host turns it on, and then reachable only for a remote target.
+    sealed class EndLink(string self, IReadOnlyList<PresenceEntry> presence, Func<JsonElement, Task<JsonElement>> serve) : IFleetLaunchLink
+    {
+        public int Calls;
+        public string Self => self;
+        public string Account => "123";
+        public IReadOnlyList<PresenceEntry> Presence => presence;
+        public Task<JsonElement> RequestAsync(string peerId, string account, string op, JsonElement request, CancellationToken ct)
+        { Calls++; Assert.Equal(FleetRemoteEnd.Op, op); return serve(request); }
+    }
+    (FleetRemoteEndSender Sender, EndLink Link, GrantSubject Subject) OpenSender(bool on = true, bool present = true,
+        Func<JsonElement, Task<JsonElement>>? serve = null)
+    {
+        var subject = new GrantSubject("123", Peer, caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc));
+        grant = grant with { Id = Guid.NewGuid(), Subjects = [subject], StopTargets = [Target] };
+        Assert.True(store.Issue(grant).Usable);
+        var receiver = Receiver();
+        var q = peerSign.ExportParameters(false).Q;
+        var link = new EndLink(Peer, present ? [new(Device, "Target", "host", DateTimeOffset.UtcNow)] : [], serve
+            ?? (async data => JsonSerializer.SerializeToElement(await receiver.ReceiveAsync(PeerChannel(), data), ProtocolJson.Options)));
+        return (new FleetRemoteEndSender(link, credentials, () => (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]), () => on), link, subject);
+    }
+    FleetStopInput SenderInput() => new(1, Guid.NewGuid(), grant.Id, id, Device);
+
+    [Fact]
+    public async Task A_sender_host_seals_an_end_the_receiving_host_verifies_and_stops_once()
+    {
+        var s = OpenSender();
+        var receipt = await s.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("ended", 1, 1), (receipt.Outcome, injector.Calls, s.Link.Calls));
+    }
+
+    [Fact]
+    public async Task A_sender_that_is_off_refuses_before_anything_is_sent_or_stopped()
+    {
+        var s = OpenSender(on: false);
+        var receipt = await s.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("refused", "policy", 0, 0), (receipt.Outcome, receipt.Reason, s.Link.Calls, injector.Calls));
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("own-host")]
+    [InlineData("revoked")]
+    public async Task An_offline_or_own_host_target_or_stale_credential_sends_nothing(string case_)
+    {
+        var s = OpenSender(present: case_ != "absent");
+        if (case_ == "revoked") { credentials.Revoke(caller.Session, "test"); }
+        var input = case_ == "own-host" ? SenderInput() with { Target = Peer } : SenderInput();
+        var receipt = await s.Sender.SendAsync(caller, input, CancellationToken.None);
+        Assert.Equal(("refused", case_ == "absent" ? "target-offline" : "policy", 0, 0), (receipt.Outcome, receipt.Reason, s.Link.Calls, injector.Calls));
+    }
+
+    [Fact]
+    public async Task A_peer_that_is_not_a_trusted_own_host_is_peer_not_trusted_and_a_lost_reply_is_unconfirmed_never_resent()
+    {
+        var untrusted = OpenSender(serve: _ => Task.FromException<JsonElement>(new LitePeerNotTrustedException("not the same account")));
+        var refused = await untrusted.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("refused", "peer-not-trusted", 1), (refused.Outcome, refused.Reason, untrusted.Link.Calls));
+        var lost = OpenSender(serve: _ => Task.FromException<JsonElement>(new IOException("channel dropped")));
+        var unconfirmed = await lost.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("unconfirmed", 1), (unconfirmed.Outcome, lost.Link.Calls));
+    }
+
+    // G6b3 (#4027): the relay stop row carries generation, payloadDigest and caps like the local one. Enabled when #4027 is merged.
+    [Fact(Skip = "TODO until G6b3 (#4027) lands: the remote end receipt's generation, payloadDigest and caps match the local stop row")]
+    public Task The_remote_stop_row_carries_generation_payload_digest_and_caps_like_the_local_one() => Task.CompletedTask;
+
+    [Fact]
+    public async Task The_local_pipe_sends_only_a_remote_target_to_the_sender_and_only_when_the_sender_exists()
+    {
+        var q = peerSign.ExportParameters(false).Q;
+        var link = new EndLink(Device, [new(Peer, "Target", "host", DateTimeOffset.UtcNow)], data =>
+        {
+            var sent = data.GetProperty("end").Deserialize<FleetStopInput>(ProtocolJson.Options)!;
+            return Task.FromResult(JsonSerializer.SerializeToElement(new FleetStopReceipt(sent.Request, sent.Grant, 0, "refused", "grant-revoked"), ProtocolJson.Options));
+        });
+        var sender = new FleetRemoteEndSender(link, credentials, () => (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]), () => true);
+        var channel = new Chan();
+        credentials.Accept(channel, caller);
+        JsonElement Call(string target) => JsonSerializer.SerializeToElement(new FleetStopInput(1, Guid.NewGuid(), grant.Id, id, target), ProtocolJson.Options);
+        async Task<FleetStopReceipt> Run(FleetRemoteEndSender? remote, string target) => Assert.IsType<FleetStopReceipt>(await LocalApi.Handler(sessions, null!,
+            new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")), credentials: credentials, fleetStop: Open(), remoteEnd: remote)(channel, FleetStopCommands.Op, Call(target)));
+        Own();
+        Assert.Equal("ended", (await Run(sender, Device)).Outcome);   // this host: the local gate, nothing sent
+        Assert.Equal(0, link.Calls);
+        Assert.Equal("scope", (await Run(null, Peer)).Reason);        // no sender: a remote target is refused by the local gate
+        Assert.Equal(0, link.Calls);
+        Assert.Equal("grant-revoked", (await Run(sender, Peer)).Reason);   // a sender: the remote target goes to it, once
+        Assert.Equal(1, link.Calls);
+    }
+
     [Fact]
     public async Task A_remote_subject_the_grant_names_ends_its_own_session_through_the_same_gate_and_audits_the_relay_path()
     {

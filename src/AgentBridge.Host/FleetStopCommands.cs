@@ -24,6 +24,12 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
 
+    // A request that does not parse is left to the local path, which refuses and audits it.
+    internal static FleetStopInput? TryParse(JsonElement data)
+    {
+        try { return data.ValueKind == JsonValueKind.Object ? data.Deserialize<FleetStopInput>(Json) is { Version: 1 } i && i.Request != Guid.Empty && i.Grant != Guid.Empty ? i : null : null; }
+        catch (JsonException) { return null; }
+    }
     public Task<FleetStopReceipt> HandleAsync(AgentCredential caller, JsonElement data) =>
         HandleCoreAsync(new(credentials.PrincipalOf(caller), caller.Chain, "local", caller, null), data);
     // G10 (docs/design/fleet-grants.md, "Remote targets"): a stop from another host of this account, with the subject the grant names. Same
