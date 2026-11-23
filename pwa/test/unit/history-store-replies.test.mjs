@@ -84,6 +84,19 @@ test('an id-less restatement of the last stored reply is that reply, not a new p
   store.live('h', saySession(null, 'Same words.'));
   assert.deepEqual(replyTexts(store), ['Same words.']);
 });
+test('a stored part that follows an id-less live reply stays deferred in the live card', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const live = saySession(null, 'Live words.');
+  store.live('h', live);
+  page = [{ id: turn(6), at: '2026-11-21T22:00:00Z', parts: [{ id: 'replacement', kind: 'response', text: 'Stored replacement must remain deferred' }] }];
+  await store.open('h', ID);
+  assert.equal(currentReply(store.get('h', ID), live), 'Live words.');
+});
 test('a stored page replaces the id-less live parts without duplicating them', async () => {
   let page = [];
   const store = new HistoryStore({ current: () => ({ client: {

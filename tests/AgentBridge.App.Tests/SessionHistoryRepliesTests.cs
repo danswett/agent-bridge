@@ -105,6 +105,53 @@ public sealed class SessionHistoryRepliesTests
         Assert.Equal(3, history.Turns.Single().Parts.Select(p => p.Id).Distinct().Count());
     }
     [Fact]
+    public async Task An_id_less_restatement_of_the_last_reply_is_that_reply_not_a_new_part()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said("a", "Same words."));
+        history.Observe(Said(null, "Same words."));
+        Assert.Equal(["Same words."], Replies(history));
+        Assert.Equal(["a"], history.Turns.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task A_stored_page_replaces_an_id_less_live_part_once_it_says_the_same_words_without_duplicating_it()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said("a", "First reply."));
+        history.Observe(Said(null, "Second reply."));
+        Assert.Equal(2, history.Turns.Single().Parts.Count(p => p.Kind == HistoryPartKind.Response));
+        host.On(HistoryProtocol.Op, (JsonElement d) => new HistoryResult
+        {
+            Turns = [new HistoryTurn { Id = "t1", At = T0, Prompt = new HistoryPrompt { Text = "Question" }, Parts = [
+                new HistoryPart { Id = "a", Kind = HistoryPartKind.Response, Text = "First reply.", At = T0 },
+                new HistoryPart { Id = "b", Kind = HistoryPartKind.Response, Text = "Second reply.", At = T0.AddSeconds(1) }] }],
+            Start = new HistoryStart { At = T0 },
+        });
+        await history.LoadNewestAsync();
+        Assert.Equal(["a", "b"], history.Turns.Single(t => t.Id == "t1").Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Id));
+        Assert.Equal(["First reply.", "Second reply."], Replies(history));
+    }
+
+    [Fact]
+    public async Task A_stored_page_keeps_an_id_less_live_part_its_words_are_not_in()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said("a", "First reply."));
+        history.Observe(Said(null, "Second reply, not stored yet."));
+        host.On(HistoryProtocol.Op, (JsonElement d) => new HistoryResult
+        {
+            Turns = [new HistoryTurn { Id = "t1", At = T0, Prompt = new HistoryPrompt { Text = "Question" }, Parts = [
+                new HistoryPart { Id = "a", Kind = HistoryPartKind.Response, Text = "First reply.", At = T0 }] }],
+            Start = new HistoryStart { At = T0 },
+        });
+        await history.LoadNewestAsync();
+        Assert.Equal(["First reply.", "Second reply, not stored yet."], Replies(history));
+    }
+    [Fact]
     public async Task Codex_live_revisions_after_history_replace_the_same_part_without_accepting_stale_snapshots()
     {
         await using var host = Serving(() => 0);
