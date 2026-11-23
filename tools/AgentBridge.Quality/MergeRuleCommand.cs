@@ -733,7 +733,26 @@ static class MergeRuleCommand
         }
     }
 
+    // The runs read ahead (CompletedMainCore) are all finished when this ends, whether the walk reached
+    // them or found its answer first: nothing is read, counted or recorded once a caller has its verdict,
+    // so what it then enumerates (the reads it made, the points it spent) is not written under it. A read
+    // that was never reached and failed is nothing to say: it is only waited for.
     static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session, List<long>? skipped = null)
+    {
+        var started = new List<Task>();
+        try
+        {
+            foreach (var evidence in CompletedMainCore(session, skipped, started))
+                yield return evidence;
+        }
+        finally
+        {
+            try { Task.WaitAll([.. started]); }
+            catch (AggregateException) { }
+        }
+    }
+
+    static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMainCore(Session session, List<long>? skipped, List<Task> started)
     {
         var config = session.Config;
         var seen = 0;
@@ -753,7 +772,7 @@ static class MergeRuleCommand
                     for (var next = at; next < Math.Min(ordered.Count, at + (at == 0 ? 1 : RunsAtOnce)); next++)
                     {
                         var readRun = ordered[next];
-                        ahead[next] = Task.Run(() => ReadRunJobs(session, readRun));
+                        started.Add(ahead[next] = Task.Run(() => ReadRunJobs(session, readRun)));
                     }
                 var run = ordered[at];
                 var id = run.GetProperty("id").GetInt64();
