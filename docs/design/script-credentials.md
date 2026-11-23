@@ -214,6 +214,8 @@ revocable at the machine in one app press.
 ## 7. Placing it on each machine
 
 * **Per machine, minted on that machine.** A credential works only on the host that minted it.
+  Copying its protected file, token or hash record never rebinds it: the protected file uses
+  Windows CurrentUser DPAPI, and a store with another machine's script identity fails closed.
   Nothing is synced, and the relay never holds one (agent-token-rotation.md §3).
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
@@ -227,6 +229,21 @@ revocable at the machine in one app press.
 * **Rollout, one machine at a time.** The owner presses "Add script credential" in the app for
   each script on each of the four machines; no command is run. Nothing is minted for another machine
   from one device: there is no remote mint (Q3).
+  The credential is a protected file the host writes for that script; the app never shows it and the
+  result never contains the token. How the script learns the file's path is OPEN (#1414 design). The
+  scheduled process must use the minting Windows user and read/unprotect the file on each run. Do not
+  copy the store, file or token between hosts, export it into session environments, or include it in bundles.
+* **Audit before use.** Presentations and scope refusals append one row by script principal;
+  fleet reads append one attempt even for invalid input or an unavailable registry.
+  Invalid sends append one refusal; valid sends retain their existing attempt and terminal
+  outcome rows. Separately granted fleet launches audit credential admission/refusal without
+  replacing launch-history evidence. None includes token or message text.
+  Missing/unwritable audit refuses use.
+  Audit-only hash/name attribution for recently revoked credentials is bounded and in-memory;
+  after restart, an unknown/deleted token cannot be attributed to a credential name.
+  Rotate with the app's Rotate press, verify an audited fleet read, then retire the
+  old consumer. Revoke with the app's Revoke press if compromised. HA-token retirement
+  remains separate work after fleet cutover validation.
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.
