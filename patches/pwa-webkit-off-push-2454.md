@@ -1,6 +1,6 @@
 # WebKit off the push path, behind `PWA_WEBKIT_OFF_PUSH` (#2454, item B)
 
-For Quality, to apply; the owner decides whether to turn it on. Apply `patches/pwa-webkit-off-push-2454.patch` with `git apply`.
+For Quality, to apply; the owner decides whether to turn it on. **Apply order (train v9):** `release-train-3769.patch` (v9, cee23c3b), then this patch, then `main-red-webkit-2454.patch`, then `release-train-webkit-hook-2454.patch`, each with `git apply` on main. This patch already includes v9's `Release train` entry in `merge-rule.yml`, so it applies cleanly after v9.
 
 **While the variable is unset (the default), nothing changes.** `pwa-webkit.yml`'s job is skipped, and `ci.yml` keeps the WebKit legs on every main push.
 

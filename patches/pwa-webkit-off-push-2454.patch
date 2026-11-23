@@ -1,8 +1,8 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 76a9f418..530be854 100644
+index 5f4466c4..feb998d1 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -1589,11 +1589,13 @@ jobs:
+@@ -1602,11 +1602,13 @@ jobs:
      strategy:
        fail-fast: false
        matrix:
@@ -19,15 +19,15 @@ index 76a9f418..530be854 100644
      # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
      # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
 diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
-index c0189fa6..4d38caf2 100644
+index 40e0bee0..51c04ce3 100644
 --- a/.github/workflows/merge-rule.yml
 +++ b/.github/workflows/merge-rule.yml
 @@ -45,7 +45,7 @@ on:
      types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
    status:
    workflow_run: # zizmor: ignore[dangerous-triggers]
--    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
-+    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, PWA WebKit, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+-    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Release train, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
++    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, PWA WebKit, Pages, Perf, Re-run known flakes, Relay deploy, Release train, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
      types: [in_progress, completed]
    check_suite:
      types: [completed] # the only type Actions accepts here
@@ -129,7 +129,7 @@ index 00000000..ad1ff3ef
 +          path: pwa/test-results
 +          retention-days: 7
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 20cf6d13..085b3fc9 100644
+index d0fea8a2..da0c076e 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -879,8 +879,9 @@ suites:
