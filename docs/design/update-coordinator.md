@@ -4,32 +4,109 @@ Follow-up: https://github.com/danswett/agent-bridge/issues/2869.
 
 ## Status and landing rule (read first)
 
-This document is the design of the side-by-side update coordinator stack carried from
-`builder/ab-2869-e-076c495c` onto main in order, each pull request Part of #2869 and
-sensitive (two-family review through Quality). **Nothing described below is on main until
-its own pull request has merged**; the section for a piece describes the design that pull
-request lands, and main's code is the authority on what exists.
+This is the design of the side-by-side update coordinator stack, carried from
+`builder/ab-2869-e-076c495c` onto main in slices, each pull request Part of #2869 and
+sensitive (two independent model families through Quality; the builder never arms or
+merges). **Nothing described below is on main until its own pull request has merged**: a
+section describes what its slice lands, and main's code is the authority on what exists.
 
 Decision, recorded from a relay and not owner-direct: on Nov 23, 2026 (Pacific), about
-08:40, the owner's answer to #2869 was "Finish it", relayed to this builder by the
-engineering lead. The approved way to finish it:
+08:40, the owner's answer to #2869 was "Finish it", relayed by the engineering lead. The
+relay is not the owner's approval of each CHANGE listed below; each is approved by the
+owner's own yes, through the chief, in the pull request that lands it.
 
-- **Everything lands disabled.** D3c's activation (publishing `active-slot.json` and
-  migrating a legacy install) is off by default behind a setting, and is tested with the
-  setting both off and on. Until the last pull request, a machine behaves as it does today.
-- **Turning activation on is the last pull request**, and only after the update acceptance
-  proof passes on an existing fleet VM, the least loaded, with a rollback, run with SRE.
-  No new Azure VM is created for it. That pull request goes to the engineering lead first,
-  not to Quality, and the chief takes it to the owner as its own yes.
-- `HeadlessUpdateTimer.MinimumApp` (the minimum app version headless updates require) is
-  set in the first release after #3810 (`--update-only` run) ships, in a separate small pull
-  request. Per the engineering lead it lives on #3810's branch; it was not found on main, nor
-  at #3810's head `991e92c1` (a search for `MinimumApp` and `HeadlessUpdateTimer`), so this
-  document does not describe it further.
+**Landing rule.**
+- Order, each checked to compile on main plus the slices before it: this document; the retry
+  class; `SlotPayloadRules`; `HostwBundle`; `SlotPreparation`; `CoordinatorImage`;
+  `SlotPointer`; `SlotEntry`; `CoordinatorHandoff`; `SlotMigration`; the coordinator core; the
+  native adapter; the launcher's early and stable-entry modes; **the activation setting**;
+  the app and host wiring; `HeadlessUpdateTimer.MinimumApp` (first release after #3810,
+  `--update-only` run, ships); the acceptance proof on an existing fleet VM, least loaded, with
+  rollback, run with SRE (no new Azure VM); and last, the pull request that turns activation
+  on, which goes to the engineering lead first and then to the owner as its own yes.
+- At most 400 lines whole per pull request (added plus deleted, tests and docs included).
+  Tests come first within a pull request (a RED commit before its GREEN one, or the carried
+  tests landing with the code they pin).
+- A slice may add classes and tests and edit what it names below. It may not add a caller in the
+  app, host or launcher of anything a later slice owns, and a slice is never live before its
+  prerequisites have merged. Where a carried slice must be split or edited to meet this, the
+  split is mechanical and called out in its pull request.
 
-Carried-versus-new: sections B to E and D3c below describe carried code, except the
-off-by-default activation setting, which is **new code** the carry adds (the carried
-D3c commit enables activation outright) and which its own pull request tests.
+## Disabled until the owner turns it on
+
+One setting, **`SlotActivation`** (name proposed here; the pull request that adds it fixes where
+it is stored), per machine, **off when absent**. Required properties:
+- Only the owner turns it on, on that machine, by a deliberate action. No installer, updater,
+  migration, package, release feed, upgrade or default change writes it, and the last pull
+  request adds **no default flip**. A release that carries these slices behaves, for a machine
+  whose setting is absent, as the release before it did on the app, host and launcher paths below.
+- Both states are tested for every code path it gates, with the legacy path asserted unchanged
+  when off.
+
+What each slice changes while the setting is off. "Legacy path" is the apply flow in
+`docs/app-windows.md` (`InPlaceHandoff`, `--inplace-apply`, `Update.exe --norestart` without `--wait`).
+
+| Slice | While off |
+|---|---|
+| This document | Nothing. |
+| Retry class, `SlotPayloadRules`, `HostwBundle`, `SlotPreparation`, `CoordinatorImage`, `SlotPointer`, `SlotEntry`, `CoordinatorHandoff`, `SlotMigration`, coordinator core | New classes and tests. No caller in the app, host or launcher. Legacy path unchanged. |
+| Native adapter and closed packaging | The adapter has no caller. **CHANGE C1, not gated by a setting:** `build/pack-app.ps1` publishes the launcher as one self-contained single file, and the launcher project references `App.Core`; what ships as `agent-bridge-hostw.exe` changes for every machine (the Nov 17 spike was 73,570,095 bytes). |
+| Launcher early mode and stable-entry mode | New branches taken only for `--coordinator-v1` or a root alias; with the setting off no caller passes that argument and no alias exists, because `SlotMigration` writes them only under the setting. The pull request shows this with a test. |
+| Activation setting | Adds the setting, off. Nothing reads it yet. |
+| App and host wiring (B3c cutover, D3b and D3c) | **As carried, this is not disabled:** `Platform.ApplyAndRestart` always stages the coordinator handoff, runs `SlotMigration.Prepare` and starts `--coordinator-v1`; `Platform.KeepsHostRunning` is always true, which skips the host stop, the other-profile check and the file scans in `AutoUpdater`; `Program.cs` always sets the slot-aware locator. Carried unchanged it would replace the legacy path for every app update. **CHANGE C2 (new code, not a carry):** the wiring pull request takes the legacy path whenever the setting is off. The host picks the slot-aware locator only when `active-slot.json` or `stable-entry.json` exists, so it is already inert when off. |
+| E, the retry | `UpdateApplyRetry` is called only from the native adapter and the launcher's early mode, both reachable only through the gated app path. With the setting off the legacy apply never calls it. |
+| `MinimumApp` | One value in the first release after #3810, in its own small pull request; it can stop an older app from headless updates, so it is sensitive. |
+| Activation on | The last pull request. Changes one machine's behaviour only after the acceptance proof passes. |
+
+## Canonical documents, overlaps, and CHANGES
+
+Canonical per concern; this design does not replace them. The pull request that lands a
+departure edits the canonical document in the same pull request.
+
+| Concern | Canonical | What this design does |
+|---|---|---|
+| Legacy app apply (`InPlaceHandoff`, helper waits for the app's PID and start time, `Update.exe --norestart` without `--wait`, completion evidence) | `docs/app-windows.md`, "Updates: Velopack, one version for app and host" | B1 to B3c restate this as `UpdateCoordinator`; legacy stays canonical for the legacy path. At activation the wiring pull request moves the slot flow's description there. |
+| Departure, per-machine states, consent, restart caps, the press | `docs/design/updates-fast-fleet-update.md` sections 3 and 6; `docs/protocol/v1-update.md` | D3c bypasses the legacy departure and file-replacement gates (CHANGE C3). |
+| Halt policy | `docs/design/updates-fast-fleet-update.md` section 4; `docs/design/halt-policy-without-github-api.md` | Unchanged; see Binding rules. |
+| App and host version skew | `docs/app-windows.md` ("an app update is a host update, so they never skew") and `VersionSkewHeal` | Running slots report their own version (CHANGE C4). |
+
+CHANGES for the owner's approval (none is approved by the relayed "Finish it"):
+- **C1** the hostw artifact becomes one single-file bundle for every machine.
+- **C2** with the setting on, the app applies through the coordinator and slots, not `InPlaceHandoff`.
+- **C3** with the setting on, D3c preserves the hosts (no stop) and bypasses the legacy file-replacement and departure gates.
+- **C4** with the setting on, a running slot reports its own version, so app and host may differ until the host restarts onto the installed files.
+- **C5** host-side native install refuses the slot layout.
+- **C6** the activation setting itself.
+
+Convergence of a running host onto newer installed files is `VersionSkewHeal`, not section E (E
+is the retry only): detection #2888, the pure decision #3981, the banner #4078 (merged Nov 23),
+and the host restarting onto its installed files once quiet, #4107 (open). That restart is not
+an install.
+
+## Binding rules (every slice, unchanged)
+
+- **Halt policy still binds `slot-apply-v1`.** It is checked at acceptance and again at
+  departure. D3c does not go through `UpdateService.DepartAsync`, so the slot path must call the
+  same `PolicyCode` check wherever it bypasses it: known halts always refuse; automatic, batch
+  and null policy fail closed; the digest check and the 72 h cap apply. A halted release never
+  installs by this path.
+- Signed press, consent and read-only checks, restart caps and the quiet-moment lease bind the slot path.
+- Unasked installs stay banner-only. E's retry never starts an install. Downloads stay automatic in the background.
+- No HA fallback, no raised timeouts (#2558), no change to signing or halt-list custody.
+
+## Failure modes and loop stops
+
+| Situation | Behaviour |
+|---|---|
+| App on a newer slot than the running host | Expected with the setting on (C4). Banner only; `VersionSkewHeal` restarts the host once quiet; never an install. |
+| Pointer damaged or missing a slot | Stable entry fails closed, logs `stable-entry failed`, exits 1, no fallback to legacy once active. Recovery reads strict metadata without resolving the damaged payload. |
+| Relay offers a release the host has halted | Refused at acceptance and at departure (Binding rules). |
+| `slot-apply-v1` fails before publication | Prior pointer and legacy payloads stay authoritative; the result keeps its step; held and visible; no automatic retry of the whole update. |
+| Apply fails | E only: at most three attempts, 1 s then 2 s backoff, only a known nonzero exit at `apply-completion` or a sharing or lock violation before publication; a repeated step, code or exit stops it. |
+| Failure after publication | No retry from any exception. |
+| Observation times out | Stays `Unknown`; never retry authority; the updater is not killed. |
+| Repeated activation or migration attempts across restarts | **New, not in the carried code, required before activation can be turned on:** a failed attempt for a release is retried only by a person's action or a newer release, never by a restart; a test shows it. |
+| Power loss | Not claimed durable (existing limits). |
 
 ## B: build-only feasibility proof
 
@@ -43,6 +120,7 @@ no launcher DLL, deps.json or runtimeconfig.json sidecars remained.
 Executable SHA256: `EADD23796B5E1263FCDD78BFE2F56FDC208F29D8D1A7D47A90FF2A7A4D274A1A`.
 This establishes standalone **build feasibility**, not native execution/survival.
 Nothing produced by the spike was executed.
+The size and hash are evidence from that day, not a contract.
 
 Pinned Velopack [process selection](https://github.com/velopack/velopack/blob/92d6a1c91716729d449034df5c50307dcce39493/src/bins/src/shared/util_windows.rs)
 uses `QueryFullProcessImageNameW` plus `is_sub_path(root)`, not descendant ancestry.
@@ -196,9 +274,9 @@ preserves the prior authority and legacy payloads. Version confirmation binds th
 verified package digest; one retained snapshot supplies respawn even on republish.
 Before handoff, stable aliases and enabled task/existing Run registrations are
 prepared without starting/stopping hosts. The app preserves hosts and consent/
-read-only checks, bypassing legacy file-replacement and departure gates. Running
-slots report their own version. Host-side native install refuses this layout;
-E owns convergence. Quality owns two-family review. The native update acceptance proof runs on an
+read-only checks, bypassing legacy file-replacement and departure gates (C3; halt policy still binds, see Binding rules). Running
+slots report their own version. Host-side native install refuses this layout (C5).
+Convergence of a running host is `VersionSkewHeal`, not E. Quality owns two-family review. The native update acceptance proof runs on an
 existing fleet VM with SRE, before activation is turned on; focused managed tests
 do not establish native or power-loss durability.
 
