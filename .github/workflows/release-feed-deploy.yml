@@ -1,0 +1,102 @@
+name: Release feed deploy
+
+# Deploys the release feed Worker (infra/cloudflare/release-feed, #927) to Cloudflare, by hand and from main only, once
+# SRE approves the release-feed-deploy environment. It replaces the owner's `wrangler login` / `wrangler deploy` (#3880).
+# - test: the Worker's own tests, with no secret.
+# - deploy: wrangler, pinned to an exact version, with the environment's Cloudflare API token.
+# - purge-check: purges the public list URL by URL and checks the next answer was fetched after the purge (#3870).
+# There is no push or pull_request trigger: nothing a pull request can change deploys or reaches these secrets.
+# docs/relay-deploy.md is the model: least permissions, SHA-pinned actions, one rollout at a time.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One rollout at a time; a newer one waits, never cancels a deploy in flight.
+  group: release-feed-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: The Worker's tests
+        run: node infra/cloudflare/release-feed/worker.test.mjs
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Waits for approval: the environment's required reviewer (SRE), and main only.
+    environment: release-feed-deploy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      # wrangler.toml holds the name, the route releases.slipgates.com/* and workers_dev = false. A deploy sets no
+      # secret and changes no DNS. An exact version: npm never changes a published version's contents.
+      - name: Deploy the Worker (wrangler 4.42.0)
+        working-directory: infra/cloudflare/release-feed
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.42.0 deploy
+
+  purge-check:
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: release-purge
+    steps:
+      # The Worker keys its cache on the public zone URL, so purging that URL must clear the entry (#3880). Read it twice
+      # so it is cached, purge it, then read again: the answer must have been fetched after the purge (its Age no older
+      # than the purge). Then a bodyless 304 for its ETag, as the README's Verify step asks.
+      - name: Purge-by-URL clears the cached release list (#3870)
+        env:
+          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
+          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          url='https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1'
+          read_headers() { curl -sS -o /dev/null -D - --max-time 30 "$@" "$url" | tr -d '\r'; }
+          status() { printf '%s\n' "$1" | awk 'NR==1 { print $2 }'; }
+          header() { printf '%s\n' "$1" | awk -F': ' -v k="$2" 'tolower($1) == k { v = $2 } END { print v }'; }
+          if ! [[ "$CF_ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then echo "::error::CF_ZONE_ID is not a zone id"; exit 1; fi
+
+          first=$(read_headers)
+          [ "$(status "$first")" = 200 ] || { echo "::error::the feed answered $(status "$first"), not 200"; exit 1; }
+          sleep 5
+          cached=$(read_headers); age=$(header "$cached" age)
+          [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -ge 1 ] || { echo "::error::the second read was not served from the cache (Age '$age')"; exit 1; }
+
+          purged_at=$(date +%s)
+          answer=$(curl -sS --max-time 30 -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CF_PURGE_TOKEN" -H 'Content-Type: application/json' \
+            --data "$(jq -cn --arg u "$url" '{files: [$u]}')")
+          [ "$(jq -r '.success' <<<"$answer")" = true ] || { echo "::error::Cloudflare refused the purge: $(jq -c '[.errors[]?.message]' <<<"$answer")"; exit 1; }
+          sleep 5
+
+          after=$(read_headers); age=$(header "$after" age); since=$(( $(date +%s) - purged_at ))
+          [ "$(status "$after")" = 200 ] || { echo "::error::after the purge the feed answered $(status "$after")"; exit 1; }
+          [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -le "$since" ] || { echo "::error::after the purge, Age is '$age' (purged ${since}s ago): purge-by-URL did not clear the Worker's cache entry (#3870)"; exit 1; }
+
+          etag=$(header "$after" etag)
+          [ -n "$etag" ] || { echo "::error::no ETag on the list"; exit 1; }
+          again=$(read_headers -H "If-None-Match: $etag")
+          [ "$(status "$again")" = 304 ] || { echo "::error::If-None-Match answered $(status "$again"), not 304"; exit 1; }
+          echo "Purge-by-URL cleared the entry: Age $age s after a purge ${since}s ago; 304 for its ETag." >> "$GITHUB_STEP_SUMMARY"

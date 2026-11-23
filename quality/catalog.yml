@@ -1092,6 +1092,32 @@ suites:
     where: relay.yml production, rollback
     status: exists
 
+  - id: release-feed-worker
+    validation_plan: native
+    kind: unit
+    ring: 4
+    select: always
+    # The release feed Worker's own tests (#927), the gate before release-feed-deploy.yml deploys it.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [infra/cloudflare/release-feed/**]
+    command: node infra/cloudflare/release-feed/worker.test.mjs
+    where: release-feed-deploy.yml test
+    status: exists
+
+  - id: release-feed-deploy
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand, main only, after SRE approves: deploys the Worker, then purges its list URL and checks the next
+    # answer was fetched after the purge, and a 304 for its ETag (#3870, #3880).
+    platforms: [linux-x64]
+    runner: staging
+    command: see release-feed-deploy.yml deploy and purge-check
+    where: release-feed-deploy.yml deploy, purge-check
+    status: exists
+
   - id: epic-dashboard-unit
     validation_plan: native
     kind: unit
