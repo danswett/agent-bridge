@@ -567,9 +567,12 @@ controls consume that same contract; this extraction does not disable or remove 
   "GitHub is limiting" is said only when no source answered. **Trade-off, accepted by the owner:** a
   compromised or stale relay can withhold an update from a press for as long as GitHub's revalidation
   allows (up to six hours); package authenticity is unaffected, since feeds and packages still come
-  from GitHub and are checked against their checksums. Background checks still ask GitHub first when
-  its revalidation is due; making them relay-first, with GitHub's revalidation never blocking one, is
-  the next slice.
+  from GitHub and are checked against their checksums. **Background checks are relay-first too** (owner,
+  Nov 22; the full flip): when GitHub's 6-hour revalidation is due and the 24-hour relay grace is open, a
+  background check reads the relay first and then asks GitHub, waiting at most `RevalidateWait` (five
+  seconds). A readable GitHub list wins and renews the anchors; a refusal, a failure or no answer is recorded
+  for GitHub's backoff but never fails or delays the relay's answer, and later checks do not ask GitHub
+  until that backoff ends. Past the grace, or with no GitHub answer yet, GitHub is still asked first.
 
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
@@ -578,9 +581,11 @@ controls consume that same contract; this extraction does not disable or remove 
   304 for its list) is kept in the same state file, `release-discovery.json` (`gitHubAnsweredAt`,
   written atomically; one file shared by the app and every profile's host, so a GitHub answer to
   any of them counts for all), and only GitHub's own answer moves it, never the relay's.
-  Once it is 6 hours old or missing, GitHub is asked first, obeying the existing backoff and
-  Retry-After. Only a 403, 429 or persisted rate-limit hold permits the validated relay during
-  a 24-hour window from GitHub's last answer (`GithubRelayAtMost`): bounded extra availability,
+  Once it is 6 hours old, a check reads the relay first while the grace is open and asks GitHub after
+  it, never blocking the answer (above); once the grace has ended, or with no GitHub answer, GitHub is
+  asked first, obeying the existing backoff and Retry-After. The validated relay is permitted past the
+  6 hours only during a 24-hour window from GitHub's last answer (`GithubRelayAtMost`): bounded extra
+  availability,
   not indefinitely renewable relay trust. With no GitHub answer, one persisted bootstrap starts
   at the first refusal. Relay reads, further refusals and restarts never renew either anchor,
   GitHub's backoff or its version floor. A 500 or network failure still fails as before.

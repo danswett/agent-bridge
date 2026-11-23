@@ -674,7 +674,7 @@ public sealed class HostUpdatesTests : IDisposable
     // The relay says how old its copy is, so a compromised one could serve an old but valid list with
     // Age 0 for ever: GitHub must answer at least every GithubRevalidateEvery, whatever the relay says.
     [Fact]
-    public async Task A_stale_but_valid_cdn_list_served_with_age_zero_is_not_used_past_the_deadline_and_github_is_asked()
+    public async Task A_stale_but_valid_cdn_list_served_with_age_zero_is_superseded_by_GitHubs_revalidation_past_the_deadline()
     {
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
         GitHubAnsweredAt(time.GetUtcNow().AddMinutes(-1));
@@ -689,15 +689,16 @@ public sealed class HostUpdatesTests : IDisposable
         time.Advance(TimeSpan.FromHours(1));
         Assert.Equal("0.1.603", await OfferedAsync(discovery));
 
-        Assert.Equal((2, 1), (web.CdnRequests, web.GitHubRequests));
+        // Owner, Nov 22 (the full flip): the relay is read first, then GitHub revalidates and its newer list wins.
+        Assert.Equal((3, 1), (web.CdnRequests, web.GitHubRequests));
         Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
-        Assert.Contains("update check: the CDN was not asked, as GitHub has not answered here in the last 6 hours; asking GitHub", said);
+        Assert.Contains("update check: GitHub's revalidation is due; asking it after the CDN answer, without waiting past its short deadline", said);
 
         // GitHub answering starts the window again: the relay is read once more.
         web.Cdn = () => Relayed($"[{Listed("0.1.603")}]");
         time.Advance(ReleaseDiscovery.Interval);
         Assert.Equal("0.1.603", await OfferedAsync(discovery));
-        Assert.Equal((3, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal((4, 1), (web.CdnRequests, web.GitHubRequests));
     }
 
     [Fact]
