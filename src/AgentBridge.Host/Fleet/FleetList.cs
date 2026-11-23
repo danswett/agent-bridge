@@ -52,11 +52,15 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     readonly object accountGate;
     long connectionEpoch;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
+    // 1 s: no reader needs fresher, liveness is judged on the registry's own lastSeen and the target re-resolves.
+    public static readonly TimeSpan ReadFreshness = TimeSpan.FromSeconds(1);
+    readonly SharedRead<IReadOnlyList<System.Text.Json.JsonElement>> registryRead;
 
     public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, object? accountGate = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        registryRead = new(clock, ReadFreshness);
         this.accountGate = accountGate ?? new();
     }
 
@@ -129,7 +133,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
-        var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
+        // One read for every local caller (#1396): fleet.list, fleet.find and the Lite checks share this connection.
+        var frames = await registryRead.GetAsync(current, () => current.RegistryGetAsync(includeKnown: true), ct);
         lock (cache)
         {
             if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
