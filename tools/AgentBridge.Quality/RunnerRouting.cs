@@ -12,8 +12,8 @@ namespace AgentBridge.Quality;
 /// </summary>
 static partial class RunnerRouting
 {
-    const string PushEvent = "github.event_name == 'push'";
-    const string HeadRepository = "github.event.pull_request.head.repo.full_name == github.repository";
+    // The whole guard, as quality/README.md gives it. The repository variable lets one setting flip the pool off.
+    internal const string Guard = "vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)";
 
     // The labels only: not "--deny-self-hosted-runners", which names an option, not a runner.
     [GeneratedRegex(@"(?<![\w-])(ab-ci|self-hosted)(?![\w-])", RegexOptions.IgnoreCase)]
@@ -42,9 +42,9 @@ static partial class RunnerRouting
                     || labelled.Any(other => other != name && Text(job).Contains($"needs.{other}.", StringComparison.Ordinal)
                         && Text(job).Contains(other, StringComparison.Ordinal)));
             if (!Label().IsMatch(runsOn) && !dynamic) { continue; }
-            if (!runsOn.Contains(PushEvent, StringComparison.Ordinal) || !runsOn.Contains(HeadRepository, StringComparison.Ordinal))
+            if (!Guarded(runsOn))
             {
-                problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({PushEvent} || {HeadRepository}) in its runs-on");
+                problems.Add($"{file} job {name} can run on a self-hosted runner without the guard in front of the label: {Guard} && <label>");
             }
             if (targetsFork)
             {
@@ -52,6 +52,17 @@ static partial class RunnerRouting
             }
         }
         return problems;
+    }
+
+    // The exact guard (whitespace aside), then "&&", and no label before it: a label reachable through "||", behind a
+    // weaker condition, or ahead of the guard is a way round it. Two pieces of the guard somewhere in the expression are not.
+    static bool Guarded(string runsOn)
+    {
+        var text = Regex.Replace(runsOn, @"\s+", " ").Trim();
+        var at = text.IndexOf(Guard, StringComparison.Ordinal);
+        if (at < 0) { return false; }
+        if (Label().Matches(text).Any(m => m.Index < at)) { return false; }
+        return Regex.IsMatch(text[(at + Guard.Length)..], @"^\s*\)*\s*&&");
     }
 
     static HashSet<string> Triggers(YamlMappingNode root)

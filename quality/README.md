@@ -819,7 +819,9 @@ gate, upload the bytes they built, and hold neither main nor a merge. The releas
 installs and self-tests those exact bytes before it publishes, and when that fails it publishes nothing and raises an alert,
 so a bad installer blocks the release, never a merge. **`ci.yml` packs:** its non-required pack jobs (x64 and Arm64) upload
 `agent-bridge-windows-<ver>` and `agent-bridge-windows-arm64-<ver>`, the artifacts `build/select-release-commit.ps1` requires
-unexpired before the train takes a commit; without them the train publishes nothing. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
+unexpired before the train takes a commit; without them the train publishes nothing. **The x64 package is required for a
+release; the Arm64 one is optional** (owner decision A, via Eng R8b: Arm64 does not gate, as #3769 says), and neither packing,
+`sign`, `attest` nor the installer check is required for main to be green. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
 of "Releases and updates" in docs/app-windows.md describes what runs.
 
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
@@ -892,9 +894,10 @@ no risk, stops the cancelling. (2) The routing guard and its lint, with `ab-ci` 
 runners registered, then `AB_CI_SELF_HOSTED=true`. (4) The app self-test sections option, the each-section-alone job, then
 the shards. (5) Product shards, the PWA filters. (6) Pack, installer, `sign` and `attest` become non-required jobs in `ci.yml`, and the train installs and self-tests their bytes
 before it publishes (#3769); `publish` moves to the train. Quality alone
-pushes `ci.yml` and the merge rule: this document is the design, and steps (1) and (2) are already written as a patch,
-`docs/design/proposals/ci-per-sha-and-ab-ci-routing.diff` (`git apply` it: `ci.yml`, the plan's pinned concurrency expression in
-`tools/AgentBridge.Quality/CiPlan.cs` and `CiPlanTests`; the Quality tests pass with it applied).
+pushes `ci.yml` and the merge rule: this document is the design, step (1) is written as a patch (`docs/design/proposals/ci-per-sha-main-concurrency.diff` on
+branch `sg-ci-gate-diff`: `ci.yml`, the plan's pinned concurrency expression in `tools/AgentBridge.Quality/CiPlan.cs`,
+`CiPlanTests` and the text that named the old group; `git apply` it, the Quality tests pass with it), and step (2)'s `runs-on` is
+the CI builder's: it must carry the exact guard above, which `CiRunnerRoutingTests` checks.
 
 ### Independent review depth
 

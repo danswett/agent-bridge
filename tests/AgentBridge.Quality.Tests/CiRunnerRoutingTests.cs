@@ -42,6 +42,28 @@ public sealed class CiRunnerRoutingTests
         Assert.Contains("job product", one);
     }
 
+    // Both pieces of the guard appearing somewhere is not a guard: the label must be reachable only through it.
+    [Theory]
+    [InlineData("${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository || true && 'ab-ci' || 'windows-latest' }}")]
+    [InlineData("${{ vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) || 'ab-ci' }}")]
+    [InlineData("${{ 'ab-ci' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}")]
+    [InlineData("${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && 'ab-ci' || 'windows-latest' }}")]
+    [InlineData("${{ vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' && github.event.pull_request.head.repo.full_name == github.repository) && 'ab-ci' || 'windows-latest' }}")]
+    public void A_runs_on_that_has_the_pieces_but_not_the_exact_guard_in_front_of_the_label_is_a_violation(string runsOn)
+    {
+        Assert.NotEmpty(RunnerRouting.Violations(Workflow(runsOn), "ci.yml"));
+    }
+
+    [Fact]
+    public void The_guard_is_read_whatever_the_spacing_and_may_sit_inside_a_larger_condition()
+    {
+        var spaced = Workflow("${{ vars.AB_CI_SELF_HOSTED   ==  'true' &&   (github.event_name == 'push'    ||   github.event.pull_request.head.repo.full_name == github.repository) && 'ab-ci' || 'windows-latest' }}");
+        Assert.Empty(RunnerRouting.Violations(spaced, "ci.yml"));
+
+        var inner = Workflow($"${{{{ (matrix.os == 'windows-latest' && {Guard}) && fromJSON('[\"self-hosted\",\"windows\",\"x64\",\"ab-ci\"]') || matrix.os }}}}");
+        Assert.Empty(RunnerRouting.Violations(inner, "ci.yml"));
+    }
+
     [Fact]
     public void A_guard_that_checks_the_event_but_not_the_head_repository_is_a_violation()
     {
