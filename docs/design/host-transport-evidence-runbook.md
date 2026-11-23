@@ -79,33 +79,75 @@ Get-NetFirewallProfile | Select-Object Name, DefaultInboundAction, DefaultOutbou
 Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-NetFirewallPortFilter).LocalPort -eq 3389 }   # RDP inbound rules, recorded
 ```
 
-Per event, in this order, by the elevated session, after the owner approves that event:
+**Each event is ONE local script that the elevated session starts itself.** Nobody can message the session while the relay is down, so nothing about an event is
+done by hand mid-drop: the owner approves the event beforehand, then presses **Restart host** once SRE tells them the script has started (the script waits for it for up to 8 minutes; a restart before the block is in place is caught by the 3c proof and voids the event). In order the script: reads
+this event's relay addresses (step 0), arms the dead-man, adds the block, **waits for the host process id to change** (the owner's restart) with a timeout, does the
+3c read, holds, restores, disarms, and does the 4b read. A **timeout is 8 minutes**, the hold is 60 seconds, so with the proofs an event ends well inside the
+20-minute dead-man. Any failure restores and disarms (in `finally`), records why, and exits non-zero; the event is then void.
 
 ```powershell
-# 0. Re-read the relay addresses for THIS event (read, before anything else; use this event's own result in step 2, and record it):
-Get-NetTCPConnection -OwningProcess <host process id> -RemotePort 443 -State Established | Select-Object -ExpandProperty RemoteAddress -Unique
-# 1. Arm the dead-man FIRST: it deletes the whole group after N minutes whatever happens to the session.
-$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
-Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -User 'SYSTEM' -RunLevel Highest
-# 2. Drop: outbound only, host program AND the relay addresses on TCP 443, in the one group.
-New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses read for this event>
-# 3. Scope check (read): must show only Outbound, the host program, TCP 443, and no 3389.
-Get-NetFirewallRule -Group 'SG-relay-drop' | ForEach-Object { $_.Direction; ($_ | Get-NetFirewallApplicationFilter).Program; ($_ | Get-NetFirewallPortFilter) | Select-Object Protocol, LocalPort, RemotePort }
-# 3b. END the existing relay connection (the owner pressing Restart host right after each block was approved by the owner, about 09:20 PT). A block rule is checked when a connection is SET UP, so it does not cut a socket that is already established.
-#     No host command restarts only the relay link (the host CLI has: stop, which ends a session, grants, fleet, launches, sessions, audit, approve, devices,
-#     host-sign, roster-pin, ha and serve), so the OWNER presses the host restart in the app (person-only, guard 67). The restarted host must set up a NEW
-#     connection, and the rule blocks it. Without this press the drop does not happen and the step is not runnable.
-# 3c. PROOF the drop happened (read, after the restart, new host process id): no Established connection from the host to a relay address. It must return
-#     nothing; if it returns a row, the drop did not happen: restore (step 4) and void the event.
-Get-NetTCPConnection -OwningProcess <new host process id> -RemotePort 443 -State Established | Where-Object { $_.RemoteAddress -in '<relay addresses read for this event>' }
-# 4. Restore, one command:
-Remove-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue    # tolerant: the dead-man may already have deleted the group
-# 4b. PROOF of the reconnect (read): the host sets up a new connection by itself (it reconnects with backoff); the same read as 3c now returns a relay address.
-# 5. Disarm the dead-man:
-Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false -ErrorAction SilentlyContinue    # tolerant: the dead-man task may be gone already
-# 5b. READ that both are gone (each must return nothing):
-Get-ScheduledTask -TaskName 'SG-relay-drop-revert' -ErrorAction SilentlyContinue
-Get-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue
+# relay-drop-event.ps1: run by the elevated session on the drop host, one event per run. No secrets are logged.
+param(
+  [Parameter(Mandatory)][string]$EventId,
+  [Parameter(Mandatory)][string]$HostExe,      # AgentBridge host exe path from the frozen plan
+  [Parameter(Mandatory)][int]$HostPid,         # host process id before the owner's restart
+  [Parameter(Mandatory)][string]$Evidence,     # evidence folder (off the repository)
+  [int]$RestartTimeoutMinutes = 8, [int]$HoldSeconds = 60)
+$ErrorActionPreference = 'Stop'
+$ok = $false
+function Note($m) { Add-Content -Path (Join-Path $Evidence "relay-drop-$EventId.log") -Value ("{0:o} {1}" -f (Get-Date), $m) }
+function Relays($p) { @(Get-NetTCPConnection -OwningProcess $p -RemotePort 443 -State Established -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RemoteAddress -Unique) }
+function Defaults { Get-NetFirewallProfile | Select-Object Name, DefaultInboundAction, DefaultOutboundAction | ConvertTo-Json -Compress }
+$addr = Relays $HostPid                                  # 0. this event's relay addresses (a read)
+if (-not $addr) { throw 'no established relay connection to drop' }
+$defaultsBefore = Defaults; Note "0 relay addresses: $($addr -join ',')"
+try {
+  # 1. Arm the dead-man FIRST: it deletes the whole group after 20 minutes whatever happens to this session.
+  $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Remove-NetFirewallRule -Group 'SG-relay-drop'"
+  Register-ScheduledTask -TaskName 'SG-relay-drop-revert' -Action $act -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(20)) -User 'SYSTEM' -RunLevel Highest | Out-Null
+  Note '1 dead-man armed (20 min)'
+  # 2. Drop: outbound only, the host program AND this event's relay addresses on TCP 443, in the one group.
+  New-NetFirewallRule -DisplayName "SG-relay-drop-$EventId" -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program $HostExe -Protocol TCP -RemotePort 443 -RemoteAddress $addr | Out-Null
+  # 3. Scope check (a read): only Outbound, the host program, TCP 443, and never 3389.
+  foreach ($r in Get-NetFirewallRule -Group 'SG-relay-drop') {
+    $pf = $r | Get-NetFirewallPortFilter
+    if ($r.Direction -ne 'Outbound' -or ($r | Get-NetFirewallApplicationFilter).Program -ne $HostExe -or $pf.RemotePort -ne '443' -or $pf.LocalPort -eq '3389') { throw 'rule scope is not outbound / host program / 443' }
+  }
+  Note '2-3 block in place, scope checked; waiting for the owner to press Restart host'
+  # 3b. Wait for the host process id to change: the owner's Restart host ends the established connection; the new process must set up a NEW one, which is blocked.
+  $deadline = (Get-Date).AddMinutes($RestartTimeoutMinutes); $newPid = $null
+  while (-not $newPid -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 5
+    $newPid = (Get-Process | Where-Object { $_.Path -eq $HostExe -and $_.Id -ne $HostPid } | Select-Object -First 1).Id
+  }
+  if (-not $newPid) { throw "the host process id did not change within $RestartTimeoutMinutes minutes: no restart, so no drop" }
+  Note "3b new host pid $newPid"
+  # 3c. PROOF the drop happened: no Established connection from the host to a relay address, now and again after the hold.
+  Start-Sleep -Seconds 15
+  if (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) { throw 'drop did not happen: an Established relay connection exists' }
+  Note '3c proof: no Established relay connection'; Start-Sleep -Seconds $HoldSeconds
+  if (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) { throw 'drop did not hold' }
+  Note '3c proof held'
+  $ok = $true
+} catch { Note "FAILED: $($_.Exception.Message)" }
+finally {
+  # 4 and 5. Restore and disarm, each tolerant of the dead-man having already fired.
+  Remove-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName 'SG-relay-drop-revert' -Confirm:$false -ErrorAction SilentlyContinue
+  $gone = -not (Get-NetFirewallRule -Group 'SG-relay-drop' -ErrorAction SilentlyContinue) -and -not (Get-ScheduledTask -TaskName 'SG-relay-drop-revert' -ErrorAction SilentlyContinue)
+  Note "4-5 restored and disarmed; group and task gone: $gone"
+}
+if ($ok) {
+  # 4b. PROOF of the reconnect: the host sets up a new connection by itself (it reconnects with backoff).
+  $deadline = (Get-Date).AddMinutes(3)
+  while (-not (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+  $back = [bool](@(Relays $newPid | Where-Object { $_ -in $addr }).Count)
+  Note "4b reconnect proof: $back"
+  if (-not $back) { $ok = $false }
+}
+if ((Defaults) -ne $defaultsBefore) { Note 'FAILED: firewall profile defaults changed'; $ok = $false }
+if (-not $gone) { $ok = $false }
+exit ([int](-not $ok))
 ```
 
 **RDP is unaffected** because the rule is outbound only and scoped to the host program and the relay addresses: nothing inbound and no other program is
