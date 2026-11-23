@@ -72,6 +72,9 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
     readonly TimeProvider _time;
     readonly Action<string> _log;
     readonly HookHandlers _handlers;
+    long _writeRetries;
+    // How many registration writes needed a retry (the rename was refused by a reader holding the old file open) since this host started.
+    public long WriteRetries => Interlocked.Read(ref _writeRetries);
     readonly Dictionary<string, int> _attempts = new(StringComparer.Ordinal);
     // Files handled whose delete failed (a reader that would not share it): deleted again, never
     // handled again.
@@ -121,7 +124,15 @@ public sealed class HookIntake : IHookNotices, IAsyncDisposable
         _processes = processes;
         _time = time ?? TimeProvider.System;
         _log = log ?? (_ => { });
-        _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time) { Ours = Ours };
+        _handlers = new HookHandlers(options.RuntimeRoot, options.ClaudeHome, processes, _time)
+        {
+            Ours = Ours,
+            WriteRetried = attempt =>
+            {
+                Interlocked.Increment(ref _writeRetries);
+                _log($"a hook registration write needed a retry (attempt {attempt} was refused)");
+            },
+        };
         _spool = SpoolContract.SpoolDirectory(options.RuntimeRoot);
         _codexLog = new HookLogWatch(options.RuntimeRoot, "codex", _time);
         _heartbeat = SpoolContract.HeartbeatPath(options.RuntimeRoot);

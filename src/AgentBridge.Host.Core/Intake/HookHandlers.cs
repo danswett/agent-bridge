@@ -389,6 +389,16 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
+    // Asked once per refused rename that is about to be retried, with the attempt that was refused (1 or 2).
+    public Action<int>? WriteRetried { get; init; }
+
+    // The rename over the old file is refused for as long as another reader has it open without delete-sharing (Windows reports
+    // that as UnauthorizedAccessException, or an IOException sharing violation). That clears in moments, so the commit is tried
+    // up to MoveAttempts times with a short backoff before the event fails and the intake retries it a whole pass later. This is
+    // not an ACL or authentication change: the spool's folder and files are already owner-only (#3847 is about its authentication).
+    internal const int MoveAttempts = 3;
+    static readonly TimeSpan[] MoveBackoff = [TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(50)];
+
     // Written whole and renamed into place: discovery reads these every second, and
     // agent-ha-bridge's own reader treats a half-written file as no file.
     void WriteJson(string path, Action<Utf8JsonWriter> body)
@@ -405,8 +415,17 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
                 body(writer);
                 writer.WriteEndObject();
             }
-            Commit();
-            File.Move(partial, path, overwrite: true);
+            for (var attempt = 1; ; attempt++)
+            {
+                // Asked again before each try: a daemon that started meanwhile owns the folder from then on (G5).
+                Commit();
+                try { File.Move(partial, path, overwrite: true); break; }
+                catch (Exception e) when (e is UnauthorizedAccessException or IOException && attempt < MoveAttempts)
+                {
+                    WriteRetried?.Invoke(attempt);
+                    Thread.Sleep(MoveBackoff[attempt - 1]);
+                }
+            }
         }
         finally
         {
