@@ -427,6 +427,17 @@ public sealed class FleetStopTests : IDisposable
         using var parsed = JsonDocument.Parse(output.ToString());
         return (exit, parsed.RootElement.Clone());
     }
+    // G10: a remote end can be refused by the sending host before anything is sent, with the two reasons only a remote target has.
+    [Theory]
+    [InlineData("target-offline")]
+    [InlineData("peer-not-trusted")]
+    public async Task A_remote_end_refusal_made_by_the_sender_is_an_ordinary_exit_5_refusal(string reason)
+    {
+        var (exit, json) = await Cli((op, data) => Task.FromResult(op is Ops.Hello or AgentProtocol.Hello ? JsonSerializer.SerializeToElement(new { })
+            : JsonSerializer.SerializeToElement(new FleetStopReceipt(((FleetStopInput)data!).Request, ((FleetStopInput)data).Grant, 0, "refused", reason), ProtocolJson.Options)));
+        Assert.Equal(5, exit);
+        Assert.Equal(("refused", reason), (json.GetProperty("outcome").GetString(), json.GetProperty("reason").GetString()));
+    }
     // A stop request id is remembered from the audit, so a host restart (a fresh StopService, an empty
     // memory) never dispatches it again (fleet-grants.md, stop replay and audit).
     AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null) =>

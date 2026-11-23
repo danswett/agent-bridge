@@ -175,9 +175,9 @@ Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
 | `name-gate` | The fixed name gate refused: invalid or colliding name |
 | `duplicate-id` | Same request id with a different binding |
 | `duplicate-store-full` | The 4096-id store is full of unexpired bindings |
-| `target-offline` | The target node is unreachable; nothing was sent that could have acted |
+| `target-offline` | The target node is unreachable (`fleet launch` and a remote `fleet end`); nothing was sent that could have acted |
 | `kill-switch` | Account-wide kill switch, `launch.enabled` off or equivalent off state |
-| `peer-not-trusted` | The target is not a trusted own peer (same-account relay presence bound to the device key) |
+| `peer-not-trusted` | The target is not a trusted own peer (same-account relay presence bound to the device key), for a launch or a remote `fleet end`; the sender refuses before anything is sent |
 | `person-required` | The existing stopper needs person confirmation; the agent never obtains `--confirm` |
 | `audit-unavailable` | Audit intent could not be written; no action taken |
 | `policy` | Another receiving-host launch safety gate refused |
