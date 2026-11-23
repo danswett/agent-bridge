@@ -43,11 +43,7 @@ public sealed partial class SlotPreparationTests : IDisposable
         }
     }
 
-    void ReadPayload()
-    {
-        using var zip = ZipFile.OpenRead(Package);
-        SlotPreparation.Payload(zip, Version, static v => v == " v0.2.0+build " ? Version : v);
-    }
+    void ReadPayload() => Prepare();
 
     [Theory]
     [InlineData("lib/app/../escape")]
