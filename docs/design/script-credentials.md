@@ -2,8 +2,9 @@
 
 **Owner decision (option 1, recorded on #1414): script credentials are issued from the Slipgates app.**
 Only a person's press in the app mints, revokes or rotates one, and no terminal or PowerShell step
-exists anywhere (the owner's Nov 19 rule, #3305 to #3308). The `agent-bridge-host scripts add` and
-`scripts revoke` commands this note once proposed are not built. Build order: script send (#2763)
+exists anywhere (the owner's Nov 19 rule, #3305 to #3308). The terminal CLI `agent-bridge-host scripts
+add|revoke|grant-fleet|revoke-fleet` is built today (`ScriptCredentialCommands.cs`; #2286, PR 2582,
+#2820). It is a terminal step, so it is retired or app-gated when the app path lands. Build order: script send (#2763)
 and the `launch:fleet` grant first, then the app-issued credential, then the fleet scripts switch
 over and `AGENT_HA_AGENT_TOKEN` retires.
 
@@ -60,11 +61,12 @@ Slipgates mints a credential per session at launch. A script has no session, so 
 | Revoke by session, or when the bound process ends | Built | `RevokeSession`, `RevokeEnded` |
 | Pipe ops an agent connection may call: `agent.send`, `fleet.list`, `fleet.find` | Built (Windows for `agent.send`) | `LiteAgentSend.cs`, `FleetList.cs` |
 | A credential **not tied to a session or a process** | Built: named script record, hashed store and protected file; default and maximum life 30 days | `AgentCredentials.cs` |
-| A host command to list, mint or revoke credentials by hand (`agents revoke`) | **Not found in the code.** agent-principals.md §3.4 describes it; no command implements it | design only |
+| A host CLI to mint, revoke and grant or revoke the fleet launch grant by hand: `agent-bridge-host scripts add\|revoke\|grant-fleet\|revoke-fleet <name>` | **Built** (#2286, PR 2582, #2820). A terminal step: retired or app-gated when the app path lands (owner option 1) | `ScriptCredentialCommands.cs` |
 | A script principal in the audit | Built for fleet reads; complete, traceable, agent-free ancestry required | `AgentCredentials.Check`, `FleetList.cs` |
 
-The remaining sections retain the broader proposal. #2346 does not implement script send,
-launch, mint/revoke commands (#2286), signed registry records or a fleet-script rollout.
+The remaining sections retain the broader proposal. #2346 did not itself implement script send,
+launch, the mint/revoke commands (they landed later as #2286, PR 2582 and #2820), signed registry
+records or a fleet-script rollout.
 Rotation retires the older hash only after the newer token completes an audited fleet read;
 a handshake, failed audit, invalid lookup or failed roster read leaves both hashes intact.
 An expired, revoked or faulted-store connection is refused and logged, never treated as a person.
@@ -112,18 +114,33 @@ says. The base script credential never carries it.
 **Only a person's press in the Slipgates app mints, revokes or rotates**, on the machine's own
 host and from a presence-proven device. Never an agent, never a script, never a remote device
 without that presence, and no terminal or PowerShell step. This follows guard #67 (host management
-is refused from inside an agent session) and agent-token-rotation.md �4 (a new token is accepted
+is refused from inside an agent session) and agent-token-rotation.md §4 (a new token is accepted
 only from a person's device). The owner chose this over a host command line (recorded on #1414).
 
+**How the host tells a person's press from same-user code imitating the app.** The press must reach
+the host as a **person-device presence-signed command**, the same kind the owner's other person-only
+actions use (#3305; agent-principals.md §4.2 and the signed-command memory in §4.4): a designated-verifier
+MAC from the person's device key (`CommandMac`, a TPM or Secure Enclave key), made with presence, that
+names the operation (mint, revoke or rotate), the script name, the machine, a nonce and an expiry.
+The host checks the MAC, the machine and the expiry, and refuses a nonce it has seen in the **durable**
+replay store (#391 R6, agent-principals.md §4.4); the in-memory store forgets across a restart, so it
+is not enough. A remote device mints or revokes only with presence, as the Nov 19 decision says (role
+assignments need a person signature made with presence, never an unattended capSign). A bare local
+pipe call from the app process is **not** a person press: the app's process identity is a safety rail,
+not a boundary. **OPEN (#1414 design):** whether the local app on the same machine can obtain a
+presence-signed command from the person's device without a phone or second device, and what the
+fallback is on a machine with no presence-capable key. Until that is settled, nothing here removes the
+terminal CLI (the Option 1 build order stands).
+
 * **Mint.** In app Settings the person presses "Add script credential" and picks a script name.
-  The host writes the token straight into an owner-only file for that script (�7) and the app shows
+  The host writes the token straight into an owner-only file for that script (§7) and the app shows
   the name, scope, expiry date and the **last four characters** only. The token is never printed,
   logged, put in an argument, or sent over any channel, and no person ever handles it.
 * **Revoke.** The "Revoke" press beside the script in the app. The record is deleted, every open
   connection on it is closed and the next call is refused.
 * **Rotate.** The "Rotate" press, or minting the same name again. The host writes the new file
   atomically and keeps the old credential until the new one passes one real call
-  (agent-token-rotation.md �4), then deletes it. At most two credentials per name are live, and
+  (agent-token-rotation.md §4), then deletes it. At most two credentials per name are live, and
   only during a rotation; a failed first call changes nothing, and a Revoke press kills both. To
   end a leak at once, revoke first and then mint, rather than rotating. A script reads its file on
   each run, so it needs no restart.
@@ -179,7 +196,12 @@ only from a person's device). The owner chose this over a host command line (rec
    already capped at 4096 characters, `LiteAgentSend.MaxText`), and the audit log (#1401) records every
    call with the script principal.
 
-**Honest residual.** Rule 3 is a safety rail, not a boundary (agent-principals.md §3.4,
+**Honest residual.** Same-user code that imitates the app is the agent-principals.md §1.3 residual
+(§3.4): it can drive the same pipe and UI as the person. The presence-signed press above is what stops
+it from minting, revoking or rotating a credential on its own, but it cannot stop code that already
+holds the same-user key material. Replay is closed by the nonce and expiry, not by the app's identity.
+
+Rule 3 is a safety rail, not a boundary (agent-principals.md §3.4,
 "This check is a safety rail"). A script credential sits in an owner-only file, which any
 program running as the same user can read; an agent that copies it and uses a helper with a
 spoofed parent gets `read+reply` as that script. That is the same-user limit of
@@ -273,6 +295,8 @@ Engineering and the owner's security review agree to this note before any code i
 6. **Q6: the HA token's removal.** Fleet #107 removes it. Recommended gate: a script's HA
    fallback is deleted only after one machine runs it for a full run with zero HA calls
    (the epic's retirement gate counts this), not on a date.
+7. **Q7: the local press.** Which presence-signed path the app uses for a local press (see §5),
+   and the fallback on a machine without a presence-capable device key.
 
 ## 11. What is not in this note
 
