@@ -30,7 +30,9 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // A trace of a failing test, kept on CI: Chromium has no retry, so a failure that does not come
+    // back would otherwise leave nothing to look at (sign-in.spec, #2558).
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], trace: process.env.CI ? 'retain-on-failure' : 'off' } },
     // One retry in CI for WebKit alone: its shards fail on a loaded runner in tests that then
     // pass (#1692). Chromium has none, and a pass on retry is listed, never hidden. A tap there
     // can take over 5 s to land under load (answer.spec, #1690), so its expects wait 10 s.
