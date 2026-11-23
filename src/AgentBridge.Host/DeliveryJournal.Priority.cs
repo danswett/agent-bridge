@@ -17,6 +17,14 @@ public sealed partial class DeliveryJournal
     readonly List<DeliveryJournalRecord> priorityRecords = [];
     bool priorityQuarantined;
     string priorityTail = "";
+    // The admission callback runs after the authority and quota decision is computed. A nested priority call
+    // (the lock is reentrant) could spend that quota or revoke the capability and leave the outer grant stale.
+    bool admitting;
+
+    void NoReentry()
+    {
+        if (admitting) { throw new InvalidOperationException("Priority journal is not reentrant during admission."); }
+    }
 
     // Only trusted ingress may supply the authenticated person and captured receiver binding.
     internal void IssuePriority(PriorityCapability capability, DeliverySender person, GrantAudience receiver,
@@ -24,6 +32,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             if (!person.Owner || !current() || !ValidPriority(capability) || capability.Issuer.Account != person.Id ||
                 priorityQuarantined ||
                 capability.Audience != receiver || capability.Issuer.IssuedAt > now ||
@@ -39,6 +48,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var cap = priorityRecords.FirstOrDefault(r => r.Reason == "issued" && r.Capability?.Id == capability)?.Capability;
             if (!person.Owner || !current() || cap is null || cap.Issuer.Account != person.Id || cap.Audience != receiver)
             { throw new InvalidOperationException("Priority revoke requires the authenticated issuing person and exact receiver."); }
@@ -51,6 +61,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var previous = priorityRecords.LastOrDefault(r => r.Header.Id == request.ToString("D"));
             var binding = Binding(target, sender, receiver, body);
             if (previous is not null && (previous.Reason is not ("lane-full" or "missing-reason" or "invalid-priority") ||
@@ -66,8 +77,10 @@ public sealed partial class DeliveryJournal
             if (string.IsNullOrWhiteSpace(requested.Reason) || requested.Reason.Length > 256)
             { PriorityRecord(request, target, sender, "missing-reason", now); return new(false, "normal", "missing-reason"); }
             if (sender.Owner) { return Admit("urgent"); }
+            // The smallest active limit governs, so a second, larger capability never widens the quota.
             var cap = priorityRecords.Where(r => r.Reason == "issued").Select(r => r.Capability!).ToArray()
-                .FirstOrDefault(c => c.Principal == sender.Id && c.Audience == receiver && ActivePriority(c, now));
+                .Where(c => c.Principal == sender.Id && c.Audience == receiver && ActivePriority(c, now))
+                .OrderBy(c => c.Hourly).FirstOrDefault();
             var spent = priorityRecords.Where(r => r.Reason == "granted" && r.Capability?.Principal == sender.Id &&
                 r.Capability.Audience == receiver && now - r.RecordedAt < TimeSpan.FromHours(1))
                 .Select(r => r.Header.Id).Distinct().Count();
@@ -76,7 +89,10 @@ public sealed partial class DeliveryJournal
 
             PriorityDecision Admit(string effective, PriorityCapability? capability = null, string? refused = null)
             {
-                if (!admit(effective))
+                bool admitted;
+                admitting = true;
+                try { admitted = admit(effective); } finally { admitting = false; }
+                if (!admitted)
                 { PriorityRecord(request, target, sender, "lane-full", now); return new(false, "normal", "lane-full"); }
                 if (refused is not null)
                 {
@@ -98,6 +114,7 @@ public sealed partial class DeliveryJournal
     {
         lock (gate)
         {
+            NoReentry();
             var cap = priorityRecords.LastOrDefault(r => r.Reason == "consumed" && r.Header.Id == request.ToString("D") &&
                 r.Session == target && r.Capability?.Principal == sender.Id)?.Capability;
             if (cap is null || sender.Owner || cap.Audience != receiver || !ActivePriority(cap, now)) { return false; }

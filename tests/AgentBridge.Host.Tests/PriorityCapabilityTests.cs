@@ -445,4 +445,31 @@ public sealed class PriorityCapabilityTests
             Assert.Throws<InvalidOperationException>(() => reopened.Issue(reopened.Cap() with { Principal = "fresh" }));
         }
     }
+
+    [Theory]
+    [InlineData("decide")]
+    [InlineData("revoke")]
+    public void Admission_callback_cannot_reenter_the_priority_journal_and_spend_or_revoke_the_decision(string nested)
+    {
+        using var f = new Fake(); var cap = f.Cap(1); f.Issue(cap);
+        var now = f.Clock.GetUtcNow();
+        Assert.Throws<InvalidOperationException>(() => f.Journal.DecidePriority(Guid.NewGuid(), "target", Agent, "body",
+            new("urgent", "stop wrong work"), Receiver, now, _ =>
+            {
+                if (nested == "decide") { f.Decide(); } else { f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, now); }
+                return true;
+            }));
+        Assert.DoesNotContain(f.Records, r => r.Reason is "granted" or "consumed" or "revoked");
+        Assert.Equal("urgent", f.Decide().Priority);
+    }
+
+    [Fact]
+    public void Quota_uses_the_smallest_active_hourly_limit_for_the_same_principal_and_receiver()
+    {
+        using var f = new Fake(); f.Issue(f.Cap(3)); f.Issue(f.Cap(1));
+        Assert.Equal("urgent", f.Decide().Priority);
+        Assert.Equal("quota", f.Decide().Reason);
+        using var replay = new Fake(f.Records);
+        Assert.Equal("quota", replay.Decide().Reason);
+    }
 }
