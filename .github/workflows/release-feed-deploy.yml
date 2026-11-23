@@ -5,7 +5,8 @@ name: Release feed deploy
 # - test: the Worker's own tests, with no secret.
 # - deploy: wrangler, pinned to an exact version, with the environment's Cloudflare API token; then the Worker's
 #   optional GITHUB_TOKEN secret from the environment secret RELEASE_FEED_GITHUB_TOKEN, on stdin, never logged.
-# - purge-check: purges the public list URL by URL and checks the next answer was fetched after the purge (#3870).
+# - purge-check: purges both public list URLs the app reads by URL, and checks each next answer was fetched after the
+#   purge (#3870).
 # There is no push or pull_request trigger: nothing a pull request can change deploys or reaches these secrets.
 # docs/relay-deploy.md is the model: least permissions, SHA-pinned actions, one rollout at a time.
 on:
@@ -48,17 +49,27 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      # wrangler.toml holds the name, the route releases.slipgates.com/* and workers_dev = false. A deploy sets no
-      # secret and changes no DNS. An exact version: npm never changes a published version's contents.
+      # Before anything is deployed: without the token the run fails here and the Worker is untouched.
+      - name: RELEASE_FEED_GITHUB_TOKEN is set
+        env:
+          RELEASE_FEED_GITHUB_TOKEN: ${{ secrets.RELEASE_FEED_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${RELEASE_FEED_GITHUB_TOKEN:-}" ]; then
+            echo "::error::RELEASE_FEED_GITHUB_TOKEN not set: add it to the release-feed-deploy environment's secrets. Nothing was deployed."
+            exit 1
+          fi
+      # wrangler.toml holds the name, the route releases.slipgates.com/* and workers_dev = false. The deploy changes no
+      # DNS; the next step sets the Worker's one secret. An exact version: npm never changes a published version's contents.
       - name: Deploy the Worker (wrangler 4.42.0)
         working-directory: infra/cloudflare/release-feed
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4.42.0 deploy
-      # The Worker's optional read-only GitHub token (README: 60-second freshness instead of 300). It goes from the
-      # environment secret to wrangler on stdin only: never an argument, never echoed, no `set -x`. An empty or
-      # absent secret skips this step, so the Worker keeps whatever secret it has and is never given an empty token.
+      # The Worker's read-only GitHub token (README: 60-second freshness instead of 300). worker.js sends it only as the
+      # Authorization of its release-list read (refresh()). It goes from the environment secret to wrangler on stdin
+      # only: never an argument, never echoed, no `set -x`. A missing or empty secret fails the run, so the Worker is
+      # never given an empty token.
       - name: Set the Worker's GITHUB_TOKEN secret
         working-directory: infra/cloudflare/release-feed
         env:
@@ -68,8 +79,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${RELEASE_FEED_GITHUB_TOKEN:-}" ]; then
-            echo "::notice::RELEASE_FEED_GITHUB_TOKEN is not set: the Worker's GITHUB_TOKEN is left as it is"
-            exit 0
+            echo "::error::RELEASE_FEED_GITHUB_TOKEN not set: add it to the release-feed-deploy environment's secrets. The Worker's GITHUB_TOKEN was not changed."
+            exit 1
           fi
           printf '%s' "$RELEASE_FEED_GITHUB_TOKEN" | npx --yes wrangler@4.42.0 secret put GITHUB_TOKEN > /dev/null
           echo "The Worker's GITHUB_TOKEN secret was set from RELEASE_FEED_GITHUB_TOKEN." >> "$GITHUB_STEP_SUMMARY"
@@ -81,40 +92,47 @@ jobs:
     timeout-minutes: 5
     environment: release-purge
     steps:
-      # The Worker keys its cache on the public zone URL, so purging that URL must clear the entry (#3880). Read it twice
-      # so it is cached, purge it, then read again: the answer must have been fetched after the purge (its Age no older
-      # than the purge). Then a bodyless 304 for its ETag, as the README's Verify step asks.
-      - name: Purge-by-URL clears the cached release list (#3870)
+      # The Worker keys its cache on the public zone URL, so purging that URL must clear the entry (#3880). The app reads
+      # two list URLs: the update check's per_page=10 and the halt policy's per_page=100. Each is read twice so it is
+      # cached, both are purged in one call, then each is read again: its answer must have been fetched after the purge
+      # (its Age no older than the purge), or the run fails naming the URL. Then a bodyless 304 for each one's ETag.
+      - name: Purge-by-URL clears both cached release lists (#3870)
         env:
           CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
           CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
         run: |
           set -euo pipefail
-          url='https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1'
-          read_headers() { curl -sS -o /dev/null -D - --max-time 30 "$@" "$url" | tr -d '\r'; }
+          base='https://releases.slipgates.com/repos/danswett/agent-bridge/releases'
+          urls=("$base?per_page=10&page=1" "$base?per_page=100&page=1")
+          read_headers() { local u="$1"; shift; curl -sS -o /dev/null -D - --max-time 30 "$@" "$u" | tr -d '\r'; }
           status() { printf '%s\n' "$1" | awk 'NR==1 { print $2 }'; }
           header() { printf '%s\n' "$1" | awk -F': ' -v k="$2" 'tolower($1) == k { v = $2 } END { print v }'; }
           if ! [[ "$CF_ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then echo "::error::CF_ZONE_ID is not a zone id"; exit 1; fi
 
-          first=$(read_headers)
-          [ "$(status "$first")" = 200 ] || { echo "::error::the feed answered $(status "$first"), not 200"; exit 1; }
+          for u in "${urls[@]}"; do
+            first=$(read_headers "$u")
+            [ "$(status "$first")" = 200 ] || { echo "::error::$u answered $(status "$first"), not 200"; exit 1; }
+          done
           sleep 5
-          cached=$(read_headers); age=$(header "$cached" age)
-          [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -ge 1 ] || { echo "::error::the second read was not served from the cache (Age '$age')"; exit 1; }
+          for u in "${urls[@]}"; do
+            cached=$(read_headers "$u"); age=$(header "$cached" age)
+            [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -ge 1 ] || { echo "::error::the second read of $u was not served from the cache (Age '$age')"; exit 1; }
+          done
 
           purged_at=$(date +%s)
           answer=$(curl -sS --max-time 30 -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
             -H "Authorization: Bearer $CF_PURGE_TOKEN" -H 'Content-Type: application/json' \
-            --data "$(jq -cn --arg u "$url" '{files: [$u]}')")
+            --data "$(jq -cn '{files: $ARGS.positional}' --args "${urls[@]}")")
           [ "$(jq -r '.success' <<<"$answer")" = true ] || { echo "::error::Cloudflare refused the purge: $(jq -c '[.errors[]?.message]' <<<"$answer")"; exit 1; }
           sleep 5
 
-          after=$(read_headers); age=$(header "$after" age); since=$(( $(date +%s) - purged_at ))
-          [ "$(status "$after")" = 200 ] || { echo "::error::after the purge the feed answered $(status "$after")"; exit 1; }
-          [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -le "$since" ] || { echo "::error::after the purge, Age is '$age' (purged ${since}s ago): purge-by-URL did not clear the Worker's cache entry (#3870)"; exit 1; }
-
-          etag=$(header "$after" etag)
-          [ -n "$etag" ] || { echo "::error::no ETag on the list"; exit 1; }
-          again=$(read_headers -H "If-None-Match: $etag")
-          [ "$(status "$again")" = 304 ] || { echo "::error::If-None-Match answered $(status "$again"), not 304"; exit 1; }
-          echo "Purge-by-URL cleared the entry: Age $age s after a purge ${since}s ago; 304 for its ETag." >> "$GITHUB_STEP_SUMMARY"
+          for u in "${urls[@]}"; do
+            after=$(read_headers "$u"); age=$(header "$after" age); since=$(( $(date +%s) - purged_at ))
+            [ "$(status "$after")" = 200 ] || { echo "::error::after the purge $u answered $(status "$after")"; exit 1; }
+            [[ "$age" =~ ^[0-9]+$ ]] && [ "$age" -le "$since" ] || { echo "::error::after the purge, $u has Age '$age' (purged ${since}s ago): purge-by-URL did not clear its cache entry (#3870)"; exit 1; }
+            etag=$(header "$after" etag)
+            [ -n "$etag" ] || { echo "::error::no ETag on $u"; exit 1; }
+            again=$(read_headers "$u" -H "If-None-Match: $etag")
+            [ "$(status "$again")" = 304 ] || { echo "::error::If-None-Match on $u answered $(status "$again"), not 304"; exit 1; }
+            echo "Purge-by-URL cleared $u: Age $age s after a purge ${since}s ago; 304 for its ETag." >> "$GITHUB_STEP_SUMMARY"
+          done
