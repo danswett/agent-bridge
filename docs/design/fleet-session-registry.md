@@ -297,6 +297,37 @@ and subscription handling (slice RC) and signature checks (#1776) are still to c
     reader that was offline learns it from the next `registry-get`, which no longer lists the
     machine, and drops cache entries for machines not listed in `registry` or `known`.
 
+## One registry read for every local caller (#1396)
+
+A host has one relay connection, and every local reader shares it: `fleet.list` and `fleet.find` for each
+agent session on the machine, and the Lite receiver's account and roster checks. Each used to make its own
+`registry-get`, so two sessions replying within the same two seconds made the relay answer `slow-down`
+(seen as "fleet.list refused: the relay allows one registry read every 2 seconds" from `reply-session`).
+The relay's rate is now a token bucket (see "Size and paging", #3787); this rule removes the avoidable reads
+so the bucket is spent on distinct work.
+
+* **Single flight.** While a `registry-get` is in flight on the host's relay connection, readers that may share
+  wait for that one read and get its result. One shared read serves both of the host's roster readers
+  (the fleet roster and the Lite messaging roster), not one each.
+* **Freshness window.** A successful read is reused for `RegistryReadFreshness` (1 s, monotonic clock) by a reader that may
+  share. Liveness is judged on the registry's own `lastSeen` (5 s and 60 s windows), and the target host
+  resolves a node id again itself before typing.
+* **Who may share, and who must not.** Sharing is for listing and routing: `fleet.list` and `fleet.find` as an agent
+  session calls them to send to a node id or to look at the fleet. These **bypass it and always start their own
+  read, after the request arrived**: (1) the send-time name fence, which asks `fleet.list` with `fresh: true`
+  (a name that moved from A to B must never send to A); (2) name-uniqueness checks, the rename enrollment's duplicate
+  test and a named launch's availability test; any caller that sends `fresh: true`. A shared read is never used for
+  a decision about whether a name is free or still belongs to a node.
+* **Never cached:** a failed or refused read (a `slow-down` or a transport failure is reported to each caller, never
+  answered from an older copy), a read after the connection changed (attaching a new connection resets the shared
+  read, and a read still in flight for the old connection is not kept for the new one), and anything across accounts.
+* **Same answer.** The reply shape and scoping of `fleet.list` and `fleet.find` do not change; `fresh` is the only new
+  request field, and a value that is not the boolean `true` means not fresh. The shared read is the account snapshot
+  before each caller's own filtering and authorization.
+* **Not changed:** the sender's refusal when the target is not live in the read, the expected-node fence and the
+  name fence (now fresh by the rule above). A held discovery pass on the target is a separate refusal
+  (`sessionResolutionIncomplete`, #3802). The 30 s pin on a lost reply is not changed here (follow-up).
+
 ## Offline machines and the cache
 
 The host's fleet reader keeps this cache in memory only (#2643), cleared on each new relay connection.
@@ -624,6 +655,15 @@ first draft of this note.
 | 9 | Fleet messenger and reply-session switch (fleet repo) | S | 5, R | Resolve every name without HA; ambiguity, `unverified` and `incomplete` refused loudly; sends pin machine and node |
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
 | 11 | 24 h dual run against HA, then S8 | n/a | 2a to 9, RC | At most 5 s lag, zero missing sessions, 100% of person-set names resolved |
+
+Slice 11's definitions (live, lag, missing, extra, person-set name), pass bar, exclusions and evidence file are in
+[slipgates-fleet `docs/ha-dual-run.md`](https://github.com/danswett/slipgates-fleet/blob/main/docs/ha-dual-run.md). The sampler and the run each
+need their own approval; the owner decides S7 after Quality attests the evidence.
+
+Stuck-prompt evidence needs no new field here. `fleet.list` already returns `attention`, `openAsks`, `unsentLength`, `unsentHash`,
+`observedAt` and `lastReplyAt` ([agent-operations.md](../protocol/agent-operations.md)); the fleet tools' relay roster projection
+(`Get-FleetRoster`) now carries them, so the stuck-prompt shadow reads them with HA off. The read scope is unchanged and an `approval`
+attention is passed through unmapped, so a reader refuses it rather than guessing.
 
 Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L/M, was one L);
 #1399 grows from S to M; #1412 stays L; the reader core RC is a new issue. The epic's seven-day
