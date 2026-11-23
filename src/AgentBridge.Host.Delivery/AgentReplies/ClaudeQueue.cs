@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AgentBridge.Host.Delivery.Copilot;
 
 namespace AgentBridge.Host.Delivery.AgentReplies;
@@ -37,7 +38,40 @@ public static class ClaudeQueue
     }
 
     // Whether the transcript's tail holds a relay prompt enqueued at or after since and not taken since: the slot a host restart forgot.
-    public static bool Unconsumed(string path, DateTimeOffset since) => false;
+    public static bool Unconsumed(string path, DateTimeOffset since)
+    {
+        var from = Math.Max(0, Jsonl.Length(path) - TailBytes);
+        var enqueued = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (Jsonl.Lines(path, from, skipFirst: from > 0, Line) is null) { return false; }
+        return enqueued.Any(r => !taken.Contains(r));
+
+        void Line(ReadOnlySpan<byte> bytes, long start)
+        {
+            var queue = bytes.IndexOf("\"type\":\"queue-operation\""u8) >= 0;
+            if ((!queue && bytes.IndexOf("\"type\":\"user\""u8) < 0) || bytes.IndexOf(" request "u8) < 0) { return; }
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(bytes.ToArray()); }
+            catch (JsonException) { return; }
+            using (doc)
+            {
+                var e = doc.RootElement;
+                if (e.ValueKind != JsonValueKind.Object || Flag(e, "isSidechain") || Flag(e, "isMeta")) { return; }
+                if (queue)
+                {
+                    // A row with no time stays: a relay prompt that cannot be placed before the process is held, the safe side.
+                    if (ClaudePrompts.Str(e, "operation") == "enqueue" && ClaudePrompts.Str(e, "content") is { } content
+                        && RelayId(content) is { } id && (Jsonl.Timestamp(e) is not { } at || at >= since)) { enqueued.Add(id); }
+                }
+                else if (ClaudePrompts.Text(e) is { } text && RelayId(text) is { } taken1) { taken.Add(taken1); }
+            }
+        }
+    }
+
+    // How far back the slot is looked for. A relay prompt older than this tail is treated as gone.
+    const long TailBytes = 4L << 20;
+    static readonly Regex Relay = new(@"^\[[^\]]*? · request ([0-9a-fA-F-]{36}) · not typed by your user\]", RegexOptions.CultureInvariant);
+    static string? RelayId(string text) => Relay.Match(text) is { Success: true } m ? m.Groups[1].Value : null;
 
     static bool Flag(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
 }

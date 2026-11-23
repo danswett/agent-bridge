@@ -55,7 +55,7 @@ public static class LiteComposition
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
         var busyStore = new BusyQueueStore(TimeProvider.System);
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = busyStore, Watcher = new BusyQueueWatcher(busyStore, TimeProvider.System) };
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = busyStore, Watcher = new BusyQueueWatcher(busyStore, TimeProvider.System), ArmKeeper = new BusyQueueArmKeeper(busyStore, TimeProvider.System) };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)

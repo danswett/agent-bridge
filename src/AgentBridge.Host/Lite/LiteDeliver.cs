@@ -131,16 +131,24 @@ public sealed class LiteDeliver(
         var store = busyQueue ? BusyStore : null;
         if (store is not null)
         {
+            var process = source.ProcessOf(id)?.StartedAt;
+            var transcript = source.Files(id)?.Transcript;
             var begin = store.TryBegin(body.Request, Principal(body.Principal), id);
-            // A prompt Claude took after the report frees its slot (D2b-2b1, #3856): look at the transcript before refusing a held slot.
-            if (begin == BusyQueueStore.Begin.Held && LateTaken(store, id)) { begin = store.TryBegin(body.Request, Principal(body.Principal), id); }
+            // A held slot is freed when Claude restarted since (its queue is gone, D2b-2c) or took the prompt after the report (D2b-2b1, #3856).
+            if (begin == BusyQueueStore.Begin.Held && (Restarted(store, id, process) || LateTaken(store, id))) { begin = store.TryBegin(body.Request, Principal(body.Principal), id); }
+            // The store forgets a host restart; the transcript does not (D2b-2c): a relay prompt enqueued since this Claude process started and not
+            // taken still holds the slot. With no known process start, rows count from the last hour.
+            if (begin == BusyQueueStore.Begin.Started && transcript is not null && ClaudeQueue.Unconsumed(transcript, process ?? time.GetUtcNow() - TimeSpan.FromHours(1)))
+            {
+                store.Release(body.Request);
+                return Refused(LiteCodes.QueueHeld);
+            }
             switch (begin)
             {
                 case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
                 case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
-            var transcript = source.Files(id)?.Transcript;
-            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript));
+            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript), process);
         }        // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
@@ -179,12 +187,18 @@ public sealed class LiteDeliver(
                     break;
             }
             // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
-            if (store.Get(body.Request) is { Held: true }) { _ = Watcher?.Start(body.Request); }
+            if (store.Get(body.Request) is { Held: true })
+            {
+                _ = Watcher?.Start(body.Request);
+                if (driver is not null && armed is { } arm) { _ = ArmKeeper?.Start(body.Request, () => driver.KeepArm(time.GetUtcNow(), arm.Generation)); }
+            }
         }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { Unarm(); Record(null); throw; }
-        if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
+        catch { if (!(store is not null && keysWent)) { Unarm(); } Record(null); throw; }
+        // A send whose keys went may still be queued, so with the status store its arm stays (D2b-2c): the framed words carry a unique request id, so no
+        // prompt of the person's can match them, and a prompt Claude takes later still shows as the agent's. The keeper keeps it from lapsing.
+        if (result.Outcome != AnswerOutcome.Delivered && !(store is not null && keysWent)) { Unarm(); }
         Record(result);
         return result.Outcome switch
         {
@@ -258,6 +272,15 @@ public sealed class LiteDeliver(
         return source.Held is null ? found : null;
     }
 
+    // Claude restarted since a held send: its in-memory queue is gone (assumed, UNPROVEN until a real transcript proves it), so the old record is
+    // unconfirmed with that reason and the slot frees.
+    static bool Restarted(BusyQueueStore store, string session, DateTimeOffset? process)
+    {
+        var held = store.Holder(session);
+        if (held is null || held.ProcessStart is not { } was || process is not { } now || was == now) { return false; }
+        store.Settle(held.Request, BusyQueueStore.Unconfirmed, "claudeRestart", held: false);
+        return true;
+    }
     // A relay prompt Claude took after its send was reported: the record becomes delivered and the slot frees. A held send whose transcript
     // is unknown, or whose prompt has not been taken, stays held.
     static bool LateTaken(BusyQueueStore store, string session)

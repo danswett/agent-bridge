@@ -24,7 +24,7 @@ public sealed class BusyQueueStore(TimeProvider time)
     // The slot: session id -> the request that claims it.
     readonly Dictionary<string, string> slots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> sessionOf = new(StringComparer.Ordinal);
-    readonly Dictionary<string, (string? Transcript, long Offset)> tracked = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string? Transcript, long Offset, DateTimeOffset? ProcessStart)> tracked = new(StringComparer.Ordinal);
 
     // Claims the session's slot and creates the in-flight record, before any key goes. Held: another relay message holds the slot, or this
     // request id was already begun. Full: no room for another record.
@@ -74,12 +74,12 @@ public sealed class BusyQueueStore(TimeProvider time)
     // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
     public void Track(string request, string? transcript, long offset, DateTimeOffset? processStart = null)
     {
-        lock (gate) { if (records.ContainsKey(request)) { tracked[request] = (transcript, offset); } }
+        lock (gate) { if (records.ContainsKey(request)) { tracked[request] = (transcript, offset, processStart); } }
     }
 
     public (string? Transcript, long Offset) Tracking(string request)
     {
-        lock (gate) { return tracked.TryGetValue(request, out var where) ? where : default; }
+        lock (gate) { return tracked.TryGetValue(request, out var where) ? (where.Transcript, where.Offset) : default; }
     }
 
     public Holding? Holder(string session)
@@ -88,7 +88,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         {
             if (!slots.TryGetValue(session, out var request)) { return null; }
             tracked.TryGetValue(request, out var where);
-            return new Holding(request, where.Transcript, where.Offset);
+            return new Holding(request, where.Transcript, where.Offset, where.ProcessStart);
         }
     }
 

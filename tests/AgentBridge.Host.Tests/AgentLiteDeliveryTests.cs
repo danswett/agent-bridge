@@ -873,11 +873,11 @@ public sealed class AgentLiteDeliveryTests
         File.WriteAllText(path, EnqueueRowAt(FramedEarlier("55555555-5555-5555-5555-555555555555"), "2026-11-23T10:05:00.000Z") + "\n");
         try
         {
-            var restarted = BusyClaude(ReplyStage.Queued); restarted.Transcript = path; restarted.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z");
+            var restarted = BusyClaude(ReplyStage.Queued); restarted.Transcript = path; restarted.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z"); restarted.Launch(LaunchProtocol.Ask);
             Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(restarted.Build()));   // the store is empty, the transcript is not
             Assert.Empty(restarted.Typed);
             Assert.Empty(restarted.Store.Records());                                                   // no record is left behind
-            var newer = BusyClaude(ReplyStage.Queued); newer.Transcript = path; newer.ProcessAt = DateTimeOffset.Parse("2026-11-23T11:00:00Z");
+            var newer = BusyClaude(ReplyStage.Queued); newer.Transcript = path; newer.ProcessAt = DateTimeOffset.Parse("2026-11-23T11:00:00Z"); newer.Launch(LaunchProtocol.Ask);
             Assert.Equal(LiteKind.Queued, (await SendNew(newer.Build())).Outcome);                     // Claude restarted since: that queue is gone
         }
         finally { File.Delete(path); }
@@ -885,10 +885,10 @@ public sealed class AgentLiteDeliveryTests
     [Fact]
     public async Task A_claude_restart_frees_a_held_slot_and_the_old_record_is_unconfirmed_with_that_reason()
     {
-        var f = BusyClaude(ReplyStage.Queued); f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z"); var lite = f.Build();
+        var f = BusyClaude(ReplyStage.Queued); f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z"); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
         Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
         Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));                       // same process: still held
-        f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:30:00Z");                                    // Claude restarted
+        f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:30:00Z"); f.Launch(LaunchProtocol.Ask);          // Claude restarted, and re-registered as a launch
         Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
         var old = f.Store.Records().Single(r => r.Reason == "claudeRestart");
         Assert.Equal((BusyQueueStore.Unconfirmed, false), (old.State, old.Held));

@@ -233,8 +233,17 @@ public sealed partial class SessionDriver
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
     public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null, bool WordsToCome = false, string? Label = null);
 
-    // Keeps a waiting arm waiting (docs/message-delivery.md, #3856): moves only its time.
-    public bool KeepArm(DateTimeOffset now, long onlyAt) => false;
+    // Keeps a waiting arm waiting (docs/message-delivery.md, #3856): moves only its time, so the words, the principal and the label stay as they were and nothing new is granted.
+    // Only the arm of that generation, and only while it is still waiting; one spent, replaced or put back is left as it is.
+    public bool KeepArm(DateTimeOffset now, long onlyAt)
+    {
+        lock (gate)
+        {
+            if (generation != onlyAt || pendingAt is null) { return false; }
+            pendingAt = now;
+            return true;
+        }
+    }
 
     public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome, armedLabel); } }
 
