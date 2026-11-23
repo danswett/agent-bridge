@@ -262,3 +262,44 @@ Focused tests belong with the store tests, `LiteReceiverTests`, `ReplyTests`,
 `AgentLiteSenderTests`, and the messenger's route tests. This remains a design-only
 issue: no implementation or runtime tests are run here. The store location, relay/HA
 delivery behavior, and protocol changes make the eventual implementation sensitive.
+
+## Proposed CHANGE (owner approval needed, not in force): fewer discovery holds
+
+**Status: a proposal. Nothing here is implemented, and no rule above changes until the owner picks an option.** It touches how a
+live target is found, so it is sensitive (it changes what a node-id send may resolve to while discovery is incomplete).
+
+**The problem.** A node id is refused `sessionResolutionIncomplete` while session discovery is held (`LiteDeliver.FromNodeId`: a held
+pass may not list a live second session with the same node id). A live target therefore gets a refusal for as long as any hold stands.
+Before #3802 that refusal was `noSuchSession`; since then the sender can tell it to retry, and #1117's busy loop retries it three
+times, 20 s apart.
+
+**Evidence** (one host's log, 8.2 h; a sample, not the fleet). 196 hold episodes: median 2 s, 90th percentile 11 s, longest 49 s,
+the host held 3.3% of the time. Reasons: 164 an unrecognised `claude` process, 38 `copilot`, 16 `codex`. In the same machine's send
+log, 44 `noSuchSession` refusals, 39 of them to targets that delivered within 5 minutes (live), and, after #3802 reached the hosts, 4
+`sessionResolutionIncomplete`, all four delivered on a later try. A hold ends when the process is recognised, or exits, or after
+`Unaccounted.Grace` (2 min): `Unaccounted.Holding` holds for *any* agent process that is not yet matched to a session, because a real
+session that is still starting up must not be mistaken for a stranger and have its sessions retired or resumed.
+
+**Option (c), recommended: do not hold for a process that cannot be an interactive session.** Most holds are short-lived `claude`
+helper processes (sub-agents and non-interactive print-mode runs) that start, never register as a session and exit. Holding for one
+protects nothing: it will never be a session to retire or resume. `AgentProcess` already carries the command line, so a process whose
+command line shows the agent's non-interactive print mode is not held for. It fails open: an unreadable or unrecognised command line,
+or any other agent version's flags, is still held for, exactly as today. What it needs before anyone builds it: a **sample of the
+command-line shapes** of the processes holds name (flags only, never arguments or prompts, written to the host log in a bounded form),
+to confirm the helpers are what the counts suggest; real command-line fixtures for each agent and version in tests; a test that an
+interactive session started with the same binary is still held for until it registers. Expected effect: most of the 164 `claude`
+holds go away, so most refusals do; not verified until the sample exists.
+
+**Option (b): resolve a node id during a hold when the held kind differs from the target's.** While discovery is held only for agent
+kinds K (`DiscoveryHeld.Agents`), resolve a node id when exactly one listed session matches it and that session's agent kind is not in
+K. The only live session a hold can hide is one of a held kind, and two sessions of different kinds cannot share a node id short of a
+64-bit prefix collision, so the match is still exactly one. This departs from the current rule (any hold refuses a node id) and needs
+the owner's approval. **Its limit:** it only helps when the held kind is not the target's kind. Here that is about a quarter of holds
+(the `copilot` and `codex` ones), and the refused targets are mostly `claude` sessions, so it would remove few of the refusals seen.
+
+**Option (a): keep the rule.** The sender's retry (#1117, three tries 20 s apart, about a minute) already covers a hold up to the
+longest seen here (49 s). The cost is the occasional uncertain-looking refusal and a slower first reply.
+
+**Owner decision requested:** (c), (b), both, or (a). Whichever is picked lands as its own sensitive PR, tests first (fixtures for
+(c); a held-kind matrix for (b), including the same-kind and different-kind cases), and this section is replaced by the rule it
+adopts.
