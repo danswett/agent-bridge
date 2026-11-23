@@ -444,6 +444,8 @@ public sealed class IntakeTests : IDisposable
         {
             var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, $"{id}.json"), id);
             Assert.Equal(ApprovalMarkerState.Present, marker.State);
+            Assert.NotNull(marker.DecisionId);
+            Assert.NotNull(marker.Question);
             Assert.Equal(($"Needs approval: {tool}", tool, (string?)null), (marker.Question, marker.Tool, marker.Command));
             var q = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, DateTimeOffset.UnixEpoch, atMachine: false);
             Assert.True(q.AnswerAtMachine);
@@ -451,6 +453,8 @@ public sealed class IntakeTests : IDisposable
         // Only the command and the agent's words about it: the command is the whole of what runs.
         var whole = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x3.json"), "x3");
         Assert.Equal(("Bash", "git push"), (whole.Tool, whole.Command));
+        Assert.NotNull(whole.DecisionId);
+        Assert.NotNull(whole.Question);
         Assert.Null(QuestionMapper.CodexApproval(whole.DecisionId, whole.Tool, whole.Command, whole.CommandCut, whole.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
     }
 
@@ -473,10 +477,14 @@ public sealed class IntakeTests : IDisposable
 
         var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x1.json"), "x1");
         Assert.Equal(("Needs approval: Bash", (string?)null), (marker.Question, marker.Command));
+        Assert.NotNull(marker.DecisionId);
+        Assert.NotNull(marker.Question);
         Assert.True(QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
         // An ordinary description, even one that mentions network access later on, stays answerable.
         var plain = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x2.json"), "x2");
         Assert.Equal("npm install", plain.Command);
+        Assert.NotNull(plain.DecisionId);
+        Assert.NotNull(plain.Question);
         Assert.Null(QuestionMapper.CodexApproval(plain.DecisionId, plain.Tool, plain.Command, plain.CommandCut, plain.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
     }
 
@@ -830,7 +838,7 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void Withdrawing_approvals_stops_at_once_when_agent_ha_bridge_starts()
+    public async Task Withdrawing_approvals_stops_at_once_when_agent_ha_bridge_starts()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         var first = Running();
@@ -839,7 +847,7 @@ public sealed class IntakeTests : IDisposable
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
         Assert.True(File.Exists(marker));
         SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
-        foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        foreach (var i in _intakes) { await i.DisposeAsync(); }
         _intakes.Clear();
         // The pass, then the marker: agent-ha-bridge is running by the second.
         var checks = 0;
@@ -999,7 +1007,7 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void Approvals_are_settled_even_while_the_heartbeat_cannot_be_written()
+    public async Task Approvals_are_settled_even_while_the_heartbeat_cannot_be_written()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
         var first = Running();
@@ -1008,7 +1016,7 @@ public sealed class IntakeTests : IDisposable
         var marker = Path.Combine(_f.CodexRegistrations, "x1.approval.json");
         Assert.True(File.Exists(marker));
         SpoolContract.Record(_f.Runtime, "codex", "hook", "reply", "no daemon heartbeat", _base.AddSeconds(5), 3);
-        foreach (var i in _intakes) { i.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        foreach (var i in _intakes) { await i.DisposeAsync(); }
         _intakes.Clear();
         // Something where the heartbeat should be.
         File.Delete(SpoolContract.HeartbeatPath(_f.Runtime));
@@ -1689,7 +1697,7 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
-    public void A_host_stopping_part_way_through_a_backlog_leaves_the_rest_for_the_next_one()
+    public async Task A_host_stopping_part_way_through_a_backlog_leaves_the_rest_for_the_next_one()
     {
         Spooled("0001", "claude", "register", new { session_id = "s1", hook_event_name = "SessionStart" });
         var rest = Spooled("0002", "claude", "register", new { session_id = "s2", hook_event_name = "SessionStart" });
@@ -1701,7 +1709,7 @@ public sealed class IntakeTests : IDisposable
 
         intake.Start(stop.Token);
         Assert.True(stop.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)));
-        intake.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await intake.DisposeAsync();
         _intakes.Remove(intake);
 
         Assert.Equal(1, intake.Handled);
@@ -1907,7 +1915,7 @@ public sealed class IntakeTests : IDisposable
     // ---------------------------------------------------------------- upkeep
 
     [Fact]
-    public void Registrations_for_sessions_that_are_over_are_pruned_as_the_daemon_did_and_only_on_a_complete_process_list()
+    public async Task Registrations_for_sessions_that_are_over_are_pruned_as_the_daemon_did_and_only_on_a_complete_process_list()
     {
         _f.Processes.Run(AgentKind.Claude, 30);
         _f.Processes.Run(AgentKind.Codex, 60);
@@ -1948,7 +1956,7 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal(["running.approval.json", "running.json"], Directory.GetFiles(_f.CodexRegistrations).Select(Path.GetFileName).Order());
 
         // A host that cannot see every process (the first has stopped, so this one takes the spool).
-        intake.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        await intake.DisposeAsync();
         _intakes.Remove(intake);
         var blind = new HookIntake(new HookIntakeOptions { RuntimeRoot = _f.Runtime, ClaudeHome = _f.ClaudeHome, UseFileSystemWatcher = false }, new Blind(), _f.Time);
         _intakes.Add(blind);
