@@ -376,7 +376,7 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
-    public async Task However_many_devices_subscribe_the_relay_runs_one_sweeper_and_none_before_the_first()
+    public async Task However_many_devices_subscribe_the_relay_runs_one_sweeper_none_before_the_first_and_drain_disposes_it()
     {
         var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
@@ -391,22 +391,51 @@ public sealed class RosterFieldsTests
                 await SubscribedAsync(d);
             }
             Assert.Equal(1, time.Sweepers);
+            Assert.Equal(0, time.Disposed);
+            await relay.App.Services.GetRequiredService<AgentBridge.Relay.RelayHub>().DrainAsync();
+            Assert.Equal(1, time.Disposed);
         }
         finally { foreach (var d in devices) { await d.DisposeAsync(); } }
     }
 
     [Fact]
-    public async Task Draining_the_relay_disposes_its_sweeper()
+    public async Task A_machine_that_went_quiet_is_announced_offline_once_even_if_it_then_disconnects()
     {
-        var time = new CountingTime(new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
-        await using var d = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
-        await SubscribedAsync(d);
-        Assert.Equal(0, time.Disposed);
+        await using var watcher = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
+        var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "quiet", "host");
+        var heard = await SubscribedAsync(watcher);
+        Assert.Null(await new Wirer(host).PutAsync(host, Record(host.Id)));
+        await heard.ChangedAsync(_ => true);
 
-        await relay.App.Services.GetRequiredService<AgentBridge.Relay.RelayHub>().DrainAsync();
+        time.Advance(TimeSpan.FromSeconds(61));
+        await heard.ChangedAsync(f => !f.GetProperty("online").GetBoolean());
+        await host.DisposeAsync();
+        await Task.Delay(500);
 
-        Assert.Equal(1, time.Disposed);
+        Assert.Empty(heard.Drain());
+    }
+
+    [Fact]
+    public async Task A_machine_that_went_quiet_and_publishes_again_is_announced_offline_then_online_in_that_order()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        await using var watcher = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "quiet", "host");
+        var heard = await SubscribedAsync(watcher);
+        var put = new Wirer(host);
+        Assert.Null(await put.PutAsync(host, Record(host.Id, seq: 1)));
+        await heard.ChangedAsync(_ => true);
+
+        time.Advance(TimeSpan.FromSeconds(61));
+        await heard.ChangedAsync(f => !f.GetProperty("online").GetBoolean());
+        Assert.Null(await put.PutAsync(host, Record(host.Id, seq: 2, at: time.GetUtcNow())));
+
+        var back = await heard.ChangedAsync(_ => true);
+        Assert.True(back.GetProperty("online").GetBoolean());
+        Assert.Equal(2, back.GetProperty("record").GetProperty("seq").GetInt64());
     }
 
     [Fact]
