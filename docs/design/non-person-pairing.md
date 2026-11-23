@@ -27,7 +27,7 @@ being replaced (parity row 20 and row 34).
 | **Host** | The Slipgates host on a machine; a device of kind `host` in the account's roster | Yes: the device key, and a `hostSign` key | The host key, and (once roster v2 is on) a roster entry a person approved. `hostSign` proves only that the host holds its key |
 | **Agent session** | One live agent session on one machine | No. "It is not a device: it has no key, never joins a roster and never opens a channel" (agent-principals.md 3.1) | An `abat1_` token bound to the session's process tree, presented on the local pipe, plus the host's claim |
 | **Script** | A named, long-lived caller (a scheduled task) on one machine, `script:<machine>/<name>` | No | A per-machine credential file, owner-only, minted on that machine (script-credentials.md 2, 7) |
-| **Connector (HA component, S8)** | A service principal that pairs as a client over the relay | Yes, its own | A roster `add` of kind `connector`, approved by the mutual code exchange (agent-principals.md 9.2) |
+| **Connector (HA component, S8)** | A service principal that pairs as a client over the relay | Yes, its own | **Designed, not built** (S8 is not built; agent-principals.md 9.2): a roster `add` of kind `connector`, approved by the mutual code exchange |
 
 ## 3. What does not change, in either part
 
@@ -79,7 +79,7 @@ person from an already-trusted device, that the machine's host consumes to mint 
 **What it does not change:** everything in section 3. In particular the host still mints and keeps the secret
 itself, no token is carried anywhere, and an agent, a script and the relay still cannot authorize anything.
 
-**The grant** is modelled on the person-issued fleet grants (fleet-grants.md): authorized by the receiver, from a
+**The grant** is modelled on the person-issued fleet grants (fleet-grants.md, a design whose remote grant, G9, is not built): authorized by the receiver, from a
 signed envelope the receiver checks. Its fields (proposed):
 
 | Field | Meaning |
@@ -115,7 +115,7 @@ sent anywhere: the host mints it on its own disk, in an owner-only file, protect
 | Change the name, scope, expiry or machine | The signature covers them; the host verifies it against the roster |
 | Use it twice | Single use: the id is recorded as consumed before the credential is minted |
 | Use it later | Expires (at most 24 hours); the host checks the clock at consumption |
-| Present it from outside the account | The host takes provisioning only from a device of its own account, as it does `push.*` and fleet grants; the relay delivers nothing else |
+| Present it from outside the account | The host takes provisioning only from a device of its own account, as it does `push.*`; fleet grants are designed to (G9, not built); the relay delivers nothing else |
 | Use it after the person was removed | The signer is re-checked in the verified roster at consumption |
 | Read the minted credential | The token never leaves the host and the file is owner-only and user-bound |
 
