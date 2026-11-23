@@ -153,16 +153,24 @@ for (const layout of LAYOUTS) {
         await test.step(name, async () => { expect.soft(await scan(page), name).toEqual([]); });
       };
 
-      test('the sessions, Needs you, a question, an approval, delegates, details, tools, menus and End session have no serious or critical violations', async ({ page, browserName }) => {
-        // WebKit on a loaded CI runner took over 60 s to open this page and run the walk (#1690): three times the time there.
-        test.slow(browserName === 'webkit', 'the walk is long and WebKit is slow under load, #1690');
+      // The walk was one long test; its states are four now, each opened afresh, so no one test is the
+      // long pole of a shard (#2454). Every view it scanned is scanned by one of them, in the same order.
+      // WebKit on a loaded CI runner took over 60 s to open this page and run the walk (#1690): three times the time there.
+      const SLOW = 'the walk is long and WebKit is slow under load, #1690';
+
+      // The page with its machines and delegates, and an approval in Needs you beside the worked example's question.
+      const begin = async (page) => {
         await openDemo(page, '&machines=3&delegates=1');
-        // An approval in Needs you beside the worked example's question.
         await page.evaluate(({ id, q, t }) => {
           const h = window.agentBridgeDemo.host;
           h.upsert({ ...h.get(id), status: 'waiting', statusSince: t, updatedAt: t, question: { kind: 'form', askedAt: t, ...q } });
         }, { id: LAND, q: permission, t: new Date(Date.now() + 1000).toISOString() });
         await expect(page.locator('#needs-you .needs-you-list > li')).not.toHaveCount(0);
+      };
+
+      test('the sessions with Needs you, the machine tabs, a row\'s menu and search have no serious or critical violations', async ({ page, browserName }) => {
+        test.slow(browserName === 'webkit', SLOW);
+        await begin(page);
         await check(page, 'the session list with Needs you');
 
         // Narrow tabs retain More; wide tabs scroll (#1894).
@@ -195,9 +203,11 @@ for (const layout of LAYOUTS) {
         }
         await page.locator('#search').fill('demo');
         await check(page, 'search');
-        await page.locator('#search').fill('');
-        if (layout.phone) { await page.locator('#search-close').click(); }
+      });
 
+      test('a session asking a question, and Details\' ID row after Copy, have no serious or critical violations', async ({ page, browserName }) => {
+        test.slow(browserName === 'webkit', SLOW);
+        await begin(page);
         const copilot = await open(page, COPILOT);
         await expect(copilot.locator('.question')).toBeVisible();
         await check(page, 'a session asking a question');
@@ -211,7 +221,11 @@ for (const layout of LAYOUTS) {
         await copilot.locator('.fact-id').getByRole('button', { name: 'Copy session ID' }).click();
         await expect(copilot.locator('.fact-id [role="status"]')).toHaveText('Copied');
         await check(page, 'Details\' ID row after Copy');
+      });
 
+      test('a session asking for approval, and the approval answered, have no serious or critical violations', async ({ page, browserName }) => {
+        test.slow(browserName === 'webkit', SLOW);
+        await begin(page);
         const land = await open(page, LAND);
         await check(page, 'a session asking for approval');
         await land.getByRole('button', { name: /^Approve once/ }).click();
@@ -219,7 +233,11 @@ for (const layout of LAYOUTS) {
         await expect(land.locator('.answer-status.progress, .answer-receipt.progress')).toHaveCount(0);
         await expect(land.locator('.answer-receipt, .answer-status').filter({ hasText: /\S/ }).first()).toBeVisible();
         await check(page, 'an approval answered');
+      });
 
+      test('delegates, tools, details and End session have no serious or critical violations', async ({ page, browserName }) => {
+        test.slow(browserName === 'webkit', SLOW);
+        await begin(page);
         // A delegate opens in the inspector from the strip, or on a phone in the Delegates tab's
         // list's place (ui.md §6.3).
         const delegating = await open(page, DELEGATES);
