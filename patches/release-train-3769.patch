@@ -13,10 +13,10 @@ index 63a6053..e725310 100644
      types: [completed] # the only type Actions accepts here
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..e5c7ad5
+index 0000000..ea2452d
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,331 @@
 +name: Release train
 +
 +# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
@@ -138,7 +138,7 @@ index 0000000..e5c7ad5
 +        run: |
 +          . ./build/app-installer-input.ps1
 +          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases "$env:OUT/releases" -Version $env:APP_VERSION -Runtime $env:RUNTIME -Commit $env:SHA -RunId $env:RUN_ID | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
-+      - name: The package installs per user into its own channel and the installed app self-tests
++      - name: The package installs per user into its own channel and the manifest is its channel's
 +        shell: pwsh
 +        env:
 +          RUNTIME: ${{ matrix.runtime }}
@@ -155,8 +155,35 @@ index 0000000..e5c7ad5
 +          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
 +          $manifest = Get-Content "$root/current/sq.version" -Raw
 +          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
++      # The installed app's self-test. x64's is required. Arm64's only records (owner and Quality: Arm64 jobs
++      # never gate the train, though the Arm64 package, its hash and its manifest above stay required) unless
++      # the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true, which makes a red Arm64 self-test
++      # hold the release. Unset is the default: not blocking.
++      - name: The installed app self-tests
++        id: selftest
++        continue-on-error: ${{ matrix.runtime == 'win-arm64' && vars.TRAIN_ARM64_SELFTEST_GATES != 'true' }}
++        shell: pwsh
++        run: |
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
 +          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
 +          exit $LASTEXITCODE
++      - name: Record the self-test result
++        if: always() && steps.selftest.outcome != 'skipped'
++        shell: bash
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUTCOME: ${{ steps.selftest.outcome }}
++          GATES: ${{ vars.TRAIN_ARM64_SELFTEST_GATES }}
++        run: |
++          gating="required"
++          if [ "$RUNTIME" = "win-arm64" ]; then
++            if [ "${GATES,,}" = "true" ]; then gating="gating (TRAIN_ARM64_SELFTEST_GATES is true)"; else gating="recorded, not gating (TRAIN_ARM64_SELFTEST_GATES is not true)"; fi
++          fi
++          echo "### Release train: $RUNTIME installed-app self-test: $OUTCOME; $gating" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$OUTCOME" = "failure" ] && [ "$RUNTIME" = "win-arm64" ] && [ "${GATES,,}" != "true" ]; then
++            echo "::warning title=release train::the Arm64 installed-app self-test failed; it is recorded and does not hold the release"
++          fi
 +
 +  alert:
 +    name: Alert when verification fails
@@ -348,3 +375,78 @@ index 65f3eac..8d0f4ed 100644
    - id: pwa-iphone
      validation_plan: native
      kind: e2e
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+new file mode 100644
+index 0000000..20f81b0
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -0,0 +1,69 @@
++using AgentBridge.Quality;
++using Xunit;
++
++// The release train's verify job (.github/workflows/release-train.yml): the owner's rule is that Arm64 jobs never
++// gate the train, though both packages are still required; the Arm64 installed-app self-test only records unless
++// the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true. x64's self-test and every package check
++// stay required on both architectures.
++public sealed class ReleaseTrainWorkflowTests
++{
++    const string Switch = "TRAIN_ARM64_SELFTEST_GATES";
++
++    static string Workflow() => File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "release-train.yml"))
++        .ReplaceLineEndings("\n");
++
++    static string Job(string text, string id)
++    {
++        var start = text.IndexOf($"\n  {id}:\n", StringComparison.Ordinal);
++        Assert.True(start >= 0, $"job {id} is missing");
++        var next = System.Text.RegularExpressions.Regex.Match(text[(start + 1)..], "\n  [a-z-]+:\n");
++        return next.Success ? text[start..(start + 1 + next.Index)] : text[start..];
++    }
++    static string Step(string job, string name)
++    {
++        var marker = $"      - name: {name}\n";
++        var start = job.IndexOf(marker, StringComparison.Ordinal);
++        Assert.True(start >= 0, $"step '{name}' is missing");
++        var next = job.IndexOf("\n      - ", start + marker.Length, StringComparison.Ordinal);
++        return next < 0 ? job[start..] : job[start..next];
++    }
++
++    [Fact]
++    public void The_arm64_installed_app_self_test_only_records_unless_the_switch_is_true_and_x64s_is_always_required()
++    {
++        var verify = Job(Workflow(), "verify");
++        var selfTest = Step(verify, "The installed app self-tests");
++
++        Assert.Contains($"continue-on-error: ${{{{ matrix.runtime == 'win-arm64' && vars.{Switch} != 'true' }}}}", selfTest, StringComparison.Ordinal);
++        // The only way to exempt a leg is that expression: it is false for x64 whatever the variable says.
++        Assert.Single(System.Text.RegularExpressions.Regex.Matches(verify, "continue-on-error"));
++    }
++
++    [Theory]
++    [InlineData("The picked run's release files, byte for byte")]
++    [InlineData("The picked run's installer input")]
++    [InlineData("Refuse missing, foreign or altered installer input before running it")]
++    [InlineData("The package installs per user into its own channel and the manifest is its channel's")]
++    public void Both_architectures_keep_the_package_presence_hash_and_manifest_checks_required(string step)
++    {
++        Assert.DoesNotContain("continue-on-error", Step(Job(Workflow(), "verify"), step), StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void A_red_arm64_self_test_is_recorded_in_the_summary_and_a_warning_names_it()
++    {
++        var record = Step(Job(Workflow(), "verify"), "Record the self-test result");
++
++        Assert.Contains("GITHUB_STEP_SUMMARY", record, StringComparison.Ordinal);
++        Assert.Contains("::warning title=release train::", record, StringComparison.Ordinal);
++        Assert.Contains($"vars.{Switch}", record, StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void Publish_still_needs_the_whole_verify_job_so_a_required_check_failing_publishes_nothing()
++    {
++        var publish = Job(Workflow(), "publish");
++
++        Assert.Contains("needs: [pick, verify]", publish, StringComparison.Ordinal);
++    }
++}
