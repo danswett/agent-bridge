@@ -144,8 +144,9 @@ static partial class SelfTest
                 }, TimeSpan.FromSeconds(10));
                 var focused = box?.Focus(FocusState.Programmatic) == true;
                 var clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
-                await Task.Delay(100);
-                held = view.QuestionShown is { IsHitTestVisible: false };
+                // A loaded runner (win-arm64 CI, main's 62c35b0a) still held the question a moment after the button showed, which a fixed
+                // 100 ms look read as the button's doing: held is what is still held after a few seconds, not at one look.
+                held = !await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3));
                 if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
                 check(settled && setupSettled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; focused: {focused}; shown: {clearShown}; held: {held})");
 

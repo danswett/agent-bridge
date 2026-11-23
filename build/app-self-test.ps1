@@ -85,8 +85,10 @@ Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 # Written part-way through before a check that can end the process (SelfTest.Write): still set,
 # the app ended inside that check, whatever the exit code says. Every check before it passed.
 $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
+# The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
+$failedChecks = if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } } else { @() }
 $evidence = [ordered]@{
-    processId = $p.Id; exitCode = $code
+    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
     stderr = ''; events = @(); captureErrors = @()
 }
@@ -146,10 +148,14 @@ try {
     }
 }
 catch {
-    $evidence.captureErrors += "app-process event capture failed: $($_.FullyQualifiedErrorId): $($_.Exception.Message)"
-    Write-Output "::error::$($evidence.captureErrors[-1])"
+    # None recorded is what a normal exit leaves; only a failure to look is a gap.
+    if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') {
+        $evidence.captureErrors += "app-process event capture failed: $($_.FullyQualifiedErrorId): $($_.Exception.Message)"
+        Write-Output "::error::$($evidence.captureErrors[-1])"
+    }
 }
-if ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
+if ($code -eq 1 -and $failedChecks.Count -gt 0 -and -not $unfinished) { Write-Output "::error::the self-test failed $($failedChecks.Count) check(s), and the app exited normally with code 1 (no crash, so no Windows event): $($failedChecks -join ' | ')" }
+elseif ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
 $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # The crashing thread's stack from the dump, by the runner's own cdb when it has one (the Windows
 # SDK's Debugging Tools), with Microsoft's public symbols. Bounded: a slow symbol server costs at
