@@ -184,6 +184,7 @@ public sealed record AgentPolicy
         IReadOnlyList<string> workspaces = [];
         IReadOnlyList<string> agents = [];
         IReadOnlyList<string> profiles = [];
+        var allowAllLaunch = false;
         var ok = true;
         foreach (var p in v.EnumerateObject())
         {
@@ -201,11 +202,15 @@ public sealed record AgentPolicy
                     break;
                 case "agents": if (Strings(p.Value, k, problems) is { } a) { agents = a; } else { ok = false; } break;
                 case "profiles": if (Strings(p.Value, k, problems) is { } pr) { profiles = pr; } else { ok = false; } break;
+                case "allowAllLaunch":
+                    allowAllLaunch = Bool(p.Value, k, problems);
+                    if (p.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { ok = false; }
+                    break;
                 default: Unknown(k, problems); break;
             }
         }
         if (!v.TryGetProperty("permissions", out _)) { problems.Add($"{key}.permissions must be stated as \"ask\"; the launch grant is off"); ok = false; }
-        return ok && workspaces.Count > 0 ? new AgentLaunchGrant(workspaces, agents, profiles) : null;
+        return ok && workspaces.Count > 0 ? new AgentLaunchGrant(workspaces, agents, profiles, allowAllLaunch) : null;
     }
 
     static (AgentPolicy, IReadOnlyList<string>) Denied(List<string> problems, string? why = null)
@@ -274,7 +279,8 @@ public sealed record AgentInboundPolicy
 
 public sealed record AgentCoordinationGroups(int MaxHours, int PerMemberPerDay, int PerGroupPerMinute);
 
-public sealed record AgentLaunchGrant(IReadOnlyList<string> Workspaces, IReadOnlyList<string> Agents, IReadOnlyList<string> Profiles);
+public sealed record AgentLaunchGrant(IReadOnlyList<string> Workspaces, IReadOnlyList<string> Agents, IReadOnlyList<string> Profiles,
+    bool AllowAllLaunch = false);
 
 public sealed record AgentPolicyLimits
 {

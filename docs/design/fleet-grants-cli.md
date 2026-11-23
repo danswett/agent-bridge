@@ -40,7 +40,7 @@ or mutation. A grant cannot call either. Phone issuance is a later slice.
 exact node (device) id, never a machine name; the local node id counts as local.
 They do not replace the person `stop <session> [--confirm <token>]` verb, which is
 unchanged. They supersede the `launch --grant` and `stop --grant` forms in
-fleet-grants.md for agent use.
+fleet-grants.md for agent use. `fleet end` calls pipe op `fleet.end` with the agent's own session credential only (a script, app or other caller is refused, `person-required` is surfaced, and no grant is created or bypassed); `still-running` may accompany exit 7.
 
 ## Request ids
 
@@ -69,7 +69,7 @@ fields, enum values and versions exit 2.
   "request": "3f1c0a52-8d0e-4b8a-9a63-0c1e5f7a2b10",
   "grant": "b7e5a0de-4f3c-4a52-8e1f-2d9c6a1b7c33",
   "target": "<node id, optional>",
-  "name": "SG Builder 263 CLI Contract",
+  "name": "SG Builder 263",
   "workspace": "<approved workspace identity or label>",
   "agent": "<agent id>",
   "model": "<launch-tuning id, e.g. opus[1m]>",

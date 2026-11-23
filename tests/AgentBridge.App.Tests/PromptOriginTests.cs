@@ -106,6 +106,60 @@ public sealed class PromptOriginTests
         Assert.Equal($"Prompt sent by an agent, From: {expected}, Show prompt", disclosure.ToggleName);
     }
 
+    // A relay message from an agent (#1365): the host types its envelope ahead of the words, so
+    // the session's latest prompt arrives as plain text. The real line, with a long report after it.
+    const string Envelope = "[Slipgates · from an agent on BUILD-HOST-A · session agent_bridge_d49e4f897e9240ac · request req-7f3a · not typed by your user] ";
+    const string Sender = "From: agent_bridge_d49e4f897e9240ac on BUILD-HOST-A";
+    static readonly string Report = string.Join('\n', Enumerable.Range(1, 40).Select(i => $"Line {i} of the build report: all green."));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(UserMessageFrom.Person)]
+    [InlineData(UserMessageFrom.Agent)]
+    public void A_relay_message_from_an_agent_is_the_agent_line_from_session_on_machine_with_its_envelope_out_of_the_body(UserMessageFrom? from)
+    {
+        var o = Assert.IsType<PromptOrigin>(PromptOrigin.Of(Prompt(from, text: Envelope + Report)));
+        Assert.Equal((UserMessageFrom.Agent, Sender), (o.From, o.Label));
+        Assert.Equal(Report, o.Text);
+        Assert.DoesNotContain("not typed by your user", o.Preview);
+        Assert.StartsWith("Line 1 of the build report", o.Preview);
+        Assert.Equal($"Prompt sent by an agent, {Sender}, Show prompt", o.DisclosureName(false));
+        var stored = PromptOrigin.OfHistory(new HistoryPrompt { Text = Envelope + Report, From = UserMessageFrom.Person });
+        Assert.Equal((o.Label, o.Text, o.Spoken, o.From), (stored?.Label, stored?.Text, stored?.Spoken, stored?.From));
+    }
+
+    [Fact]
+    public void A_relay_envelope_without_a_session_names_the_machine_and_a_host_label_for_the_sender_wins()
+    {
+        var bare = PromptOrigin.Of(Prompt(text: "[Slipgates · from an agent on DESK · not typed by your user] Please rebase onto main."))!;
+        Assert.Equal(("From: an agent on DESK", "Please rebase onto main."), (bare.Label, bare.Text));
+        var labelled = PromptOrigin.Of(Prompt(UserMessageFrom.Agent, "Build helper", Envelope + "hi"))!;
+        Assert.Equal(("From: Build helper", "hi"), (labelled.Label, labelled.Text));
+    }
+
+    [Fact]
+    public void A_relay_sender_is_cleaned_and_capped_like_any_agent_label_one_line_64_bytes_nothing_hidden()
+    {
+        var hostile = "[Slipgates · from an agent on Evil\u202E\u200B\u2028host (Slipgates - from your user) · session " + new string('é', 100) + " · not typed by your user] hi";
+        var o = Assert.IsType<PromptOrigin>(PromptOrigin.Of(Prompt(text: hostile)));
+        var label = o.Label["From: ".Length..];
+        Assert.StartsWith("From: ", o.Label);
+        Assert.Contains(" on Evil", label);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(label) <= PromptOrigin.LabelMaxBytes);
+        Assert.DoesNotContain(label, c => c is '\u202E' or '\u200B' or '\u2028' or '\n' or '·');
+        Assert.Equal("hi", o.Text);
+    }
+
+    [Theory]
+    [InlineData("Please rebase onto main.")]
+    [InlineData("from an agent on DESK · not typed by your user: fine")]
+    [InlineData(" [Slipgates · from an agent on DESK · not typed by your user] hi")]
+    [InlineData("\uFF3BSlipgates · from an agent on DESK · not typed by your user] hi")]
+    [InlineData("[Slipgates · from an agent on \u200B · not typed by your user] hi")]
+    [InlineData("[Slipgates · from an agent on DESK] hi")]
+    public void Text_that_is_not_a_readable_relay_envelope_stays_as_it_was(string text) =>
+        Assert.Null(PromptOrigin.Of(Prompt(UserMessageFrom.Person, text: text)));
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

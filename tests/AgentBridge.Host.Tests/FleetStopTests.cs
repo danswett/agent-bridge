@@ -277,6 +277,75 @@ public sealed class FleetStopTests : IDisposable
         Assert.Null(result.Confirm);
         Assert.Equal(0, control.Terminations);
     }
+    [Fact]
+    public async Task Fleet_end_from_the_cli_ends_an_own_session_through_the_pipe_route()
+    {
+        Own();
+        var (exit, json) = await Cli(Pipe());
+        Assert.Equal((0, "ended", "end", true), (exit, json.GetProperty("outcome").GetString(), json.GetProperty("action").GetString(),
+            json.GetProperty("session").GetString() == id.Replace("-", "")[..16]));
+        Assert.Equal(1, injector.Calls);
+    }
+    [Fact]
+    public async Task Fleet_end_without_a_grant_for_the_caller_is_refused_and_types_nothing()
+    {
+        Own();
+        var (exit, json) = await Cli(Pipe(), Guid.NewGuid());
+        Assert.Equal((5, "refused", "grant-missing"), (exit, json.GetProperty("outcome").GetString(), json.GetProperty("reason").GetString()));
+        Assert.Equal(0, injector.Calls);
+    }
+    [Fact]
+    public async Task Fleet_end_with_a_read_only_session_credential_is_refused_by_the_host()
+    {
+        Own();
+        var token = credentials.Mint(Guid.NewGuid().ToString(), "person-launch", 101, started, AgentProtocol.ScopeRead);
+        var reader = credentials.Check(token, new([new PeerProcess(101, started, "agent.exe")], true)).Accepted!;
+        var (exit, json) = await Cli(Pipe(reader));
+        Assert.Equal((5, "policy"), (exit, json.GetProperty("reason").GetString()));
+        Assert.Equal(0, injector.Calls);
+    }
+    [Theory]
+    [InlineData("script")]
+    [InlineData("none")]
+    [InlineData("person")]
+    public async Task Fleet_end_from_a_script_a_caller_without_a_credential_or_a_person_client_is_refused_at_the_pipe(string who)
+    {
+        Own();
+        var channel = new Chan();
+        if (who == "script") { credentials.Accept(channel, credentials.MintScript("dispatcher").Credential); }
+        var handle = LocalApi.Handler(sessions, null!, new FixedCallerGuard(new Caller(who == "person" ? CallerKind.App : CallerKind.Agent, "fixture")),
+            credentials: credentials, fleetStop: Open());
+        if (who == "person") { credentials.Accept(channel, caller); }
+        var body = JsonSerializer.SerializeToElement(new FleetStopInput(1, Guid.NewGuid(), grant.Id, id), ProtocolJson.Options);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handle(channel, FleetStopCommands.Op, body));
+        Assert.Equal(0, injector.Calls);
+    }
+    Func<string, object?, Task<JsonElement>> Pipe(AgentCredential? who = null)
+    {
+        var channel = new Chan();
+        credentials.Accept(channel, who ?? caller);
+        var handle = LocalApi.Handler(sessions, null!, new FixedCallerGuard(new Caller(CallerKind.Agent, "fixture")),
+            credentials: credentials, fleetStop: Open());
+        return async (op, data) => op is Ops.Hello or AgentProtocol.Hello ? JsonSerializer.SerializeToElement(new { })
+            : JsonSerializer.SerializeToElement(await handle(channel, op, JsonSerializer.SerializeToElement(data, ProtocolJson.Options)), ProtocolJson.Options);
+    }
+    async Task<(int Exit, JsonElement Json)> Cli(Func<string, object?, Task<JsonElement>> exchange, Guid? grantId = null)
+    {
+        using var output = new StringWriter();
+        var exit = await FleetEndCommands.RunAsync(["fleet", "end", "--request", Guid.NewGuid().ToString(), "--grant", (grantId ?? grant.Id).ToString(),
+            "--session", id], "unused", output, new StringWriter(), "fixture", exchange);
+        using var parsed = JsonDocument.Parse(output.ToString());
+        return (exit, parsed.RootElement.Clone());
+    }
+    sealed class Chan : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.Delay(Timeout.Infinite);
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
+    }
     sealed class Probe : IAgentHaBridgeProbe { public string? Active() => null; }
     sealed class Source : ISessionSource
     {

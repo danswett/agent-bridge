@@ -68,6 +68,9 @@ public sealed class LaunchServiceOptions
     public required string ClaudeHome { get; init; }
     public bool? ClaudeConfigDirExplicit { get; init; }
     public required string CodexHome { get; init; }
+    // Whether this profile's hook setup record for an agent id is absent, so the agent was never set up
+    // here. Null: not known, and nothing is refused. Only Codex is asked (see CodexHooksMissing).
+    public Func<string, bool>? HooksNotSetUp { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
     public bool HomeAssistantEnabled { get; init; }
@@ -789,11 +792,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         ArgumentNullException.ThrowIfNull(prepare);
         return LaunchOnceAsync(request, peer, prepare);
     }
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Func<string?> dispatch, CancellationToken cancellationToken = default) => LaunchOnceAsync(request, peer, prepare, dispatch: dispatch);
+
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, Func<string?>? dispatch = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, dispatch: dispatch)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet, dispatch: dispatch))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
             Settled(request, result, $"launch {Short(key)}", peer),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
@@ -866,7 +872,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Func<string?>? dispatch = null)
     {
         PublishStatus(peer, key, "starting");
         try
@@ -942,7 +948,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     }
                 }
                 return await StartAsync(plan, claim, key, peer, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, dispatch: dispatch);
             }
             finally
             {
@@ -1055,6 +1061,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
         }
 
+        // Codex with no hook setup record on this profile (a migrated profile never had one, #3648) would run
+        // but could never report; refuse it by name instead of starting a session that ends unconfirmed (#3644).
+        if (launcher.Kind == AgentKind.Codex && options.HooksNotSetUp?.Invoke(launcher.Id) == true) { return (null, CodexHooksMissing); }
         var agent = o.Agents.First(a => a.Id == launcher.Id);
         var profile = "";
         if (launcher.TakesProfile && agent.Profiles is { } profiles)
@@ -1122,7 +1131,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, string principal, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Func<string?>? dispatch = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1131,6 +1140,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         WorktreeResult? created = null;
         try
         {
+            if (dispatch?.Invoke() is { } denied) { return Refused(denied); }
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
             if (probe.Active() is { } active) { return Refused(active); }
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy) { Trust = BusyQuestion() }; }
@@ -2096,4 +2106,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);
+
+    // Needs-you text: Set up registers the hook; Codex then asks once for its hooks to be trusted, which
+    // the host cannot read, so that is only a hint here and never a refusal.
+    const string CodexHooksMissing = "codexHooksMissing: Codex has no hook registration on this machine, so a launched session could not report; run Set up for Codex on this machine, then approve Codex's hook trust prompt once";
 }

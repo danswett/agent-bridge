@@ -348,8 +348,9 @@ only exact item IDs correlate within the still-known readable prompt.
 Legacy text dedup counts currently retained texts only.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
-It omits identity for composite legacy text, text after a tool in the same record,
-duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
+Text after a tool or question in the same record keeps its identity: the index counts those
+parts as history does, once per call id in the readable turn. It omits identity for composite
+legacy text (text, tool, text of one message), duplicate records, unread/skimmed/skipped beginnings, or more than 4,096 assistant records
 in a turn. A readable new prompt reestablishes identity; text never supplies an id.
 Codex joins only explicit nonempty, exact assistant-item ids within a readable turn, keeping
 the first record's part id across both streams and updates. Distinct ids retain equal
@@ -398,7 +399,7 @@ turn was the latest, with the same `from`.
 
 | | Copilot `events.jsonl` | Claude `<id>.jsonl` | Codex rollout |
 |---|---|---|---|
-| A turn starts | `user.message` of the main agent (no `agentId`) with text, whose `data.source` is not `memory`, `system` or `skill-…`. `from` and `label` from `data.source` (#489) | A `user` entry, not a sidechain's, meta or a compaction summary, with text and no `tool_result`, that is not a task notification Claude marked as one or "[Request interrupted by user…]" | `event_msg` `user_message`, or `item_completed` `UserMessage`, with text |
+| A turn starts | `user.message` of the main agent (no `agentId`) with text, whose `data.source` is not `memory`, `system` or `skill-…`. `from` and `label` from `data.source` (#489) | A `user` entry, not a sidechain's, meta or a compaction summary, with text and no `tool_result`, that is not a task notification Claude marked as one or "[Request interrupted by user…]"; **or the person's message sent while it worked (owner-approved CHANGE, P1 Nov 22):** an `attachment` entry, not a sidechain's, with `attachment.type` `queued_command`, `origin.kind` `human` and `commandMode` `prompt`, whose `attachment.prompt` is the text. It starts a turn at its place in the transcript, as `activity.userMessage` takes it; a notice's attachment (`origin.kind` `task-notification`) never does | `event_msg` `user_message`, or `item_completed` `UserMessage`, with text |
 | `response` | `assistant.message` `content`, main agent's, the CLI's turn-error notice shown as `activity.response` shows it: the host's sentence for the error its turn ended with, none of its words (#846) | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage`; an assistant `message` response item; `task_complete`'s `last_agent_message`. Codex writes a reply in more than one of these: the same text is one part |
 | `reasoning` | `assistant.message` `reasoningText`, main agent's | `thinking` blocks | `agent_reasoning`; a `reasoning` response item's `summary`; `Reasoning` `summary_text` (only when the user asked for summaries); one part per summary, the same text once |
 | `tool` | `tool.execution_start` and `_complete`, main agent's | `tool_use`, ended by its `tool_result` | `exec_command_*`, `patch_apply_*`, `mcp_tool_call_*`, `CommandExecution`, function, custom, shell and web search calls |
