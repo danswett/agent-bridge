@@ -112,7 +112,7 @@ builds, and guard G6 limits their HA connector to a disposable HA.
 ## Relay deploys
 
 - `relay.yml` deploys to staging and smoke-tests it.
-- Production is a separate job whose required reviewer is the owner's account. Deploying never needs the owner (owner, Nov 23): SRE approves it through the per-command danswett route, after the normal gates (merged on main through Quality, staging deploy and smoke green, only the newest run, a health check after, the runbook rollback if bad, report to Chief). Nobody else approves a production deploy. This does not cover enforce flags, kill switches, repository settings or variables, or credentials, which still need the owner ([docs/relay-deploy.md](docs/relay-deploy.md#who-approves-a-production-deploy)).
+- Production is a separate job whose required reviewer is the owner's account. The owner typed "Deploying never needs me" (Nov 23). The conditions are Chief S17's wording as relayed, not the owner's: SRE approves it through the per-command danswett route, after the normal gates (merged on main through Quality, staging deploy and smoke green, only the newest run, a health check after, the runbook rollback if bad, report to Chief). Not covered: enforce flags, kill switches, repository settings or variables, credentials ([docs/relay-deploy.md](docs/relay-deploy.md#who-approves-a-production-deploy)).
 - An older run waiting at the production gate blocks newer ones (concurrency group `relay-production`), so cancel superseded runs.
 - Infrastructure changes go through `infra/deploy.ps1` (staging), then `-Production` with `-ProductionImage <running digest>` to keep the current image ([docs/relay-deploy.md](docs/relay-deploy.md)).
 
