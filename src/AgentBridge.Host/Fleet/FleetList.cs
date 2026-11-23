@@ -52,11 +52,17 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     readonly object accountGate;
     long connectionEpoch;
     readonly Dictionary<string, (FleetMachine Machine, long Seen)> cache = new(StringComparer.Ordinal);
+    // 1 s: no reader needs fresher, liveness is judged on the registry's own lastSeen and the target re-resolves.
+    public static readonly TimeSpan ReadFreshness = TimeSpan.FromSeconds(1);
+    SharedRead<IReadOnlyList<System.Text.Json.JsonElement>> registryRead;
+    // The host's two roster readers share one read (Program.cs), so one relay get serves both.
+    internal void ShareReadWith(RelayFleetRoster other) => registryRead = other.registryRead;
 
     public RelayFleetRoster(Func<RosterVerifier?>? verifiedRoster = null, TimeProvider? time = null, object? accountGate = null)
     {
         signedRoster = verifiedRoster;
         clock = time ?? TimeProvider.System;
+        registryRead = new(clock, ReadFreshness);
         this.accountGate = accountGate ?? new();
     }
 
@@ -104,7 +110,7 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     // A new connection may be another account's, so nothing cached carries over.
     public void Attach(RelayClient? connection)
     {
-        lock (accountGate) { lock (cache) { cache.Clear(); connectionEpoch++; Volatile.Write(ref relay, connection); } }
+        lock (accountGate) { lock (cache) { cache.Clear(); registryRead.Reset(); connectionEpoch++; Volatile.Write(ref relay, connection); } }
     }
 
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
@@ -129,7 +135,8 @@ public sealed class RelayFleetRoster : IScopedFleetRoster
     async Task<FleetRosterSnapshot> ReadConnectionAsync(RelayClient current, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(current.AccountId)) { throw new InvalidOperationException("refused: the fleet connection has no authenticated account scope"); }
-        var frames = await current.RegistryGetAsync(includeKnown: true, ct: ct);
+        // One read for every local caller (#1396): fleet.list, fleet.find and the Lite checks share this connection.
+        var frames = await registryRead.GetAsync(current, () => current.RegistryGetAsync(includeKnown: true), ct, RegistryReads.FreshRequested);
         lock (cache)
         {
             if (!ReferenceEquals(current, Volatile.Read(ref relay))) { throw new InvalidOperationException("refused: the fleet connection changed during lookup"); }
@@ -267,9 +274,13 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         // The only member read; a principal or account in the body is ignored. Names are what a
         // person typed, so they come only when asked for (design §5.8).
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
+        // `fresh: true` (the send-time name fence): a read that starts after this request, never the shared one.
+        using var fresh = RegistryReads.Scope(IsFresh(data));
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         return await ListAsync(withNames, caller, ct);
     }
+
+    static bool IsFresh(JsonElement data) => data.ValueKind == JsonValueKind.Object && data.TryGetProperty("fresh", out var f) && f.ValueKind == JsonValueKind.True;
 
     // fleet.find: exact live session IDs only. An own-account lite match is
     // routing metadata, never roster verification; its distinct trust is for messaging only.
@@ -291,6 +302,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         }
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
+        using var fresh = RegistryReads.Scope(IsFresh(data));
         FleetRosterSnapshot snapshot;
         try { snapshot = await scoped.ReadScopedAsync(ct); }
         catch (Exception e) when (e is JsonException or FormatException or KeyNotFoundException or InvalidDataException or IOException or HttpRequestException or TimeoutException
