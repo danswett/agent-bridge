@@ -272,11 +272,27 @@ public sealed class StopFlowTests : IAsyncLifetime
     string StopAuditProfile => Path.Combine(f.Root, "gate");
     List<AuditCommands.Row> StopRows() => GateAuditProjection.Load(StopAuditProfile).Rows;
     Task<StopResult> AuditStopAsync(StopService stopper, string id = Id, string? request = null, string? confirm = null,
-        string path = "local", string? principal = null) =>
+        string path = "local", string? principal = null, ClientIdentity? client = null) =>
         StopAudit.StopAsync(stopper, source, new AgentAuditLog(StopAuditProfile, clock, logged.Enqueue),
             new StopRequest { Id = id, Request = request ?? Guid.NewGuid().ToString(), Confirm = confirm },
-            path, principal ?? (path == "legacy-ha" ? "ha:connector" : "person:local"));
+            path, principal ?? (path == "legacy-ha" ? "ha:connector" : "person:local"), client: client);
 
+    [Theory]
+    [InlineData("relay", true, "app", "windows")]
+    [InlineData("relay", false, null, null)]
+    [InlineData("local", true, null, null)]
+    [InlineData("legacy-ha", true, null, null)]
+    public async Task A_relay_stop_carries_the_client_from_the_roster_and_every_other_stop_carries_none(string path, bool given, string? kind, string? platform)
+    {
+        var stopper = Stopper();
+        stopper.LaunchHeld = _ => "fixture launch is not ready";
+        var client = given ? new ClientIdentity("app", "windows") : null;
+        var arm = await AuditStopAsync(stopper, path: path, principal: path == "relay" ? "person:0123456789abcdef" : null, client: client);
+        Assert.Equal(StopOutcome.Confirm, arm.Outcome);
+        var rows = StopRows();
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal((kind, platform), (row.Gate!.ClientKind, row.Gate.ClientPlatform)));
+    }
     GateAuditReport QualifiedStopReport()
     {
         var (rows, complete) = GateAuditProjection.Load(StopAuditProfile);

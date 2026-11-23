@@ -1,4 +1,5 @@
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 
 namespace AgentBridge.Host.SignIn;
 
@@ -41,6 +42,21 @@ internal static class PersonDevices
     // action (§3.1). Checked here too, so a roster that returned anything else still pins nobody.
     static readonly HashSet<string> Kinds = new(["app", "pwa", "phone"], StringComparer.Ordinal);
     static readonly HashSet<string> Presences = new(["key", "webauthn"], StringComparer.Ordinal);
+
+    static readonly HashSet<string> Platforms = new(["windows", "macos", "linux", "ios", "ipados", "android"], StringComparer.Ordinal);
+
+    // The client the roster says a relay channel's device is, for the audit rows (ha-audit-client-field.md): the roster's own kind and platform,
+    // never the channel's declaration or a request field. Null on any doubt (no roster, not pinned, not a person kind, an unknown platform).
+    public static ClientIdentity? Client(IPersonDeviceRoster roster, IProtocolChannel channel)
+    {
+        if (channel is not SecureChannel { IsOpen: true } secure || secure.PeerStatic is not { } key || secure.Relay.AccountId is not { Length: > 0 } account) { return null; }
+        try
+        {
+            return roster.State == RosterState.Ready && roster.Find(key, account) is { } device && device.Id == Wire.DeviceId(key) && Qualifies(device)
+                && Platforms.Contains(device.Platform) && roster.StillPinned(device) ? new ClientIdentity(device.Kind, device.Platform) : null;
+        }
+        catch (Exception) { return null; }
+    }
 
     public static bool Qualifies(PinnedDevice? d) => d is not null && Kinds.Contains(d.Kind) && Presences.Contains(d.Presence)
         && TransferProtocol.IsDeviceId(d.Id) && !string.IsNullOrEmpty(d.Generation) && !string.IsNullOrEmpty(d.AddHash);
