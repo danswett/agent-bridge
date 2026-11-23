@@ -153,6 +153,20 @@ For (B), on each host that passed the room rule:
    0 in a busy hour.
 8. **The owner** sets `AB_CI_LINUX_SELF_HOSTED=true`. The check runs again in the next busy hour.
 
+**Every step that needs admin, elevation or a reboot, for (B)** (the owner approved (B) on VM6/VM7, provided SRE's
+read-only check passes first):
+
+| Step | Who | Elevation / reboot |
+|---|---|---|
+| Read nested virtualisation, Hyper-V's feature state, the size and the room rule | SRE | read-only; the feature query needs an elevated shell |
+| Enable Hyper-V if it is off (`Microsoft-Hyper-V-All`) | OWNER | admin, then a **reboot** of the host |
+| Create the `abci-linux` switch, the NAT and the host firewall rules | OWNER | admin |
+| Add SRE's account to Hyper-V Administrators | OWNER | admin |
+| Create, start and checkpoint the guest | SRE | Hyper-V Administrators; no host admin |
+| Root inside the guest (cloud-init: accounts, packages, hooks) | SRE | the guest's root, never the host's |
+| A runner registration token | OWNER | repository admin (short-lived; SRE's script uses it once and holds no token) |
+| Set `AB_CI_LINUX_SELF_HOSTED=true`, last | OWNER | repository admin |
+
 For (A), the same order, with step 3 instead:
 - a non-admin `abci-wsl` account;
 - `wsl --import` of the baked tarball as that account;
