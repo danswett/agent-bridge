@@ -1,8 +1,8 @@
 # Script credentials: one credential for fleet scripts that run outside any session (#1402)
 
-**Owner decision (option 1, recorded on #1414): script credentials are issued from the Slipgates app.**
+**Owner decision (option 1, as relayed by the Chief on #1414 at about 23:55 PT, Nov 22; no direct owner comment link): script credentials are issued from the Slipgates app.**
 Only a person's press in the app mints, revokes or rotates one, and no terminal or PowerShell step
-exists anywhere (the owner's Nov 19 rule, #3305 to #3308). The terminal CLI `agent-bridge-host scripts
+exists anywhere (the owner's Nov 19 rule, carried by #3305). The terminal CLI `agent-bridge-host scripts
 add|revoke|grant-fleet|revoke-fleet` is built today (`ScriptCredentialCommands.cs`; #2286, PR 2582,
 #2820). It is a terminal step, so it is retired or app-gated when the app path lands. Build order: script send (#2763)
 and the `launch:fleet` grant first, then the app-issued credential, then the fleet scripts switch
@@ -115,7 +115,7 @@ says. The base script credential never carries it.
 host and from a presence-proven device. Never an agent, never a script, never a remote device
 without that presence, and no terminal or PowerShell step. This follows guard #67 (host management
 is refused from inside an agent session) and agent-token-rotation.md §4 (a new token is accepted
-only from a person's device). The owner chose this over a host command line (recorded on #1414).
+only from a person's device). The owner chose this over a host command line (as relayed by the Chief on #1414).
 
 **How the host tells a person's press from same-user code imitating the app.** The press must reach
 the host as a **person-device presence-signed command**, the same kind the owner's other person-only
@@ -208,7 +208,7 @@ spoofed parent gets `read+reply` as that script. That is the same-user limit of
 agent-principals.md §1.3. It is **no worse than the HA token it replaces**, which every
 session's environment holds and which reaches far more (launch, Allow all, every machine).
 It is narrower in three ways: one named script, not the whole HA user; no launch; and
-revocable at the machine in one command.
+revocable at the machine in one app press.
 
 ## 7. Placing it on each machine
 
@@ -217,8 +217,9 @@ revocable at the machine in one command.
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
   rules as agent-token-rotation.md §1. The host keeps only the hash.
-* **How a script gets it.** The script reads **its own file** by a path that the owner sets in
-  the script's own configuration. It is not put in any session's environment, and the
+* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design):** how that
+  path reaches the script now that no terminal step may set it (a per-script path the host reports
+  to the app, or a fixed per-profile location the script derives). It is not put in any session's environment, and the
   `set-agent-ha-token.ps1` approach of setting a per-VM environment variable is not repeated:
   an environment variable is inherited by every child process, which is how the HA token ended
   up in every session.
@@ -245,9 +246,14 @@ scans the profile, logs and bundles for it, as agent-token-rotation.md §5 requi
 ## 9. Every fleet script that needs it
 
 The scripts themselves live in the fleet repository (`danswett/slipgates-fleet`), not in this
-one, and I did not read their source. This table is from #1402, the epic's fleet issues
-(#103 to #108) and the ops that exist in this repository. **Engineering must confirm each row
-from the script before #1414 is cut (Q4).**
+one. The table below is from #1402, the epic's fleet issues (#103 to #108) and the ops that exist
+in this repository. **The current fleet-side inventory is `docs/ha-script-credentials.md` in
+slipgates-fleet (fleet PR #1128)**, read from the fleet tree at `f9e6ca31`, and it wins where they
+differ: the stall alarm, status board and roster snapshot no longer call HA (the snapshot reads the
+relay roster); the messenger keeps only an HA rollback transport; the inventory lists no
+review-router script; the dispatcher's `FleetLaunch.psm1` is the live HA launch client; and `end-sessions`
+and `launch-remote` are person tools on their own transport changes (G10 and HA-Grants-Launch).
+Engineering still confirms each row's operations from the script before #1414 is cut (Q4).
 
 | Script | What it does today | Operation it needs | Notes |
 |---|---|---|---|
