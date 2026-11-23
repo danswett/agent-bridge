@@ -23,7 +23,7 @@ public sealed record PushSubscribeRequest
 
 // Per-device notification filters (docs/protocol/v1-sessions.md, "Notification filters"), kept with the
 // device's subscription so the host filters when it sends. PinnedSessions is the device's pinned set of
-// session ids (no order), at most MaxPinned. DeliveryFailures is read and kept; a host sends nothing for it yet.
+// session ids (no order), at most MaxPinned. DeliveryFailures turns on the host's failures notice (S2b), off unless a device asks.
 public sealed record PushNotify
 {
     public const int MaxPinned = 300;

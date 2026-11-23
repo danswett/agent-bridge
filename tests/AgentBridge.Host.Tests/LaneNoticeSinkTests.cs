@@ -119,4 +119,55 @@ public sealed class LaneNoticeSinkTests
         await heardAgain.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(sink.Describe(second));
     }
+
+    // S2b-2b: the count behind the "Delivery failures" push. One call per new drop, revoked-authority drop or unconfirmed
+    // handoff; never the id, the cause or any text.
+    [Fact]
+    public void A_listener_is_told_once_per_new_counted_notice_and_not_for_a_demotion_a_full_lane_or_a_repeat()
+    {
+        using var sink = new LaneNoticeSink(null);
+        var told = 0;
+        using var listener = sink.Forward(() => told++);
+        var first = Guid.NewGuid();
+        sink.Accept(Event(first, DeliveryNoticeCause.Overflow));
+        sink.Accept(Event(first, DeliveryNoticeCause.Overflow));  // the same id and cause again
+        Assert.Equal(1, told);
+        sink.Accept(Event(Guid.NewGuid(), DeliveryNoticeCause.RevokedAuthority));
+        sink.Accept(Event(Guid.NewGuid(), DeliveryNoticeCause.Unconfirmed));
+        Assert.Equal(3, told);
+        foreach (var cause in new[] { DeliveryNoticeCause.DemotedForOwner, DeliveryNoticeCause.LaneFull, DeliveryNoticeCause.Unknown })
+        {
+            sink.Accept(Event(Guid.NewGuid(), cause));
+        }
+        Assert.Equal(3, told);
+    }
+
+    [Fact]
+    public void A_notice_the_sink_later_forgets_to_stay_bounded_is_not_counted_again_and_a_new_cause_for_an_id_is_new()
+    {
+        using var sink = new LaneNoticeSink(null, capacity: 1);
+        var told = 0;
+        using var listener = sink.Forward(() => told++);
+        var id = Guid.NewGuid();
+        sink.Accept(Event(id, DeliveryNoticeCause.Overflow));
+        sink.Accept(Event(id, DeliveryNoticeCause.Unconfirmed));  // the same message, a different cause: a second failure
+        sink.Accept(Event(Guid.NewGuid(), DeliveryNoticeCause.Overflow));  // evicts the oldest, which is no new count
+        Assert.Equal(3, told);
+    }
+
+    [Fact]
+    public void A_disposed_listener_is_told_nothing_and_a_listener_that_throws_never_breaks_the_sink()
+    {
+        using var sink = new LaneNoticeSink(null);
+        var told = 0;
+        var listener = sink.Forward(() => told++);
+        sink.Accept(Event(Guid.NewGuid(), DeliveryNoticeCause.Overflow));
+        listener.Dispose();
+        sink.Accept(Event(Guid.NewGuid(), DeliveryNoticeCause.Overflow));
+        Assert.Equal(1, told);
+        using var thrower = sink.Forward(() => throw new InvalidOperationException("the push is gone"));
+        var id = Guid.NewGuid();
+        sink.Accept(Event(id, DeliveryNoticeCause.Overflow));  // must not throw into the lane
+        Assert.Equal($"dropped id={id:D} reason=overflow", sink.Describe(id));
+    }
 }

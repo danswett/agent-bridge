@@ -654,6 +654,9 @@ async Task<int> ServeAsync(HostHandover handover)
     using var laneComposition = liteDeliver.Composition;
     await using var lanePump = liteDeliver.Pump;
     using var laneNotices = liteDeliver.Notices;
+    // The lane's drops and unconfirmed handoffs, counted, go to the phones that turned "Delivery failures" on (S2b). Declared after both, so
+    // it is let go before either.
+    using var laneFailures = push is not null ? laneNotices?.Forward(() => push.NoteDeliveryFailure()) : null;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
