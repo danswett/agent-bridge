@@ -102,4 +102,57 @@ public sealed class VersionSkewHealTests
         var d = Decide("0.1.7684", "0.1.7684", null, failures: 5, last: Now);
         Assert.Equal(SkewHealKind.Converged, d.Kind);
     }
+
+    // The ordering is the updater's own (ReleaseVersions.TryRun, 0.1.N by value), not text: 10 is above 9, and a prerelease is no release it can order.
+    [Theory]
+    [InlineData("0.1.10", "0.1.9")]
+    [InlineData("0.1.7684", "0.1.7522")]
+    [InlineData("0.1.100", "0.1.99")]
+    public void Releases_are_ordered_by_run_number_not_by_text(string higher, string lower)
+    {
+        var down = Decide(higher, lower, lower);
+        Assert.Equal((SkewHealKind.Hold, "no-verified-package"), (down.Kind, down.Reason));
+        var up = Decide(lower, higher, higher);
+        Assert.Equal((SkewHealKind.Heal, higher), (up.Kind, up.Target));
+    }
+
+    [Theory]
+    [InlineData("0.1.7-rc.10", "0.1.6", "0.1.7-rc.9")]
+    [InlineData("0.1.7-rc.9", "0.1.6", "0.1.7-rc.10")]
+    [InlineData("0.1.7-1", "0.1.6", "0.1.7-alpha")]
+    [InlineData("0.1.7-alpha", "0.1.6", "0.1.7-alpha.1")]
+    [InlineData("0.1.7", "0.1.6", "0.1.7-rc.9")]
+    [InlineData("0.1.7-rc.9", "0.1.6", "0.1.7")]
+    [InlineData("0.1.7", "0.1.7-rc.9", "0.1.7")]
+    [InlineData("0.1.7.1", "0.1.7", "0.1.7.1")]
+    [InlineData("0.2.0", "0.1.6", "0.2.0")]
+    public void A_prerelease_or_another_scheme_is_never_ordered_so_it_can_never_be_a_downgrade_or_a_heal_target(string app, string host, string cached)
+    {
+        var d = Decide(app, host, cached);
+        Assert.NotEqual(SkewHealKind.Heal, d.Kind);
+        Assert.Null(d.Target);
+    }
+
+    [Fact]
+    public void A_release_outranks_its_own_prerelease_so_the_prerelease_package_is_not_enough()
+    {
+        // App on the release, host older: a cached package that is only a prerelease of it must not stand in for it.
+        var d = Decide("0.1.7684", "0.1.7522", "0.1.7684-rc.1");
+        Assert.Equal((SkewHealKind.Hold, "no-verified-package"), (d.Kind, d.Reason));
+    }
+
+    [Fact]
+    public void The_fourth_attempt_holds_once_three_have_failed_and_the_third_still_waits_only_for_the_backoff()
+    {
+        var last = Now.AddMinutes(-1);
+        var third = Decide("0.1.7684", "0.1.7522", "0.1.7684", failures: 2, last: last);
+        Assert.Equal((SkewHealKind.Hold, "backoff"), (third.Kind, third.Reason));
+
+        var fourth = Decide("0.1.7684", "0.1.7522", "0.1.7684", failures: VersionSkewHeal.FailureBound, last: last);
+        Assert.Equal((SkewHealKind.Hold, "failed-repeatedly"), (fourth.Kind, fourth.Reason));
+        Assert.Equal(last + UpdateBackoff.After(VersionSkewHeal.FailureBound), fourth.Until);
+
+        // Past the backoff, one more is let through.
+        Assert.Equal(SkewHealKind.Heal, Decide("0.1.7684", "0.1.7522", "0.1.7684", VersionSkewHeal.FailureBound, last, last + UpdateBackoff.After(VersionSkewHeal.FailureBound)).Kind);
+    }
 }
