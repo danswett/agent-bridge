@@ -661,3 +661,11 @@ test('only this machine\'s pinned ids are sent, each 1 to 128 characters, at mos
   assert.equal(sent.at(-1), 'id304');
   assert.deepEqual(pinnedIdsFor(undefined, 'h1'), []);
 });
+
+test('closing stale question notices leaves a failures notice alone: it is no question', async () => {
+  const closed = [];
+  const notice = (data) => ({ data, close: () => closed.push(data.kind) });
+  const shown = [notice({ machine: 'h1', kind: 'failures', session: null, question: null }), notice({ machine: 'h1', kind: 'question', session: 's9', question: 'q9' })];
+  await closeStaleNotices({ getNotifications: async () => shown }, 'h1', new SessionsStore(), () => true);
+  assert.deepEqual(closed, ['question']);
+});

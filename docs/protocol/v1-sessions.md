@@ -1752,6 +1752,7 @@ silently (ui.md §7.0; later #913 work).
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
 | `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
+| `failures` | **New (S2b of the push filters).** The machine's delivery lane dropped messages, or could not confirm a handoff, in the last 60 s window: `data.failures` is how many. One per machine per window, a count only (never a session, id or text), sent at the end of the window and only to a device whose `notify.deliveryFailures` is on, always alerting. It opens the machine; an older client reads it as a question and does the same | Delivery lane |
 | `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
@@ -1897,6 +1898,7 @@ Every notice about one session on one machine shares:
 | `signIn` | 6 h | `high` |
 | `restored` | 24 h | `normal` |
 | `group` | 24 h | `high`; `normal` when it changes silently or is withdrawn |
+| `failures` | 6 h | `normal` |
 | `hostGone` (#970, proposed) | 6 h | `high` |
 | `hostBack` (#970, proposed) | 6 h | `normal` |
 

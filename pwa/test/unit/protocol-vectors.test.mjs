@@ -111,7 +111,7 @@ async function shown(message) {
     notification: {
       title: n.title, body: n.body, tag: n.tag, lang: n.lang, silent: n.silent, navigate: n.data.url,
       // A group stands for no one session: the wire says "", which the worker reads as none.
-      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (n.data.kind === 'group' ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, reminder: n.data.reminder },
+      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (['group', 'failures'].includes(n.data.kind) ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, failures: n.data.failures, reminder: n.data.reminder },
     },
   };
 }
