@@ -1,10 +1,11 @@
 using System.Text.RegularExpressions;
 using Xunit;
 
-// HA-off evidence for notifications (parity row 16, docs/design/ha-s4-evidence-matrix.md): the code that sends a
-// question or finished-turn notice to a PWA phone and shows one in the Windows app names no Home Assistant type,
-// API path or notify service, so turning Home Assistant off cannot take either away. The flow itself, with Home
-// Assistant pointed at a listener nothing may call, is PushFlowTests.A_question_and_a_finished_turn_reach_the_phone_...
+// HA-off evidence for notifications (parity row 16, docs/design/ha-s4-evidence-matrix.md): a source scan. The code that
+// sends a question or finished-turn notice to a PWA phone and shows one in the Windows app names no Home Assistant
+// type, API path or notify service, so turning Home Assistant off cannot take either away. It does not detect a call
+// to Home Assistant at run time, and no HA-off flow runs the Windows toasts. PushFlowTests shows the PWA push flow
+// runs with no Home Assistant connector in the process, which is true by construction.
 public sealed class HaOffNotificationTests
 {
     // A Home Assistant type or namespace, its REST API, or a phone notify service.
