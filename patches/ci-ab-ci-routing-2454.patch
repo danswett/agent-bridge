@@ -1,29 +1,69 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index ac19f77d..eb0b4c4f 100644
+index f7752a7e..f4d85ec6 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -271,7 +271,9 @@ jobs:
+@@ -9,10 +9,15 @@ on:
+     # marking it ready must run the PR gate on the same head without waiting for another push.
+     types: [opened, synchronize, reopened, ready_for_review]
+   # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
+-  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
+-  # writes no cache and runs every job (the whole ring).
++  # §4.7), or on main with use_ab_ci to try the ab-ci pool before AB_CI_SELF_HOSTED is set; the
++  # plan job refuses anything else. A run by hand is never a release (APP_RELEASE), writes no
++  # cache and runs every job (the whole ring).
+   workflow_dispatch:
+     inputs:
++      use_ab_ci:
++        description: Run the Windows x64 legs (product, spikes) on the ab-ci pool, before AB_CI_SELF_HOSTED is set (main only)
++        type: boolean
++        default: false
+       force-apt-fallback:
+         description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
+         type: boolean
+@@ -103,13 +108,20 @@ jobs:
+         if: github.event_name == 'workflow_dispatch'
+         env:
+           FORCE: ${{ inputs.force-apt-fallback }}
++          USE_AB_CI: ${{ inputs.use_ab_ci }}
+           REF: ${{ github.ref }}
+           SHA: ${{ github.sha }}
+           REPO: ${{ github.repository }}
+           GH_TOKEN: ${{ github.token }}
+         run: |
+           fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+-          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
++          # A try of the ab-ci pool: on main only, and never with the fallback proof (a run of its own).
++          if [ "$USE_AB_CI" = true ]; then
++            [ "$FORCE" != true ] || fail "use_ab_ci and force-apt-fallback are separate runs"
++            [ "$REF" = refs/heads/main ] || fail "use_ab_ci runs only on main, not $REF"
++            exit 0
++          fi
++          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true or use_ab_ci=true"
+           if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
+             fail "only on a branch other than main, not $REF"
+           fi
+@@ -271,7 +283,9 @@ jobs:
        fail-fast: false
        matrix:
          os: ${{ fromJSON(needs.plan.outputs.product-os) }}
 -    runs-on: ${{ matrix.os }}
-+    # Windows x64 on the ab-ci pool for a push or a same-repository pull request, only with AB_CI_SELF_HOSTED on; every
-+    # other leg and case stays on its hosted runner (quality/README.md, routing guard; RunnerRouting checks the shape).
-+    runs-on: ${{ (matrix.os == 'windows-latest' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
++    # Windows x64 on the ab-ci pool for a push or a same-repository pull request with AB_CI_SELF_HOSTED on, or a run by
++    # hand on main with use_ab_ci; every other leg and case stays hosted (quality/README.md routing guard, RunnerRouting).
++    runs-on: ${{ (matrix.os == 'windows-latest' && (vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
      # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
      # (#129); this caps what a hang can cost.
      timeout-minutes: 30
-@@ -588,7 +590,8 @@ jobs:
+@@ -588,7 +602,8 @@ jobs:
    spikes:
      needs: plan
      if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
 -    runs-on: windows-latest
 +    # Windows x64 on the ab-ci pool behind the same guard as product; windows-latest otherwise.
-+    runs-on: ${{ vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || 'windows-latest' }}
++    runs-on: ${{ (vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || 'windows-latest' }}
      steps:
        - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
          with:
-@@ -596,11 +599,18 @@ jobs:
+@@ -596,11 +611,18 @@ jobs:
        - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
          with:
            dotnet-version: '10.0.x'
@@ -43,7 +83,7 @@ index ac19f77d..eb0b4c4f 100644
            key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
            restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
        - name: Build spike projects
-@@ -615,7 +625,7 @@ jobs:
+@@ -615,7 +637,7 @@ jobs:
          if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
          uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
          with:
@@ -52,7 +92,7 @@ index ac19f77d..eb0b4c4f 100644
            key: ${{ steps.nuget.outputs.cache-primary-key }}
        - name: Parse spike scripts
          shell: pwsh
-@@ -639,6 +649,9 @@ jobs:
+@@ -639,6 +661,9 @@ jobs:
          # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
          shell: pwsh
          run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
