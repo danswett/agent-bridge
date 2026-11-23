@@ -144,7 +144,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
             string? reason;
             try { using var check = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None); reason = null; }
             catch (IOException) { reason = "a fixture holding runtime.dll"; }
-            if (Interlocked.Increment(ref probes) > 0) { probed.TrySetResult(); }
+            Interlocked.Increment(ref probes);
             return reason;
         }
         Assert.NotNull(Probe());
@@ -153,8 +153,10 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         host.Start();
         var begun = false;
         var applied = false;
-        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, _ => Probe());
-        // Signalled by the probe itself, not polled; the wait keeps the helper's patience as its bound.
+        // Signalled only from the update's own probe call, after the pre-call above, so it cannot be
+        // satisfied before the update has seen the held file; the wait keeps the helper's patience as its bound.
+        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true,
+            _ => { var reason = Probe(); probed.TrySetResult(); return reason; });
         await probed.Task.WaitAsync(FakeHost.Patience);
         Assert.Empty(host.Sent(HostOps.Stop));
         holder.Dispose();
@@ -170,8 +172,10 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         Assert.Equal("the old install", File.ReadAllText(file));
     }
 
-    // A fake clock that knows how many timers are armed (created and not yet disposed), so a test can
-    // advance it only when something is waiting on it.
+    // A fake clock that knows how many wait timers are armed (created and not yet disposed), so a test can
+    // advance it only when something is waiting on it. A timer due after the whole two-minute release
+    // wait is a scan's own deadline (CancellationTokenSource(ReleaseWait, Time)), armed for the length of
+    // every probe, so it says nothing about the update waiting: it is not counted.
     sealed class ArmedTimerClock(DateTimeOffset start) : FakeTimeProvider(start)
     {
         int armed;
@@ -181,6 +185,7 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             var inner = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime >= InstallationFiles.ReleaseWait) { return inner; }
             Interlocked.Increment(ref armed);
             return new Counted(inner, () => Interlocked.Decrement(ref armed));
         }
