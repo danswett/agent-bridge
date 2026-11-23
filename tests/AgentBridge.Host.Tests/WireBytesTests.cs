@@ -79,6 +79,13 @@ public sealed class WireBytesTests : IAsyncLifetime
         return await ch.Events.ReadAsync(cts.Token);
     }
 
+    // The patch that says the focused session's response is `response`: the last thing the host sends in this workload.
+    static bool IsFocusedPatch(ChannelEvent e, int handle, string response) =>
+        e.Name == Events.SessionPatch
+        && e.Data.TryGetProperty("handle", out var h) && h.GetInt32() == handle
+        && e.Data.TryGetProperty("set", out var set) && set.TryGetProperty("activity", out var activity)
+        && activity.TryGetProperty("response", out var text) && text.GetString() == response;
+
     // What the host's SecureChannel sent for one event: the envelope it serialises, deflated as
     // MessageDeflate.Pack does for a peer that said it inflates, plus the overhead.
     static int WireBytes(ChannelEvent e)
@@ -138,12 +145,23 @@ public sealed class WireBytesTests : IAsyncLifetime
             time.Advance(Step);
         }
         // What the quiet interval was still holding at the 40 s mark is not counted: the next
-        // release is after it.
-        await Task.Delay(200);
+        // release is after it. The host sends each event from its own task, so on a loaded runner they are still on their way when the loop ends: a
+        // guessed 200 ms once found none of them (#2343). Its events reach this channel in the order it sends them and the last it sends is the focused
+        // session's last change (the quiet releases ended at 36 s), so waiting for that patch is waiting for all of them. The watchdog is the original
+        // 10 s: never getting there reads as before, "no patch was sent".
+        var arrived = new List<ChannelEvent>();
+        var lastFocusedChange = $"focused change {Seconds - 1}";
+        var focusedHandle = handles[Focused];
+        try
+        {
+            do { arrived.Add(await NextAsync(ch)); } while (!IsFocusedPatch(arrived[^1], focusedHandle, lastFocusedChange));
+        }
+        catch (OperationCanceledException) { Assert.Fail($"no patch was sent: the focused session's last change did not arrive within {Patience.TotalSeconds:0} s ({arrived.Count} events did)"); }
+        while (ch.Events.TryRead(out var more)) { arrived.Add(more); }
 
         var wire = new SortedDictionary<string, (int Count, int Bytes)>();
         var total = 0;
-        while (ch.Events.TryRead(out var e))
+        foreach (var e in arrived)
         {
             Assert.False(e.Data.TryGetProperty("id", out _));
             Assert.Contains(e.Data.GetProperty("handle").GetInt32(), handles.Values);
