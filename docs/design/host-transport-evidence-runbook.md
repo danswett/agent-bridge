@@ -27,7 +27,7 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly these two commands per event and nothing else. Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
+| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly these two commands per event and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **NOT COVERED: there is no disposable HA**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says NOT COVERED |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
@@ -43,8 +43,9 @@ The firewall commands need elevation, so the run uses **one elevated session, fo
 - **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the two commands in the table above, the drop and then the
   restore, with that event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
   any setting, trust, credential, key or ACL.
+- **RDP safety (owner ask).** The block rule is **outbound only**, scoped to the AgentBridge host program path **and** the relay remote addresses on  TCP 443, so a remote-desktop connection (inbound) is never touched; it is **never** an inbound rule and **never** a profile-wide or default-action  change. Every rule is in **one named group, `SG-relay-drop`**, so removal is one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'`.
 - **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
-  that session, that no rule named `evidence-relay-drop-*` remains on any disposable host, and records the end and that read.
+  that session, that the group `SG-relay-drop` has no rule left on any disposable host (`Get-NetFirewallRule -Group 'SG-relay-drop'` returns none), and records the end and that read.
 - **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 Home Assistant (there is no disposable HA, so the HA comparison and the fallback checks are NOT COVERED).
 
