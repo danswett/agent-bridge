@@ -30,11 +30,12 @@ public sealed class CiCachePolicyTests
                 run: dotnet build-server shutdown
         """;
 
-    static string Ci(string job, string steps, string runsOn = "windows-latest") => $$"""
+    static string Ci(string job, string steps, string runsOn = "windows-latest", string strategy = "") => $$"""
         name: CI
         on: [push, pull_request]
         jobs:
           {{job}}:
+            {{strategy}}
             runs-on: {{runsOn}}
             steps:
         {{steps}}
@@ -54,6 +55,23 @@ public sealed class CiCachePolicyTests
         => CachePolicy.Violations(yaml, path => actions is not null && actions.TryGetValue(path, out var text) ? text : null);
 
     static string Composite(string steps) => "name: x\nruns:\n  using: composite\n  steps:\n" + steps.Replace("\n      ", "\n    ", StringComparison.Ordinal).Replace("      - ", "    - ", StringComparison.Ordinal);
+
+    // #3831 on the fixed resolver (B421): a job is held to the reused-machine rules whenever its runner may be anything but
+    // a known hosted label, including a part of the pool's label set or a label built from pieces.
+    [Theory]
+    [InlineData("[windows, x64]", true)]
+    [InlineData("windows", true)]
+    [InlineData("${{ format('ab-{0}', 'ci') }}", true)]
+    [InlineData("windows-latest", false)]
+    public void A_runner_the_fixed_resolver_cannot_prove_hosted_is_held_to_the_reused_machine_rules(string runsOn, bool held)
+        => Assert.Equal(held, Check(Ci("product", Checkout, runsOn)).Any(v => v.Contains("reused ab-ci machine", StringComparison.Ordinal)));
+
+    // Shapes only the B421 resolver reads: a built include parsed as JSON (OS = os), and a literal include row's OS key.
+    [Theory]
+    [InlineData("strategy: { matrix: { os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"OS\\\":\\\"ab-ci\\\"}]') }}\" } }")]
+    [InlineData("strategy: { matrix: { os: [ubuntu-latest], include: [{ OS: ab-ci }] } }")]
+    public void A_matrix_the_fixed_resolver_reads_as_the_pool_is_held_to_the_reused_machine_rules(string strategy)
+        => Assert.Contains(Check(Ci("product", Checkout, "${{ matrix.os }}", strategy)), v => v.Contains("reused ab-ci machine", StringComparison.Ordinal));
 
     // B221 P1-1: local composite actions are read and held to the same rules, with the two documented exceptions.
     [Fact]
