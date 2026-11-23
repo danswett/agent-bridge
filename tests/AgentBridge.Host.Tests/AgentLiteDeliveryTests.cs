@@ -467,6 +467,52 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(hold ? new LiteDelivery(false, "sessionResolutionIncomplete") : new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
+    // #3933 option (b) (owner decision, Nov 23): a hold on one kind of agent no longer stops a node id that names a session
+    // of another kind. It resolves only when exactly one listed session has it, that session's agent is not held, and the hold
+    // is the same before and after the scan. Anything else is sessionResolutionIncomplete, as before.
+    static DiscoveryHeld HoldOf(params AgentKind[] agents) => new("a live session could not be read", agents);
+
+    [Fact]
+    public async Task A_node_id_naming_a_session_of_an_agent_that_is_not_held_resolves_while_another_agent_is_held()
+    {
+        var f = new Fixture { Held = HoldOf(AgentKind.Claude), Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await SendTo(f, Node)).Typed);
+        Assert.Equal(Target, Assert.Single(f.Typed).Id);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Copilot, new[] { AgentKind.Copilot })]
+    [InlineData(AgentKind.Copilot, new[] { AgentKind.Claude, AgentKind.Copilot })]
+    [InlineData(AgentKind.Claude, new[] { AgentKind.Claude })]
+    public async Task A_node_id_naming_a_session_of_a_held_agent_is_still_refused(AgentKind agent, AgentKind[] held)
+    {
+        var f = new Fixture { Held = HoldOf(held), Agent = agent }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
+    [Fact]
+    public async Task A_node_id_two_listed_sessions_share_is_refused_while_another_agent_is_held()
+    {
+        var f = new Fixture { Held = HoldOf(AgentKind.Claude), Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        f.Others.Add(Sibling);
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
+    [Theory]
+    [InlineData(null, AgentKind.Claude)]
+    [InlineData(AgentKind.Claude, null)]
+    [InlineData(AgentKind.Claude, AgentKind.Codex)]
+    [InlineData(AgentKind.Claude, AgentKind.Copilot)]
+    public async Task A_node_id_is_refused_when_the_hold_changes_while_the_snapshot_is_scanned_even_to_another_agent(AgentKind? before, AgentKind? during)
+    {
+        var f = new Fixture { Held = before is { } b ? HoldOf(b) : null, Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        f.OnSnapshot = () => f.Held = during is { } d ? HoldOf(d) : null;
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {
