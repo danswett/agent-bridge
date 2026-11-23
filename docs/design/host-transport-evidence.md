@@ -45,7 +45,8 @@ write goes to the real one, and the receipt names the disposable HA used.
 | Replay of the sealed envelope | Refused (`policy`); nothing starts |
 | First 2.5 minutes after the target restarts | Refused (`policy`, the warm-up); nothing starts; a fresh request after the window starts one session |
 | Target offline | `target-offline` (exit 5, only when delivery provably did not happen); nothing is queued and nothing is sent to HA |
-| Source credential revoked or process gone | Refused before any send; nothing is sent |
+| Source credential revoked or process gone | Refused `policy` (exit 5) by the sender before any send; nothing is sent |
+| Grant missing or expired | Refused `grant-missing` or `grant-expired` (exit 5); counters do not move |
 | Grant revoked | Refused `grant-revoked` (exit 5); counters do not move |
 | Kill switch on (`launch.enabled` off or equivalent) | Refused `kill-switch` (exit 5); never another route |
 | Scope outside the grant or host policy | Refused `scope` (exit 5) |
@@ -151,22 +152,22 @@ Quality sets these floors:
    The run holds at least **100 compared requests** in all, each with an HA twin; the 50 consecutive count is
    inside that total, never in place of it.
 
-**Coverage floors**, each also INCONCLUSIVE if missed:
+2. **Coverage floors**, each also INCONCLUSIVE if missed:
 
-- **Refusal cases (Host only, no HA twin)**: 5 of each case in the table above, and 3 for the warm-up case.
-- **Lost response**: 3 cases, each resolved with `launches status`.
-- **Concurrent bursts**: 3, with launches issued at the same time; the double-launch and counter checks cover them.
-- **Long prompts**: 5, including one near 60 KB.
-- **Hosts**: at least 3 disposable hosts, with 3 source-target pairs, each pair run in both directions.
-- **Window**: at least 6 h across at least 4 distinct hours, including one induced host restart and one relay
-  reconnect. Each induced event needs the owner's approval **at run time**; this document grants none.
-- **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request id.
-2. **0 double launches**: for each request (its unique launch name), at most one session exists on the target, and the live-session, started-row and counter-rise counts agree.
-3. **0 HA fallbacks**: the HA fallback counter stays at zero. Source: the owner-only #1401 audit log (`launches-*.jsonl`, `ha-gate-counters.md`, #3813), whose rows carry a `path` of `relay`, `local` or `legacy-ha`. Reader: Quality/SRE's windowed reader over those files (the run adds no counter of its own). The `legacy-ha` rows are attributed by request id: a row whose id is one of the plan's HA twin ids is the comparison and is expected; every other `legacy-ha` row in the run window, for a target and name of the plan, is a fallback and fails the run. It is read before and after each request and for the whole window. Unreadable is INCONCLUSIVE. (It counts zero for
+   - **Refusal cases (Host only, no HA twin)**: 5 of each Host-only case in the table above (the cases with no HA twin), and 3 for the warm-up case.
+   - **Lost response**: 3 cases, each resolved with `launches status`.
+   - **Concurrent bursts**: 3, with launches issued at the same time; the double-launch and counter checks cover them.
+   - **Long prompts**: 5, including one near 60 KB.
+   - **Hosts**: at least 3 disposable hosts, with 3 source-target pairs, each pair run in both directions.
+   - **Window**: at least 6 h across at least 4 distinct hours, including one induced host restart and one relay
+     reconnect. The 3 warm-up restarts are induced events too: each is person-only and needs the owner's approval **at run time**; this document grants none.
+   - **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request (its launch name).
+3. **0 double launches**: for each request (its unique launch name), at most one session exists on the target, and the live-session, started-row and counter-rise counts agree.
+4. **0 HA fallbacks**: the HA fallback counter stays at zero. Source: the owner-only #1401 audit log (`launches-*.jsonl`, `ha-gate-counters.md`, #3813), whose rows carry a `path` of `relay`, `local` or `legacy-ha`. Reader: Quality/SRE's windowed reader over those files (the run adds no counter of its own). The `legacy-ha` rows are attributed by request id: a row whose id is one of the plan's HA twin ids is the comparison and is expected; every other `legacy-ha` row in the run window, for a target and name of the plan, is a fallback and fails the run. It is read before and after each request and for the whole window. Unreadable is INCONCLUSIVE. (It counts zero for
    Host-path requests.)
-4. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
-5. No token, key, credential or prompt text appears in any receipt, log or output the run keeps.
-6. The receipts carry the request id, so any case can be read back with `launches status`.
+5. **0 mismatches**: for each request the Host path and the HA comparison agree on outcome, `registered` and refusal reason.
+6. No token, key, credential or prompt text appears in any receipt, log or output the run keeps.
+7. Every case can be recomputed from the raw per-request records SRE keeps (see "Witness and receipt"); the 15 minute launch status store is never relied on after the run.
 
 A failure fails the gate. A run **below any floor** (fewer than 50 compared launches, a case that never ran, a counter
 that was not read) is **INCONCLUSIVE** and is repeated from the start; silence or no activity is never a pass. A result
@@ -175,15 +176,19 @@ failed request is never excused as load or retried until it passes.
 
 ## Witness and receipt
 
-- **Quality/SRE runs the evidence and signs a receipt.** A builder who wrote the code never witnesses it.
-- The receipt **copies the run plan's numbers** (N, every floor, the window, the hosts and pairs) and attaches the
-  plan, then records the **actual** count against each one. It also names the source and target build heads, the date,
-  each case's result and the request ids. It carries no secret.
-- **Raw records and hashes.** The receipt lists every raw record it relies on (command outputs, receipts, session
-  lists, counter reads, host logs) with a sha256 each, and where they are kept. The launch status store keeps an
-  outcome only 15 minutes, so each `launches status` and `launches list` output is copied at request time, not read later.
-- The lead approves the flip from the receipt. The flip is a separate small Fleet PR that cites the receipt;
-  this document does not authorize it.
+- **SRE runs the evidence and keeps the raw records off-repo; Quality reads them against the bars and attests.** A
+  builder who wrote the code never witnesses it, and neither role writes the run plan numbers after the first request.
+- The receipt **copies the run plan's numbers unchanged** (N, every floor, the window, the hosts and pairs) and attaches the
+  plan, then records the **actual** count and denominator against each one. It also names the source and target build heads,
+  the date, each case's result and the request ids. It carries no secret, token, URL, path, machine name or prompt text.
+- **Raw records and hashes.** SRE keeps every raw per-request record off the repository (command outputs, receipts,
+  session lists, counter reads, host logs). The receipt gives the **evidence path** and a sha256 for each record. The launch
+  status store keeps an outcome only 15 minutes, so each `launches status` and `launches list` output is copied at request
+  time, not read later.
+- **Failed and INCONCLUSIVE runs are kept** with the same records and are never overwritten; a repeat run is a new run.
+- **The owner decides any deletion** of the records or the receipt (G12 E4 (e)); nothing here deletes them.
+- **Quality attests; the lead approves the flip** from the attested receipt. The flip is a separate small Fleet PR that
+  cites the receipt; this document does not authorize it.
 
 ## Rollback
 
@@ -192,9 +197,14 @@ Rollback is **HA kept**: nothing on this gate deletes HA code (deletion needs E4
 - **Launch default:** set the `launch-remote.ps1` default back to `HA` (a one-line Fleet change); the HA path, which
   this gate leaves untouched, works as before.
 - **Dispatcher:** revert the dispatcher's switch in its own small Fleet PR so `FleetLaunch` makes its three HA calls
-  again; those calls stay in the code until E4, so this is a revert, not a rewrite.
+  again; those calls stay in the code until E4, so this is a revert, not a rewrite. The dispatcher is a headless caller, and
+  the host verb accepts only a live agent session credential, so the dispatcher's evidence is produced **through that same
+  headless caller class**, never through a human CLI, the app or a script, or the evidence does not cover the dispatcher.
+- **Per-call rollback:** any single call can pass `-Transport HA` explicitly and use the unchanged HA path at once.
+- **Rollback triggers:** a launch that lands on the wrong target, a double launch, a person-guard bypass, or any row that
+  fails twice rolls the default back. The lead decides, and the receipt records which trigger fired.
+- This gate also covers the G11 A wrapper, which depends on the same Host launch path.
 - If a Host-path request is `unconfirmed`, rolling back does not resend it: it is resolved by `launches status` first.
-
 ## Person steps
 
 The run needs a person at run time; an agent, a script or a builder does none of these (guard 67).
