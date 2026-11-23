@@ -2,8 +2,26 @@
 // caller carries the messages over the Noise channel and passes in `h`, that channel's handshake hash. A relay between the two devices
 // has two channels with two different `h`, so the two ends compute different codes. The hashes are asynchronous (WebCrypto), so the
 // steps that take a peer's message are too; typing a code is not, because the codes are worked out when the transcript is.
-// The approver is in enrollment-approver.js. Not ported: the joiner's `Accepts` check of the signed add (step 8), which belongs with the wiring.
+// The approver is in enrollment-approver.js.
+import { equal } from './roster/codec.js';
 import { NONCE_BYTES, commit as commitOf, transcript as transcriptOf, code1 as code1Of, code2 as code2Of, shown, matches } from './roster/enrollment.js';
+
+// Two byte strings compared without stopping at the first difference (a transcript or a commitment); anything but two equal-length arrays is false.
+export function macMatches(a, b) {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+// The same device in every field and key (the library's SameDevice): a descriptor as js/roster/entry.js parses it.
+const isKey = (k) => k instanceof Uint8Array;
+const same = (a, b) => (a == null ? b == null : isKey(a) && isKey(b) && equal(a, b));
+const FIELDS = ['id', 'kind', 'platform', 'name', 'presence', 'signAlg', 'hostSignAlg', 'capSignAlg'];
+const KEYS = ['dh', 'sign', 'hostSign', 'hostSignProof', 'capSign', 'capSignProof'];
+const sameDevice = (a, b) => isKey(a.dh) && FIELDS.every((f) => (a[f] ?? null) === (b[f] ?? null)) && KEYS.every((k) => same(a[k], b[k]))
+  && (a.webauthn == null ? b.webauthn == null : b.webauthn != null && a.webauthn.rpId === b.webauthn.rpId && a.webauthn.attested === b.webauthn.attested
+    && a.webauthn.backupEligible === b.webauthn.backupEligible && same(a.webauthn.credentialId, b.webauthn.credentialId) && same(a.webauthn.key, b.webauthn.key));
 
 export const bytes = (v, n) => v instanceof Uint8Array && v.length === n; // what a peer sent, checked before it is read
 export const randomNonce = () => crypto.getRandomValues(new Uint8Array(NONCE_BYTES));
@@ -82,6 +100,16 @@ export class EnrollmentJoiner {
       [this.#code1, this.#code2, this.#transcript] = [c1, c2, t];
       return this.#nN;
     } finally { this.#taking = false; }
+  }
+
+  // Step 8: the newest entry of a roster the joiner has already verified must add exactly this device, signed by the approver the person
+  // confirmed, carrying this exchange's transcript, and only after code 2 matched. A relay that played approver on another channel cannot
+  // produce this transcript. The entry is a parsed one; its signature is the roster verifier's to check.
+  accepts(newest, own, approverId) {
+    const b = newest?.body;
+    return typeof approverId === 'string' && approverId !== '' && own != null && typeof own === 'object'
+      && this.#matched && !this.#over() && this.#transcript !== null && b?.op === 'add' && b.by === approverId
+      && b.device != null && sameDevice(b.device, own) && b.approval?.method === 'code' && macMatches(this.#transcript, b.approval.transcript);
   }
 
   get code1Shown() { return this.#transcript === null ? null : shown(this.#code1); }
