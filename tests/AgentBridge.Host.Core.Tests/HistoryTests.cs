@@ -597,6 +597,32 @@ public class HistoryTests
         Assert.Equal(identified ? replies[2].Id : null, session.Activity.ResponseId);
     }
 
+    // History skips a repeated call id without a part, so a tool-only record at the window edge does not
+    // break a response begun before the window: the later record of that message merges into it.
+    [Fact]
+    public async Task Claude_window_edge_stays_open_through_a_deduplicated_tool_only_record()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var tool = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("z0", 2, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 3, null, Claude.Text("Before")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("z", 4, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 5, null, Claude.Text("More")));
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Fixture.Append(transcript, Claude.AssistantMessage("w", 6, "end_turn", Claude.Text("Final")));
+        await source.RefreshAsync();
+        var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Before\n\nMore", "Final"], replies.Select(p => p.Text));
+        Assert.Equal(replies[1].Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
     [Fact]
     public async Task Claude_message_at_the_window_edge_has_no_identity_even_when_it_continues()
     {
