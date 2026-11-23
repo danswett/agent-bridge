@@ -245,7 +245,7 @@ suites:
     triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/app-channels.ps1, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
-    where: ci.yml product
+    where: ci.yml product, host-tests
     # Product's Windows on Arm leg runs every product suite; it's named once, here (#3208).
     tier: post-merge
     tier_jobs: [product (windows-11-arm)]

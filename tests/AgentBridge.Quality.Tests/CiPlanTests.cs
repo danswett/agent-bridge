@@ -466,7 +466,7 @@ public class CiPlanTests
         // The waiver's steps come first; the check is the one that reads the needs.
         var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
             .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
-        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
+        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\" and .key != \"host-tests\") or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
         // A pull request skips post-merge jobs, so its gate doesn't count them as selected (#3209).
         foreach (var part in new[] { "jq -r --arg off \"$PR_OFF\" '", "($off | split(\" \")) as $off", "| select(.key | IN($off[]) | not)" })
@@ -561,7 +561,7 @@ public class CiPlanTests
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
-        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+        Assert.Equal(new[] { "plan", "product", "host-tests", "ha-integration", "spikes", "spikes-linux", "app",
             "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
