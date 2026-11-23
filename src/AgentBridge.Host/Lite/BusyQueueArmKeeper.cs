@@ -22,9 +22,9 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
     {
         while (!ct.IsCancellationRequested)
         {
-            if (store.Get(request) is not { Held: true }) { return; }
+            if (store.Get(request) is not { Held: true } current) { return; }
             // The session ended: no arm is left to keep and no prompt can be taken, so the slot is released (sessionEnded) and the keeper stops.
-            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false); return; }            try { keep(); }
+            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false, expected: current.State); return; }            try { keep(); }
             catch (Exception e) when (e is not OutOfMemoryException) { }
             try { await Task.Delay(Every, time, ct); }
             catch (OperationCanceledException) { return; }

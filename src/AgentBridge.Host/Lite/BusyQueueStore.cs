@@ -42,28 +42,31 @@ public sealed class BusyQueueStore(TimeProvider time)
         }
     }
 
-    // The keys went: from now the prompt may sit in Claude's own queue.
+    // The keys went: from now the prompt may sit in Claude's own queue. Only a record still in flight; one already settled stays as it is.
     public void KeysWent(string request)
     {
-        lock (gate) { if (records.TryGetValue(request, out var r)) { records[request] = r with { Held = true }; } }
+        lock (gate) { if (records.TryGetValue(request, out var r) && r.State == InFlight) { records[request] = r with { Held = true }; } }
     }
 
-    // A later state. held false frees the slot; queued sets until to the watch after now.
+    // A later state, as a compare-and-set (#4125, #4129): it applies only to a record still in the state the caller read (expected, when given),
+    // and never to one already settled: delivered, or settled and freed. A late settle returns false and changes nothing, so it can neither turn a
+    // delivered record back into a held one nor leave a held record with no slot. held false frees the slot; queued sets until to the watch after now.
     public bool Settle(string request, string state, string? reason, bool held, string? expected = null)
     {
         lock (gate)
         {
-            if (!records.TryGetValue(request, out var r)) { return false; }
+            if (!records.TryGetValue(request, out var r) || expected is not null && r.State != expected) { return false; }
+            if (r.State == Delivered || r.State != InFlight && !r.Held) { return false; }
             records[request] = r with { State = state, Reason = reason, Held = held, Until = state == Queued ? time.GetUtcNow() + Watch : r.Until };
             if (!held) { FreeSlot(request); }
             return true;
         }
     }
 
-    // Nothing was typed: the record and the slot go.
+    // Nothing was typed: the record and the slot go. A delivered record is never removed.
     public void Release(string request)
     {
-        lock (gate) { records.Remove(request); FreeSlot(request); }
+        lock (gate) { if (records.TryGetValue(request, out var r) && r.State != Delivered) { records.Remove(request); FreeSlot(request); } }
     }
 
     public Record? Get(string request)
@@ -71,7 +74,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { return records.TryGetValue(request, out var r) ? r : null; }
     }
 
-    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null);
+    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null, string State = InFlight);
     // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
     public void Track(string request, string? transcript, long offset, DateTimeOffset? processStart = null)
     {
@@ -89,7 +92,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         {
             if (!slots.TryGetValue(session, out var request)) { return null; }
             tracked.TryGetValue(request, out var where);
-            return new Holding(request, where.Transcript, where.Offset, where.ProcessStart);
+            return new Holding(request, where.Transcript, where.Offset, where.ProcessStart, records.TryGetValue(request, out var r) ? r.State : InFlight);
         }
     }
 

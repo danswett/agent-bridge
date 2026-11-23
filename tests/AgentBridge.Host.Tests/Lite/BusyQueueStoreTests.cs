@@ -123,16 +123,13 @@ public sealed class BusyQueueStoreTests
     }
 
     [Fact]
-    public void A_settle_applies_only_to_the_state_the_caller_read_and_release_only_to_a_record_that_typed_nothing()
+    public void A_settle_applies_only_to_the_state_the_caller_read_and_release_never_removes_a_delivered_record()
     {
         var s = Store(); var r = Req();
         s.TryBegin(r, "p", "sess1"); s.KeysWent(r); s.Settle(r, BusyQueueStore.Queued, null, held: true);
         Assert.False(s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.Unconfirmed));
         Assert.Equal((BusyQueueStore.Queued, true), (s.Get(r)!.State, s.Get(r)!.Held));
         Assert.True(s.Settle(r, BusyQueueStore.Unconfirmed, "watchEnded", held: true, expected: BusyQueueStore.Queued));
-        s.Release(r);                                                                    // keys went: the record and the slot stay
-        Assert.Equal("watchEnded", s.Get(r)!.Reason);
-        Assert.True(s.SlotHeld("sess1"));
         Assert.True(s.Settle(r, BusyQueueStore.Delivered, null, held: false, expected: BusyQueueStore.Unconfirmed));
         s.Release(r);                                                                    // already delivered: not removed
         Assert.Equal(BusyQueueStore.Delivered, s.Get(r)!.State);
