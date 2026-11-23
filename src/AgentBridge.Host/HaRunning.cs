@@ -14,6 +14,8 @@ public sealed class HaRunning : IAsyncDisposable
     readonly HaConnector connector;
     readonly HttpClient http;
     readonly Mutex claim;
+    internal AgentBridge.Host.Core.Launch.LaunchRequestStore? LaunchRequests { get; private init; }
+    internal string? LaunchRequestsProblem { get; private init; }
 
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
@@ -67,10 +69,15 @@ public sealed class HaRunning : IAsyncDisposable
         // Launches from the card go through the host's own launcher, as an app's do (its checks,
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.
+        // Agents' launch requests by id, on a record in the profile folder that survives restarts
+        // (#2743): each id launches once, and its outcome is readable for 15 minutes.
+        var (requests, requestsProblem) = launcher is null ? (null, null) : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
+        if (requestsProblem is not null) { log($"Home Assistant launch requests with an id are refused: {requestsProblem}"); }
         var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
             (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
                 : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
-                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct));
+                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct))
+        { Requests = requests, RequestsProblem = requestsProblem, PublishStatus = (id, request, result) => launcher.PublishAlias("home-assistant", id, request, result) };
         var connector = new HaConnector(new HaConnectorOptions
         {
             MachineName = machine,
@@ -98,7 +105,7 @@ public sealed class HaRunning : IAsyncDisposable
             (updates is null || !ha.CheckForUpdates ? "" : ", the update buttons when this copy was installed by its updater") +
             (ha.Notify.Enabled ? $", notifications via {ha.Notify.Service}" : "") +
             (answer is not null && ha.Notify.ButtonsOn ? $", answer buttons to {ha.Notify.AnswerButtonServices.Count} phone(s)" : ""));
-        return new HaRunning(connector, http, claim);
+        return new HaRunning(connector, http, claim) { LaunchRequests = requests, LaunchRequestsProblem = requestsProblem };
     }
 
     public async ValueTask DisposeAsync()

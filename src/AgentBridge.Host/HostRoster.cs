@@ -28,6 +28,7 @@ public sealed record RosterCheck(
 
 public static class HostRoster
 {
+    static readonly long Started = System.Diagnostics.Stopwatch.GetTimestamp();
     // The relay is an untrusted store, so nothing it says is taken: the generation is learned from
     // the first genesis it holds for this account, and every entry is verified against the signed
     // log on this host's own clock. In off mode the generation is not pinned, so this protects
@@ -66,15 +67,16 @@ public static class HostRoster
         new(why, relay.Mode, relay.Entries.Count, 0, 0, 0, 0, unreadable, [], []);
 
     // Reads and verifies once; never throws, so a relay that cannot answer, or says something this
-    // host cannot make sense of, costs a log line and nothing else.
-    public static async Task<RosterCheck> SyncAsync(RelayClient relay, Func<TimeSpan> clock, CancellationToken ct, HostRosterReader? retained = null)
+    // host cannot make sense of, costs a log line and nothing else. Off mode: never the retained reader.
+    internal static async Task<RosterCheck> SyncAsync(Func<CancellationToken, Task<RelayRoster?>> get, string account, Func<TimeSpan> clock,
+        CancellationToken ct)
     {
         try
         {
-            var roster = await relay.GetRosterAsync(ct);
+            var roster = await get(ct);
             return roster is null
                 ? new RosterCheck("the relay gave no roster", "", 0, 0, 0, 0, 0, 0, [], [])
-                : retained?.Update(roster, relay.AccountId) ?? Verify(roster, relay.AccountId, clock);
+                : Verify(roster, account, clock);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -86,5 +88,5 @@ public static class HostRoster
         }
     }
 
-    public static TimeSpan Now() => DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch;
+    public static TimeSpan Now() => System.Diagnostics.Stopwatch.GetElapsedTime(Started);
 }

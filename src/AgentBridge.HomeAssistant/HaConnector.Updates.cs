@@ -34,6 +34,9 @@ public sealed partial class HaConnector
     DateTimeOffset nextUpdateCheck;
     Task<UpdateRelease?>? updateCheck;
     bool updateCheckPressed;
+    // Once Check was requested here, Install must not return to the older background list.
+    // Background checks still use the cache; an Install with no prior Check keeps its old path.
+    bool updateInstallRevalidates;
     // A press of Check that came while a check was already under way: answered by a check of its
     // own once that one is done, not by one begun before it.
     bool updateCheckQueued;
@@ -163,6 +166,7 @@ public sealed partial class HaConnector
         {
             updateCheckQueued = false;
             if (!UpdateBusy) { StartCheck(now, pressed: true); }
+            else { log(PressedDuringUpdate); }
         }
         var touched = Interlocked.Exchange(ref updateTouched, 0) == 1;
         if (options.ConsumeAnswers && (touched || now >= nextUpdateSweep))
@@ -187,6 +191,7 @@ public sealed partial class HaConnector
                 log("Home Assistant connector: update check requested from Home Assistant");
                 StartCheck(now, pressed: true);
             }
+            else if (check.Fresh) { log(PressedDuringUpdate); }
         }
         if (await PressedAsync("install_update", installPressSeen, ct) is { } install)
         {
@@ -209,6 +214,9 @@ public sealed partial class HaConnector
         }
     }
 
+    // A press of Check during an install, which looks for itself and says what it found.
+    const string PressedDuringUpdate = "Home Assistant connector: update check pressed: not checked, as an update is under way here and reports what it finds";
+
     // A press not seen before, and whether it was made since this connector started.
     async Task<(string Value, bool Fresh, string Driver)?> PressedAsync(string key, string? seen, CancellationToken ct)
     {
@@ -222,6 +230,7 @@ public sealed partial class HaConnector
     // that is slow to answer must hold up no session's card.
     void StartCheck(DateTimeOffset now, bool pressed)
     {
+        if (pressed) { updateInstallRevalidates = true; }
         nextUpdateCheck = now + options.UpdateCheck;
         if (updateCheck is not null)
         {
@@ -230,7 +239,7 @@ public sealed partial class HaConnector
         }
         updateCheckPressed = pressed;
         updateCheckEpoch = installEpoch;
-        updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token).WaitAsync(options.UpdateCheckTimeout, time));
+        updateCheck = Begin(() => updates!.CheckAsync(updateCancel.Token, pressed).WaitAsync(options.UpdateCheckTimeout, time));
     }
 
     static Task<T> Begin<T>(Func<Task<T>> start)
@@ -246,7 +255,11 @@ public sealed partial class HaConnector
         // An install looks for itself, and what it found is what the entity shows until it ends.
         // Cancelled only matters when the connector is stopping: otherwise it is a request that
         // timed out (HttpClient's timeout is a cancellation), and as much a failure as any other.
-        if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy) { return; }
+        if ((done.IsCanceled && updateCancel.IsCancellationRequested) || UpdateBusy)
+        {
+            if (pressed && !updateCancel.IsCancellationRequested) { log(PressedDuringUpdate); }
+            return;
+        }
         if (updateCheckEpoch != installEpoch)
         {
             // Begun before an install that has since looked for itself: older news. A press it was
@@ -259,6 +272,8 @@ public sealed partial class HaConnector
         {
             var why = done.Exception is { } failed ? failed.InnerException?.Message ?? failed.Message : "the request timed out";
             Problem("update-check", $"Home Assistant connector update check failed: {why}");
+            // Problem says a failure once; a press answers for itself whatever was said before (#3441).
+            if (pressed) { log($"Home Assistant connector: update check pressed: failed: {why}"); }
             nextUpdateCheck = now + options.UpdateRetry;
             // Not "failed": a check that could not be made is not a failed update (#92). The
             // explanation goes in the notes, and the entity, with no latest version known, reads
@@ -301,6 +316,12 @@ public sealed partial class HaConnector
             }
         }
         if (announce) { log($"Home Assistant connector: update available: {Installed} -> {release!.Version}"); }
+        if (pressed)
+        {
+            log(release is null
+                ? $"Home Assistant connector: update check pressed: no newer release; {Installed}, installed here, is the latest"
+                : $"Home Assistant connector: update check pressed: {release.Version} is newer than {Installed}, installed here");
+        }
     }
 
     // A press of Install: refused while an update runs (#196), otherwise the spinner at once and
@@ -327,7 +348,8 @@ public sealed partial class HaConnector
         {
             updateVerdict = null;
             updateProgress = ("checking", null);
-            installing = Task.Run(() => InstallAsync(updateCancel.Token), CancellationToken.None);
+            var revalidate = updateInstallRevalidates;
+            installing = Task.Run(() => InstallAsync(updateCancel.Token, revalidate), CancellationToken.None);
         }
         await PublishUpdateAsync(now, ct);
     }
@@ -349,12 +371,12 @@ public sealed partial class HaConnector
     // Invoke-BridgeSelfUpdate, in the host: the release looked for again (Install acts on what is
     // newest now, not on what the last check found), downloaded, and handed to the updater, which
     // replaces the host once it has exited and starts it again.
-    async Task InstallAsync(CancellationToken ct)
+    async Task InstallAsync(CancellationToken ct, bool revalidate)
     {
         string? target = null;
         try
         {
-            var release = await updates!.CheckAsync(ct).WaitAsync(options.UpdateCheckTimeout, time, ct);
+            var release = await updates!.CheckAsync(ct, pressed: revalidate).WaitAsync(options.UpdateCheckTimeout, time, ct);
             if (release is null)
             {
                 var detail = $"{Installed} is already installed, and it is the latest release";

@@ -41,7 +41,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         Assert.Equal(AgentProtocol.ScopeReadReply, hello.Scope);
         var result = await Handler()(channel, op, Body(new
         {
-            name = "worker",
+            sessionId = "agent_bridge_1234567890abcdef",
             scope = AgentProtocol.ScopeReadReplyLaunch,
             principal = "person:local",
         }));
@@ -185,9 +185,9 @@ public sealed class ScriptCredentialScopeTests : IDisposable
     sealed class Roster : IScopedFleetRoster
     {
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<FleetMachine>>([]);
-        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) =>
-            Task.FromResult(new FleetRosterSnapshot("account-a", []));
+            Task.FromResult<IReadOnlyList<FleetMachine>>([new("fixture", true, [new("agent_bridge_1234567890abcdef", "worker", "idle", DateTimeOffset.UtcNow)], Verified: true)]);
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) =>
+            new("account-a", await ReadAsync(ct));
     }
 
     sealed class Channel : IProtocolChannel

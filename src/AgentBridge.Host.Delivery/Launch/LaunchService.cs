@@ -22,12 +22,17 @@ public interface ISessionLauncher
     Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot write durable launch evidence."));
+    Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Func<string?> dispatch, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot fence grant dispatch."));
 
     Task<LaunchResult>? ReplayAsync(LaunchRequest request, string principal) => null;
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
     LaunchConfig? FleetConfig => null;
+    IReadOnlyList<LaunchStatus> LaunchStatuses() => [];
+    void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result) { }
     Task<LaunchResult>? ReplayAuditedAsync(LaunchRequest request, string peer) => null;
 
     Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
@@ -63,8 +68,13 @@ public sealed class LaunchServiceOptions
     public required string ClaudeHome { get; init; }
     public bool? ClaudeConfigDirExplicit { get; init; }
     public required string CodexHome { get; init; }
+    // Whether this profile's hook setup record for an agent id is absent, so the agent was never set up
+    // here. Null: not known, and nothing is refused. Only Codex is asked (see CodexHooksMissing).
+    public Func<string, bool>? HooksNotSetUp { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
+    public bool HomeAssistantEnabled { get; init; }
+    public Uri? HomeAssistantBaseUrl { get; init; }
 
     // How long a launch request waits for the session to register before it answers
     // unconfirmed. Copilot registers in seconds; a first launch that has to sign in can take
@@ -144,6 +154,7 @@ public sealed class LaunchServiceOptions
 
     // The profile's launch-provenance.json, independent of credential storage.
     public string? ProvenanceFile { get; init; }
+    public string? StatusFolder { get; init; }
 }
 
 // Launches and resumes agent sessions as agent-ha-bridge's Launch button does
@@ -179,6 +190,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly AgencyCatalog agency;
     readonly ResumableStore resumable;
     readonly LaunchProvenance provenance;
+    readonly LaunchStatusLedger statusLedger;
     readonly LaunchServiceOptions options;
     readonly Action<string> log;
     readonly AttachmentStore? attachments;
@@ -187,14 +199,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     readonly SemaphoreSlim starting = new(1, 1);
     readonly Lock pendingGate = new();
     // Sessions whose launch here was never seen ready, with whether the agent it started still runs
-    // (HeldForReply). Under pendingGate; dropped once that agent has gone, or once a person got past
-    // whatever its window asked: a prompt of theirs in its transcript after the launch (Copilot), or,
+    // (HeldForReply). Under pendingGate; dropped once that agent has gone, or its own transcript
+    // shows activity after its process started (Copilot), or,
     // for an agent that registers only once ready, its registration.
     readonly Dictionary<string, Unready> neverReady = new(StringComparer.OrdinalIgnoreCase);
 
     // Alive: the launcher's process, or, once that handed the session on and exited, the session's own
-    // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
-    sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
+    // (AgentHeld). Transcript: only this session's Copilot events.jsonl.
+    sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, CopilotInput? Transcript, DateTimeOffset StartedAt);
     readonly ILaunchCredentials? credentials;
     readonly ILaunchAccount? launchAccount;
     readonly List<Pending> pending = [];
@@ -230,6 +242,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         this.options = options;
         this.log = log ?? (_ => { });
         provenance = new LaunchProvenance(options.ProvenanceFile, this.log);
+        statusLedger = new LaunchStatusLedger(options.StatusFolder, this.log);
         this.attachments = attachments;
         resumable = new ResumableStore(options.CopilotHome, options.ClaudeHome, options.CodexHome, options.Time);
         var deliveryGate = gate ?? throw new ArgumentNullException(nameof(gate));
@@ -242,6 +255,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     LaunchConfig Config => options.Config;
+    public IReadOnlyList<LaunchStatus> LaunchStatuses() => statusLedger.Read();
+    public void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result)
+    {
+        if (Guid.TryParseExact(request, "D", out var id))
+        { statusLedger.Publish(new(id.ToString("D"), result.Outcome.ToString().ToLowerInvariant(), result.Session, result.Launched?.Permissions, false, options.Time.GetUtcNow()) { Principal = principal, SourceRequest = source.Request }); }
+    }
+    void PublishStatus(string principal, Guid request, string outcome, LaunchResult? result = null) =>
+        statusLedger.Publish(new(request.ToString("D"), outcome, result?.Session, result?.Launched?.Permissions, false, options.Time.GetUtcNow()) { Principal = principal });
 
     public IReadOnlyList<Started> LaunchedProcesses()
     {
@@ -771,22 +792,25 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         ArgumentNullException.ThrowIfNull(prepare);
         return LaunchOnceAsync(request, peer, prepare);
     }
+    public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
+        Func<string?> dispatch, CancellationToken cancellationToken = default) => LaunchOnceAsync(request, peer, prepare, dispatch: dispatch);
 
-    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false)
+    Task<LaunchResult> LaunchOnceAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?>? prepare, bool fleet = false, Func<string?>? dispatch = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet)
-            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet))
+        return requests.Once(key, () => request.FleetName is null ? RunAsync(request, key, peer, prepare: prepare, fleet: fleet, dispatch: dispatch)
+            : NamedLaunch is { } policy ? policy(request, peer, () => RunAsync(request, key, peer, prepare: prepare, fleet: fleet, dispatch: dispatch))
             : Task.FromResult(Refused("fleetName is not supported by this host")), result =>
-            Settled(request, result, $"launch {Short(key)}"),
+            Settled(request, result, $"launch {Short(key)}", peer),
             owner: prepare is null ? Owner(request, peer) : new LaunchOwner(peer, RequestBinding(request)),
             foreign: () => Task.FromResult(Refused("request is not a repeat owned by this caller")));
     }
 
     // Once per finished request, never for a repeat answered from the remembered outcome (that
     // is what requests.Once's settled callback guarantees).
-    void Settled(LaunchRequest request, LaunchResult result, string who)
+    void Settled(LaunchRequest request, LaunchResult result, string who, string principal)
     {
+        PublishStatus(principal, Guid.Parse(request.Request), result.Outcome.ToString().ToLowerInvariant(), result);
         log($"{who}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Session is { } s ? $" session {Short(s)}" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}");
         var index = Launchers.All.ToList().FindIndex(l => l.Id == request.Agent);
         try { options.Journal?.Record(JournalEvents.LaunchRequested(result.Outcome, index < 0 ? null : index + 1)); }
@@ -819,7 +843,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
         return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
-            Settled(request, result, $"launch {Short(key)} ({ask.By})"));
+            Settled(request, result, $"launch {Short(key)} ({ask.By})", ask.By));
     }
 
     // A restore's settings, each kept only while this machine still offers it (else its default),
@@ -848,14 +872,24 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer, bool restoring = false, CancellationToken ct = default,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Func<string?>? dispatch = null)
     {
+        PublishStatus(peer, key, "starting");
         try
         {
             if (!options.PlatformSupported) { return Refused("launching sessions is not supported on this platform yet; start it at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
             if (!Config.Enabled) { return Refused("launching is turned off on this machine (launch.enabled in the host's config)"); }
             if (starter.Unavailable() is { } unavailable) { return Refused(unavailable); }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is null)
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl is not configured on this host");
+            }
+            if (options.HomeAssistantEnabled && options.HomeAssistantBaseUrl is { } baseUrl &&
+                (!baseUrl.IsAbsoluteUri || baseUrl.Query.Length > 0 || baseUrl.Fragment.Length > 0 || baseUrl.UserInfo.Length > 0))
+            {
+                return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl must be an absolute URL without a query, fragment or userinfo");
+            }
             if (LaunchProtocol.Check(request) is { } invalid) { return Refused(invalid); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
                 .Where(x => x.Item2 is not null).Select(x => $"{x.Item1}={x.Item2}"));
@@ -913,8 +947,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                         return Refused($"'{fetched.About.Title}' is a {theirs} session, so it resumes in {theirs}, not {plan.Launcher.Label}");
                     }
                 }
-                return await StartAsync(plan, claim, key, handed, fetched, ct, restoring,
-                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet);
+                return await StartAsync(plan, claim, key, peer, handed, fetched, ct, restoring,
+                    fleet || peer.StartsWith("agent:", StringComparison.Ordinal) ? peer : null, prepare: prepare, fleet: fleet, dispatch: dispatch);
             }
             finally
             {
@@ -1027,6 +1061,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
         }
 
+        // Codex with no hook setup record on this profile (a migrated profile never had one, #3648) would run
+        // but could never report; refuse it by name instead of starting a session that ends unconfirmed (#3644).
+        if (launcher.Kind == AgentKind.Codex && options.HooksNotSetUp?.Invoke(launcher.Id) == true) { return (null, CodexHooksMissing); }
         var agent = o.Agents.First(a => a.Id == launcher.Id);
         var profile = "";
         if (launcher.TakesProfile && agent.Profiles is { } profiles)
@@ -1093,8 +1130,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
     }
 
-    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
-        Func<Guid, Action<string>?>? prepare = null, bool fleet = false)
+    async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, string principal, StrongBox<bool> handed, FetchedBundle? fetched, CancellationToken ct = default, bool restoring = false, string? agentPrincipal = null,
+        Func<Guid, Action<string>?>? prepare = null, bool fleet = false, Func<string?>? dispatch = null)
     {
         Pending follow;
         LaunchedWith launched;
@@ -1103,6 +1140,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         WorktreeResult? created = null;
         try
         {
+            if (dispatch?.Invoke() is { } denied) { return Refused(denied); }
             // Checked again: agent-ha-bridge may have started while this one waited its turn.
             if (probe.Active() is { } active) { return Refused(active); }
             if (BusyReason() is { } busy) { return new LaunchResult(LaunchOutcome.Busy, busy) { Trust = BusyQuestion() }; }
@@ -1223,7 +1261,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 extras, plan.Profile, prompt);
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
-                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath(),
+                options.HomeAssistantEnabled ? options.HomeAssistantBaseUrl : null);
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
             // Set to nothing when none is issued, so a token of the host's own is never inherited.
             environment[Launchers.TokenVariable] = null;
@@ -1277,9 +1316,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
             // Last chance to withdraw: nothing has started yet.
             if (ct.IsCancellationRequested) { return Refused(Withdrawn); }
-            // Where a prompt of the person's would show they got past its startup questions
-            // (HeldForReply): what the transcript holds now is from before this agent.
-            var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
             var launchId = Guid.NewGuid().ToString("N");
             Action<string>? auditRegistered = null;
             if (prepare is not null && plan.Resume is null && plan.Transfer is null)
@@ -1296,7 +1332,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
                 catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
                 {
-                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                    log($"launch {Short(key)}: no agent credential was issued: {e.GetType().Name}");
                 }
             }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
@@ -1306,16 +1342,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             {
                 if (credentialIssued) { credentials!.Abandon(launchId); }
                 provenance.Abandon(key);
-                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
+                log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.GetType().Name}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
             if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
+            var consoleSize = plan.Launcher.Kind == AgentKind.Copilot ? new LaunchedConsoleSize(injector, started, log) : null;
+            if (consoleSize is not null) { await consoleSize.AtLaunchAsync(); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");
             // The reservation is the follow's now, released when the session registers.
             follow = new Pending(key, plan.Launcher, sessionId, started, plan.Where, options.Time.GetUtcNow(), codexBefore, reserved, reservation, launched)
-                { Transcript = transcriptFrom, AuditRegistered = auditRegistered };
+            { Transcript = TranscriptOf(plan.Launcher, sessionId, started.StartedAt), AuditRegistered = auditRegistered, Principal = principal, ConsoleSize = consoleSize };
             reservation = null;
             lock (pendingGate) { pending.Add(follow); }
             resumable.Forget();
@@ -1426,6 +1464,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                     ConsoleScreen screen;
                     try { screen = await injector.ReadScreenAsync(window); }
                     catch (Exception) { screen = new ConsoleScreen(null, "unreadable"); }
+                    if (screen.Rows is not null && p.ConsoleSize is { } sizing)
+                    {
+                        // One final sizing check when a console is first readable. A handoff never
+                        // widens a different PID: the worker still checks the original creation time.
+                        p.ConsoleSize = null;
+                        await sizing.FirstReadAsync();
+                        try { screen = await injector.ReadScreenAsync(window); }
+                        catch (Exception) { screen = new ConsoleScreen(null, "unreadable"); }
+                    }
                     var question = StartupQuestions.Read(screen.Rows);
                     p.Ready = p.Launcher.RegistersBeforeReady && StartupQuestions.CopilotReady(screen.Rows);
                     // Read again on every look while it waits: what is shown to a person is what
@@ -1503,14 +1550,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             lock (pendingGate)
             {
                 pending.Remove(p);
-                if (unready is not null && alive is not null)
+                if (unready is not null && alive is not null && !p.RegisteredLate)
                 {
                     neverReady[unready] = new Unready(alive, p.Launcher.Label, p.Launcher.RegistersBeforeReady,
-                        p.Transcript is { } tr && string.Equals(tr.Id, unready, StringComparison.OrdinalIgnoreCase) ? (tr.Path, tr.From) : null);
+                        string.Equals(p.SessionId, unready, StringComparison.OrdinalIgnoreCase) ? p.Transcript : null, p.Started.StartedAt);
                     holding = true;
                 }
             }
-            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait until a prompt is typed at the machine or it exits"); }
+            if (holding) { log($"launch {Short(p.Key)}: replies to session {Short(unready!)} wait for its own transcript activity or it exits"); }
             if (p.Reservation is { } token && p.Worktree is { } worktree)
             {
                 // Only once it has registered: one still starting stays protected, and one that
@@ -1568,18 +1615,32 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public string? HeldForReply(string sessionId)
     {
         Unready? held;
+        Pending? p;
         lock (pendingGate)
         {
-            var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
+            p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
                 && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
-            if (p is not null) { return Waiting(p.Launcher.Label, p.Question); }
-            if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
+            neverReady.TryGetValue(sessionId, out held);
+            if (p is null && held is null) { return null; }
         }
         // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
-        // Not a turn count: a new CLI's session.resume ends a killed turn, which counts one, with
-        // nobody having typed anything.
-        var past = held.RegistersBeforeReady
-            ? held.Transcript is { } t && CopilotPrompts.Since(t.Path, t.From).Prompts.Count > 0
+        if (p is not null)
+        {
+            var active = p.Transcript?.Read().StartedSince(p.Started.StartedAt) == true;
+            lock (pendingGate)
+            {
+                if (!active || p.Question != StartupQuestion.None) { return Waiting(p.Launcher.Label, p.Question); }
+                if (!pending.Remove(p)) { return null; }
+                p.Ready = true;
+                p.RegisteredLate = true;
+                neverReady.Remove(sessionId);
+            }
+            Decide(p, new LaunchResult(LaunchOutcome.Started) { Session = sessionId, Launched = p.Launched });
+            return null;
+        }
+        // session.resume alone is not activity, and an old resumed transcript is not this launch.
+        var past = held!.RegistersBeforeReady
+            ? held.Transcript?.Read().StartedSince(held.StartedAt) == true
             : source.Get(sessionId) is not null;
         var alive = held.Alive();
         lock (pendingGate)
@@ -1618,12 +1679,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         return () => source.ProcessOf(sessionId)?.Id == owner.Id;
     }
 
-    (string Id, string Path, long From)? TranscriptFrom(Launcher launcher, string sessionId)
+    CopilotInput? TranscriptOf(Launcher launcher, string sessionId, DateTimeOffset startedAt)
     {
         if (launcher.Kind != AgentKind.Copilot || !Guid.TryParseExact(sessionId, "D", out _)) { return null; }
-        var path = Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl");
-        try { return (sessionId, path, File.Exists(path) ? new FileInfo(path).Length : 0); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        return new CopilotInput(Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl"), startedAt);
     }
 
     // Whether a launch has started an agent on this session that is still running.
@@ -1644,6 +1703,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     void Decide(Pending p, LaunchResult result)
     {
+        if (result.Outcome == LaunchOutcome.Started && Interlocked.Exchange(ref p.StartedDecided, 1) != 0) { return; }
+        PublishStatus(p.Principal, p.Key, result.Outcome.ToString().ToLowerInvariant(), result);
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
         if (result is { Outcome: LaunchOutcome.Started, Session: { } id })
         {
@@ -1986,9 +2047,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         string? worktree, string? reservation, LaunchedWith launched)
     {
         public Guid Key { get; } = key;
+        public required string Principal { get; init; }
         public Launcher Launcher { get; } = launcher;
         public string SessionId { get; } = sessionId;
         public Started Started { get; } = started;
+        public LaunchedConsoleSize? ConsoleSize;
         public string Where { get; } = where;
         public DateTimeOffset At { get; } = at;
         public HashSet<string> CodexBefore { get; } = codexBefore;
@@ -2021,12 +2084,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // window never seen ready, and whether its launcher exited, handing the session on.
         public volatile bool Ready;
         public DateTimeOffset? RegisteredAt { get; set; }
-        // Copilot's transcript of the session, and its length just before the agent was started: a
-        // prompt of the person's after it shows they got past the window's startup questions.
-        public (string Id, string Path, long From)? Transcript { get; set; }
+        public CopilotInput? Transcript { get; set; }
         public bool ReadyMissed { get; set; }
         public bool HandedOn { get; set; }
         public bool RegisteredLate { get; set; }
+        public int StartedDecided;
         public string? Bound { get; set; }
     }
 
@@ -2044,4 +2106,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);
+
+    // Needs-you text: Set up registers the hook; Codex then asks once for its hooks to be trusted, which
+    // the host cannot read, so that is only a hint here and never a refusal.
+    const string CodexHooksMissing = "codexHooksMissing: Codex has no hook registration on this machine, so a launched session could not report; run Set up for Codex on this machine, then approve Codex's hook trust prompt once";
 }

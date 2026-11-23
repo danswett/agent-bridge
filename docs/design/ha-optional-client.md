@@ -119,8 +119,12 @@ These are required target views, not claims that the initial service grant cover
 them all. Build an HA push coordinator (`should_poll = false`), not polling.
 Entity keys derive from enrolled identity and current protocol session identity;
 never keep session/node addresses or a named machine roster in configuration.
-`fleet.find` remains the canonical name lookup, with verified fresh records and
-person-confirmed machine pins; no guessed, unverified or ambiguous target is routed.
+`fleet.find` remains the canonical live session-ID lookup from the authenticated
+roster, with person-confirmed exact device-ID pins and the
+[documented trust/completeness precedence](../protocol/agent-operations.md#fleetfind).
+Names are display only. Unknown, stale or offline IDs refuse; no name, fragment or
+HA fallback routes a target. Incomplete, unverified or ambiguous results stay
+unroutable; the messaging-only own-account exception grants this service no actions.
 
 | Card role | Entities/view and parity rows | Subscription source and authority |
 |---|---|---|

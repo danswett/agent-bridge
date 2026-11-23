@@ -24,6 +24,10 @@ public static partial class HaContract
     public static readonly TimeSpan LaunchNoteExpiry = TimeSpan.FromSeconds(600);
     // How many outcomes an agent can read back (Set-DaemonLaunchOutcome keeps five).
     public const int LaunchOutcomesKept = 5;
+    // With the host's record of launch requests (#2743), every outcome still on it, newest first,
+    // up to 20 and 15000 bytes: Home Assistant's recorder drops attributes over 16 KiB.
+    public const int LaunchOutcomesPublished = 20;
+    public const int LaunchOutcomesBytes = 15000;
 
     // The tuning axes, in display order, with their selector's name and icon (BridgeTuningAxes).
     public static readonly IReadOnlyList<(string Axis, string Label, string Icon)> TuningAxes =

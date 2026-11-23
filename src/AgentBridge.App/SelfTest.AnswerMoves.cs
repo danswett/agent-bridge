@@ -142,12 +142,27 @@ static partial class SelfTest
                     window.RootElement.UpdateLayout();
                     return view.QuestionShown is { IsHitTestVisible: true };
                 }, TimeSpan.FromSeconds(10));
-                var focused = box?.Focus(FocusState.Programmatic) == true;
-                var clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
-                await Task.Delay(100);
-                held = view.QuestionShown is { IsHitTestVisible: false };
+                // Setup's late layout on a loaded runner (win-arm64, main's 62c35b0a) can still hold the question as focus comes:
+                // it is waited out before the act, and the look after it stays short (HoldProbe), so only the button's own hold fails.
+                var focused = false;
+                var clearShown = false;
+                var (quiet, armed) = await HoldProbe.AroundAsync(() => view.QuestionShown is { IsHitTestVisible: true }, Until, Task.Delay, async () =>
+                {
+                    focused = box?.Focus(FocusState.Programmatic) == true;
+                    clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
+                });
+                held = armed;
+                // For the failure's message only, after the verdict is read: how long the hold lasts, to tell the guard's own half second
+                // from one that keeps arming (win-arm64, main's 40c35191 held it after a quiet and a strict look).
+                var holdFor = "";
+                if (held)
+                {
+                    var waited = System.Diagnostics.Stopwatch.StartNew();
+                    holdFor = await Until(() => view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3))
+                        ? $"; released {waited.ElapsedMilliseconds} ms after the look" : "; still held 3 s after the look";
+                }
                 if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
-                check(settled && setupSettled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; focused: {focused}; shown: {clearShown}; held: {held})");
+                check(settled && setupSettled && quiet && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; quiet: {quiet}; focused: {focused}; shown: {clearShown}; held: {held}{holdFor})");
 
                 // A press while the person's own act still holds, with their question grown since
                 // the last layout pass: the pass that press brings is read with nothing exempt, so

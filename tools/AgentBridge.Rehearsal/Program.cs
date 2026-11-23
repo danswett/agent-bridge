@@ -90,8 +90,10 @@ internal static class Program
                         _ => Outcome.Error(""),
                     };
                 }
+            case "usage-compare":
+                return UsageCompare.Run(p.Option("--pairs")!, TimeSpan.FromSeconds(p.Int("--interval") ?? 120));
             case "conformance":
-                return ClientConformanceCommand.Run(p, Console.Out) == 0
+                return ClientConformanceCommand.Run(p, Console.Out, WindowsClientCallback.Create) == 0
                     ? Outcome.Pass("Every required row passed for the named client.")
                     : Outcome.Fail("The named client has non-passing required rows.");
             case "baseline save":

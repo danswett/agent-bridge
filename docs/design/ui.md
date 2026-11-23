@@ -585,6 +585,17 @@ easing in, its duration out, and how far it travels.
 | Reorder | The session list (#164, #592) | A touch hold then drag; a mouse or pen drag; Alt+↑/↓; Move up or Move down; a screen reader's move action; an order change during a return's grace (§6.1, #950) | The whole card lifts, then follows the pointer 1:1 with no easing. Its neighbours ease one slot aside, leaving a card-sized gap where it will land: no insertion line. The order commits at release; the card settles into the gap and lowers. A key, menu or screen-reader move trades the moved card and its neighbours together, without a lift. Automatic return updates use the move, never the lift; return-grace order changes retarget changed rows from their drawn places. Only rows whose places changed move | `reorder`: standard, standard | Windows: pointer-driven in-list drag, Composition `Translation`, not OLE drag, its ghost or caption, nor `ReorderThemeTransition`. PWA: Pointer Events and transforms with frame-coalesced FLIP, not HTML5 drag-and-drop. Apple and Android: system list drag mapped to this contract | Instant gap, neighbours, drop and cancel. Only the held card follows the pointer |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
+Windows' reply-box exception line fades in place with `acknowledge`, including its
+reduced-motion cross-fade. On clearing, a drawn-only copy fades out with the same
+entry's exit token; it has no hit testing or automation presence. The live line's
+words and announcements change immediately, without waiting for that copy.
+
+Windows animates the list's existing selection bar using `selection`: it slides
+between realized rows intersecting the viewport, or fades in when the previous row
+is off screen. First draw and reduced motion are instant; recycling and unloading
+settle the bar. The row fill and the shipped container-relative bar geometry stay
+unchanged.
+
 **Lift and make room (#592).** The lift uses `fast` and `decelerate`: scale 1.02 about
 the card's centre, a 5% Bridge tint on `card` (4% in light), the drag shadow, a `stroke2`
 edge and `radius.card`. A selected card keeps its selection pill and selected overlay;
@@ -725,6 +736,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **New sessions** go to the top of Sessions once, then stay put, in no group unless they
   continue a grouped session ("Groups", below). A machine's first list is
   placed together, newest first, once the machine has sent all of it.
+  **CHANGE C5 (proposed, not built):** a verified successor follows the stable-slot
+  exception below, not new-row insertion.
 - **Moving** is the person's only (#592; §5.3's lift and make room):
   - **Touch holds first:** a long press anywhere on the card, 500 ms on iOS and 400 ms on Android
     (the platform's timing; the PWA matches its device, 500 ms elsewhere). A 150 ms hold on the
@@ -882,12 +895,14 @@ launch lineage may come later, on top of this, once hosts report it.
   else the one before it, else New), and it is announced politely ("*name* deleted. 3 sessions
   moved to Sessions"). An empty group stays until it is deleted.
 - **Kept and roaming:** groups are kept with your order (above). Their names, their order and
-  which sessions are in them roam with your order, pins and sort once #759 lands: keyed by
+  which sessions are in them roam with your order and pins once #759 lands: keyed by
   machine id + session id, last writer wins per change, in the same record as the order and
   under its privacy rules (ids and the names you gave, never titles or paths). Collapsed or
   expanded is per device and never roams; a group
   first seen on a device, made there or arriving from another, starts expanded. Until #759
   lands, all of it is per device.
+  **CHANGE C6 (canonical reconciliation):** sort choice does not roam, as #759's
+  canonical record design already specifies.
 - **A resumed session keeps its group by its resume lineage.** A session's membership outlives
   its ending: it is kept for 30 days after the session was last listed, so a resume finds it.
   - Resumed on its own machine, by anyone (a client's `session.launch` with `resume`, or at the
@@ -901,6 +916,51 @@ launch lineage may come later, on top of this, once hosts report it.
     (a new id from a transfer no client saw, an agent that started afresh, or membership
     already dropped) is a new session: the top of Sessions, in no group. A host never reports
     lineage today; if it does later, it is used the same way.
+
+#### Verified successors (CHANGE C4-C5)
+
+**Proposed Nov 21, 2026, 22:26 PT; owner approval required, not implementation.**
+[Recycling](https://github.com/danswett/agent-bridge/issues/1504) extends the existing
+[group decision](https://github.com/danswett/agent-bridge/issues/767), for ALL user groups
+and all applicable orders. No named group, role label or coordinator gets special rules.
+The legacy resume rules above remain until adoption; verified role succession uses
+[the canonical identity/record rules](session-order-roaming.md#11-stable-presentation-identity-change-c1),
+not a matching title, prompt, fork/transfer result or session's self-claim.
+
+The approved successor occupies the same logical row: same pin, exact manual position
+(including its position in Pinned), and every order's kept user-group membership.
+It does not join the foot of Pinned or the top of its group/Sessions merely by launching.
+Unpin still uses the existing explicit-person-action rule. Group names, group order and
+collapse do not change. This device's order remains independent; sync remains optional.
+Most recent/Machine keep their existing derived sort rules; a changed actual host can
+change Machine sort or make the row leave a selected machine tab. Never display a false host.
+
+Before the signed handover commits, retain the predecessor's slot; a prepared successor
+has no inherited presentation. During vacancy, stale proof or competing current claims,
+keep its choices in a read-only slot with "Waiting for continuation" or "Identity conflict".
+Candidate details cannot assign the pin/groups. Dormant slots are not live-session or
+Needs-you counts; empty user groups and their saved memberships remain.
+
+A valid binding change enters the model immediately, but rendering waits for the existing
+pointer, drag, grabbed-row, menu and motion holds. Preserve scroll and row selection.
+Cancel any drag of the replaced activation, announcing "Session replaced. Move cancelled.";
+apply no move to the new activation. Close its old row menu instead of dispatching an action
+to the successor. Focus on a row moves to its neutral row heading, never an answer control.
+An open conversation, reply draft or approval remains attached to its exact old SESSION ID;
+show "Session replaced" with an explicit Open successor action, never silently navigate,
+copy a draft, submit a pending send or reuse an approval. Fresh snapshot and synchronous
+target checks still gate every action; sharing a presentation identity conveys no authority.
+
+Details show verified "Continues <predecessor>" and the person-visible handover receipt.
+"Treat this session separately" and "Follow this identity again" follow the scoped,
+persistent opt-out rules in [the same record design](session-order-roaming.md#14-person-visibility-and-undo-change-c4).
+Undo is preference-only: it never activates/stops a holder, re-pins the old session or
+grants a successor permissions. Ordinary unlinked sessions keep today's new-session defaults.
+Manage continuity also offers Move saved choices to this session and Forget saved slot;
+scope, overwrite preview, idempotence and device-acknowledged cleanup follow that record design.
+Dormant slots consume saved-row quota but no live/Ended count; prior adopted activations
+remain in slot details, not duplicate Ended/group rows. Adoption explicitly warns that a
+manual provider-ID resume stays separate until the person approves its continuation.
 
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
@@ -1132,7 +1192,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   | 15 | Updated | "2m ago" | Always |
   | 16 | Background | "2 background agents · 1 background command" | When any |
   | 17 | Turns | "12 turns", "1 turn" | When sent |
-  | 18 | Compactions | "3 compactions" | When more than 0 |
+  | 18 | Compactions | "compacted once" / "compacted 3 times", as in the session header | When more than 0 |
   | 19 | Process | "pid 4312", mono | When sent |
   | 20 | ID | The full session id, mono, then a Copy button | Always |
 
@@ -1335,6 +1395,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     draws chrome, that the last block is found by its name, which no other block has, and that every
     block, found and realised as a screen reader does it (FindItemByProperty, then Realize), is a
     list item numbered 1 to N in a set of N, none -1 ([app-windows.md](../app-windows.md)).
+    A Copy-Tab failure records the starting and landing focus paths, each Tab attempt, block
+    indices and realization, scroll offset/viewport/extent and rasterization scale. Focus-scroll
+    suppression uses the stop's position after leading alignment, even while that scroll is pending.
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255). The same in the stored turns above the live exchange, in the
@@ -1350,7 +1413,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
     quotes); the
     `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
-    secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
+    secondary text when the host knows. On Windows, a nonempty agent `userMessageLabel` instead
+    reads "From: <session>" in that same agent-colour line, live and in history (#2928).
+    `PromptOrigin.Fact` cleans the untrusted name and caps it at 64 UTF-8 bytes; an empty cleaned
+    name keeps "Sent by an agent". The sender is not inferred from `driverPrincipal`.
+    The host captures `Limits.KeepStart(agentPrincipal, Limits.UserMessageLabel)` at arm time,
+    then binds that agent-principal snapshot to the prompt and keeps it in the turn's history
+    metadata, so a later driver never renames an earlier sender. The snapshot is display-only,
+    not an authenticated identity or an authorization/trust decision. Restoring an arm discards
+    unmatched attribution; labels already bound to a prompt stay.
+    For `other`, the diamond still reads "Automatic prompt". Then the
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
@@ -1714,8 +1786,39 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   44 px Retry button instead of a gap. Remaining unread/queue/missing-reply UX is C2, not
   implemented or declared complete by C1; these rules supersede the older H3 wording for C2.
   It opens at the end, on the latest reply, and stays there as replies arrive until the person
-  scrolls; once they scroll, a new reply never moves the view (#1635, #1646). Reasoning, tool lines,
-  delegate events and questions are still to come. The Windows app loads earlier turns a page
+  scrolls; once they scroll, a new reply never moves the view (#1635, #1646).
+  Returning within 8 px of the Windows conversation's measured end re-engages following
+  on the next reply or history update, including after a screen-reader retreat.
+  This end-entry tolerance is separate from the 1 px movement tolerance; it does not
+  widen pin-release exemptions or override active navigation, scrolling or holds.
+  Windows tracks synchronous pane/list measure, arrange and forced measurement ownership
+  separately from reader movement, so their offset coercion does not consume the end pin.
+  Native last-item anchoring follows only an unheld pin and yields to reader custody;
+  an SDK intermediate layout event alone does not establish that custody.
+  Restores recheck session, release and hold state after measurement before moving the view.
+  Leading retained latest-response trims own their list anchor and invalidate earlier queued
+  numeric restores, but not stored-row or end corrections; plain appends preserve prior restores.
+  Only a signed extent decrease explains a shrink-sized drop; for stationary remeasurement
+  starting at a known end, the latest signed change survives until the next actual move,
+  so later growth cannot explain a shrink-sized drop or excuse a retreat from an earlier gap.
+  Stationary remeasurement evidence survives until the next actual move
+  or user release, and resets on reattachment, so a one-viewport layout landing is recognized
+  in either event ordering.
+  A question brought into view, a block requested by a screen reader or any other move back from
+  the end the app did not ask for releases the Windows end pin too: later layout must not scroll that destination away,
+  even before navigation first moves.
+  An unrelated final scroll event cannot end that custody before the requested target is reached.
+  A held scrollbar owns the view from its press until release or cancellation, before its
+  first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
+  Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
+  End-following also waits while a finger is down or the pointer is over or pressed in the
+  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
+  Opening another session still places its latest reply despite an inherited hold; subsequent
+  scrolling or navigation cancels that queued placement. Unloading or replacing the session
+  clears scrollbar and navigation custody. A nearest-edge bring request already spanning the viewport takes
+  no navigation latch unless an explicit alignment or offset asks it to move.
+  Reasoning, tool lines, delegate events and questions are still to come. The Windows app loads earlier turns a page
   at a time through "Load earlier messages" or scrolling upward within a screen of the top
   (#1593 W2b-1). Both use the history client's cursor and deduplication; the first visible
   stored turn keeps its screen position as a page is inserted above it. With history, a
@@ -3323,6 +3426,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | Code shown | "Waiting for sign-in · code expires *time*" | None (the sheet is open) |
 | Code expired | "Code expired" | Try again (a new request) |
 | Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
+| Signed in here, the host's `pending` not yet come (`signin.done` first) | Same line, said once, held at most 5 s | Sign in (never Show code, whatever `recovery` says) |
 | Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
 | Refused (the machine refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
 | Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
@@ -3356,6 +3460,9 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
 - **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
   the host updates.
+- In the expired and couldn't-be-shown states, on both clients **Cancel** is the one filled
+  (accent) button and the default, as well as the Escape action; **Try again** is secondary.
+  The code-shown rule above is unchanged.
 - **Success:** the sheet closes and the banner goes to "Signed in · waiting for *n* sessions to
   confirm", not to recovered. Nothing is typed for the sessions, so each confirms on its next
   turn. A session that died mid-turn is to offer a **Continue** like §6.12's, from `signin.done`'s

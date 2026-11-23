@@ -41,6 +41,28 @@ wiring; A5 #2011 supplies answer/lookup wiring. A6a is #2064 / PR #2066,
 not the remaining A6 durable-head/archive/pruning work. The gate must not claim
 integrity before A3 lands. Existing hash links alone cannot prove no tail was lost.
 
+### Status at main 0416b9d7b (S1 definition of the remaining #1401 and row 25 work)
+
+Checked against source and commit subjects only; not a live run.
+
+* **#1401 dependencies landed:** A3 #2009 (#2222), A4 #2010 (#2017), A5 #2011 (#2013) and
+  A6a #2064 (#2066, merged; the "unmerged" statement above is out of date). Later audit
+  work also landed: archive (#3162), person-signed rotation (#3566, #3580, #3551).
+* **Counter source in code:** `src/AgentBridge.Host/GateAudit.cs` defines the `path`
+  (`relay`, `local`, `legacy-ha`), `actorKind` and control phases (`gate.start`, `gate.pause`,
+  `gate.reset`, `gate.seal`); launch, approval and stop wiring exist in `GateLaunchAudit.cs`,
+  `PhoneApprovalEvidence.cs`, `StopAudit.cs` and `HaRunning.cs` (red tests #2570, #2588,
+  #2596, #2629).
+* **Not verified as landed:** the gate reader/view (slices 1 and 7) and A6-rest continuity
+  (slice 9). The S3 landed-state check for #1401 covers these; no qualifying run starts first.
+* **Confirmed (owner, relayed by Engineering, Nov 22):** the #1401 audit log is the counter
+  source for launches, approvals and stops (S4). A counter is still not evidence until the
+  reader/gate view runs in a qualifying run. S8 stays: HA remains possible as an optional
+  client, and the slice 11 dual run is still the gate.
+* **Row 25 gap in fleet:** fleet `ops/ha-retirement` has the PowerShell-only no-new-call-site
+  gate; it misses `.psm1`-only changes and the Python caller `pump/fleet_pump/wake.py`. That is
+  fleet slice S5, defined in fleet `docs/ha-retirement.md`.
+
 ## 2. Authority and path
 
 The destination host owns launch, approval and stop counts. Neither the
@@ -235,11 +257,12 @@ The person-class control entry points are `start`, `pause`, `reset` and `seal`.
 Each requires an authenticated person-class channel and host-side person
 authorization, never the local pipe or shared OS-user identity.
 Agents and read-only audit clients cannot start, reset, repair, pause or seal it.
-Record a host-generated run ID, fixed participating four Windows host/profile
-identities, deployed instrumentation version and starting heads in audit markers.
+Record a host-generated run ID and the host/profile identities of
+all active hosts in the approved fleet roster, pinned at run start.
+Record deployed instrumentation version and starting heads in audit markers.
 Include the existing message recorder identity and starting source cursor/digest.
-The four participating hosts come from the fleet roster source the person approves
-and pins at run start; any roster membership/identity change mid-run voids the run.
+Membership is fixed for the run; any roster membership/identity change mid-run voids the run.
+No host roles are assigned; coordinators can live anywhere.
 All participants must attest coverage of relay, local and legacy HA action
 entries before admission opens. Old daemon/private script bypasses must either
 be covered or disabled by the person; unobserved routes make the gate unavailable.
@@ -256,8 +279,9 @@ use a monotonic timer while live. An unreadable clock or one earlier than the
 last recorded control timestamp makes the deadline uncertain and voids the run.
 On timeout, control loss or restart with an uncertain deadline, void the run and
 resume admission. Retain every queued request for normal revalidation; drop none.
-Restart is allowed only with verified complete replay and unchanged coverage;
-missing/unreachable hosts or incomplete replay block the report.
+Restart is allowed only with verified complete replay and unchanged coverage.
+An offline pinned host or incomplete replay makes the report INCOMPLETE;
+missing/unreachable hosts cannot be omitted.
 
 Any fallback on any participant invalidates the whole run and resets eligible
 message/launch/approval/stop credit to zero, not just that action's counter.
@@ -278,7 +302,7 @@ totals, cached roster counts or unsigned imported JSON may certify the gate.
 Bind each host response to the requested run, membership, fresh reader challenge,
 instrumentation version, durable heads and verified read-through sequence.
 Reject duplicates, mismatched identities, replays, partial pages or stale replies.
-An offline host or missing fresh-challenge response yields INCOMPLETE naming
+An offline pinned host or missing fresh-challenge response yields INCOMPLETE naming
 that host, exit 2; never pass using only the reachable participants.
 The host verifies under its existing audit writer; the CLI read path must not
 instantiate a writer, create locks/profiles or repair files to obtain a verdict.

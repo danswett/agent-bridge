@@ -61,6 +61,12 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
     Write-Output 'WER dumps are isolated from publication inputs, including if cleanup is interrupted'
 }
 try {
+# A retry starts only on the desktop the first attempt found (build/app-self-test-desktop.ps1, #2026).
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    . (Join-Path $PSScriptRoot 'app-self-test-desktop.ps1')
+    try { Enter-SelfTestDesktop -State (Join-Path $env:RUNNER_TEMP 'app-self-test-desktop.json') -Exe (Resolve-Path -LiteralPath $Exe).Path }
+    catch { Write-Output "::error::$($_.Exception.Message)"; exit 1 }
+}
 $started = Get-Date
 $stderrPath = Join-Path $Logs 'app.stderr.log'
 $evidencePath = Join-Path $Logs 'app-exit-cause.json'
@@ -79,8 +85,12 @@ Write-Output "app process $($p.Id): exit code $code (finished=$finished)"
 # Written part-way through before a check that can end the process (SelfTest.Write): still set,
 # the app ended inside that check, whatever the exit code says. Every check before it passed.
 $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
+# The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
+# An array: one failed check, the arm64 case, would otherwise be a string with no .Count under strict mode.
+$failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
+. (Join-Path $PSScriptRoot 'app-self-test-trace.ps1')
 $evidence = [ordered]@{
-    processId = $p.Id; exitCode = $code
+    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks; bounceTrace = $null
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
     stderr = ''; events = @(); captureErrors = @()
 }
@@ -140,10 +150,28 @@ try {
     }
 }
 catch {
-    $evidence.captureErrors += "app-process event capture failed: $($_.FullyQualifiedErrorId): $($_.Exception.Message)"
-    Write-Output "::error::$($evidence.captureErrors[-1])"
+    # None recorded is what a normal exit leaves; only a failure to look is a gap.
+    if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') {
+        $evidence.captureErrors += "app-process event capture failed: $($_.FullyQualifiedErrorId): $($_.Exception.Message)"
+        Write-Output "::error::$($evidence.captureErrors[-1])"
+    }
 }
-if ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
+if ($code -eq 1 -and $failedChecks.Count -gt 0 -and -not $unfinished) { Write-Output "::error::the self-test failed $($failedChecks.Count) check(s), and the app exited normally with code 1 (no crash, so no Windows event): $($failedChecks -join ' | ')" }
+elseif ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
+# The bottom-bounce trace, when the app wrote one beside the result: which frame and which term made its surface invalid.
+$bounce = Get-BounceTraceSummary -Path ([IO.Path]::ChangeExtension($Result, '.history-bottom-bounce.json'))
+if ($null -ne $bounce) {
+    $evidence.bounceTrace = $bounce
+    Write-Output '--- bottom bounce trace'
+    Write-Output "frames sampled: $($bounce.frames)"
+    if ($null -ne $bounce.firstInvalid) {
+        Write-Output "first invalid surface: $($bounce.firstInvalid | ConvertTo-Json -Compress)"
+        foreach ($why in $bounce.why) { Write-Output "  because: $why" }
+    }
+    else { Write-Output 'no sampled frame had an invalid surface' }
+    Write-Output "head: $($bounce.head | ConvertTo-Json -Compress -Depth 4)"
+    Write-Output "tail: $($bounce.tail | ConvertTo-Json -Compress -Depth 4)"
+}
 $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # The crashing thread's stack from the dump, by the runner's own cdb when it has one (the Windows
 # SDK's Debugging Tools), with Microsoft's public symbols. Bounded: a slow symbol server costs at

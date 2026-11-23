@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.App.Core.Feedback;
 using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Transport;
 using Microsoft.UI.Dispatching;
@@ -19,6 +20,7 @@ sealed record AppOptions
     // Draw the demo's cards, write what was drawn to this file and exit (CI's smoke test).
     public string? SelfTest { get; init; }
     public bool HistoryScrollBudget { get; init; }
+    public bool HistoryScrollPreserve { get; init; }
     public bool LiveListReplay { get; init; }
 
     public static AppOptions Parse(string[] args)
@@ -34,6 +36,7 @@ sealed record AppOptions
                 case "--demo": o = o with { Demo = true }; break;
                 case "--self-test" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true }; break;
                 case "--self-test-history-scroll" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollBudget = true }; break;
+                case "--self-test-scroll-preserve" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, HistoryScrollPreserve = true }; break;
                 case "--self-test-live-list" when i + 1 < args.Length: o = o with { SelfTest = Path.GetFullPath(args[++i]), Demo = true, LiveListReplay = true }; break;
             }
         }
@@ -55,18 +58,19 @@ static class Paths
 
 static class CrashLog
 {
-    // The app's own diagnostics journal (#737): the crash as its type and frames only, beside the
-    // crash.log line, which stays as it was for the person's own reading.
+    // The app's own diagnostics journal (#737) also records only exception type and frames.
     static readonly Lazy<DiagnosticsJournal> Journal = new(() => new DiagnosticsJournal(TimeProvider.System, Path.Combine(Paths.AppData, "diagnostics-journal.jsonl")));
 
     // A XAML failure surfaces only as 0xC000027B in Microsoft.UI.Xaml.dll with the real
     // exception lost (S3), so every unhandled exception is written down first.
     public static void Write(Exception? e)
     {
+        try { Program.Marker?.RecordCrash(e); }
+        catch (Exception error) { AppLog.Write($"crash marker not written: {error.GetType().Name}"); }
         try
         {
             Directory.CreateDirectory(Paths.AppData);
-            File.AppendAllText(Path.Combine(Paths.AppData, "crash.log"), $"{DateTime.Now:O} {e}\n");
+            File.AppendAllText(Path.Combine(Paths.AppData, "crash.log"), $"{DateTime.Now:O} {RunMarker.DescribeCrash(e)}\n");
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
@@ -87,7 +91,7 @@ static class AppLog
                 Directory.CreateDirectory(Paths.AppData);
                 var file = Path.Combine(Paths.AppData, "app.log");
                 if (File.Exists(file) && new FileInfo(file).Length > 1_000_000) { File.Move(file, file + ".1", overwrite: true); }
-                File.AppendAllText(file, $"{DateTime.Now:O} {line}\n");
+                File.AppendAllText(file, $"{DateTime.Now:O} {FeedbackRedactor.Redact(line)}\n");
             }
         }
         catch (IOException) { }

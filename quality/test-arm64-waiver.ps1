@@ -23,23 +23,26 @@ function Waived($needs, [string]$jobsJson, [string]$setting = 'on', [string]$now
 $appFailed = @{ app = @{ result = 'failure' } }
 $arm64Red = Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' 'failure'))
 try {
-    Check 'a failed app (win-arm64) is waived while the switch is on and before expiry' ((Waived $appFailed $arm64Red) -eq 'app')
+    Check 'a failed app (win-arm64) is waived' ((Waived $appFailed $arm64Red) -eq 'app')
     Check 'a failed product (windows-11-arm) is waived' ((Waived @{ product = @{ result = 'failure' } } (Pages @((Leg 'product (ubuntu-latest)' 'success'), (Leg 'product (windows-11-arm)' 'failure')))) -eq 'product')
     $all = Pages @((Leg 'app (win-arm64)' 'failure'), (Leg 'app-installer (win-arm64)' 'failure'), (Leg 'app-installer (win-x64)' 'success'))
     Check 'app-installer (win-arm64) is waived and only the job that failed' ((Waived ([ordered]@{ app = @{ result = 'failure' }; 'app-installer' = @{ result = 'failure' } }) $all) -eq 'app,app-installer')
     Check 'a job id is not matched by another job whose name starts with it' ((Waived @{ app = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-arm64)' 'failure')))) -eq '')
 
-    Check 'one second before 2026-11-20T08:00:00Z it still waives' ((Waived $appFailed $arm64Red 'on' '2026-11-20T07:59:59Z') -eq 'app')
-    Check 'at exactly 2026-11-20T08:00:00Z it waives nothing' ((Waived $appFailed $arm64Red 'on' '2026-11-20T08:00:00Z') -eq '')
-    Check 'a local-offset clock past the expiry waives nothing' ((Waived $appFailed $arm64Red 'on' '2026-11-20T00:00:01-08:00') -eq '')
-    foreach ($setting in '', 'off', 'ON', 'on ', 'true') {
-        Check "switch '$setting' waives nothing" ((Waived $appFailed $arm64Red $setting) -eq '')
+    # Permanent (owner, Nov 22, #2454): no switch, no expiry, whatever -Setting or -Now say.
+    foreach ($setting in '', 'off', 'ON', 'true') {
+        foreach ($now in '2026-11-13T22:00:00Z', '2026-11-27T08:00:01Z', '2027-06-01T00:00:00Z') {
+            Check "setting '$setting' at $now still waives" ((Waived $appFailed $arm64Red $setting $now) -eq 'app')
+        }
+    }
+    foreach ($other in 'relay-image-sarif', 'pwa-e2e', 'product (ubuntu-latest)') {
+        Check "a failed $other beside the arm64 failure waives nothing" ((Waived @{ app = @{ result = 'failure' } } (Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' 'failure'), (Leg $other 'failure')))) -eq '')
     }
 
     Check 'a failed app (win-x64) is never waived' ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'failure'), (Leg 'app (win-arm64)' 'success')))) -eq '')
     Check 'an arm64 failure beside an x64 failure waives nothing' ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'failure'), (Leg 'app (win-arm64)' 'failure')))) -eq '')
     Check 'any other failed job waives nothing, even a nameless one' ((Waived $appFailed (Pages @((Leg 'app (win-arm64)' 'failure'), (Leg '' 'failure')))) -eq '')
-    Check 'a failed light job beside the arm64 failure waives nothing' ((Waived @{ app = @{ result = 'failure' }; light = @{ result = 'failure' } } (Pages @((Leg 'app (win-arm64)' 'failure'), (Leg 'light' 'failure')))) -eq '')
+    Check 'a failed light job beside the arm64 failure waives nothing' ((Waived @{ app = @{ result = 'failure' }; light = @{ result = 'failure' } } (Pages @((Leg 'app (win-arm64)' 'failure'), (Leg 'light' 'failure'))) 'on' '2026-11-20T08:00:01Z') -eq '')
     foreach ($conclusion in 'cancelled', 'timed_out', 'skipped') {
         Check "a waived leg that is $conclusion is not waived" ((Waived $appFailed (Pages @((Leg 'app (win-x64)' 'success'), (Leg 'app (win-arm64)' $conclusion)))) -eq '')
     }

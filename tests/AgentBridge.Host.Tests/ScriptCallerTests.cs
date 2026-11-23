@@ -135,7 +135,7 @@ public sealed class ScriptCallerTests : IDisposable
         await op.HandleAsync(oldChannel, Empty);
         Assert.Equal(2, Store().Count);
         var reply = JsonSerializer.SerializeToElement(await op.FindAsync(channel,
-            JsonSerializer.SerializeToElement(new { name = "SG Quality", fleetScope = "spoof" })), ProtocolJson.Options);
+            JsonSerializer.SerializeToElement(new { sessionId = "agent_bridge_1234567890abcdef", fleetScope = "spoof" })), ProtocolJson.Options);
         Assert.Equal("unverified", reply.GetProperty("result").GetString());
         Assert.Equal("account-a", reply.GetProperty("fleetScope").GetString());
         Assert.DoesNotContain("node", reply.GetRawText());
@@ -160,6 +160,22 @@ public sealed class ScriptCallerTests : IDisposable
         var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(store, null, channel, Empty, windows: true));
         Assert.Contains("no longer live", refusal.Message);
+    }
+
+    [Theory, InlineData(false), InlineData(true)]
+    public async Task An_unknown_id_still_checks_completion_liveness_and_rotation(bool expire)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Store();
+        Mint(store);
+        var newer = Mint(store);
+        var channel = new Chan();
+        store.Accept(channel, newer.Credential);
+        var roster = new Roster { Machines = [], OnRead = () => { if (expire) { clock.Now = Started.AddHours(1); } } };
+        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() => new FleetList(store, roster, audit: new AgentAuditLog(root))
+            .FindAsync(channel, JsonSerializer.SerializeToElement(new { sessionId = "agent_bridge_1234567890abcdef" })));
+        Assert.Contains(expire ? "credential is no longer live" : "agent_bridge_1234567890abcdef", refusal.Message);
+        Assert.Equal(expire ? 2 : 1, Store().Count);
     }
 
     [Fact]
@@ -206,10 +222,10 @@ public sealed class ScriptCallerTests : IDisposable
         var channel = new Chan();
         store.Accept(channel, newer.Credential);
         var roster = new Roster { Machines = Enumerable.Range(0, 1024).Select(i =>
-            new FleetMachine($"machine{i}", true, [new("fixture", "SG Quality", "working", Started)], Name: new string('m', 64))).ToArray() };
+            new FleetMachine($"machine{i}", true, [new("agent_bridge_1234567890abcdef", "SG Quality", "working", Started)], Name: new string('m', 64))).ToArray() };
         var op = new FleetList(store, roster, audit: new AgentAuditLog(root));
         await Assert.ThrowsAsync<InvalidOperationException>(() => find
-            ? op.FindAsync(channel, JsonSerializer.SerializeToElement(new { name = "SG Quality" })) : op.HandleAsync(channel, Empty));
+            ? op.FindAsync(channel, JsonSerializer.SerializeToElement(new { sessionId = "agent_bridge_1234567890abcdef" })) : op.HandleAsync(channel, Empty));
         Assert.Equal(2, Store().Count);
     }
 
@@ -243,7 +259,7 @@ public sealed class ScriptCallerTests : IDisposable
         {
             OnRead?.Invoke();
             return Fail ? Task.FromException<IReadOnlyList<FleetMachine>>(new IOException("fixture roster failure"))
-                : Task.FromResult<IReadOnlyList<FleetMachine>>(Machines ?? [new("machine2", true, [new("fixture", "SG Quality", "working", Started)])]);
+                : Task.FromResult<IReadOnlyList<FleetMachine>>(Machines ?? [new("machine2", true, [new("agent_bridge_1234567890abcdef", "SG Quality", "working", Started)])]);
         }
         public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => new("account-a", await ReadAsync(ct));
     }

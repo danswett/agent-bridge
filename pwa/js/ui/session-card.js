@@ -30,7 +30,7 @@ import { ago, localTime } from './time.js';
 import { copyText, renderMarkdown } from '../markdown.js';
 import { copyFeedback } from './copy-feedback.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
-import { awayWords, detailRows } from '../details-rows.js';
+import { awayWords, compactionText, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, describeClosed, renderQuestion, renderResolved } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
@@ -49,7 +49,7 @@ import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
-import { HistoryView, liveMessageTimes } from './history-view.js';
+import { HistoryView, currentReply, liveMessageTimes } from './history-view.js';
 import { holdTimeFocus, setTime, timeRow, timeTicker } from './message-time-view.js';
 import { sentMessage, setSentMessage } from './sent-message.js';
 import { HISTORY, closedQuestionIds } from '../history.js';
@@ -58,6 +58,35 @@ import { moveView, moves } from '../move.js';
 import { ScrollFollow } from './scroll-follow.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
+// The original agent-ha-bridge card's list; selection survives redraws and reopening a session.
+const SPINNER_VERBS = [
+  'Thinking', 'Pondering', 'Slithering', 'Brewing', 'Conjuring', 'Noodling', 'Percolating',
+  'Mulling', 'Cogitating', 'Simmering', 'Ruminating', 'Tinkering', 'Churning', 'Musing',
+  'Crafting', 'Forging', 'Marinating', 'Synthesizing', 'Deliberating', 'Puttering',
+];
+export function cardStatusFacts(s, words, stale = false) {
+  const facts = [...words.facts];
+  if (!stale && words.rule === 3) {
+    const index = s.id.split('').reduce((n, c) => (n + c.charCodeAt(0)) % SPINNER_VERBS.length, 0);
+    facts[0] = SPINNER_VERBS[index];
+  }
+  const compactions = compactionText(s.activity.compactions);
+  if (compactions) { facts.push(compactions); }
+  return facts;
+}
+
+export function pauseCardSpinners(doc, elements) {
+  const changed = () => {
+    for (const el of elements) {
+      if (doc.visibilityState === 'hidden') { el.dataset.pageHidden = 'true'; }
+      else { delete el.dataset.pageHidden; }
+    }
+  };
+  changed();
+  doc.addEventListener('visibilitychange', changed);
+  return () => doc.removeEventListener('visibilitychange', changed);
+}
+
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
 const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated', 'last-activity']);
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
@@ -522,10 +551,12 @@ export class SessionCard {
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
     this.#buildRow();
     this.#buildView();
+    this.#stopSpinners = pauseCardSpinners(this.view.ownerDocument, [this.element, this.view]);
     this.update(session);
     this.#unmove = moves.subscribe((id) => { if (id === this.#s?.id) { this.update(this.#s); } });
   }
   #unmove = null;
+  #stopSpinners = null;
 
   get id() { return this.#s.id; }
   get session() { return this.#s; }
@@ -897,9 +928,9 @@ export class SessionCard {
     e.barTitle.textContent = title;
     setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
     setGlyph(e.barGlyph, words.glyph, { size: 16, driven: words.driven });
-    if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
+    if (this.#changed('meta', [s.id, words.text, words.tone, words.driven, s.activity.compactions, !!stale, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = words.tone;
-      setFacts(e.statusText, words.facts);
+      setFacts(e.statusText, cardStatusFacts(s, words, !!stale));
       const driver = words.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
@@ -924,8 +955,9 @@ export class SessionCard {
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
     const voice = liveVoice(displayed);
-    if (this.#changed('response', voice.response ?? '')) {
-      e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
+    const response = currentReply(this.historyStore?.get(this.hostId, displayed.id), displayed);
+    if (this.#changed('response', response)) {
+      e.response.replaceChildren(renderMarkdown(response));
     }
     e.response.hidden = !voice.response;
     e.truncated.hidden = !voice.responseTruncated;
@@ -1495,6 +1527,7 @@ export class SessionCard {
   dispose() {
     this.#columnSize?.disconnect();
     this.#unmove?.();
+    this.#stopSpinners?.();
     this.#panel?.destroy();
     this.#panel = null;
     this.#reply?.destroy();
@@ -1693,6 +1726,8 @@ export class SessionCard {
     const t = this.turns.latest;
     const focus = [e.userTime, e.promptAge, e.agentAge].map(holdTimeFocus);
     const voice = liveVoice(s);
+    const response = currentReply(this.historyStore?.get(this.hostId, s.id), s);
+    if (this.#changed('response', response)) { e.response.replaceChildren(renderMarkdown(response)); }
     const recorded = (kind) => t?.parts.filter((p) => p.kind === kind && p.text).at(-1)?.text;
     e.user.hidden = !!t || !s.activity.userMessage || !!promptOrigin(s);
     e.prompt.hidden = !!t || !promptOrigin(s);

@@ -1522,6 +1522,55 @@ public sealed class CardTests : IAsyncLifetime
         Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
     }
 
+    [Theory]
+    [InlineData("a", "Synthesizing")]
+    [InlineData("b", "Deliberating")]
+    [InlineData("6f1c2b7e-claude-example", "Cogitating")]
+    public void A_working_card_shows_the_original_verb_stably_per_session_id(string id, string verb)
+    {
+        var session = Make.Session(id, status: SessionStatus.Working);
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            Assert.Equal(verb, card.HeaderStatusText);
+            Assert.Equal("Working", card.StatusText);
+            Assert.Equal("Working", card.Details.Single(d => d.Label == "Status").Value);
+            Assert.Equal(StatusGlyph.Working, card.Glyph);
+            card.Update(session with { Title = "Renamed" });
+            card.RefreshTimes();
+            Assert.Equal(verb, card.HeaderStatusText);
+            card.Update(Make.Session(id));
+            Assert.Equal("Idle", card.HeaderStatusText);
+            card.Update(session);
+            Assert.Equal(verb, card.HeaderStatusText);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(null, "Waiting on you")]
+    [InlineData(0, "Waiting on you")]
+    [InlineData(1, "Waiting on you · compacted once")]
+    [InlineData(3, "Waiting on you · compacted 3 times")]
+    public void Compactions_use_the_same_words_in_the_header_and_Details_and_are_absent_at_zero_or_unknown(int? count, string expected)
+    {
+        var session = Make.Session(question: Make.Choice());
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            card.Update(session with { Activity = session.Activity with { Compactions = count } });
+            Assert.Equal(expected, card.HeaderStatusText);
+            Assert.Equal("Waiting on you", card.StatusText);
+            Assert.Equal(count > 0, card.Details.Any(d => d.Label == "Compactions"));
+            if (count > 0)
+            {
+                Assert.Equal(expected.Split(" · ")[1], card.Details.Single(d => d.Label == "Compactions").Value);
+            }
+            Assert.DoesNotContain("compaction", card.Facts, StringComparison.Ordinal);
+        }
+        finally { card.Detach(); }
+    }
+
     [Fact]
     public void A_card_says_what_the_session_is_doing_in_the_words_and_glyph_of_the_status_rules()
     {
@@ -1663,18 +1712,18 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     // A delegate chooses its name (#303): its commas, drawn on the row, are spaces in the row's
-    // name, so "x, idle, DEV-VM2" can't read as facts of the row's own.
+    // name, so "x, idle, node-b" can't read as facts of the row's own.
     [Fact]
     public void A_delegates_name_on_a_row_is_read_without_its_commas()
     {
         var asking = Make.Session(question: Make.Approval() with { Agent = "agent-7" }) with
         {
             WaitingOn = "agent-7",
-            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = "x, idle, DEV-VM2" }],
+            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = "x, idle, node-b" }],
         };
         var card = new SessionCardViewModel(asking, Context());
-        Assert.Equal("Delegate x, idle, DEV-VM2 asks", card.RowStatus);
-        Assert.Equal("A session, Delegate x idle DEV-VM2 asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
+        Assert.Equal("Delegate x, idle, node-b asks", card.RowStatus);
+        Assert.Equal("A session, Delegate x idle node-b asks, danswett/agent-bridge, 5m, Test PC", card.RowLabel);
     }
 
     [Fact]

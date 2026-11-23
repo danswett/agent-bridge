@@ -67,7 +67,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phase = "create harness";
         try
         {
-            await using var h = await Harness.CreateAsync();
+            // No queued source-change sweeps: each one runs Schedule() on a pool thread, and one that computes the retention
+            // due before the clock advance but arms it after resets the fake timer to a full retention, so it never fires.
+            await using var h = await Harness.CreateAsync(manualSourceChanges: true);
             harness = h;
             h.Clock.Observed = observations.Enqueue;
             phase = "start";
@@ -85,6 +87,9 @@ public sealed class SignInTests(ITestOutputHelper output)
             await h.Service.CancelAsync(phone, Json(new { flow }));
             phase = "wait for retention timer";
             await retained.Task.WaitAsync(Patience);
+            // The recovery task's finally and any in-flight sweep finish their Schedule() before the clock moves.
+            phase = "drain background sweeps";
+            await h.Service.SweepAsync().WaitAsync(Patience);
             phase = "assert retention armed";
             Assert.Equal(1, h.Clock.Armed);
             h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
@@ -124,30 +129,54 @@ public sealed class SignInTests(ITestOutputHelper output)
     [InlineData("data")]
     [InlineData("revocation")]
     [InlineData("expiry")]
+    [InlineData("expiry-runner-first")]
     public async Task Data_revocation_and_code_expiry_end_active_flow_without_periodic_idle_sweeps(string cause)
     {
-        await using var h = await Harness.CreateAsync();
+        var runnerFirst = cause == "expiry-runner-first";
+        // Queued source notifications can also sweep; isolate the runner's expiry path.
+        await using var h = await Harness.CreateAsync(manualSweeps: runnerFirst, manualSourceChanges: runnerFirst);
+        h.Factory.Process.HoldDisposal = runnerFirst;
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.States.After = state =>
+        {
+            if (state == RecoveryState.Failed) { ended.TrySetResult(); }
+        };
         var phone = h.Phone();
         await h.Start(phone).Then(phone);
         await h.Factory.Started.Task.WaitAsync(Patience);
         h.Factory.Process.OutputPipe.Put(Frame(h.Time));
         await phone.Code.Task.WaitAsync(Patience);
-        if (cause == "data")
+        if (runnerFirst)
         {
-            Fixture.Append(h.Events, AuthError(3));
-            await h.Source.RefreshAsync();
-            h.States.Change();
+            Assert.Equal(1, h.Service.CodesHeld);
         }
-        else if (cause == "revocation")
+        try
         {
-            h.Authority.Denial = "revoked";
-            h.Authority.Change();
+            if (cause == "data")
+            {
+                Fixture.Append(h.Events, AuthError(3));
+                await h.Source.RefreshAsync();
+                h.States.Change();
+            }
+            else if (cause == "revocation")
+            {
+                h.Authority.Denial = "revoked";
+                h.Authority.Change();
+            }
+            else { h.Time.Advance(TimeSpan.FromSeconds(10)); }
+            await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+            h.Factory.Process.ReleaseDisposal.TrySetResult();
+            // Disposal entry is not flow completion; a revoked phone cannot receive Done.
+            await ended.Task.WaitAsync(Patience);
+            Assert.Equal(0, h.Service.CodesHeld);
+            Assert.False(h.Service.FlowRunning);
+            Assert.Equal(0, h.Recovery.Resumes);
+            Assert.Equal(0, h.Clock.Repeating);
         }
-        else { h.Time.Advance(TimeSpan.FromSeconds(10)); }
-        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
-        Assert.Equal(0, h.Service.CodesHeld);
-        Assert.Equal(0, h.Recovery.Resumes);
-        Assert.Equal(0, h.Clock.Repeating);
+        finally
+        {
+            h.Factory.Process.ReleaseDisposal.TrySetResult();
+        }
     }
 
     [Theory]
@@ -1097,7 +1126,8 @@ public sealed class SignInTests(ITestOutputHelper output)
         public bool ReadOnly;
         // Whether the roster pins anyone (SessionSourceOptions.PhoneSignInPinned).
         public bool Pinned = true;
-        public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false, IReadOnlyCollection<AgentKind>? phoneSignIn = null)
+        public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false, IReadOnlyCollection<AgentKind>? phoneSignIn = null,
+            bool manualSourceChanges = false)
         {
             var h = new Harness();
             h.Events = h.Fixture.CopilotSession(Id, 100);
@@ -1107,7 +1137,7 @@ public sealed class SignInTests(ITestOutputHelper output)
             await h.Source.RefreshAsync();
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
-            h.States = new(h.Source);
+            h.States = new(h.Source, manualSourceChanges);
             h.Clock = new(h.Time);
             TimeProvider clock = manualSweeps ? new ManualSweepClock(h.Time) : h.Clock;
             h.Service = new(h.States, h.Authority, h.Resolver, h.Recovery, new(h.Factory, h.Time), () => h.ReadOnly, clock)
@@ -1129,7 +1159,7 @@ public sealed class SignInTests(ITestOutputHelper output)
         public event Action? Changed;
         public void Change() => Changed?.Invoke();
     }
-    sealed class StateSource(ISessionSource inner) : ISessionSource
+    sealed class StateSource(ISessionSource inner, bool manualChanges = false) : ISessionSource
     {
         event EventHandler<SessionChange>? changed;
         public Action<RecoveryState>? After;
@@ -1139,8 +1169,8 @@ public sealed class SignInTests(ITestOutputHelper output)
         public long Revision => inner.Revision;
         public event EventHandler<SessionChange>? Changed
         {
-            add { inner.Changed += value; changed += value; }
-            remove { inner.Changed -= value; changed -= value; }
+            add { if (!manualChanges) { inner.Changed += value; } changed += value; }
+            remove { if (!manualChanges) { inner.Changed -= value; } changed -= value; }
         }
         public void Change() => changed?.Invoke(this, new(SessionChangeKind.Upserted, Id, inner.Get(Id), inner.Revision));
         public IReadOnlyList<Session> Snapshot() => inner.Snapshot();

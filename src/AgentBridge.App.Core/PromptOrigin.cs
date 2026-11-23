@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -43,8 +44,40 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
         return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat);
     }
 
+    // The line the host types ahead of another agent's message (LiteDeliver.Frame):
+    //   [Slipgates · from an agent on DESK · session s-9 · request r-1 · not typed by your user] words
+    // The session and request are optional. The host strips brackets and middle dots from the
+    // fields and neutralises a second "[Slipgates" in the words, so only the first line can be it.
+    static readonly Regex Envelope = new(
+        $@"^\[{Regex.Escape(Product.Name)} · from an agent on ([^\]·]+)(?: · session ([^\]·]+))?(?: · request [^\]·]+)? · not typed by your user\] ?(.*)\z",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    const int SessionMaxBytes = 32;
+    const int MachineMaxBytes = 28;
+
+    // The sender, as "<session> on <machine>" ("an agent on <machine>" with no session), and the
+    // words of a relayed message; null for text without a readable envelope (the person's own, or
+    // one naming no machine). Each part is cleaned and capped like any agent label.
+    internal static (string Label, string Body)? Relay(string message)
+    {
+        if (Envelope.Match(message) is not { Success: true } m) { return null; }
+        var machine = Fact(m.Groups[1].Value, MachineMaxBytes);
+        if (machine.Length == 0) { return null; }
+        var session = m.Groups[2].Success ? Fact(m.Groups[2].Value, SessionMaxBytes) : "";
+        return (Fact($"{(session.Length == 0 ? "an agent" : session)} on {machine}"), m.Groups[3].Value);
+    }
+
     static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat)
     {
+        // The relay's envelope is typed into the session, so the host may call the text the
+        // person's: a message that carries one is an agent's, whoever typed it, and its envelope
+        // is not the body.
+        var relay = from is UserMessageFrom.Person or UserMessageFrom.Agent ? Relay(message) : null;
+        if (relay is { } r)
+        {
+            from = UserMessageFrom.Agent;
+            message = r.Body;
+            if (Fact(label).Length == 0) { label = r.Label; }
+        }
         if (from == UserMessageFrom.Person) { return null; }
         var text = HiddenText.Reveal(message);
         var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -58,7 +91,10 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
                 return new(from, facts, null, DelegateLabel.Aloud(name is null ? "Scheduled prompt" : $"Scheduled prompt {name.TrimStart('#')}"), repeat, text, preview);
             case UserMessageFrom.Agent:
                 var by = driver is not null && Fact(driver, 128) is { Length: > 0 } p ? p : null;
-                return new(from, ["Sent by an agent"], by, "Prompt sent by an agent", false, text, preview);
+                var sender = Fact(label);
+                var agentLabel = sender.Length == 0 ? "Sent by an agent" : $"From: {sender}";
+                var spoken = sender.Length == 0 ? "Prompt sent by an agent" : $"Prompt sent by an agent, From: {DelegateLabel.Aloud(sender)}";
+                return new(from, [agentLabel], by, spoken, false, text, preview);
             default:
                 return new(UserMessageFrom.Other, ["Automatic prompt"], null, "Automatic prompt", false, text, preview);
         }

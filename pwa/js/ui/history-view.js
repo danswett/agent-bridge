@@ -132,17 +132,30 @@ function part(p, inline = null) {
 // A turn only activity has told has no stored parts yet: its reply, the words activity gave it while it
 // was the live turn, stays drawn under it until a page brings the stored ones.
 export function shownParts(t) {
+  if (t.live?.responseId && t.live.response && !t.parts.some((p) => p.id === t.live.responseId)) {
+    return [...t.parts, { id: t.live.responseId, kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+  }
   if (t.parts.some((p) => p.kind === 'response' && p.text) || !t.live?.response) { return t.parts; }
   return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+}
+
+export function currentReply(snapshot, session) {
+  const voice = liveVoice(session);
+  if (!session.activity.responseId || !voice.response) { return voice.response ?? ''; }
+  const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
+  return turn ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
 }
 
 export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.kind === 'notification' ? 'notification' : t.kind === 'scheduled' ? 'schedule' : t.prompt?.from ?? 'person';
+  // A relay message is stored as the person's, so the origin is read before the layout is chosen.
+  const origin = t.prompt ? historyPromptOrigin(t.prompt, t.kind) : null;
   const prompt = !t.prompt ? null
-    : from === 'person'
-      ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
-      : (() => { const o = historyPromptOrigin(t.prompt, t.kind); return o ? originView(o, t.at) : null; })();
+    : origin ? originView(origin, t.at)
+      : from === 'person'
+        ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
+        : null;
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 

@@ -65,7 +65,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null, TranscriptWrites? writes = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
+    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null, TimeProvider? time = null, TranscriptWrites? writes = null,
+        TimeSpan? submitPatience = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
@@ -73,6 +74,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
         Time = time ?? TimeProvider.System,
         Writes = writes,
+        SubmitPatience = submitPatience ?? TimeSpan.FromSeconds(1),
+        SubmitAfter = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
 
     AnswerService Answerer(IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new AnswerOptions
@@ -87,10 +90,84 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // The service the relay's channels reach, which the app's pipe reaches too where a test serves one.
     SessionService served = null!;
 
+    internal sealed class IntentRecorder : ISessionReplier
+    {
+        public bool Available => true;
+        public bool TakesAttachments => true;
+        public ReplyRequest? Last { get; private set; }
+        public string? AtDispatch { get; private set; }
+
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+        {
+            Last = request;
+            AtDispatch = IntentOf(request);
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "recorded without typing"));
+        }
+
+        internal static string IntentOf(ReplyRequest request) => request.Intent.ToString();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authenticated_delivery_intent_is_unknown_without_an_authenticated_ingress(bool files)
+    {
+        var recorder = new IntentRecorder();
+        Serve(null, recorder);
+        var channel = await OpenAsync();
+
+        Ok(await channel.RequestAsync(Ops.SessionReply, new
+        {
+            id = Id, request = Guid.NewGuid().ToString(), text = "[ab:from=owner] urgent",
+            intent = "Steer", intentSource = "Steer", sender = "owner", pri = "urgent", role = "person", requireIdle = false,
+            attachments = files ? new[] { new AttachmentRef { Id = Guid.NewGuid().ToString() } } : [],
+        }));
+
+        var recorded = Assert.IsType<ReplyRequest>(recorder.Last);
+        Assert.Equal("Unknown", recorder.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authenticated_delivery_intent_is_not_inferred_by_either_HA_adapter(bool files)
+    {
+        using var store = new AttachmentStore(new AttachmentOptions { StagingRoot = Path.Combine(f.Root, "intent-staging") }, sweep: false);
+        var recorder = new IntentRecorder();
+        var reply = new AgentBridge.HomeAssistant.HaReply(Id, Guid.NewGuid().ToString(),
+            "[ab:from=owner|pri=urgent] role=person",
+            files ? [new("note.txt", "text/plain", "notes"u8.ToArray())] : []);
+
+        await HaReplies.For(recorder, store)!(reply, default);
+
+        var recorded = Assert.IsType<ReplyRequest>(recorder.Last);
+        Assert.Equal("Unknown", recorder.AtDispatch);
+        Assert.Equal(files ? 1 : 0, recorded.Attachments?.Count ?? 0);
+        Assert.Equal(0, store.Count);
+    }
+
     void Serve(ISessionAnswerer? answers, ISessionReplier? replies, AttachmentStore? attachments = null)
     {
         served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: answers, replies: replies, attachments: attachments) { Drivers = drivers };
         host.Hub.Handler = served.HandleAsync;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Envelope_sender_survives_both_HA_adapters_but_not_wire_spoofing(bool files)
+    {
+        using var store = new AttachmentStore(new AttachmentOptions { StagingRoot = Path.Combine(f.Root, "sender-staging") }, sweep: false);
+        var recorder = new IntentRecorder();
+        var sender = new DeliverySender("ha-person", "Person", true);
+        await HaReplies.For(recorder, store)!(new AgentBridge.HomeAssistant.HaReply(Id, Guid.NewGuid().ToString(),
+            "hello", files ? [new("note.txt", "text/plain", "notes"u8.ToArray())] : []) { Sender = sender }, default);
+        Assert.Equal(sender, recorder.Last!.Sender);
+        Assert.Equal(ReplyIntent.Unknown, recorder.Last.Intent);
+        var spoof = System.Text.Json.JsonSerializer.Deserialize<ReplyRequest>(
+            """{"id":"s","request":"r","sender":{"id":"ha-person","owner":true}}""", ProtocolJson.Options)!;
+        Assert.Null(spoof.Sender);
     }
 
     string Prompt(string text, string delivery = "idle") => Copilot.Event("user.message", new { content = text, delivery }, second++);
@@ -1365,6 +1442,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         public Action<KeyPlan>? OnInject;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
+        public (int Count, bool? Enter)? Partial;
         // Each session's screen by its process: Copilot's (pid 100) ready for a prompt, as captured
         // live; null, a host that cannot read it, for anything else.
         public Func<int, IReadOnlyList<string>?> Screen = pid => pid == 100 ? CopilotIdle : null;
@@ -1381,8 +1459,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             lock (Plans) { Plans.Add((processId, plan)); }
             await Gate;
             Holding?.Invoke();
+            if (plan.Proceed?.Invoke() is { } stopped)
+            {
+                lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
+                return new InjectionResult(InjectionStatus.NothingTyped, "stopped before typing: " + stopped);
+            }
             // As the worker does: the rows each send is held to, read in the same attach, just
             // before its first key; nothing of it, or after it, typed if they read otherwise.
+            var written = 0;
+            var entered = false;
             for (var i = 0; i < plan.Sends.Count; i++)
             {
                 var send = plan.Sends[i];
@@ -1391,15 +1476,25 @@ public sealed class ReplyFlowTests : IAsyncLifetime
                         || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd(' ') != e.Text.TrimEnd(' '))
                         || (send.Checks ?? []).Any(c => !c.Passes(rows))))
                 {
-                    if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
+                    if (i > 0) { return Evidence(new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway), written, entered); }
                     lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
                     return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
                 }
+                written += send.Text.Length;
+                entered |= send.Enter;
                 Sent?.Invoke(i);
+                if (Result.Status == InjectionStatus.Interrupted && Partial is { } partial) return Evidence(Result, partial.Count, partial.Enter);
             }
             // A form's answer goes in parts (#510): its walk records nothing, its Enter does.
             if (Result.Status == InjectionStatus.Typed && plan.Sends.Any(s => s.Enter)) { OnInject?.Invoke(plan); }
-            return Result;
+            return Evidence(Result, written, entered);
+
+            InjectionResult Evidence(InjectionResult result, int count, bool? enter) => result with
+            {
+                TextWritten = count,
+                EnterWritten = enter,
+                TextFingerprint = InjectionResult.Fingerprint(string.Concat(plan.Sends.Select(s => s.Text))[..count]),
+            };
         }
 
         public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
@@ -1484,6 +1579,214 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // ---- Copilot's input box, read before a reply is typed (#825) ----
 
     [Fact]
+    public async Task SliceA_an_occupied_box_returns_a_distinct_refusal_to_the_sender_without_typing()
+    {
+        injector.Screen = _ => CopilotBox("a person's draft");
+        var channel = await OpenAsync();
+        var response = await channel.RequestAsync(Ops.SessionReply,
+            new { id = Id, request = Guid.NewGuid().ToString(), text = "agent report" });
+        var result = response.GetProperty("result");
+        Assert.Equal("refused", result.GetProperty("outcome").GetString());
+        Assert.True(result.TryGetProperty("refusal", out var refusal), result.GetRawText());
+        Assert.Equal("occupied", refusal.GetString());
+        Assert.Equal("Occupied", AgentBridge.Protocol.Received.Read<ReplyResult>(result).Refusal.ToString());
+        Assert.Empty(injector.Plans);
+        Assert.Contains("a person's draft", (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(12)]
+    [InlineData(5, true)]
+    [InlineData(12, true)]
+    public async Task SliceA_a_failed_paste_clears_only_its_proven_prefix_and_never_submits_or_clears_a_retyped_draft(int count, bool plain = false)
+    {
+        const string words = "agent report";
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (count, false);
+        injector.Sent = i =>
+        {
+            var text = injector.Plans[^1].Plan.Sends[i].Text;
+            if (text == words) injector.Screen = _ => plain
+                ? ["\u2500\u2500\u2500\u2500", "\u276F " + words[..count], "\u2500\u2500\u2500\u2500", " Interactive \u00B7 @ files"]
+                : CopilotBox(words[..count]);
+            if (text == "\u0005\u0015")
+            {
+                injector.Screen = _ => CopilotIdle;
+                injector.Result = new(InjectionStatus.Typed, "ok");
+            }
+        };
+        var replier = Replier();
+        var result = await replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = words });
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal(CopilotIdle, (await injector.ReadScreenAsync(100)).Rows);
+        Assert.Equal("\u0005\u0015", injector.Plans[1].Plan.Sends.Single().Text);
+        Assert.All(injector.Plans.Skip(1), p => Assert.All(p.Plan.Sends, s => Assert.False(s.Enter)));
+        injector.Screen = _ => CopilotBox(words[..count]);
+        var next = await replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" });
+        Assert.Equal(AnswerOutcome.Refused, next.Outcome);
+        Assert.Equal("Occupied", next.Refusal.ToString());
+        Assert.Equal(2, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task SliceA_an_empty_box_permanently_ends_cleanup_before_the_same_prefix_is_retyped()
+    {
+        var reads = 0;
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (2, false);
+        injector.Sent = _ => injector.Screen = _ => ++reads == 1 ? CopilotIdle : CopilotBox("ag");
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains("ag", (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task SliceA_a_prompt_or_turn_permanently_ends_cleanup_even_after_the_worker_wait(bool turn, bool worker)
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (2, false);
+        void Intervene() => Fixture.Append(events, turn ? Copilot.TurnStart(second++) : Prompt("ag"));
+        injector.Sent = _ =>
+        {
+            injector.Screen = _ => CopilotBox("ag");
+            if (worker) injector.Holding = Intervene;
+            else Intervene();
+        };
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains("ag", (await injector.ReadScreenAsync(100)).Rows![3]);
+        if (worker) Assert.Single(injector.Refused);
+    }
+
+    // The line boundary moves only at a newline, so a record still without its own (#3153 review)
+    // must end cleanup too: any growth of the file does, at either check, as a replacement does.
+    [Theory]
+    [InlineData("unterminated", false, false)]
+    [InlineData("unterminated", true, false)]
+    [InlineData("unterminated", false, true)]
+    [InlineData("unterminated", true, true)]
+    [InlineData("terminated", false, false)]
+    [InlineData("replaced", false, false)]
+    [InlineData("replaced", false, true)]
+    [InlineData("none", false, false)]
+    public async Task SliceA_any_transcript_change_even_an_unterminated_prompt_or_turn_ends_cleanup(string growth, bool turn, bool worker)
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (2, false);
+        void Intervene()
+        {
+            var record = turn ? Copilot.TurnStart(second++) : Prompt("ag");
+            if (growth == "terminated") Fixture.Append(events, record);
+            else if (growth == "unterminated") File.AppendAllText(events, record);
+            else if (growth == "replaced")
+            {
+                // Another file of the same length: nothing past the boundary to read.
+                var bytes = File.ReadAllBytes(events);
+                var digit = Array.FindLastIndex(bytes, b => b is >= (byte)'0' and <= (byte)'8');
+                bytes[digit]++;
+                File.Delete(events);
+                File.WriteAllBytes(events, bytes);
+            }
+        }
+        injector.Sent = i =>
+        {
+            if (injector.Plans[^1].Plan.Sends[i].Text == "\u0005\u0015") { injector.Screen = _ => CopilotIdle; return; }
+            injector.Screen = _ => CopilotBox("ag");
+            if (worker) injector.Holding = Intervene;
+            else Intervene();
+        };
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        if (growth == "none")
+        {
+            Assert.Equal("\u0005\u0015", injector.Plans[1].Plan.Sends.Single().Text);
+            return;
+        }
+        Assert.Single(injector.Plans);
+        Assert.Contains("ag", (await injector.ReadScreenAsync(100)).Rows![3]);
+        if (worker) Assert.Single(injector.Refused);
+    }
+
+    [Theory]
+    [InlineData("ag\nent report")]
+    [InlineData("agent\n\nreport")]
+    public async Task SliceA_newline_edits_never_authorize_cleanup(string draft)
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (12, false);
+        injector.Sent = _ => injector.Screen = _ =>
+            [.. CopilotIdle.Take(3), .. draft.Split('\n').Select(line => "\u2503 " + line),
+                CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Theory]
+    [InlineData("space")]
+    [InlineData("plain-space")]
+    [InlineData("shell")]
+    [InlineData("normal")]
+    [InlineData("non-main")]
+    public async Task SliceA_edited_raw_rows_or_unsafe_screens_permanently_end_cleanup(string state)
+    {
+        var reads = 0;
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (5, false);
+        injector.Sent = _ => injector.Screen = _ => ++reads > 1 && state is not ("space" or "plain-space") ? CopilotBox("agent") : state switch
+        {
+            "space" => CopilotBox(" agent"),
+            "plain-space" => ["\u2500\u2500\u2500\u2500", "\u276F  agent", "\u2500\u2500\u2500\u2500", " Interactive \u00B7 @ files"],
+            "shell" => CopilotBox("ls", shell: true),
+            "normal" => [.. CopilotBox("agent").Take(5), " -- NORMAL -- \u00B7 Interactive \u00B7 @ files"],
+            _ => [.. CopilotBox("agent"), "dialog"],
+        };
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains((await injector.ReadScreenAsync(100)).Rows!, row => row.Contains("agent", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SliceA_expired_cleanup_never_leaves_authority_for_a_later_reply_to_erase_a_draft()
+    {
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (5, false);
+        injector.Sent = _ => injector.Screen = _ => ["Allow this command?", "1. Yes"];
+        var replier = Replier(submitPatience: TimeSpan.FromMilliseconds(100));
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await replier.ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        injector.Screen = _ => CopilotBox("agent");
+        injector.Sent = null;
+        var next = await replier.ReplyAsync(new() { Id = Id, Request = Guid.NewGuid().ToString(), Text = "owner reply" });
+        Assert.Equal(AnswerOutcome.Refused, next.Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains("agent", (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SliceA_an_edited_prefix_or_unknown_Enter_never_authorizes_cleanup(bool unknownEnter)
+    {
+        var draft = unknownEnter ? "agent" : "agent edited";
+        injector.Result = new(InjectionStatus.Interrupted, "partial native write");
+        injector.Partial = (5, unknownEnter ? null : false);
+        injector.Sent = _ => injector.Screen = _ => CopilotBox(draft);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Replier().ReplyAsync(new()
+            { Id = Id, Request = Guid.NewGuid().ToString(), Text = "agent report" })).Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains(draft, (await injector.ReadScreenAsync(100)).Rows![3]);
+    }
+
+    [Fact]
     public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed()
     {
         injector.Screen = _ => CopilotBox("half a thought \u202E");
@@ -1546,7 +1849,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("unconfirmed", outcome);
-        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box", reason);
+        Assert.Equal("reply delivery is uncertain after the input box changed; automatic recovery has ended and will not type further keys", reason);
         Assert.Single(injector.Plans);
         Assert.Empty(injector.Refused);
     }
@@ -1690,7 +1993,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         if (afterWords)
         {
             Assert.Equal("unconfirmed", outcome);
-            Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+            Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
             Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
             return;
         }
@@ -1726,7 +2029,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             return;
         }
         Assert.Equal("unconfirmed", outcome);
-        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
         Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
     }
 
@@ -1785,7 +2088,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("unconfirmed", outcome);
-        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.StartsWith("reply delivery is uncertain after the input box changed", reason);
         Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
     }
 

@@ -246,11 +246,37 @@ public class CiPlanTests
     [InlineData(" && needs.quality-gate.outputs.app == 'success'", "", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
     [InlineData("needs.quality-gate.outputs.app == 'success'", "needs.quality-gate.outputs.app != 'failure'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
     [InlineData("needs.quality-gate.outputs.app == 'success'", "!(false && needs.quality-gate.outputs.app == 'success' && false)", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
-    [InlineData("app: ${{ needs.app.result }}", "app: success", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
-    [InlineData("app: ${{ needs.app.result }}", "apps: ${{ needs.app.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "app: success", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "apps: ${{ needs.app.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "app: ${{ steps.app.outputs.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
     public void A_publish_gate_that_would_publish_a_run_that_skipped_the_app_is_reported(string from, string to, string problem)
     {
         Assert.Equal([problem], Check(Wired.Replace(from, to)));
+    }
+
+    // The waiver-adjusted app output (#2454): accepted only when the step it reads computes the app's own
+    // result from the waiver-adjusted needs, so it can't be pointed at something else.
+    const string AppStepProblem = "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app";
+
+    // Line endings normalized first: a default Windows checkout has CRLF in the fixture above.
+    static string WithAppStep(string needs, string run) => Wired.ReplaceLineEndings("\n").Replace("      app: ${{ needs.app.result }}\n",
+        "      app: ${{ steps.app.outputs.result }}\n    steps:\n      - id: app\n        env:\n          NEEDS: " + needs + "\n        run: " + run + "\n");
+
+    [Fact]
+    public void The_waiver_adjusted_app_output_is_accepted_when_its_step_reads_the_apps_result_from_the_waiver_needs()
+    {
+        Assert.Empty(Check(WithAppStep("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"")));
+    }
+
+    [Theory]
+    [InlineData("${{ toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"")]
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=success\" >> \"$GITHUB_OUTPUT\"")]
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.light.result')\" >> \"$GITHUB_OUTPUT\"")]
+    // A shell comment in the run script that merely mentions the expression is not the command (YAML comments never reach the scalar).
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "|\n          # jq -r '.app.result'\n          echo \"result=success\" >> \"$GITHUB_OUTPUT\"")]
+    public void The_waiver_adjusted_app_output_is_reported_when_its_step_does_not_compute_the_apps_result_from_the_waiver_needs(string needs, string run)
+    {
+        Assert.Equal([AppStepProblem], Check(WithAppStep(needs, run)));
     }
 
     [Fact]
@@ -386,6 +412,47 @@ public class CiPlanTests
         }
     }
 
+    // Wired with tiers (#3209): app's win-arm64 leg and all of ha-integration are post-merge.
+    const string AppLegs = "'{\"runtime\":\"win-x64\"}', github.event_name != 'pull_request' && ',{\"runtime\":\"win-arm64\"}' || ''";
+    const string HaGated = "needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'";
+    const string HaOff = "github.event_name != 'pull_request' && (" + HaGated + ")";
+    const string GateOff = "ci.yml quality-gate needs exactly one step env PR_OFF: ${{ github.event_name == 'pull_request' && '{0}' || '' }}, " +
+        "so it doesn't wait on the post-merge jobs pull requests skip";
+    static readonly string TierWired = Wired
+        .Replace("    if: needs.plan.outputs.app == 'true'", "    if: needs.plan.outputs.app == 'true'\n    name: app (${{ matrix.runtime }})\n" +
+            "    strategy:\n      matrix:\n        include: ${{ fromJSON(format('[{0}{1}]', " + AppLegs + ")) }}", StringComparison.Ordinal)
+        .Replace("if: " + HaGated, "if: " + HaOff, StringComparison.Ordinal)
+        .Replace("      app: ${{ needs.app.result }}", "      app: ${{ needs.app.result }}\n    steps:\n      - name: The check\n        env:\n" +
+            "          PR_OFF: ${{ github.event_name == 'pull_request' && 'ha-integration' || '' }}", StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData("", "", new[] { "app (win-arm64)", "ha-integration" }, new string[0])]
+    [InlineData(HaOff, HaGated, new[] { "app (win-arm64)", "ha-integration" },
+        new[] { "ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: " + HaOff })]
+    [InlineData("", "", new[] { "app (win-arm64)" },
+        new[] { "ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: " + HaGated, "GATE:" })]
+    [InlineData("&& 'ha-integration' ||", "&& '' ||", new[] { "app (win-arm64)", "ha-integration" }, new[] { "GATE:ha-integration" })]
+    [InlineData("", "", new[] { "ha-integration" },
+        new[] { "ci.yml job app leaves app (win-arm64) to main, but the catalog doesn't make it post-merge" })]
+    [InlineData("", "", new[] { "app (win-arm64)", "app (win-x86)", "ha-integration" },
+        new[] { "the catalog makes app (win-x86) post-merge, but ci.yml job app has no such leg" })]
+    [InlineData(AppLegs, "'{\"runtime\":\"win-x64\"},{\"runtime\":\"win-arm64\"}', github.event_name != 'pull_request' && ',{\"runtime\":\"win-x86\"}' || ''",
+        new[] { "app (win-arm64)", "ha-integration" },
+        new[] { "ci.yml job app runs post-merge leg app (win-arm64) on pull requests",
+            "ci.yml job app leaves app (win-x86) to main, but the catalog doesn't make it post-merge" })]
+    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name == 'push' && ',", new[] { "app (win-arm64)", "ha-integration" },
+        new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
+    public void Pull_requests_skip_exactly_the_catalog_post_merge_jobs_and_legs(string from, string to, string[] tierJobs, string[] expected)
+    {
+        var catalog = Fixture.Catalog();
+        catalog.Suites.Add(new Suite { Id = "arm", Where = "ci.yml app, ha-integration", Tier = "post-merge", TierJobs = [.. tierJobs] });
+        Assert.Contains(from, TierWired, StringComparison.Ordinal);
+
+        var problems = CiPlan.Check(catalog, from.Length == 0 ? TierWired : TierWired.Replace(from, to, StringComparison.Ordinal)).Select(p => p.Message);
+
+        Assert.Equal(expected.Select(e => e.StartsWith("GATE:", StringComparison.Ordinal) ? GateOff.Replace("{0}", e[5..], StringComparison.Ordinal) : e), problems);
+    }
+
     [Fact]
     public void The_quality_gate_allows_unselected_packages_but_keeps_other_whole_ring_jobs_required()
     {
@@ -400,6 +467,9 @@ public class CiPlanTests
             .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
         Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
+        // A pull request skips post-merge jobs, so its gate doesn't count them as selected (#3209).
+        foreach (var part in new[] { "jq -r --arg off \"$PR_OFF\" '", "($off | split(\" \")) as $off", "| select(.key | IN($off[]) | not)" })
+            Assert.Contains(part, check["run"].ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -448,11 +518,19 @@ public class CiPlanTests
     }
 
     [Fact, Trait("Category", "Process")]
-    public async Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline()
+    public Task Popup_preparation_parses_and_obeys_the_popup_and_probe_failure_rule_offline() =>
+        PassesOffline(".github", "actions", "arm64-foreground", "test-dismiss.ps1");
+
+    // #2026, PR 3239: against fake desktop boundaries; the real high contrast setting is never touched.
+    [Fact, Trait("Category", "Process")]
+    public Task A_self_test_retry_after_a_crash_starts_on_the_first_attempts_desktop_or_refuses() =>
+        PassesOffline("build", "test-app-self-test-desktop.ps1");
+
+    static async Task PassesOffline(params string[] script)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(root, ".github", "actions", "arm64-foreground", "test-dismiss.ps1") })
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine([root, .. script]) })
             start.ArgumentList.Add(arg);
         using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var output = process.StandardOutput.ReadToEndAsync();
@@ -468,7 +546,7 @@ public class CiPlanTests
             await process.WaitForExitAsync();
         }
         var diagnostics = $"stdout:{Environment.NewLine}{await output}{Environment.NewLine}stderr:{Environment.NewLine}{await error}";
-        Assert.True(completed, $"Offline popup checks timed out after 120 s.{Environment.NewLine}{diagnostics}");
+        Assert.True(completed, $"Offline checks in {Path.Combine(script)} timed out after 120 s.{Environment.NewLine}{diagnostics}");
         Assert.True(process.ExitCode == 0, diagnostics);
     }
 
@@ -488,7 +566,7 @@ public class CiPlanTests
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
         Assert.Equal(new[] { "plan", "app" },
             installerNeeds.Children.Select(n => n.ToString()));
-        Assert.StartsWith("!cancelled() && (", installer["if"].ToString(), StringComparison.Ordinal);
+        Assert.StartsWith("!cancelled() && github.event_name != 'pull_request' && (", installer["if"].ToString(), StringComparison.Ordinal);
         var strategy = (YamlDotNet.RepresentationModel.YamlMappingNode)installer["strategy"];
         var matrix = (YamlDotNet.RepresentationModel.YamlMappingNode)strategy["matrix"];
         var legs = (YamlDotNet.RepresentationModel.YamlSequenceNode)matrix["include"];

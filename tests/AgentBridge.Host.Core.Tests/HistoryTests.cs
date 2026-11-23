@@ -69,8 +69,575 @@ public class HistoryTests
 
     static string Prompt(HistoryTurn t) => t.Prompt!.Text;
 
+    sealed record LegacyOwn(string? Response);
+    sealed record LegacyActivity(string? Response, string? ResponseTurn, LegacyOwn? Own);
+
+    [Theory]
+    [InlineData(4194304)]
+    [InlineData(4096)]
+    public async Task Copilot_live_reply_identity_matches_history_without_changing_legacy_reply_fields(long tailBytes)
+    {
+        await using var s = new Copilot_(options: o => new SessionSourceOptions
+        {
+            CopilotHome = o.CopilotHome, ClaudeHome = o.ClaudeHome, CodexHome = o.CodexHome,
+            ClaudeRegistrationRoots = o.ClaudeRegistrationRoots, CodexRegistrationRoots = o.CodexRegistrationRoots,
+            UseFileSystemWatcher = false, PollInterval = o.PollInterval, InitialTailBytes = tailBytes, HistoryKeyFile = o.HistoryKeyFile,
+        });
+        var session = await s.After(Copilot.User("Owner question", 1),
+            Copilot.Assistant("Original answer", 2),
+            Copilot.Assistant("Pulse answer", 3, reasoning: "Thinking"),
+            Copilot.Assistant(new string('x', 6000), 4, agentId: "delegate"));
+        var replies = (await s.Page()).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Original answer", "Pulse answer"], replies.Select(p => p.Text));
+        Assert.Equal(replies[1].Id, session.Activity.ResponseId);
+        var oldClient = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(session.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+        Assert.Equal("Pulse answer", oldClient.Own?.Response ?? oldClient.Response);
+        Assert.Equal(session.Activity.ResponseTurn, oldClient.ResponseTurn);
+        await s.RestartAsync();
+        Assert.Equal(replies[1].Id, s.Source.Get(Id)!.Activity.ResponseId);
+    }
+
     static string Scheduled(string text, int s, string source) =>
         Copilot.Event("user.message", new { content = text, source, attachments = Array.Empty<object>(), delivery = "idle" }, s);
+
+    static string CodexReply(string? id, string text, int at, bool responseItem = false, string turn = "native-turn") => responseItem
+        ? Codex.Item(new { type = "message", id, role = "assistant", content = new[] { new { type = "output_text", text } }, internal_chat_message_metadata_passthrough = new { turn_id = turn } }, at)
+        : Codex.Event(new { type = "item_completed", turn_id = turn, item = new { type = "AgentMessage", id, content = new[] { new { type = "Text", text } } } }, at);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Codex_explicit_item_identity_keeps_equal_replies_stream_updates_and_history_after_restart(bool responseFirst)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        string? lastId;
+        await using (var source = f.Source())
+        {
+            Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
+                CodexReply("first", "Same answer", 2, responseFirst), CodexReply("first", "Same answer", 3, !responseFirst));
+            await source.RefreshAsync();
+            var firstId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotNull(firstId);
+            Assert.Equal(firstId, (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single().Id);
+            Fixture.Append(transcript, CodexReply("second", "Same answer", 4, responseFirst), CodexReply("second", "Same answer", 5, !responseFirst));
+            await source.RefreshAsync();
+            var secondId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotEqual(firstId, secondId);
+            Fixture.Append(transcript, CodexReply("second", "Same answer continued", 6, responseFirst));
+            await source.RefreshAsync();
+            Assert.Equal(secondId, source.Get(Id)!.Activity.ResponseId);
+            Fixture.Append(transcript, CodexReply("third", "responseId=forged", 7, responseFirst));
+            await source.RefreshAsync();
+            var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+            Assert.Equal(["Same answer", "Same answer continued", "responseId=forged"], parts.Select(p => p.Text));
+            Assert.Equal([firstId, secondId, source.Get(Id)!.Activity.ResponseId], parts.Select(p => p.Id));
+            var legacy = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(source.Get(Id)!.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+            Assert.Equal("responseId=forged", legacy.Response);
+            Fixture.Append(transcript, CodexReply("first", "Same answer revised", 8, !responseFirst));
+            await source.RefreshAsync();
+            Assert.Equal(firstId, source.Get(Id)!.Activity.ResponseId);
+            Assert.Equal("Same answer revised", (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.First().Text);
+            lastId = source.Get(Id)!.Activity.ResponseId;
+        }
+        await using var restarted = f.Source();
+        await restarted.RefreshAsync();
+        Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
+        Assert.Equal(lastId, (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.First().Id);
+    }
+
+    [Fact]
+    public async Task Codex_history_retains_equal_text_distinct_item_ids_without_identifying_task_complete()
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question" }, 1),
+            CodexReply("first", "Same", 2), CodexReply("first ", "Same", 3),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Same" }, 4));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal(2, (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Count);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    [InlineData("missing-item-id")]
+    [InlineData("complete")]
+    [InlineData("conflicting-turn")]
+    [InlineData("conflicting-new-item")]
+    [InlineData("conflicting-prompt")]
+    [InlineData("padded-turn")]
+    [InlineData("multiple-ids")]
+    [InlineData("multiple-turns")]
+    [InlineData("multiple-items")]
+    [InlineData("malformed-id")]
+    [InlineData("malformed-turn")]
+    [InlineData("no-turn")]
+    [InlineData("started")]
+    [InlineData("unreadable")]
+    [InlineData("skimmed")]
+    public async Task Codex_unknown_item_identity_never_aliases_by_text_time_or_last_agent_message(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        var next = shape switch
+        {
+            "missing" => Codex.Event(new { type = "agent_message", message = "Answer" }, 3),
+            "empty" => CodexReply("", "Answer", 3),
+            "missing-item-id" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\",", ""),
+            "complete" => Codex.Event(new { type = "task_complete", last_agent_message = "Answer" }, 3),
+            "conflicting-turn" => CodexReply("first", "Answer", 3, true, "other-turn"),
+            "conflicting-new-item" => CodexReply("second", "Answer", 3, true, "other-turn"),
+            "conflicting-prompt" => CodexReply("second", "Answer", 3),
+            "padded-turn" => CodexReply("first", "Answer", 3, true, "native-turn "),
+            "multiple-ids" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\"", "\"id\":\"first\",\"id\":\"first\""),
+            "multiple-turns" => CodexReply("first", "Answer", 3).Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""),
+            "multiple-items" => CodexReply("first", "Answer", 3).Replace("\"item\":", "\"item\":{},\"item\":"),
+            "malformed-id" => CodexReply("first", "Answer", 3).Replace("\"id\":\"first\"", "\"id\":\"\\ud800\""),
+            "malformed-turn" => CodexReply("first", "Answer", 3).Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":42"),
+            "no-turn" => CodexReply("first", "Answer", 3),
+            "started" => Codex.Event(new { type = "task_started" }, 3),
+            "unreadable" => "{\"type\":\"response_item\",\"payload\":",
+            "skimmed" => new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        var initial = shape == "no-turn" ? Array.Empty<string>() : [Codex.Event(new { type = "user_message", message = "Question", turn_id = shape == "conflicting-prompt" ? "other-turn" : "native-turn" }, 1), CodexReply("first", "Answer", 2)];
+        Fixture.Append(transcript, [.. initial, next]);
+        if (shape is "unreadable" or "skimmed" or "started") { Fixture.Append(transcript, CodexReply("first", "Answer", 4, true)); }
+        await using var source = f.Source(tailBytes: shape == "skimmed" ? 4096 : 4 * 1024 * 1024);
+        await source.RefreshAsync();
+        Assert.Equal("Answer", source.Get(Id)!.Activity.Response);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next" }, 5), CodexReply("first", "Fresh answer", 6));
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Theory]
+    [InlineData("task_started")]
+    [InlineData("conflicting-prompt")]
+    [InlineData("duplicate-prompt")]
+    [InlineData("unmarked-unreadable")]
+    [InlineData("unmarked-json")]
+    [InlineData("non-object")]
+    public async Task Codex_history_never_updates_an_earlier_reply_after_identity_becomes_unknown(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        var prompt = Codex.Event(new { type = "user_message", message = "Question", turn_id = shape == "conflicting-prompt" ? "other-turn" : "native-turn" }, 1);
+        if (shape == "duplicate-prompt") { prompt = prompt.Replace("\"turn_id\":\"native-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
+        Fixture.Append(transcript, prompt, CodexReply("same", "Original answer", 2));
+        if (shape == "task_started") { Fixture.Append(transcript, Codex.Event(new { type = "task_started" }, 3)); }
+        if (shape is "unmarked-unreadable" or "unmarked-json" or "non-object")
+        {
+            Fixture.Append(transcript, shape switch { "unmarked-unreadable" => "not json", "unmarked-json" => "{\"invalid\":}", _ => "[]" });
+        }
+        Fixture.Append(transcript, CodexReply("same", "Later answer", 4, true));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+        Assert.Equal(["Original answer", "Later answer"], parts.Select(p => p.Text));
+        Assert.NotEqual(parts[0].Id, parts[1].Id);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next", turn_id = "native-turn" }, 5),
+            CodexReply("same", "Fresh answer", 6), CodexReply("same", "Fresh answer updated", 7, true));
+        await source.RefreshAsync();
+        var fresh = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
+        Assert.Equal("Fresh answer updated", fresh.Text);
+        Assert.Equal(fresh.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Fact]
+    public void Codex_history_never_updates_an_earlier_reply_after_a_dropped_record()
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
+            CodexReply("same", "Original answer", 2),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 600) }.ToJsonString(),
+            CodexReply("same", "Later answer", 4, true));
+        var seed = new HistorySeed(new Dictionary<string, string?>(), new Dictionary<string, string>());
+        var result = new HistoryReader(new HistoryBudgets { MaxLineBytes = 512 }, new byte[32])
+            .Read(Id, AgentKind.Codex, transcript, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false);
+        var turn = result.Turns!.Single();
+        Assert.Equal(["Original answer", "Later answer"], turn.Parts.Select(p => p.Text));
+        Assert.True(turn.Truncated);
+    }
+
+    [Theory]
+    [InlineData("flat", false)]
+    [InlineData("flat", true)]
+    [InlineData("context", false)]
+    [InlineData("context", true)]
+    [InlineData("empty", false)]
+    [InlineData("empty", true)]
+    [InlineData("ignored", false)]
+    [InlineData("ignored", true)]
+    [InlineData("duplicate", false)]
+    [InlineData("duplicate", true)]
+    [InlineData("late-native", false)]
+    [InlineData("late-native", true)]
+    [InlineData("late-context", false)]
+    [InlineData("late-context", true)]
+    [InlineData("late-reply", false)]
+    [InlineData("late-reply", true)]
+    [InlineData("late-control", false)]
+    [InlineData("late-control", true)]
+    [InlineData("known-optional", false)]
+    [InlineData("known-optional", true)]
+    public async Task Codex_non_reply_records_invalidate_conflicting_scope_without_registering_items(string shape, bool history)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        var boundary = shape switch
+        {
+            "flat" or "late-native" => Codex.Event(new { type = "agent_message", message = "Flat", turn_id = "other-turn" }, 3),
+            "late-reply" or "known-optional" => Codex.Event(new { type = "token_count" }, 3),
+            "empty" => CodexReply("same", "", 3, true, "other-turn"),
+            _ => new JsonObject { ["type"] = shape == "ignored" ? "bookkeeping" : "turn_context",
+                ["payload"] = new JsonObject { ["turn_id"] = "other-turn" } }.ToJsonString(),
+        };
+        if (shape == "duplicate") { boundary = boundary.Replace("\"turn_id\":\"other-turn\"", "\"turn_id\":\"native-turn\",\"turn_id\":\"native-turn\""); }
+        var late = shape.StartsWith("late-", StringComparison.Ordinal);
+        var control = shape is "late-control" or "known-optional";
+        var first = CodexReply("same", shape == "late-control" ? "" : "Original", 2);
+        var later = CodexReply("same", "Later", 4, turn: shape is "late-reply" or "late-control" ? "other-turn" : "native-turn");
+        if (late)
+        {
+            first = first.Replace("\"turn_id\":\"native-turn\",", "");
+            if (shape is "late-native" or "late-context") { later = later.Replace("\"turn_id\":\"native-turn\",", ""); }
+        }
+        if (shape == "known-optional") { later = later.Replace("\"turn_id\":\"native-turn\",", ""); }
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = late ? null : "native-turn" }, 1),
+            first, boundary, later);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        if (history)
+        {
+            var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+            Assert.Equal(control ? ["Later"] : shape is "flat" or "late-native" ? ["Original", "Flat", "Later"] : ["Original", "Later"], parts.Select(p => p.Text));
+            if (control) { Assert.Equal(parts.Single().Id, source.Get(Id)!.Activity.ResponseId); }
+        }
+        else if (control) { Assert.NotNull(source.Get(Id)!.Activity.ResponseId); }
+        else { Assert.Null(source.Get(Id)!.Activity.ResponseId); }
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Next", turn_id = "native-turn" }, 5),
+            CodexReply("same", "Fresh", 6), CodexReply("same", "Fresh revised", 7, true));
+        await source.RefreshAsync();
+        var fresh = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single();
+        Assert.Equal("Fresh revised", fresh.Text);
+        Assert.Equal(fresh.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Codex_idless_completion_deduplicates_only_currently_retained_text(bool originalRetained)
+    {
+        using var f = new Fixture();
+        var transcript = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, transcript);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(transcript, Codex.Event(new { type = "user_message", message = "Question", turn_id = "native-turn" }, 1),
+            CodexReply("first", "Original", 2));
+        if (originalRetained) { Fixture.Append(transcript, CodexReply("second", "Original", 3)); }
+        Fixture.Append(transcript, CodexReply("first", "Revised", 4),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Original" }, 5));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal("Original", source.Get(Id)!.Activity.Response);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Assert.Equal(["Revised", "Original"], (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Select(p => p.Text));
+    }
+
+    // The person's message sent while Claude works is an attachment, not a user entry (2.1.318, redacted:
+    // tests/fixtures/claude/mid-turn-human-message.jsonl). It must show as its own prompt, in order, once.
+    [Fact]
+    public async Task Claude_a_message_the_person_sent_mid_turn_is_a_history_prompt_in_order_and_a_notice_is_not()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var midTurn = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-human-message.jsonl")).Trim();
+        var notice = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-queued-command.jsonl"))
+            .Single(l => l.Contains("\"commandMode\":\"task-notification\"", StringComparison.Ordinal) && l.Contains("\"queued_command\"", StringComparison.Ordinal));
+        Fixture.Append(transcript, Claude.User("Start the work", 1),
+            Claude.AssistantMessage("a", 2, null, Claude.Text("Working.")), midTurn, notice,
+            Claude.AssistantMessage("b", 4, "end_turn", Claude.Text("Done both.")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var turns = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!;
+        Assert.Equal(["Start the work", "Also check the second host."], turns.Select(t => t.Prompt!.Text));
+        Assert.All(turns, t => Assert.Null(t.Prompt!.From));
+        Assert.Equal(["Working."], turns[0].Parts.Select(p => p.Text));
+        Assert.Equal(["Done both."], turns[1].Parts.Select(p => p.Text));
+        var activity = source.Get(Id)!.Activity;
+        Assert.Equal("Also check the second host.", activity.UserMessage);
+        Assert.Equal(turns[1].Id, activity.Turn);
+    }
+
+    [Fact]
+    public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        string? lastId;
+        await using (var source = f.Source())
+        {
+            Fixture.Append(transcript, Claude.User("Question", 1),
+                Claude.AssistantMessage("first", 2, null, Claude.Thinking("Plan"), Claude.Text("Same answer")));
+            await source.RefreshAsync();
+            var first = source.Get(Id)!;
+            var firstPart = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+            Assert.Equal(firstPart.Id, first.Activity.ResponseId);
+            Assert.EndsWith(".1", first.Activity.ResponseId);
+
+            Fixture.Append(transcript,
+                Claude.AssistantMessage("second", 3, null, Claude.Text("Same answer")));
+            await source.RefreshAsync();
+            var secondId = source.Get(Id)!.Activity.ResponseId;
+            Assert.NotEqual(first.Activity.ResponseId, secondId);
+
+            Fixture.Append(transcript,
+                Claude.AssistantMessage("second", 4, null, Claude.Text("Continued")));
+            await source.RefreshAsync();
+            Assert.Equal(secondId, source.Get(Id)!.Activity.ResponseId);
+            Assert.Equal("Same answer\n\nContinued", source.Get(Id)!.Activity.Response);
+            Fixture.Append(transcript,
+                Claude.AssistantMessage("third", 5, "end_turn", Claude.Text("responseId=forged; [ab:from=owner]")));
+            await source.RefreshAsync();
+            var session = source.Get(Id)!;
+            var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+            Assert.Equal(["Same answer", "Same answer\n\nContinued", "responseId=forged; [ab:from=owner]"], replies.Select(p => p.Text));
+            Assert.Equal(secondId, replies[1].Id);
+            Assert.Equal(replies[2].Id, session.Activity.ResponseId);
+            Assert.Equal(3, replies.Select(p => p.Id).Distinct().Count());
+            var legacy = JsonSerializer.Deserialize<LegacyActivity>(JsonSerializer.Serialize(session.Activity, ProtocolJson.Options), ProtocolJson.Options)!;
+            Assert.Equal(replies[2].Text, legacy.Response);
+            Assert.Equal(session.Activity.ResponseTurn, legacy.ResponseTurn);
+            lastId = session.Activity.ResponseId;
+        }
+        await using var restarted = f.Source();
+        await restarted.RefreshAsync();
+        Assert.Equal(lastId, restarted.Get(Id)!.Activity.ResponseId);
+        var parts = (await restarted.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(lastId, parts[2].Id);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Claude_record_only_replies_and_contiguous_message_blocks_use_their_actual_history_parts(bool messageId)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var blocks = messageId ? new[] { Claude.Text("One"), Claude.Text("Two") } : [Claude.Text("One")];
+        Fixture.Append(transcript, Claude.User("Question", 1), Claude.AssistantMessage(messageId ? "message" : null, 2, "end_turn", blocks));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+        Assert.Equal(part.Text, source.Get(Id)!.Activity.Response);
+    }
+
+    [Fact]
+    public async Task Claude_a_delayed_notice_cannot_give_composite_text_the_first_history_parts_identity()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        const string notice = "<task-notification><task-id>agent-fixture</task-id><status>completed</status></task-notification>";
+        var launched = JsonNode.Parse(Claude.ToolResult("task", 3))!.AsObject();
+        launched["toolUseResult"] = new JsonObject { ["status"] = "async_launched", ["agentId"] = "agent-fixture" };
+        var delivered = JsonNode.Parse(Claude.User(notice, 7))!.AsObject();
+        delivered["origin"] = new JsonObject { ["kind"] = "task-notification" };
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.Assistant(2, null, Claude.ToolUse("task", "Agent", new JsonObject())),
+            launched.ToJsonString(),
+            new JsonObject { ["type"] = "queue-operation", ["operation"] = "enqueue", ["content"] = notice, ["timestamp"] = Copilot.At(4) }.ToJsonString(),
+            Claude.Assistant(5, null, Claude.ToolUse("wake", "SendMessage", new JsonObject { ["to"] = "agent-fixture" })),
+            Claude.AssistantMessage("message", 6, null, Claude.Text("One")),
+            delivered.ToJsonString(),
+            Claude.AssistantMessage("message", 8, null, Claude.Text("Two")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
+        Assert.Equal(["One", "Two"], parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
+        Assert.Equal("One\n\nTwo", source.Get(Id)!.Activity.Response);
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Theory]
+    [InlineData("missing-message-id")]
+    [InlineData("intervening-thinking")]
+    [InlineData("text-tool-text")]
+    [InlineData("duplicate-record")]
+    [InlineData("unreadable-record")]
+    [InlineData("skimmed-start")]
+    public async Task Claude_ambiguous_live_reply_identity_is_omitted_without_changing_legacy_text(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var first = Claude.Assistant(2, null, Claude.Text("Answer"));
+        var lines = shape switch
+        {
+            "missing-message-id" => new[] { Claude.Assistant(2, null, Claude.Text("One"), Claude.Text("Two")) },
+            "intervening-thinking" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.Thinking("Plan"), Claude.Text("Two"))],
+            "text-tool-text" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" }), Claude.Text("Two"))],
+            "duplicate-record" => [first, first],
+            "unreadable-record" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), "{\"type\":\"assistant\",\"message\":", Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
+            "skimmed-start" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(), Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        Fixture.Append(transcript, [Claude.User("Question", 1), .. lines]);
+        await using var source = f.Source(tailBytes: shape == "skimmed-start" ? 4096 : 4 * 1024 * 1024);
+        await source.RefreshAsync();
+        var session = source.Get(Id)!;
+        Assert.Null(session.Activity.ResponseId);
+        Assert.Equal(shape switch
+        {
+            "missing-message-id" or "intervening-thinking" or "unreadable-record" or "text-tool-text" => "One\n\nTwo",
+            "skimmed-start" => "Two",
+            _ => "Answer",
+        }, session.Activity.Response);
+        Fixture.Append(transcript, Claude.User("Next question", 4),
+            Claude.AssistantMessage("fresh", 5, "end_turn", Claude.Text("Fresh answer")));
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    // History counts a tool (once per call id in the turn) and its question as parts of the record, so the
+    // reply after them has an index the live parser can count exactly, not guess.
+    [Theory]
+    [InlineData("tool-then-text", 1)]
+    [InlineData("thinking-tool-text", 2)]
+    [InlineData("question-then-text", 2)]
+    [InlineData("repeated-tool-id", 0)]
+    [InlineData("tool-in-its-own-record", 0)]
+    public async Task Claude_reply_after_tool_calls_keeps_the_history_part_identity(string shape, int index)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var bash = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        var ask = Claude.ToolUse("ask", "AskUserQuestion", Claude.Ask(("Pick one?", false, ["A", "B"])));
+        string[] lines = shape switch
+        {
+            "tool-then-text" => [Claude.AssistantMessage("m", 2, null, bash, Claude.Text("Answer"))],
+            "thinking-tool-text" => [Claude.AssistantMessage("m", 2, null, Claude.Thinking("Plan"), bash, Claude.Text("Answer"))],
+            "question-then-text" => [Claude.AssistantMessage("m", 2, null, ask, Claude.Text("Answer"))],
+            "repeated-tool-id" => [Claude.AssistantMessage("a", 2, null, bash), Claude.ToolResult("tool", 3), Claude.AssistantMessage("b", 4, null, (JsonObject)bash.DeepClone(), Claude.Text("Answer"))],
+            "tool-in-its-own-record" => [Claude.AssistantMessage("a", 2, null, (JsonObject)bash.DeepClone()), Claude.ToolResult("tool", 3), Claude.AssistantMessage("b", 4, null, Claude.Text("Answer"))],
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        Fixture.Append(transcript, [Claude.User("Question", 1), .. lines]);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.EndsWith("." + index, part.Id);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+        Assert.Equal("Answer", source.Get(Id)!.Activity.Response);
+    }
+
+    // A long turn (tool calls, a background-task notice) read through a window that opens inside it: the
+    // reply's id is its record's hash and index, so unread earlier records cannot change it. Only the
+    // first message in the window may continue one begun before it, and has none.
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Claude_reply_identity_survives_a_window_that_opens_mid_turn(bool toolBeforeText, bool identified)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        const string notice = "<task-notification><task-id>agent-fixture</task-id><status>completed</status></task-notification>";
+        var delivered = new JsonObject
+        {
+            ["type"] = "attachment", ["timestamp"] = Copilot.At(7),
+            ["attachment"] = new JsonObject { ["type"] = "queued_command", ["commandMode"] = "task-notification", ["prompt"] = notice },
+        }.ToJsonString();
+        var tool = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        var answer = toolBeforeText ? Claude.AssistantMessage("m4", 8, "end_turn", tool, Claude.Text("Answer")) : Claude.AssistantMessage("m4", 8, "end_turn", Claude.Text("Answer"));
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("m1", 2, null, Claude.Text("Unread")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("m2", 3, null, Claude.Text("Edge")),
+            Claude.AssistantMessage("m3", 4, null, (JsonObject)tool.DeepClone()),
+            Claude.ToolResult("tool", 5), delivered, answer);
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        var session = source.Get(Id)!;
+        var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Unread", "Edge", "Answer"], replies.Select(p => p.Text));
+        Assert.Equal("Answer", session.Activity.Response);
+        Assert.Equal(identified ? replies[2].Id : null, session.Activity.ResponseId);
+    }
+
+    // History skips a repeated call id without a part, so a tool-only record at the window edge does not
+    // break a response begun before the window: the later record of that message merges into it.
+    [Fact]
+    public async Task Claude_window_edge_stays_open_through_a_deduplicated_tool_only_record()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var tool = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("z0", 2, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 3, null, Claude.Text("Before")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("z", 4, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 5, null, Claude.Text("More")));
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Fixture.Append(transcript, Claude.AssistantMessage("w", 6, "end_turn", Claude.Text("Final")));
+        await source.RefreshAsync();
+        var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Before\n\nMore", "Final"], replies.Select(p => p.Text));
+        Assert.Equal(replies[1].Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Fact]
+    public async Task Claude_message_at_the_window_edge_has_no_identity_even_when_it_continues()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("m1", 2, null, Claude.Text("Unread")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("m1", 3, "end_turn", Claude.Text("Continued")));
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+    }
 
     [Fact]
     public async Task Queued_owner_reply_across_spans_is_attributed_to_its_own_turn()

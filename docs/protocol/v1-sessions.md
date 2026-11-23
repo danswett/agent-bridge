@@ -82,7 +82,7 @@ with the wrong type):
 |---|---|---|
 | `HelloResult` | `protocol` | |
 | `MachineInfo` | `id` | |
-| `Session` | `id` | |
+| `Session` | `id`, `machine` | |
 | `SessionLoad` ([v1-machine-load.md](v1-machine-load.md)) | `session` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
@@ -267,7 +267,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 ```json
 {
   "protocol": 1,
-  "machine": { "id": "53d1997f…", "name": "DSWETT-DEV-VM1", "os": "windows", "hostVersion": "0.1.0" },
+  "machine": { "id": "53d1997f…", "name": "Laptop", "os": "windows", "hostVersion": "0.1.0" },
   "capabilities": ["sessions.read"]
 }
 ```
@@ -284,7 +284,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | Field | Notes |
 |---|---|
 | `at` | When this run of the host started and compared |
-| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). A client reads a cause it doesn't know as `crash` |
+| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). `crash` is a legacy wire name, not a diagnosis: an external stop or launcher job close leaves the same record. A client reads a cause it doesn't know as `crash`; Continue uses neutral wording, "the host stopping unexpectedly", rather than claiming a crash |
 | `since` | When the earlier run last wrote down what was live: about when the sessions went |
 | `restored`, `loops` | Sessions restored, idle, through the resume path, and seen ready, and those not restored again because they died again within 10 minutes of a restore (offered, and among `offered`) |
 | `waiting` | Sessions still being judged: their agent's discovery is held ([Discovery held](#discovery-held)), or its hooks' endings are not yet taken in, so whether they still run, or ended, cannot be told yet. They are never read as gone; once judged, `restore` changes and `hello.changed` says so |
@@ -392,6 +392,23 @@ host sends:
    * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
      held or what holds it changes, and `{}` when it clears. Sent once per change.
 
+These reads use the host's in-memory live source, also used by its fleet registry
+publisher, without Home Assistant reads or a separate roster store. Every `Session`
+is scoped to `hello.machine.id`. The in-memory roster is bounded to 250 sessions;
+overflow holds discovery for the affected agent until a slot is freed, without
+evicting a live row or allowing an omitted session to resume: its process stays a resume guard.
+`owner`, `pr` and `finished` carry explicit evidence:
+unknown is not confirmed none or false. Idle does not mean work-finished. Removal bypasses
+upsert coalescing and quiet-session holding once discovery drops a row; list/get and new
+subscriptions then exclude it. Missing rows are retained while their agent's discovery
+is held, but positive ended evidence removes a session immediately, even during a hold.
+A discovery hold alone is not evidence that a session ended.
+
+This cut emits `owner`, `pr` and `finished` as `{ "state": "unknown" }` on every
+host-bound row; discovering known values or confirmed none/false is out of scope.
+It does not complete the all-fields Done-when for
+[the host roster issue](https://github.com/danswett/agent-bridge/issues/2642).
+
 A session can change while the snapshot is being sent; its upsert then simply arrives
 again. When a channel closes, the client subscribes again on the new channel.
 
@@ -488,7 +505,7 @@ to #597's 5,120-byte goal. The goal is **not met**: 5,035 bytes remain. The work
 JSON are unchanged. The test's budget drops from 14,500 to **11,200 bytes** (1,045 bytes, or
 10.3%, of margin). Negotiated handles lower the unchanged workload further to **9,606 bytes**
 (549 saved, 4,486 above the goal), still 53 patches and no whole upserts. The budget is now
-**10,600 bytes**, 994 bytes (10.3%) of margin. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
+**10,600 bytes**, 994 bytes (10.3%) of margin. #3581's per-reply `responseId` then raised the measured total to 10,983..11,012 bytes, so the budget is now **11,400 bytes**. Snapshot maps and subscribe/focus requests are not counted; 5 KB is not met.
 
 #### Resuming without a snapshot
 
@@ -603,23 +620,24 @@ an absence, and never reads the failed look as "every session ended" (design §6
 agent-ha-bridge's "session discovery uncertain … absence-based work is held"). While an agent
 in `agents` is held:
 
-* its sessions are not removed for being missing, and those the host has go on updating;
+* its sessions are not removed merely for being missing, and those the host has go on
+  updating; positive ended evidence removes a session immediately, even during a hold;
 * none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
   ([v1-launch.md](v1-launch.md#while-discovery-is-held));
 * the Home Assistant connector retires no session's entities, of any agent
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
-A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
-`sessions-listed.json` in its profile's folder: each one's id, agent, pid and process start time,
-and never a path, which is found again as discovery finds it. To the first pass after it starts,
-their processes count as known, so one whose runtime cannot be read holds its agent as it would
-have before the restart. That pass brings back each of them of an agent it holds, as long as its
-own process is still running (the same pid, started at the same time) and no session found has
-that process now.
-A session such a pass cannot see, which only the hold was keeping, is therefore still listed
-after a restart, as it was before one. It is then kept like any other session a hold keeps, until
-a complete pass decides. A complete first pass is believed, as ever, and so is a registration
-that says the session ended, even when its runtime cannot be read.
+Host-bound roster membership is memory-only: each row requires fresh live discovery,
+never disk membership to fill in an incomplete pass. `sessions-listed.json` keeps only
+resume guards: a previously known unreadable runtime (dated, or one the 250 limit omitted)
+holds its agent across passes and restarts, without supplying a row. A positively exited or replaced
+process releases that guard. Native discovery supersedes an ended registration only with a
+process born after its last update, the row staying listed until the successor replaces it.
+If either timestamp is unavailable, the native candidate is not admitted and its agent is
+held: removing the ended row must not allow a duplicate resume. The hold lasts until fresh
+evidence proves the successor, the registration changes, or the candidate process exits.
+Registration session ids are compared ordinally, including across registration roots;
+case-distinct ids remain distinct.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
@@ -997,6 +1015,17 @@ even if hello was stale. A host implementing queue delivery supplies it on every
 Slice 1 defines the contract and models only; hosts must not advertise queue support
 until the delivery path implements it.
 
+**Host-owned intent (#2568 A-i).** `ReplyRequest.Intent` is an in-process carrier,
+not a wire field or the requested `mode`. It defaults to `Unknown`. Only the host's
+current local App/HostCli classification or a current pinned-person relay lease
+produces `Steer`; disabled pinning is not person proof. The carrier rechecks that
+same ingress when read, so a revoked lease cannot be replaced by a later grant.
+Unclassified ingress and both HA reply adapters retain `Unknown`. Text, sender or
+driver labels, `pri=urgent`, a claimed role and `RequireIdle` cannot grant intent;
+neither the carrier nor its source delegate is serialized or accepted from JSON.
+This producer-only slice changes no key behavior and offers no queue capability.
+Capability qualification and the fail-closed submit consumer are separate slices.
+
 **Agent-sender version boundary.** Queue-reply extension **v1** (protocol 1 with
 `sessions.reply.queue`, [#2468](https://github.com/danswett/agent-bridge/issues/2468))
 supersedes the base-v1 agent rule "nothing queued; working-session reply refused
@@ -1030,10 +1059,25 @@ those characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason", "mode", "stage"? }`, the outcomes of `session.answer`,
 with `timings` for a request that asked for progress, and optional `attachments`.
+Optional `refusal` distinguishes `occupied` (a pre-existing Copilot draft), `asking`,
+`composerUnverified`, or `busy`. Absent or unknown means `other`; older clients ignore
+the field and still show `reason`. It never authorizes retrying the same request.
 `mode` is `queue` or `steer` (absent or unknown reads as `steer`).
 Hosts emit `stage` only on `unconfirmed`: `typed`, `recorded`, or `queued` below;
 unknown reads as `typed`, never as delivery. Tolerant records may retain a stage on
 another outcome; clients ignore it there rather than override the outcome.
+
+The [guarded-clear foundation](../host-replies.md#guarded-clear-foundation-804)
+adds optional `cleared: { text, marks, truncated }`: text that a clear attempt may
+have deleted, escaped with host-only `[start, length]` marks in UTF-16 units.
+It is returned even if the reply is later refused, and is never logged. This cut
+refuses before keys unless the complete single-row draft fits 500 escaped characters;
+it therefore always returns `truncated: false`. Lossless host-only composer evidence
+is mandatory: display-normalized screen text alone cannot authorize deletion.
+Replay requires the original sender, session and still-current host authority callbacks;
+foreign replay receives no escrow or progress. There is no wire confirmation field,
+production clear producer or capability in this cut. Signed person relay confirmation,
+policy and PWA/app presentation follow separately; existing clients are unchanged.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -1079,6 +1123,15 @@ typed only into the agent's input box as its screen shows it, since without
 agent-ha-bridge's hooks a host cannot otherwise see their permission prompts and questions;
 it is `refused` when that box is not on screen, or for Codex already has words in it. Codex takes only
 images as attachments; a Codex reply with any other file is `refused`.
+
+**Startup readiness (#3634).** Activity recorded in the session's **own transcript after
+launch began** releases its startup reply hold, even for an `unconfirmed` launch:
+any `user.message` (any source), `assistant.turn_start`, tool execution or subagent
+activity recorded there counts. `session.resume` alone, old or other-session activity,
+and turn counts do not. Without a readable transcript or qualifying activity an unready
+launch stays refused, with no timeout release. Visible trust/startup questions and open
+transcript `ask_user`, `permission.requested` or trust questions still refuse replies.
+See [the owner-approved decision and readiness checks](../host-replies.md#before-and-after-typing).
 
 **Queue confirmation contract (#2468 slice 2).** On a working Copilot session,
 `queue` types the text then Ctrl+Q under every existing input-box check, including
@@ -1834,7 +1887,7 @@ service worker shows from the same fields everywhere else:
   "web_push": 8030,
   "notification": {
     "title": "Pick the session store",
-    "body": "DSWETT-DEV-VM1 · waiting on you\nWhich database should the session store use?",
+    "body": "Laptop · waiting on you\nWhich database should the session store use?",
     "navigate": "https://danswett.github.io/agent-bridge/app/?host=53d1997f…&session=0f3c…&question=toolu_01",
     "tag": "53d1997f…:0f3c…",
     "lang": "en",
@@ -1893,6 +1946,10 @@ is for disposable evaluation, not production service enrollment.
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | The agent's own session id: the Copilot session-state folder name, or the Claude or Codex session id |
+| `machine` | string? | This host's `hello.machine.id`; absent from older hosts |
+| `owner` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","principal":"..."}`. Not inferred from the current driver |
+| `pr` | object? | `{"state":"unknown"}`, confirmed `{"state":"none"}`, or `{"state":"known","number":...}` |
+| `finished` | object? | `{"state":"unknown"}` until known; otherwise `{"state":"known","value":true\|false}`. Idle, merged PRs and closed-unmerged PRs do not establish this evidence |
 | `agent` | `"copilot"` \| `"claude"` \| `"codex"` | Hosts send only these. A client reads anything else as `unknown` |
 | `title` | string? | The session's name if it has one (Copilot's `workspace.yaml` `name`). Otherwise the first user message, cut to 240 bytes |
 | `cwd` | string? | Working directory |
@@ -1903,7 +1960,7 @@ is for disposable evaluation, not production service enrollment.
 | `context` | string? | The agent's own context option id (as in `v1-launch.md` `contexts`, e.g. `1000000` or `long_context`), under the same rules as `effort`. Clients show it in Details after Model; a bare number is left out of the row, and a size such as `1M` reads `1M tokens` |
 | `status` | `"working"` \| `"waiting"` \| `"idle"` \| `"ending"` | `waiting` exactly when `question` is present, unless `ending`. `ending`: the host is ending the session (`session.stop`); it is removed once its process has gone, or shows its own status again if that fails. A client that does not know `ending` reads it as `idle` |
 | `statusSince` | time | When `status` last changed |
-| `startedAt` | time? | |
+| `startedAt` | time? | Omitted when the host cannot prove the session start. Process birth, workspace creation, `statusSince` and subscription cursors are not substitutes, including across resumes and host restarts |
 | `updatedAt` | time | When something a client shows last changed. Events that change nothing visible (hook runs, usage records, model internals) do **not** move it, so they never cause an upsert |
 | `processId` | number? | The agent's process, when known |
 | `transcript_bytes` | integer? | Session event-log file length in bytes, obtained from filesystem metadata only (#2739), never transcript contents or process memory. A measured empty file is zero; absence is unknown, never zero |
@@ -1932,6 +1989,11 @@ running (`working`); the main agent idle with background agents or commands stil
 (`idle` with `background`, shown as delegating); otherwise `idle`. Only the second is new,
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
+
+An `unconfirmed` launch does not pin an active session's status: once its own transcript
+has qualifying activity after launch began, the ordinary precedence above applies.
+Startup readiness and its remaining reply refusals are defined under [`session.reply`](#sessionreply);
+this is not a timeout or a change to launch/reply delivery confirmation.
 
 ### Phone sign-in (#800 slice 2, enabled per machine by #972)
 
@@ -2121,7 +2183,7 @@ status rather than instead of it.
   * `signInNeeded`: only when the model is seen answering, in a message of its own words or a
     tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
     ending, a hook and anything the bridge typed are written whether the agent can reach its
-    model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
+    model or not, so none of them clears it: in #800's sample a session ended a turn between two
     sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
     (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
     it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
@@ -2136,7 +2198,7 @@ status rather than instead of it.
   `question`.
 
 **What a host sends today.** Copilot only, from the `session.error` record that ends a turn,
-read by its structured fields (VM1's sign-in failures, #800, carry all three):
+read by its structured fields (#800's sign-in failures carry all three):
 
 * `signInNeeded` (provider `github`) when `remediation` is `"sign_in"`, `errorType` is
   `"authorization"` or `statusCode` is 401;
@@ -2251,9 +2313,10 @@ to be the owner's answer. The next known assistant cycle reestablishes attributi
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
 | `userMessageFrom` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **New (#489).** Who wrote `userMessage` when it was not the person typing: `schedule`, a prompt the agent's own scheduler sent; `agent`, one another agent sent, including a reply an agent sent through the bridge (`driver: agent` for the turn it started); `other`, anything else that is not someone typing. Absent means the person, and so does `person`. An unknown value reads as `other`, never as the person's. Absent whenever `userMessage` is |
-| `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is |
+| `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is. A relay message from an agent (#1365) is typed into the session behind a line `[Slipgates · from an agent on <machine> · session <id> · request <id> · not typed by your user]`, so a host may send it as `person` with no label: a client that finds that line first in `userMessage` draws the message as an agent's ("From: <session> on <machine>", cleaned and capped like a label, the line itself removed from the body) and leaves any other text as it is |
 | `turn` | string? | **New (#292).** The id of the latest turn, which `userMessage`, `reasoning`, `currentTool` and `question` belong to: the same id [`session.history`](v1-history.md#live-turns-and-history) gives it, so a client merging live activity with history pages draws it once. Absent before the first prompt, when the host could not read where the latest turn began, and after a record that may have started a turn but could not be read, until the next readable prompt. Never trimmed by the session budget |
 | `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply (`own.response`, else `response`) was written in: `turn` once the latest turn has replied, an earlier turn's until then, so a client never draws the last turn's reply under a new prompt ([v1-history.md](v1-history.md#live-turns-and-history)). Absent with no such reply or when its turn is not known. Never trimmed |
+| `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude/Codex replies: the latest main reply's `session.history` response-part id (record hash plus part index). Different ids retain successive replies within one turn; the same id updates one streaming slot. Stored parts replace that slot by id, without duplicating it. Absent with no known reply or ambiguous identity, such as the first message of a window that opens mid-turn ([rules](v1-history.md#live-turns-and-history)); unidentified Codex records and older hosts keep the legacy single-live-reply fallback. Older clients ignore this field and keep reading `response`/`own.response` unchanged |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |

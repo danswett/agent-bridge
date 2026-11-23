@@ -122,7 +122,7 @@ public sealed class AgentLaunchReadbackTests : LaunchFlowFixture
     {
         screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?",
             "\u276f 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
-        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(200));
+        var launcher = Launcher(Config());
         await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Workspace = "App" }, "person-device");
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Workspace = "App" };
         Assert.Equal(LaunchOutcome.Busy, (await launcher.LaunchAsync(request, Principal)).Outcome);

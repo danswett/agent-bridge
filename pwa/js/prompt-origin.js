@@ -5,6 +5,7 @@
 // rules are tested once (test/unit/prompt-origin.test.mjs); the app's PromptOrigin follows them.
 import { DOTS, aloud, cleanLabel, quoted } from './attribution.js';
 import { reveal } from './hidden-text.js';
+import { BRAND } from './brand.js';
 
 // The protocol's cap on userMessageLabel (v1-sessions.md), held here too: an agent's text, from
 // a host that might not.
@@ -29,6 +30,27 @@ export function promptFact(text, max = LABEL_MAX_BYTES) {
   return `${out.trimEnd()}\u2026`;
 }
 
+// The line the host types ahead of another agent's message (LiteDeliver.Frame, AgentMessageText):
+//   [<product> · from an agent on DESK · session s-9 · request r-1 · not typed by your user] words
+// The session and request are optional. The host strips brackets and middle dots from the fields
+// and neutralises a second "[<product>" in the words, so only the first line can be the header.
+const ENVELOPE = new RegExp(
+  `^\\[${BRAND.name} \\u00b7 from an agent on ([^\\]\\u00b7]+)(?: \\u00b7 session ([^\\]\\u00b7]+))?(?: \\u00b7 request [^\\]\\u00b7]+)? \\u00b7 not typed by your user\\] ?([\\s\\S]*)$`,
+  'u');
+const SESSION_MAX_BYTES = 32;
+const MACHINE_MAX_BYTES = 28;
+
+// The sender and the words of a relayed message, or null for text without a readable envelope
+// (a person's own, or one with no machine to name): the sender as "<session> on <machine>", each
+// part cleaned and capped like any agent label, "an agent on <machine>" with no session.
+export function relayEnvelope(text) {
+  const m = typeof text === 'string' ? ENVELOPE.exec(text) : null;
+  const machine = m ? promptFact(m[1], MACHINE_MAX_BYTES) : '';
+  if (!machine) { return null; }
+  const session = m[2] ? promptFact(m[2], SESSION_MAX_BYTES) : '';
+  return { label: promptFact(`${session || 'an agent'} on ${machine}`), body: m[3] };
+}
+
 // A schedule's label as drawn: "#4" for a number, and anything else in quotes, so no label of an
 // agent's reads as words of the line's own ("Scheduled · “Main agent”"), whatever letters
 // it draws them with.
@@ -50,9 +72,13 @@ function scheduleName(raw) {
 // is drawn as nothing, and no label can read as the person's or the main agent's.
 export function promptOrigin(session, { repeat = false } = {}) {
   const a = session?.activity ?? {};
-  const from = a.kind === 'notification' ? 'notification' : a.kind === 'scheduled' ? 'schedule' : a.userMessageFrom ?? 'person';
+  const kind = a.kind === 'notification' ? 'notification' : a.kind === 'scheduled' ? 'schedule' : a.userMessageFrom ?? 'person';
+  // The relay's envelope is typed into the session, so the host may call the text the person's:
+  // a message that carries one is an agent's, whoever typed it, and its envelope is not the body.
+  const relay = a.userMessage && (kind === 'person' || kind === 'agent') ? relayEnvelope(a.userMessage) : null;
+  const from = relay ? 'agent' : kind;
   if (from === 'person' || !a.userMessage) { return null; }
-  const text = reveal(a.userMessage);
+  const text = reveal(relay ? relay.body : a.userMessage);
   const preview = text.replace(/\s+/gu, ' ').trim();
   if (from === 'schedule') {
     const name = scheduleName(a.userMessageLabel);
@@ -65,8 +91,9 @@ export function promptOrigin(session, { repeat = false } = {}) {
   }
   if (from === 'notification') { return { from, icon: 'driven', by: null, repeat: false, text, preview, facts: ['Notification'], spoken: 'Notification' }; }
   const by = from === 'agent' && session.driver === 'agent' && session.driverPrincipal ? promptFact(session.driverPrincipal, 128) || null : null;
+  const label = from === 'agent' ? promptFact(a.userMessageLabel) || relay?.label || '' : '';
   return from === 'agent'
-    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: ['Sent by an agent'], spoken: 'Prompt sent by an agent' }
+    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: [label ? `From: ${label}` : 'Sent by an agent'], spoken: label ? aloud(`From: ${label}`) : 'Prompt sent by an agent' }
     : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
 }
 
