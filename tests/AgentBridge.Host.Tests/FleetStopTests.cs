@@ -391,6 +391,88 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
     }
     [Fact]
+    public async Task A_replay_is_refused_once_the_grant_is_revoked_or_the_kill_switch_is_on()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        File.WriteAllText(Path.Combine(Folder, HostSettings.FileName),
+            JsonSerializer.Serialize(new { agents = new { enabled = false }, launch = new { workspaces = new[] { new { label = "repo", path = f.Root, isolate = true } } } }));
+        var off = await End(request: request);
+        Assert.Equal(("refused", "kill-switch", calls), (off.Outcome, off.Reason, injector.Calls));
+        Settings();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
+        var revoked = await End(request: request);
+        Assert.Equal(("refused", "grant-revoked", calls), (revoked.Outcome, revoked.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_replay_is_refused_once_the_grant_has_expired()
+    {
+        grant = grant with { Id = Guid.NewGuid(), ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(4) };
+        Assert.True(store.Issue(grant).Usable);
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        var expired = await End(request: request);
+        Assert.Equal(("refused", "grant-expired", calls), (expired.Outcome, expired.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_replay_is_refused_when_the_caller_is_no_longer_a_subject_of_the_grant()
+    {
+        Own();
+        var other = grant.Subjects[0] with { Session = Guid.NewGuid().ToString() };
+        var narrowed = grant with { Id = Guid.NewGuid(), Subjects = [other] };
+        Assert.True(store.Issue(narrowed).Usable);
+        var request = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(request, "intent", "attempted", grantId: narrowed.Id)));
+        Assert.True(audit.Append(Row(request, "terminal", "ended", grantId: narrowed.Id)));
+        var receipt = await Open().HandleAsync(caller, JsonSerializer.SerializeToElement(
+            new FleetStopInput(1, request, narrowed.Id, id), ProtocolJson.Options));
+        Assert.Equal(("refused", "scope", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_terminal_row_of_another_grant_caller_or_session_is_not_the_outcome()
+    {
+        Own();
+        var audit = new AgentAuditLog(Folder);
+        var cases = new (Guid Request, AgentAuditEntry Terminal)[]
+        {
+            (Guid.NewGuid(), default!), (Guid.NewGuid(), default!), (Guid.NewGuid(), default!),
+        };
+        cases[0].Terminal = Row(cases[0].Request, "terminal", "ended", principal: "someone-else");
+        cases[1].Terminal = Row(cases[1].Request, "terminal", "ended", grantId: Guid.NewGuid());
+        cases[2].Terminal = Row(cases[2].Request, "terminal", "ended", session: Guid.NewGuid().ToString());
+        foreach (var (request, terminal) in cases)
+        {
+            Assert.True(audit.Append(Row(request, "intent", "attempted")));
+            Assert.True(audit.Append(terminal));
+            var receipt = await End(request: request);
+            Assert.Equal(("unconfirmed", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
+    public async Task A_replay_naming_another_generation_is_refused()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var audit = new AgentAuditLog(Folder);
+        var rows = GateAuditProjection.Load(Folder).Rows.Where(r => r.Request == request.ToString() && r.Gate?.Generation is not null).ToArray();
+        Assert.NotEmpty(rows);
+        var stale = Guid.NewGuid();
+        var recorded = rows[0].Gate!;
+        Assert.True(audit.Append(Row(stale, "intent", "attempted") with { Gate = recorded with { Operation = stale, Generation = 9, PayloadDigest = Digest(stale, grant.Id, id, null) } }));
+        Assert.True(audit.Append(Row(stale, "terminal", "ended") with { Gate = recorded with { Operation = stale, Phase = "terminal", Generation = 9, PayloadDigest = Digest(stale, grant.Id, id, null) } }));
+        var receipt = await End(request: stale);
+        Assert.Equal(("refused", "duplicate-id"), (receipt.Outcome, receipt.Reason));
+    }
+    [Fact]
     public async Task A_request_id_bound_to_another_caller_or_session_is_refused_without_dispatching()
     {
         Own();

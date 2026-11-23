@@ -540,7 +540,12 @@ they existed carry none and stay valid; the fields are omitted, not null, so tho
 A previous version reads a new row and ignores the fields (the line hash covers the raw line, not the parsed
 row). A repeated request id is matched by the intent row's `Gate.Operation`, grant, caller and session: another
 binding or payload refuses `duplicate-id`, one recorded `ended` outcome replays, and none or more than one
-distinct terminal is `unconfirmed` and never dispatched again.
+distinct terminal is `unconfirmed` and never dispatched again. A replay is still a use of the grant: grant
+validity (revoked, expired, generation), the caller's place in the subjects, `IsLive`, policy and the kill-switch
+are rechecked first and refuse with the reason the first call would have given; only the session-scope part
+cannot apply, as the session is gone. Residual, accepted (owner ruling via Engineering Lead R9): an intent row
+written before the digest existed has none, so the digest check is skipped for it; the key still includes the
+same session id, and a replay only reports the recorded outcome and does nothing.
 Grant counters derive from durable admissions, not a mutable UI number.
 
 | Threat | Control and remaining boundary |

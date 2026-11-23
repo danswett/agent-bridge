@@ -79,6 +79,27 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                     || r.Target is not { Length: >= 16 } at || !(at == input.Session || at.Replace("-", "")[..16] == input.Session)
                     || r.Gate!.PayloadDigest is { } recorded && recorded != digest))
                 { return Refused("duplicate-id"); }
+                // A replay is still a use of the grant: its validity, the caller's standing and the kill-switch
+                // are rechecked now (only the session-scope part of the full check cannot apply, the session
+                // being gone), and the generation it was bound under must still be the grant's.
+                string? denied = null;
+                var standing = store.Transaction(state =>
+                {
+                    var found = store.Find(state, input.Grant, state.Grants.SingleOrDefault(g => g.Id == input.Grant)?.Generation ?? 1, checkTime: true);
+                    if (!found.Usable) { denied = FleetGrantLaunch.StoreReason(found.Problem); }
+                    else if (state.Counters is { } seen && seen.ObservedAt > DateTimeOffset.UtcNow) { denied = "grant-expired"; }
+                    else if (!found.Grant!.Subjects.Contains(subject)) { denied = "scope"; }
+                    else if (bound.Any(r => r.Gate!.Generation is { } was && was != found.Grant.Generation)) { denied = "duplicate-id"; }
+                    else
+                    {
+                        var (settings, problem) = HostSettings.Load(folder);
+                        if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { denied = "policy"; }
+                        else if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled)
+                        { denied = "kill-switch"; }
+                    }
+                    return (null, new(GrantStoreProblem.None));
+                }, allowNew: false);
+                if (!standing.Usable || denied is not null) { return Refused(denied ?? FleetGrantLaunch.StoreReason(standing.Problem)); }
                 // The outcome is the terminal row of that very operation (the intent's Gate.Operation) under the
                 // same grant, caller and session; more than one distinct terminal cannot be trusted.
                 var session = bound[0].Target!;
