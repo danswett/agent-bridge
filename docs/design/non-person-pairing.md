@@ -1,7 +1,8 @@
 # Pairing without a person at the machine (non-person principals)
 
-**Status: PROPOSED CHANGE. Owner approval required; not in force.** Part A below records the rules that are in
-force today. Part B is a proposal that would change one of them. Nothing here authorizes code, a credential, a
+**Status: PROPOSED CHANGE. Owner approval required; not in force.** Part A below records the rules already
+decided, each with its build status (several are decided but not built). Part B is a proposal that would change one
+of them. Nothing here authorizes code, a credential, a
 policy change or a rollout; the build waits for the owner's answer (open questions, section 8). Written
 November 22, 2026 (Pacific Time) for the Home Assistant retirement (epic #1396), parity row 20 (agent credential
 distribution) and row 11 (pairing).
@@ -42,23 +43,32 @@ being replaced (parity row 20 and row 34).
   relay never holds one (script-credentials.md 7).
 * **No fallback to HA, a bearer token, or the relay's own label** when a check cannot be made: it refuses.
 
-## 4. Part A: the rules in force today
+## 4. Part A: rules decided (build status below)
+
+Each rule is decided; the build status is stated for each because most of it is not built.
 
 1. **A new machine's host joins by a person's approval.** A pending device shows a six-digit code; an approved
    person's device types it, shows a second code, and the person types that on the new device; the approver signs
    the roster `add` with a presence proof (device-approval.md 4.1 to 4.2). A machine with an app and a host
-   enrols both with two signed entries (4.7). Approval, enforcement and the host-enrolment slice are not built
-   yet (roster-v2-transition.md status; #55, #1825, #1359).
-2. **A script credential is minted by a person's press in the Slipgates app, on that machine's own host.**
-   "Never an agent, never a script, never a remote device" (script-credentials.md 5; Q3 closed by the owner,
-   "there is no remote mint at all"). Rollout is one press per script per machine (script-credentials.md 7).
-3. **An agent session's credential is minted by the host at launch** (`read`, or `read+reply` for a fleet child),
-   bound to the process, or adopted by a person at the machine (agent-principals.md 3.3 to 3.5;
-   client-protocol.md row 20).
+   enrols both with two signed entries (4.7). **Build status: not built.** device-approval.md is a "decided design,
+   not built" (every section 11 decision made 2026-11-04). Roster v2 (#1825, roster-v2-transition.md) is a proposed
+   design whose foundations are merged (the pin reader #1830, the pin writer, `host.roster.pin`); host enrolment, the
+   person-approval UI and the enforcement gate (#1359) are not built.
+2. **A script credential is minted only by a person's press in the Slipgates app, on that machine's own host.**
+   "Never an agent, never a script, never a remote device" (script-credentials.md 5; Q3 closed by the owner:
+   "there is no remote mint at all"). **Build status: the app press is not built.** Today the host CLI
+   `agent-bridge-host scripts add|revoke|grant-fleet|revoke-fleet` mints (built: #2286, PR 2582, #2820): a terminal
+   step that script-credentials.md says is "retired or app-gated when the app path lands". Rollout is one
+   press per script per machine (script-credentials.md 7).
+3. **An agent session's credential is minted by the host at launch** (`read`, or `read+reply` with depth 1 for a
+   fleet child), bound to the process, or adopted by a person at the machine (agent-principals.md 3.3 to 3.5;
+   client-protocol.md row 20). **Build status: the launch minting and the adoption ops are built**
+   (`AgentCredentials.cs`).
 
-What this gives row 20 today, once built: a fresh machine gets its agent and script credentials with **no HA token
-step and no pasted token**, but a person must be at that machine for each script credential press (and for the
-host's first approval, someone with the approving device reads the new machine's code).
+**What Part A would give row 20 once the app press and device approval are built:** a fresh machine gets its agent
+and script credentials with no HA token step and no pasted token, but a person must be at that machine for each
+script credential press, and someone with the approving device reads the new machine's code. **Today it does not
+meet row 20**: the CLI mints (a terminal step), and device approval and roster v2 are not built.
 
 ## 5. Part B: Proposed CHANGE (owner approval, not in force)
 
@@ -80,6 +90,25 @@ signed envelope the receiver checks. Its fields (proposed):
 | scope | At most `read+reply`. Never `launch`: fleet launch stays its own person-set flag per credential (script-credentials.md 2) |
 | expiry | Short (proposed: at most 24 hours) |
 | signer | A presence-proven person device, resolved from the verified roster |
+
+**Principals a grant may name (proposed default: `script` only).** A `script` is a named, long-lived caller
+(`script:<machine>/<name>`, script-credentials.md). `agent-fleet-child` means a session a fleet script launches under
+the person-set fleet launch grant, whose credential the host already mints itself at launch (`read+reply`, depth 1;
+`AgentCredentials.PrepareFleet`): a provisioning grant adds nothing for it, so it is **not grantable** unless the
+owner says otherwise (question 2 below).
+
+**Default: off.** A host accepts provisioning grants only if a person turned that on for that host. Approving this
+design changes nothing on any machine by itself; rolling it out is a separate decision.
+
+**Consumed-id store (proposed).** The host keeps a store of consumed and revoked grant ids, the pattern of the fleet
+grant store (fleet-grants.md, `GrantStore`): bounded, every consumption written with its audit record before the
+credential is minted, kept at least as long as the grant's longest lifetime, and **failing closed**: if the store is
+missing, unreadable or incomplete the host refuses every grant rather than resetting it, so a lost store cannot
+make a used grant usable again.
+
+**Revoking an unconsumed grant (proposed).** The person who issued a grant can revoke it before it is consumed, from
+a presence-proven device, by the same signed path; the host records the revoked id, and a revoked grant is refused as
+a consumed one is. A grant that expired unused needs no revoke.
 
 **Flow (proposed):** the person signs the grant on their device; it reaches the host over the existing
 account-scoped channel; the host checks the signer against the **verified roster**, the machine, the principal, the
@@ -106,7 +135,10 @@ Both parts refuse, with a stated reason, and never fall back to HA, a bearer tok
 | The roster cannot be verified (verifier off, enforcement not on, generation not pinned) | cannot verify: refused, never assumed |
 | A host's `hostSign`, an agent credential, a script credential or a relay-listed kind offered as the person | refused (a non-person never authorizes) |
 | Grant expired | expired |
-| Grant id already consumed (a replay) | already used |
+| Grant id already consumed (a replay), or revoked before use | already used or revoked |
+| The consumed-id store is missing, unreadable or incomplete | refused, fails closed |
+| A grant naming `agent-fleet-child` (not grantable by default) | refused |
+| Provisioning grants not enabled on this host (the default) | refused |
 | Grant names another machine | wrong machine |
 | Scope above `read+reply`, or a launch scope requested in a grant | refused (launch is a separate person-set flag) |
 | Principal kind or name not allowed, or a name already holding 2 live credentials | refused (existing rotation limit) |
@@ -118,23 +150,25 @@ Both parts refuse, with a stated reason, and never fall back to HA, a bearer tok
 
 Evidence is recorded in the epic (#1396) per row, every client the parity rule requires, 3 times per machine:
 
-* **Part A.** A fresh machine, with no HA present and no token pasted: its host is enrolled by a person's approval
+* **Part A (once the app press and device approval are built; today the CLI mints, so not yet).** A fresh machine, with no HA present and no token pasted: its host is enrolled by a person's approval
   with the matching code; one app press per script mints its credential; the script then calls `fleet.list` and
   `agent.send` with it; a credential from another machine is refused; a revoked one is refused; the refusals in
   section 6 that apply to Part A each return their reason.
 * **Part B (only if approved).** All of Part A, and: a provisioning grant consumed once mints the credential with no
   person at the machine and no HA present; replaying it, an expired one and one for another machine are each
-  refused; a grant asking for `launch` is refused; with the verifier off the grant is refused, not accepted.
+  refused; a revoked unconsumed grant is refused; a grant asking for `launch` or for `agent-fleet-child` is refused;
+  with the verifier off, or the consumed-id store unreadable, the grant is refused, not accepted.
 * **Row 11, the pairing itself** (a new machine joins only after a matching code is approved) is the device-approval
   build (#55), checked in the clean-VM release-gate harness (#736); this note adds no step to it.
 
 ## 8. Open questions for the owner
 
-1. **Keep Part A as it is, or approve Part B?** Part A already meets row 20's "no HA token step" with a person's
-   press per script per machine. Part B is only needed if provisioning must work with nobody at the machine. This
-   reverses "never a remote device" for script credentials, so it is the owner's call.
-2. If B: the grant's longest lifetime (24 hours proposed), and whether it may name an `agent-fleet-child` or only a
-   `script`.
+1. **Keep Part A as it is, or approve Part B?** Part A would meet row 20's "no HA token step" once the app press and
+   device approval are built, with a person's press per script per machine; today it does not (the CLI mints, and
+   neither is built). Part B is only needed if provisioning must work with nobody at the machine. This reverses
+   "never a remote device" for script credentials, so it is the owner's call.
+2. If B: the grant's longest lifetime (24 hours proposed), and whether it may name an `agent-fleet-child` (proposed
+   default: no, `script` only) and whether it is off by default on every host (proposed: yes).
 3. Confirm the HA component (S8) pairs as a **connector** principal with its own key, approved by the mutual code
    exchange (agent-principals.md 9.2), rather than carrying any shared secret.
 
