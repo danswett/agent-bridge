@@ -195,6 +195,13 @@
           <div class="row">
             <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
           </div>
+          <fieldset id="notify-filters" class="notify-filters" hidden>
+            <legend>Tell me about</legend>
+            <label class="check"><input type="checkbox" id="notify-questions"> Questions waiting for my answer</label>
+            <label class="check"><input type="checkbox" id="notify-pinned"> Every turn in pinned sessions</label>
+            <label class="check"><input type="checkbox" id="notify-all"> Every turn in all sessions</label>
+            <label class="check"><input type="checkbox" id="notify-failures"> Delivery failures</label>
+          </fieldset>
         </section>
         <section id="feedback" class="panel" aria-labelledby="feedback-h" hidden>
           <h3 id="feedback-h">Send feedback</h3>
