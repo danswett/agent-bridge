@@ -451,12 +451,25 @@ public sealed partial class FleetListTests : IDisposable
     static string[] Names(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("sessions")[0].EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
 
+    [Fact]
+    public async Task Fleet_list_asks_the_roster_for_a_fresh_read_only_when_the_caller_says_fresh_and_never_leaves_it_set()
+    {
+        var op = Op(); var chan = Hello(AgentProtocol.ScopeRead);
+        await op.HandleAsync(chan, Body("{}"));
+        await op.HandleAsync(chan, Body("""{"fresh":true}"""));
+        await op.HandleAsync(chan, Body("""{"fresh":"yes"}"""));
+        await op.HandleAsync(chan, Body("{}"));
+        Assert.Equal([false, true, false, false], roster.SeenFresh);
+        Assert.False(RegistryReads.FreshRequested);
+    }
+
     sealed class Roster : IScopedFleetRoster
     {
         public IReadOnlyList<FleetMachine>? Machines { get; set; }
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
             Task.FromResult(Machines ?? [new FleetMachine("m2", true, [new FleetSession("n1", "my project", "working", Started)])]);
-        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) => new("account-a", await ReadAsync(ct));
+        public List<bool> SeenFresh { get; } = [];
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { SeenFresh.Add(RegistryReads.FreshRequested); return new("account-a", await ReadAsync(ct)); }
     }
 
     sealed class FixedTime(DateTimeOffset now) : TimeProvider

@@ -5,6 +5,7 @@ namespace AgentBridge.Host.Fleet;
 // at a time per socket's budget, so readers that arrive while a read is in flight wait for it, and a
 // result younger than `freshness` (monotonic clock) answers the next reader. A failed read is never kept,
 // and a different connection never sees another's answer. A caller's cancellation stops only its own wait.
+// `fresh` readers (the name fence, name-uniqueness checks) never share: they start their own read.
 sealed class SharedRead<T>(TimeProvider clock, TimeSpan freshness)
 {
     readonly object gate = new();
@@ -14,8 +15,9 @@ sealed class SharedRead<T>(TimeProvider clock, TimeSpan freshness)
     long readAt;
     bool has;
 
-    public Task<T> GetAsync(object forConnection, Func<Task<T>> read, CancellationToken ct)
+    public Task<T> GetAsync(object forConnection, Func<Task<T>> read, CancellationToken ct, bool fresh = false)
     {
+        if (fresh) { return read().WaitAsync(ct); }
         Task<T> task;
         lock (gate)
         {
@@ -25,6 +27,9 @@ sealed class SharedRead<T>(TimeProvider clock, TimeSpan freshness)
         }
         return task.WaitAsync(ct);
     }
+
+    // A new relay connection: nothing kept or in flight belongs to it (the connection key would catch it too).
+    public void Reset() { lock (gate) { connection = null; flight = null; has = false; last = default; } }
 
     async Task<T> Start(object forConnection, Func<Task<T>> read)
     {

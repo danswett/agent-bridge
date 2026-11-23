@@ -73,4 +73,43 @@ public sealed class SharedReadTests
         Assert.Equal(9, await second);
         Assert.Equal(1, reads);
     }
+
+    [Fact]
+    public async Task A_fresh_read_starts_its_own_read_inside_the_window_and_while_another_is_in_flight()
+    {
+        var reads = 0; var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shared = Reader();
+        Task<int> Slow() { reads++; return gate.Task; }
+        var inFlight = shared.GetAsync(connection, Slow, CancellationToken.None);
+        Assert.Equal(100, await shared.GetAsync(connection, () => { reads++; return Task.FromResult(100); }, CancellationToken.None, fresh: true));
+        gate.SetResult(1);
+        Assert.Equal(1, await inFlight);
+        Assert.Equal(2, reads); // the fence's own read and the in-flight one: it did not join the earlier read
+        time.Advance(TimeSpan.FromMilliseconds(10));
+        Assert.Equal(200, await shared.GetAsync(connection, () => { reads++; return Task.FromResult(200); }, CancellationToken.None, fresh: true));
+        Assert.Equal(3, reads);
+    }
+
+    [Fact]
+    public async Task Reset_discards_the_kept_result_so_the_next_reader_asks_again()
+    {
+        var reads = 0; var shared = Reader();
+        Task<int> Read() => Task.FromResult(++reads);
+        Assert.Equal(1, await shared.GetAsync(connection, Read, CancellationToken.None));
+        shared.Reset();
+        Assert.Equal(2, await shared.GetAsync(connection, Read, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_read_still_in_flight_for_the_old_connection_is_not_kept_for_the_new_one()
+    {
+        var old = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shared = Reader(); var other = new object(); var newReads = 0;
+        var oldRead = shared.GetAsync(connection, () => old.Task, CancellationToken.None);
+        Assert.Equal(2, await shared.GetAsync(other, () => { newReads++; return Task.FromResult(2); }, CancellationToken.None));
+        old.SetResult(1);
+        Assert.Equal(1, await oldRead);
+        Assert.Equal(2, await shared.GetAsync(other, () => { newReads++; return Task.FromResult(3); }, CancellationToken.None));
+        Assert.Equal(1, newReads);
+    }
 }

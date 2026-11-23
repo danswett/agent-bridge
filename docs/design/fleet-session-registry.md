@@ -306,18 +306,27 @@ agent session on the machine, and the Lite receiver's account and roster checks.
 The relay's rate is now a token bucket (see "Size and paging", #3787); this rule removes the avoidable reads
 so the bucket is spent on distinct work.
 
-* **Single flight.** While a `registry-get` is in flight on a connection, every other local reader waits for
-  that one read and gets its result.
-* **Freshness window.** A successful read is reused for `RegistryReadFreshness` (1 s, monotonic clock) by readers that
-  ask for the account's registry. No reader needs more than that: liveness is judged on the registry's own
-  `lastSeen` (5 s and 60 s windows), and the target host resolves a node id again itself before typing.
+* **Single flight.** While a `registry-get` is in flight on the host's relay connection, readers that may share
+  wait for that one read and get its result. One shared read serves both of the host's roster readers
+  (the fleet roster and the Lite messaging roster), not one each.
+* **Freshness window.** A successful read is reused for `RegistryReadFreshness` (1 s, monotonic clock) by a reader that may
+  share. Liveness is judged on the registry's own `lastSeen` (5 s and 60 s windows), and the target host
+  resolves a node id again itself before typing.
+* **Who may share, and who must not.** Sharing is for listing and routing: `fleet.list` and `fleet.find` as an agent
+  session calls them to send to a node id or to look at the fleet. These **bypass it and always start their own
+  read, after the request arrived**: (1) the send-time name fence, which asks `fleet.list` with `fresh: true`
+  (a name that moved from A to B must never send to A); (2) name-uniqueness checks, the rename enrollment's duplicate
+  test and a named launch's availability test; any caller that sends `fresh: true`. A shared read is never used for
+  a decision about whether a name is free or still belongs to a node.
 * **Never cached:** a failed or refused read (a `slow-down` or a transport failure is reported to each caller, never
-  answered from an older copy), a read after the connection changed, and anything across accounts. A new relay
-  connection clears it, as it already clears the offline-machine cache above.
-* **Same answer.** The reply shape and scoping of `fleet.list` and `fleet.find` do not change; the
-  shared read is the account snapshot before each caller's own filtering and authorization.
-* **Not changed:** the sender's refusal when the target is not live in a fresh read, the expected-node fence and the
-  name fence. A held discovery pass on the target is a separate refusal (`sessionResolutionIncomplete`, #3802).
+  answered from an older copy), a read after the connection changed (attaching a new connection resets the shared
+  read, and a read still in flight for the old connection is not kept for the new one), and anything across accounts.
+* **Same answer.** The reply shape and scoping of `fleet.list` and `fleet.find` do not change; `fresh` is the only new
+  request field, and a value that is not the boolean `true` means not fresh. The shared read is the account snapshot
+  before each caller's own filtering and authorization.
+* **Not changed:** the sender's refusal when the target is not live in the read, the expected-node fence and the
+  name fence (now fresh by the rule above). A held discovery pass on the target is a separate refusal
+  (`sessionResolutionIncomplete`, #3802). The 30 s pin on a lost reply is not changed here (follow-up).
 
 ## Offline machines and the cache
 

@@ -55,7 +55,8 @@ public sealed partial class FleetLaunchNames
             IReadOnlyList<FleetMachine> machines = [];
             try
             {
-                machines = await roster.ReadAsync(CancellationToken.None);
+                // A name-availability decision never uses the shared registry read (fleet-session-registry.md, #1396).
+                using (RegistryReads.Scope(true)) { machines = await roster.ReadAsync(CancellationToken.None); }
             }
             catch (Exception e) when (e is IOException or InvalidOperationException or TimeoutException or OperationCanceledException or JsonException or System.Net.WebSockets.WebSocketException)
             {
