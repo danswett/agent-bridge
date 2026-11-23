@@ -764,8 +764,10 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 
 **Status: a proposal for the owner. Nothing here is built, enabled or decided.** It changes what the host captures and what agents with
 read scope can see in `fleet.list`, so it needs the owner's choice between the options below. Part of #1396; found by row 28 of the HA
-parity list. Reviewed from the shadow side by Pump-Wake (the stuck-prompt shadow's owner); its options note is slipgates-fleet
-[#1191](https://github.com/danswett/slipgates-fleet/issues/1191), whose A1 is Option A here.
+parity list. Reviewed from the shadow side by Pump-Wake (the stuck-prompt shadow's owner). Its options note, slipgates-fleet
+[#1191](https://github.com/danswett/slipgates-fleet/pull/1191), has one "host publishes the evidence" choice (its A1, which lists unsent
+input and last reply too) against retiring the tap (its A2). This note splits that A1 in two for the owner: **Option A here is A1** (fields
+from existing state) and **Option B here is A1b** (adds the composer read, the HMAC key and `lastReplyAt`). #1191's A2 is the alternative to both.
 
 **The gap.** The relay allow-list and `fleet.list` already accept the optional evidence members (`SessionEvidence`: `stale`,
 `attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`, `owner`, `pr`,
@@ -779,9 +781,10 @@ The shadow requires, on every row: `attention`, `openAsks` and `observedAt` no o
 session. Hence these rules, which apply to A and B:
 
 * **`observedAt` is part of A.** It is the time the host last evaluated the row's evidence (no new capture). Without it nothing passes.
-* **Heartbeat.** `observedAt` stays out of the identical-content check (or every read would defeat the 20 s suppression), so an unchanged,
-  long-waiting prompt would stop publishing and age past 60 s, and the shadow would call it stale: the sessions that matter would never be
-  classified. The host therefore republishes at most 30 s apart while any session has attention other than `none`, refreshing `observedAt`.
+* **Heartbeat: the existing one.** `FleetPublisher` already republishes every 20 s even when nothing changed (`FleetPublisher.cs`, the
+  identical-content check). Each such republish must recompute `observedAt` (not reuse a cached value), so an unchanged, long-waiting prompt
+  stays inside the shadow's 60 s bound with no new heartbeat. `observedAt` stays out of the identical-content comparison, or every read
+  would make the content differ and defeat the 20 s suppression (a publish every 2 s).
 * **No `stale` from the host.** A host `stale` (the not-responding threshold) would make the shadow skip exactly the prompt that has waited
   longest. The host does not publish `stale`; the reader's own derivation for an offline machine is unchanged.
 * **Attention vocabulary.** The host can see `question`, `approval` and `permission` (and `trust` at launch). The shadow accepts
@@ -791,18 +794,18 @@ session. Hence these rules, which apply to A and B:
 * **`trust` is mapped in A.** The tap planner acts only on `trust`, so A without a trust mapping plans no tap. The mapping comes from the
   launch-trust state (`LaunchTrust`) and is confirmed in review before A is built.
 
-### Option A: fields from state the host already holds (no new capture)
+### Option A (= A1 in #1191): fields from state the host already holds (no new capture)
 
 | Field | Source | Notes |
 |---|---|---|
 | `attention {kind}` | the session's pending question (`Session.Question`: question, approval, permission) and the launch-trust state (trust); `none` when nothing is pending | Anything unmapped is `unknown` or omitted, never guessed. |
 | `openAsks` | the count of asks the host holds pending (0 or 1 for a session's own question; subagent questions roll up) | A current count, not history. |
-| `observedAt` | the host's evaluation time for the row | See the heartbeat rule above; kept out of the identical-content check. |
+| `observedAt` | the host's evaluation time for the row | Recomputed at each republish (the existing 20 s heartbeat); kept out of the identical-content check. |
 
 What Option A enables: detecting a session that waits on the person (`owner-tap-needed`: trust, permission, question, and approval once the
 shadow accepts it). What it does not: composer cases (see B). Cost: about 100 bytes per session; no new capture; no key; no screen read.
 
-### Option B: A plus a background composer read and a per-host HMAC key (new capture)
+### Option B (= A1b in #1191): A plus a background composer read, a per-host HMAC key and a `lastReplyAt` source (new capture)
 
 Adds `unsentLength`, `unsentHash` and `provenance {source: host-observed, unsentHash}` (the two hashes must match); `observedAt` is
 already in A.
@@ -829,24 +832,23 @@ is agreed.
 
 * **Size.** 16 KiB per record. A produces about 100 bytes and B about 300 bytes per session, so fewer than 64 sessions may fit; the existing
   rule applies (drop the least recent, set `truncated`).
-* **Debounce.** At most one publish per 2 s; attention changes publish at once, and the heartbeat above keeps `observedAt` inside 60 s.
+* **Debounce.** At most one publish per 2 s; attention changes publish at once, and the existing 20 s republish keeps `observedAt` inside 60 s.
 * **Read gate: unchanged.** `fleet.list` needs an agent credential with a completed `agent.hello` and `read` scope, returns only the
   caller's own account, and is audited. The relay still refuses a record that carries prompt, question, path or token text.
 * **Older relays.** A relay without these members refuses the whole record, and there is no capability flag for evidence. Proposal: the
   relay advertises one (as for `sessionId`) and the host sends evidence only when it is present.
 * **Tests the build would need first:** a host producer test per field (including each field absent when its source is unknown), the heartbeat
-  (an unchanged attention row republishes within 30 s), the 16 KiB and debounce cases, the relay round trip, and for B a test that no
+  (an unchanged attention row republishes within 20 s with a fresh `observedAt`, and `observedAt` alone never triggers a publish), the 16 KiB and debounce cases, the relay round trip, and for B a test that no
   composer text appears in the record, log or metrics.
 
 ### Owner decisions
 
 1. A only, A plus B, or neither. (Recommendation: A first. It needs no new capture and already lets the shadow detect owner-tap cases; B is
    a separate decision about reading what a person has typed.)
-2. The heartbeat period (proposed 30 s while any session has attention, against the shadow's 60 s freshness bound).
-3. If B: the background read cadence (proposed 5 s), the dedicated key's custody, whether the length may be shown, and separately whether
+2. If B: the background read cadence (proposed 5 s), the dedicated key's custody, whether the length may be shown, and separately whether
    any clear or replace action may ever consume `unsentHash`.
-4. A source for `lastReplyAt` (separate step, needed for composer cases).
-5. The evidence capability flag on the relay, and, in the fleet repository, accepting the `approval` kind.
+3. A source for `lastReplyAt` (separate step, needed for composer cases).
+4. The evidence capability flag on the relay, and, in the fleet repository, accepting the `approval` kind.
 
 ## What Trust should review
 
