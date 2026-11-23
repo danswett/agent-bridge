@@ -454,6 +454,7 @@ public sealed partial class FleetListTests : IDisposable
     [Fact]
     public async Task Fleet_list_asks_the_roster_for_a_fresh_read_only_when_the_caller_says_fresh_and_never_leaves_it_set()
     {
+        if (!OperatingSystem.IsWindows()) { return; } // the op is Windows-only, as in every test here
         var op = Op(); var chan = Hello(AgentProtocol.ScopeRead);
         await op.HandleAsync(chan, Body("{}"));
         await op.HandleAsync(chan, Body("""{"fresh":true}"""));
