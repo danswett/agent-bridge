@@ -1,7 +1,6 @@
 // The approver's side of the code exchange (design §4.2), the PWA's port of EnrollmentApprover; see enrollment-exchange.js.
-import { equal } from './roster/codec.js';
 import { NONCE_BYTES, commit as commitOf, transcript as transcriptOf, code1 as code1Of, code2 as code2Of, shown, matches } from './roster/enrollment.js';
-import { bytes, randomNonce, ATTEMPT_LIFETIME } from './enrollment-exchange.js';
+import { bytes, macMatches, randomNonce, ATTEMPT_LIFETIME } from './enrollment-exchange.js';
 
 export class EnrollmentApprover {
   #account; #h; #pendingId; #lockout; #now; #expires;
@@ -25,7 +24,7 @@ export class EnrollmentApprover {
     if (this.#commit === null || this.#transcript !== null || this.#revealing || this.#over()) return false;
     this.#revealing = true; // taken before the first await: a second reveal while this one is checked is not an abandonment
     try {
-      if (!bytes(nN, NONCE_BYTES) || !equal(this.#commit, await commitOf(this.#h, nN))) { this.#ended = true; return false; }
+      if (!bytes(nN, NONCE_BYTES) || !macMatches(this.#commit, await commitOf(this.#h, nN))) { this.#ended = true; return false; }
       const t = await transcriptOf(this.#account, this.#h, this.#nA, nN);
       const [c1, c2] = [await code1Of(t), await code2Of(t)];
       if (this.#over()) return false;
