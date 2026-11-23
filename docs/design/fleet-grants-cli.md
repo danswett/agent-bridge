@@ -173,7 +173,7 @@ Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
 | `grant-exhausted` | Hourly, daily or live cap (including reservations) would be exceeded |
 | `scope` | Workspace, agent, model, launch profile, effort, context, permission, stop target or action outside the grant or narrowed by host policy |
 | `name-gate` | The fixed name gate refused: invalid or colliding name |
-| `duplicate-id` | Same request id with a different binding |
+| `duplicate-id` | Same request id with a different binding; for `fleet end`, also an earlier stop with that id whose outcome was never recorded (`unconfirmed`, exit 7), which is never dispatched again |
 | `duplicate-store-full` | The 4096-id store is full of unexpired bindings |
 | `target-offline` | The target node is unreachable; nothing was sent that could have acted |
 | `kill-switch` | Account-wide kill switch, `launch.enabled` off or equivalent off state |
@@ -181,6 +181,9 @@ Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
 | `person-required` | The existing stopper needs person confirmation; the agent never obtains `--confirm` |
 | `audit-unavailable` | Audit intent could not be written; no action taken |
 | `policy` | Another receiving-host launch safety gate refused |
+| `bad-argument` | The request or its arguments are malformed (exit 2 from the CLI) |
+| `still-running` | `fleet end`: the graceful stop timed out and the session is still running; never terminated (exit 7) |
+| `unavailable` | The host or pipe could not be reached (exit 6) |
 `target-offline` is returned only when delivery provably did not happen; if the
 envelope may have arrived, the result is exit 7. `kill-switch` and `peer-not-trusted`
 never fall back to another route.

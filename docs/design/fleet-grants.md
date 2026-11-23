@@ -473,8 +473,11 @@ Proposed command forms (not commands implemented by this PR):
 
 ```text
 agent-bridge-host launch --grant <id> [existing explicit launch options]
-agent-bridge-host stop --session <full-id> --grant <id>
+fleet end --grant <id> --session <session-id> --request <uuid>
 ```
+
+The stop form is the implemented `fleet end` verb (pipe op `fleet.end`; see
+[fleet-grants-cli.md](fleet-grants-cli.md)); it takes a fresh `--request` per session.
 
 The local pipe authenticates `AGENT_BRIDGE_TOKEN` against the AP1 credential
 record and positively binds caller ancestry/job membership to the exact live
@@ -521,7 +524,7 @@ Never retry an uncertain launch/stop with a fresh operation id automatically.
 Stop is allowed only for a subject's own grant-launched process, unless the person
 explicitly named that existing process in `stopTargets`. Grant action `stop` does
 not grant force termination or release protected/held/working-session constraints.
-If the existing stopper requires person confirmation, return `personRequired`;
+If the existing stopper requires person confirmation, return `person-required`;
 no agent may obtain or consume `--confirm` to bypass that requirement.
 No ask/answer/reply/trust op, key/sign-in/config/update, grant issuance, delegated
 grant creation or permission escalation can be carried by this grant.
