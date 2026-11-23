@@ -92,10 +92,10 @@ index 20cf6d13..d291bee7 100644
      kind: unit
 diff --git a/quality/merge-rule-sweep.ps1 b/quality/merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..8d4b9ada
+index 00000000..41bd287e
 --- /dev/null
 +++ b/quality/merge-rule-sweep.ps1
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,183 @@
 +#Requires -Version 7
 +<#
 +.SYNOPSIS
@@ -209,14 +209,18 @@ index 00000000..8d4b9ada
 +        $fields = ($waitingPrs | ForEach-Object { "p$($_): pullRequest(number: $_) { state headRefOid }" }) -join ' '
 +        $query = Invoke-SweepGh api graphql -f "query=query { repository(owner: `"$owner`", name: `"$name`") { $fields } }"
 +        $repo = if ($query.Ok) { try { (($query.Output -join "`n") | ConvertFrom-Json).data.repository } catch { $null } }
++        if ($repo -isnot [psobject]) { $repo = $null }
 +        if (-not $repo) { $lines += 'warning: pull requests could not be read; the dead-weight rule is skipped this sweep' }
 +        else {
 +            foreach ($entry in $all | Where-Object { $_.Status -ne 'in_progress' -and $_.Pr }) {
-+                $pr = $repo."p$($entry.Pr)"
-+                if (-not $pr) { continue }
++                # StrictMode: a pull request the answer omits, or null, or without a field is unknown, never dead weight.
++                $slot = $repo.PSObject.Properties["p$($entry.Pr)"]
++                $pr = if ($slot) { $slot.Value }
++                if (-not $pr -or -not $pr.PSObject.Properties['state']) { continue }
++                $prHeadNow = if ($pr.PSObject.Properties['headRefOid']) { [string]$pr.headRefOid } else { '' }
 +                if ($pr.state -eq 'MERGED') { $dead[$entry.Run.id] = "pull request merged (#$($entry.Pr))" }
 +                elseif ($pr.state -eq 'CLOSED') { $dead[$entry.Run.id] = "pull request closed (#$($entry.Pr))" }
-+                elseif ($entry.PrHead -and $pr.headRefOid -and $pr.headRefOid -ne $entry.PrHead) { $dead[$entry.Run.id] = "head superseded (#$($entry.Pr))" }
++                elseif ($pr.state -eq 'OPEN' -and $entry.PrHead -and $prHeadNow -and $prHeadNow -ne $entry.PrHead) { $dead[$entry.Run.id] = "head superseded (#$($entry.Pr))" }
 +            }
 +        }
 +    }
@@ -277,10 +281,10 @@ index 00000000..8d4b9ada
 +if ($result.Failed -gt 0) { Write-Host "::error title=merge-rule sweep::$($result.Failed) stuck Merge rule run(s) could not be stopped"; exit 1 }
 diff --git a/quality/test-merge-rule-sweep.ps1 b/quality/test-merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..f361c30d
+index 00000000..d9dea3a1
 --- /dev/null
 +++ b/quality/test-merge-rule-sweep.ps1
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,243 @@
 +#Requires -Version 7
 +# Offline only: every GitHub request must match this stand-in.
 +$ErrorActionPreference = 'Stop'
@@ -297,7 +301,7 @@ index 00000000..f361c30d
 +    # $s.runs: status -> runs; each run's age in minutes. $s.refuse: run ids whose plain cancel answers a 409 conflict;
 +# $s.completed: run ids GitHub says already completed (409 on either cancel); $s.ghost: never queued (409 on either).
 +    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @(); ghost = @(); completed = @(); remaining = 900
-+        prs = @{}; prQueryFails = $false; jobs = @{}; jobsFail = @() }
++        prs = @{}; prQueryFails = $false; prOmit = @(); jobs = @{}; jobsFail = @() }
 +}
 +function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '', [double]$RunningMinutes = -1, [string]$PrHead = 'current', [switch]$JudgeQueued) {
 +    # By default every run is for pull request 1, so a case's young run 99 (Keeper) is the newest one kept and the old
@@ -352,6 +356,7 @@ index 00000000..f361c30d
 +            if ($s.prQueryFails) { $global:LASTEXITCODE = 1; return }
 +            $repo = [ordered]@{}
 +            foreach ($m in [regex]::Matches($a, 'p(\d+): pullRequest\(number: (\d+)\)')) {
++                if ([int]$m.Groups[2].Value -in $s.prOmit) { continue }
 +                $repo["p$($m.Groups[1].Value)"] = if ($s.prs.ContainsKey([int]$m.Groups[2].Value)) { $s.prs[[int]$m.Groups[2].Value] } else { $null }
 +            }
 +            $global:LASTEXITCODE = 0
@@ -512,6 +517,14 @@ index 00000000..f361c30d
 +$s.runs = @{ queued = @((Run 82 45), (Keeper)) }; $s.remaining = 150
 +$null = Sweep
 +Assert (($s.cancelled -join ',') -eq '82') 'at 150 left, the sweep goes on'
++
++# B412 (P1): under StrictMode a pull request missing from the GraphQL answer, or null, or without its fields, must not
++# kill the sweep: its state is unknown, so that rule doesn't cancel it; every other rule and pull request still runs.
++Reset-Scenario
++$s.prs = @{ 30 = @{ state = 'MERGED'; headRefOid = 'current' }; 33 = @{ headRefOid = 'current' } }; $s.prOmit = @(31)
++$s.runs = @{ pending = @((Run 90 2 -Pr 30), (Run 91 2 -Pr 31), (Run 92 2 -Pr 32), (Run 93 2 -Pr 33)); queued = @((Run 94 45 -Pr 31), (Run 95 1 -Pr 31)) }
++$out = Sweep
++Assert ((($s.cancelled | Sort-Object) -join ',') -eq '90,94' -and $out.Failed -eq 0) 'a pull request omitted from the answer, null, or without a state is unknown: not cancelled as dead weight, and the sweep goes on'
 +
 +if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 +"merge-rule-sweep: $script:checks checks passed"
