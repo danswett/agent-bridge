@@ -165,6 +165,8 @@ sealed class CopilotWaiverConfig
 sealed record MainFact(string State, string Reason)
 {
     public IReadOnlyList<string> Alerts { get; init; } = [];
+    /// <summary>Which finished main run the state was read from (sha, run id and attempt): what the sweep marker pins.</summary>
+    public string? Evidence { get; init; }
 }
 
 /// <summary>A commit status on the head: GitHub keeps every one posted, newest last by time.</summary>

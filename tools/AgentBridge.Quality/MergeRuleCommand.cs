@@ -115,11 +115,11 @@ sealed class GhCli(Func<IReadOnlyList<string>, string?, (int Exit, string Out, s
 /// --post, sets each head's `merge-rule` status (quality/README.md §4.9). Without --post it's a dry
 /// run that only prints, so anyone can see what the workflow would post.
 /// </summary>
-static class MergeRuleCommand
+static partial class MergeRuleCommand
 {
     internal const string Usage = """
           merge-rule (--pr N | --sha SHA | --all) [--slug OWNER/REPO] [--config FILE]
-                     [--post] [--target-url URL] [--summary FILE] [--allow-non-main]
+                     [--post] [--target-url URL] [--summary FILE] [--allow-non-main] [--if-changed]
               Judges open pull requests into main against quality/merge-rule.yml: those on the
               numbered one's head, those whose head is SHA, or all of them. Main's CI comes
               first: while the latest completed product evidence isn't green, every pull request fails
@@ -131,6 +131,8 @@ static class MergeRuleCommand
               origin/main's commit with no local changes to them: run it from a freshly
               fetched origin/main checkout, never a pull request's worktree, which would judge
               itself. --allow-non-main judges anyway, with a warning.
+              --if-changed (with --all, for the backstop): judges nothing while the sweep marker (a status
+              on main's head, under an hour old) matches main and the open pull requests; else judges.
         """;
 
     // Two reads (#524's review, GITHUB_TOKEN's GraphQL budget): the open list without checks or
@@ -312,6 +314,26 @@ static class MergeRuleCommand
         if (session.Main.State == "error")
             problems++;
 
+        // The sweep marker: what the last full judgement saw. Absent, unreadable or malformed it fails open to judging.
+        var mainReadable = session.Main.State != "error";
+        // Read and written on the checkout's own head, only when it is origin/main's untouched commit (the evaluator that is judging).
+        var markerHead = mainReadable && origin.BaseCommit is not null && SameSha(origin.Head, origin.BaseCommit) && !origin.Dirty && !origin.OtherRules && IsCommitSha(origin.Head) ? origin.Head : null;
+        var (marker, markerAt) = markerHead is null ? (null, null) : ReadSweepMarker(session, markerHead);
+        var mainPart = mainReadable ? MainPart(session.Main) : null;
+        var markerCoversMain = marker is not null && marker.Main == mainPart;
+        var scoped = options.ContainsKey("pr") || options.ContainsKey("sha");
+        string? openDigest = null;
+        if (options.ContainsKey("if-changed") && options.ContainsKey("all") && mainReadable)
+        {
+            openDigest = ReadHeadsFingerprint(session);
+            if (openDigest is not null && markerCoversMain && marker!.Heads == openDigest && markerAt is { } at && now - at <= SweepMarkerMaxAge)
+            {
+                output.WriteLine($"Nothing has changed since the last full judgement (main {MergeRule.Short(markerHead!)} is {session.Main.State}, the open pull requests are as they were): not judging.");
+                output.WriteLine($"API: {session.Cost}.");
+                return 0;
+            }
+        }
+
         // The status belongs to a commit, not a pull request, and two open pull requests can share
         // a head: so every mode judges all open pull requests on the head it's about, and posts the
         // worst of their verdicts. A held or unreviewed one then can't ride on another's success.
@@ -319,9 +341,14 @@ static class MergeRuleCommand
         // run for another pull request or head may have been displaced (GitHub keeps one waiting
         // run per concurrency group), and its success, posted while main was green, mustn't stand
         // while main is red. Posts that wouldn't change a verdict are skipped, so this is cheap.
-        var widened = (options.ContainsKey("pr") || options.ContainsKey("sha")) && session.Main.State != "success";
+        // Once per main state: a full judgement posts the sweep marker, and while it covers this main state a scoped run stays
+        // scoped (every other pull request was judged for it). Without it (that sweep was lost or hasn't run) it widens and posts it.
+        var widened = scoped && session.Main.State != "success" && !markerCoversMain;
         if (widened)
             output.WriteLine($"Main isn't green ({session.Main.State}): judging every open pull request, not only the one asked for.");
+        var fullJudgement = !scoped || widened;
+        if (fullJudgement && post && mainReadable)
+            openDigest ??= ReadHeadsFingerprint(session);
         List<PullRequestFacts> prs;
         string? listCut = null;
         if (!widened && options.TryGetValue("pr", out var number))
@@ -405,6 +432,8 @@ static class MergeRuleCommand
         }
         if (prs.Count == 0 && !(options.ContainsKey("pr") && !widened))
             output.WriteLine(options.TryGetValue("sha", out var s) ? $"No open pull request into {config.Base} has head {s}." : $"No open pull requests into {config.Base}.");
+        if (fullJudgement && post && openDigest is not null && markerHead is not null && problems == 0 && listCut is null)
+            WriteSweepMarker(session, markerHead, new SweepMarker(mainPart!, openDigest), marker, options.GetValueOrDefault("target-url"), output);
         output.WriteLine($"API: {session.Cost}.");
         // A run that can't read fails its heads with error, so say why before the budget runs out.
         if (session.GraphQLRemaining is < 200)
@@ -664,9 +693,10 @@ static class MergeRuleCommand
                     $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : session.PostMerge.Contains(j.Key) ? "post-merge" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
                 + string.Concat(alerts.Select(a => $"\n{a}"))
                 + (skipped.Count == 0 ? "" : $"\nMain: skipped unreadable run(s) {string.Join(", ", skipped)}: their jobs could not be read for over {UnreadableGrace.TotalMinutes:0} minutes.");
-            var fact = held.Count == 0
+            var fact = (held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
-                : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
+                : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green"))
+                with { Evidence = $"{sha}#{id}.{attempt}" };
             // A run whose jobs stayed unreadable past the grace was passed over for an older readable one: the status says which, so it is
             // never silent (alerts follow the blocking reasons in the description).
             // First, ahead of any infra alert: the description shows the first alert and counts the rest, and cuts at 140 characters.
@@ -1195,11 +1225,11 @@ static class MergeRuleCommand
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
                 (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver, postMerge);
-            // Every other status counts like a check; merge-rule is this verdict, and the receipts
-            // are judged on their own terms above.
+            // Every other status counts like a check; merge-rule is this verdict, the sweep marker is bookkeeping (never an
+            // input, never a receipt), and the receipts are judged on their own terms above.
             var receiptContexts = ReceiptContexts(config);
             checks.AddRange(statuses
-                .Where(s => s.Context != MergeRule.StatusContext && !receiptContexts.Contains(s.Context))
+                .Where(s => s.Context != MergeRule.StatusContext && s.Context != SweepContext && !receiptContexts.Contains(s.Context))
                 .Select(s => new CheckFact(s.Context, s.State switch { "success" => "success", "pending" or "expected" => "pending", _ => "failure" }, s.State)));
         }
 
@@ -1355,7 +1385,7 @@ static class MergeRuleCommand
         return (parts[0], parts[1]);
     }
 
-    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "post", "all", "allow-non-main" };
+    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "post", "all", "allow-non-main", "if-changed" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "pr", "sha", "slug", "config", "target-url", "summary" };
 
     static Dictionary<string, string> ParseOptions(IReadOnlyList<string> args)

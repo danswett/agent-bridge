@@ -759,8 +759,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      A scoped event cannot displace a sweep or another
      head; a newer sweep replaces only a pending sweep, and still judges every open PR. A scoped run that finds main not
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
-     red can't leave another pull request's success standing (about 15 points, only while main is
-     red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
+     red can't leave another pull request's success standing (about 15 points; unchanged verdicts
+     aren't posted again), but only when no full judgement is on record for this main state: every
+     full judgement (`--all`, or a scoped run that widened) posts the sweep marker, a `merge-rule-sweep`
+     status on main's head whose description holds two digests, main's state (which finished CI run, red
+     or green) and the open pull requests (heads, drafts, labels, last update, the statuses on them). While
+     the marker covers the current main state a scoped run stays scoped. The backstop's `--if-changed` judges
+     nothing while both digests match, the marker is the merge-rule App's and under 60 minutes old, and the
+     waivers are as they were; anything unreadable judges. Not in the digest, so at most an hour stale: check runs
+     and suites, Copilot's review. Digest limits: `updated_at` also moves on bot activity (an extra full judgement,
+     never a missed one), and only the newest 100 statuses per head and on main's head are read. A scoped run costs about 3 points
      plus one per hundred open pull requests (the light open list, which finds the pull requests
      on the head; those pull requests, each read in full; a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
