@@ -407,7 +407,7 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Fact]
-    public async Task A_check_pressed_from_Home_Assistant_bypasses_a_fresh_CDN_list_with_the_CDN_switch_on()
+    public async Task A_check_pressed_from_Home_Assistant_re_reads_the_CDN_fresh_and_asks_GitHub_nothing_with_the_CDN_switch_on()
     {
         GitHubAnsweredAt(AMinuteAgo());
         var web = new FakeWeb
@@ -422,11 +422,11 @@ public sealed class HostUpdatesTests : IDisposable
         var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
         IHostUpdates updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
 
-        Assert.Null(await updates.CheckAsync(CancellationToken.None, pressed: true));
-        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
-        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
-        Assert.Null(await updates.CheckAsync(CancellationToken.None));
-        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        // Owner, Nov 22: a press reads the CDN fresh (a copy of at most five minutes) first, then GitHub.
+        // The fake serves no release feed, so Velopack's feed fetch for the CDN's newer list fails after the list was read.
+        await Assert.ThrowsAsync<HttpRequestException>(() => updates.CheckAsync(CancellationToken.None, pressed: true));
+        Assert.Equal((2, 0), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
     }
 
     [Fact]
