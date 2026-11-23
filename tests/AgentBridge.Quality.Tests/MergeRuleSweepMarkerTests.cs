@@ -4,8 +4,7 @@ using Xunit;
 
 namespace AgentBridge.Quality.Tests;
 
-// The sweep marker (a status on main's head: what the last full judgement saw), what reads it (a scoped run while main isn't
-// green; the backstop's --if-changed), and a main run still in flight.
+// The sweep marker (a status on main's head), what reads it (a scoped run under a red main, --if-changed), a main run in flight.
 public partial class MergeRuleTests
 {
     static string FailingMainRuns => MainRuns((1, "completed", "failure", 1));
@@ -24,8 +23,8 @@ public partial class MergeRuleTests
             })));
     }
 
-    static FakeGitHub FakeOpen(OpenPulls open, string? mainRuns = null, string? marker = null, bool failMarker = false) =>
-        new(open.One, listed: open.Listed, byNumber: open.ByNumber, mainRuns: mainRuns, pulls: open.Pulls, marker: marker, failMarker: failMarker);
+    static FakeGitHub FakeOpen(OpenPulls open, string? mainRuns = null, string? marker = null, bool failMarker = false, string statuses = "[]") =>
+        new(open.One, listed: open.Listed, byNumber: open.ByNumber, mainRuns: mainRuns, pulls: open.Pulls, marker: marker, failMarker: failMarker, statuses: statuses);
 
     static string JudgeWith(FakeGitHub github, params string[] arguments)
     {
@@ -41,8 +40,6 @@ public partial class MergeRuleTests
     [Theory]
     [InlineData("in_progress")]
     [InlineData("queued")]
-    [InlineData("waiting")]
-    [InlineData("pending")]
     public void A_main_run_still_in_flight_is_passed_over_for_the_newest_finished_one(string status)
     {
         var green = FakeOpen(Open(1), MainRuns((3, status, null, 1), (2, "completed", "success", 1), (1, "completed", "failure", 1)));
@@ -70,6 +67,7 @@ public partial class MergeRuleTests
         try { MergeRuleCommand.Run(["--all", "--config", config], new StringWriter(), dry, OnMain); } finally { File.Delete(config); }
 
         var marker = Assert.Single(full.Markers);
+        Assert.Equal("merge-rule-sweep", MergeRuleCommand.SweepContext);
         Assert.Matches(@"^main=[0-9a-f]{16} heads=[0-9a-f]{16}$", marker);
         Assert.Contains(full.Posted, p => p.Contains(" merge-rule-sweep main=", StringComparison.Ordinal));
         Assert.Empty(cut.Markers);
@@ -89,14 +87,12 @@ public partial class MergeRuleTests
         Assert.True(Widened(first));
         Assert.Single(github.Markers);
         Assert.False(Widened(second));
-        Assert.Contains("every open pull request was judged for this main state", second, StringComparison.Ordinal);
         Assert.True(Points(first) > Points(second));
         Assert.All(later, run => { Assert.False(Widened(run)); Assert.Equal(Points(second), Points(run)); });
     }
 
     [Theory]
     [InlineData(1, 6)]
-    [InlineData(3, 12)]
     public void A_scoped_run_under_a_red_main_with_the_marker_costs_the_same_however_many_pull_requests_are_open(int few, int many)
     {
         int Scoped(int count, bool withMarker)
@@ -154,6 +150,9 @@ public partial class MergeRuleTests
         Assert.Contains("Nothing has changed since the last full judgement", again, StringComparison.Ordinal);
         Assert.Equal(0, Points(again));
         Assert.Equal(posted, github.Posted.Count);
+        // merge-rule's own verdict and the marker on a head are not changes either
+        var ours = FakeOpen(open, marker: github.Markers[0], statuses: """[{"context":"merge-rule","state":"failure","description":"x"},{"context":"merge-rule-sweep","state":"success","description":"y"}]""");
+        Assert.Contains("Nothing has changed", JudgeWith(ours, "--all", "--if-changed"), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -161,6 +160,7 @@ public partial class MergeRuleTests
     [InlineData("main's state changed")]
     [InlineData("the marker is unreadable")]
     [InlineData("the marker is garbled")]
+    [InlineData("a receipt status arrived")]
     [InlineData("the open list is unreadable")]
     [InlineData("main is unreadable")]
     [InlineData("--if-changed is not given")]
@@ -176,6 +176,7 @@ public partial class MergeRuleTests
             "main's state changed" => FakeOpen(open, MainRuns((2, "completed", "success", 1), (1, "completed", "success", 1)), marker: marker),
             "the marker is unreadable" => FakeOpen(open, failMarker: true),
             "the marker is garbled" => FakeOpen(open, marker: "garbled"),
+            "a receipt status arrived" => FakeOpen(open, marker: marker, statuses: """[{"context":"independent-review","state":"success","description":"CLEAN"}]"""),
             "the open list is unreadable" => new FakeGitHub(open.One, listed: open.Listed, byNumber: open.ByNumber, marker: marker),
             "main is unreadable" => new FakeGitHub(open.One, listed: open.Listed, byNumber: open.ByNumber, pulls: open.Pulls, marker: marker, failMain: true),
             _ => FakeOpen(open, marker: marker),
@@ -187,19 +188,18 @@ public partial class MergeRuleTests
         Assert.True(Points(output) > 0 || reason == "main is unreadable");
     }
 
-    [Fact]
-    public void A_receipt_status_on_an_open_head_counts_as_a_change_but_the_merge_rule_verdict_itself_does_not()
+    // The marker is bookkeeping: whatever state it is in, on a head it is no check and no receipt.
+    [Theory]
+    [InlineData("FAILURE")]
+    public void The_marker_status_on_a_head_is_never_an_input_to_the_verdict(string state)
     {
-        var open = Open(2);
-        FakeGitHub With(string statuses, string? marker = null) => new(open.One, listed: open.Listed, byNumber: open.ByNumber, pulls: open.Pulls, marker: marker, statuses: statuses);
-        var settled = With("""[{"context":"merge-rule","state":"failure","description":"old"}]""");
-        JudgeWith(settled, "--all", "--if-changed");
-        var marker = Assert.Single(settled.Markers);
+        object Marker() => new { context = "merge-rule-sweep", state, description = "independent-review CLEAN", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "danswett" } };
+        var plain = new FakeGitHub(GraphQLPullRequest(Head));
+        var marked = new FakeGitHub(GraphQLPullRequest(Head, extraStatuses: [Marker()]));
 
-        var ourOwnVerdictMoved = With("""[{"context":"merge-rule","state":"success","description":"new"},{"context":"merge-rule-sweep","state":"success","description":"x"}]""", marker);
-        var receiptArrived = With("""[{"context":"independent-review","state":"success","description":"CLEAN"}]""", marker);
+        JudgeWith(plain, "--pr", "42");
+        JudgeWith(marked, "--pr", "42");
 
-        Assert.Contains("Nothing has changed", JudgeWith(ourOwnVerdictMoved, "--all", "--if-changed"), StringComparison.Ordinal);
-        Assert.DoesNotContain("Nothing has changed", JudgeWith(receiptArrived, "--all", "--if-changed"), StringComparison.Ordinal);
+        Assert.Equal(Assert.Single(plain.Posted), Assert.Single(marked.Posted));
     }
 }

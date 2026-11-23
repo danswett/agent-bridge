@@ -27,7 +27,6 @@ static partial class MergeRuleCommand
     internal static SweepMarker? ParseMarker(string? description) =>
         description is not null && MarkerText.Match(description) is { Success: true } m ? new(m.Groups["main"].Value, m.Groups["heads"].Value) : null;
 
-    // Main's head and the newest marker on it (none on an older head: a new commit is a new state); null when unreadable.
     static (string? MainHead, SweepMarker? Marker) ReadSweepMarker(Session session)
     {
         try
@@ -68,7 +67,6 @@ static partial class MergeRuleCommand
                     var labels = pr.GetProperty("labels").EnumerateArray().Select(l => l.GetProperty("name").GetString() ?? "").Order(StringComparer.Ordinal);
                     var draft = pr.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True;
                     using var statuses = session.Rest($"repos/{session.Slug}/commits/{head}/statuses?per_page=100");
-                    // Newest first, so the first of each context is its current state.
                     var current = new Dictionary<string, string>(StringComparer.Ordinal);
                     foreach (var status in statuses.RootElement.EnumerateArray())
                     {
@@ -93,7 +91,6 @@ static partial class MergeRuleCommand
         }
     }
 
-    // A marker that cannot be posted only costs the next run one more full judgement.
     static void WriteSweepMarker(Session session, string mainHead, SweepMarker marker, SweepMarker? existing, string? targetUrl, TextWriter output)
     {
         if (existing == marker)

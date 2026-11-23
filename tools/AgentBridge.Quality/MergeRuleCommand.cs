@@ -327,8 +327,6 @@ static partial class MergeRuleCommand
         var widened = scoped && session.Main.State != "success" && !markerCoversMain;
         if (widened)
             output.WriteLine($"Main isn't green ({session.Main.State}): judging every open pull request, not only the one asked for.");
-        else if (scoped && session.Main.State != "success")
-            output.WriteLine($"Main isn't green ({session.Main.State}), but every open pull request was judged for this main state (sweep marker on {MergeRule.Short(markerHead!)}): judging only the one asked for.");
         var fullJudgement = !scoped || widened;
         if (fullJudgement && post && mainReadable)
             heads ??= ReadHeadsFingerprint(session);
@@ -1071,11 +1069,11 @@ static partial class MergeRuleCommand
             checksRead = commit.TryGetProperty("checkSuites", out var suites);
             if (checksRead)
                 (run, codeScanning, checks) = ReadChecks(suites, config, arm64Waiver, postMerge);
-            // Every other status counts like a check; merge-rule is this verdict, and the receipts
-            // are judged on their own terms above.
+            // Every other status counts like a check; merge-rule is this verdict, the sweep marker is bookkeeping (never an
+            // input, never a receipt), and the receipts are judged on their own terms above.
             var receiptContexts = ReceiptContexts(config);
             checks.AddRange(statuses
-                .Where(s => s.Context != MergeRule.StatusContext && !receiptContexts.Contains(s.Context))
+                .Where(s => s.Context != MergeRule.StatusContext && s.Context != SweepContext && !receiptContexts.Contains(s.Context))
                 .Select(s => new CheckFact(s.Context, s.State switch { "success" => "success", "pending" or "expected" => "pending", _ => "failure" }, s.State)));
         }
 
