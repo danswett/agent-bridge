@@ -890,11 +890,11 @@ start within about a minute; a queue that grows is the signal to add runners or 
   behind the guard. A matrix or job output built from `vars`, `inputs`, `env`, `secrets` or the event, any other function
   (`format`, `join`), and a partial label set such as `[windows, x64]` are flagged. This lint passing is a precondition of
   setting `AB_CI_SELF_HOSTED` to `true`.
-  **What the lint can't stop: a fork PR that edits `runs-on` in its own copy of a workflow**, since a fork's run uses the
-  fork's file. What stops that is the guard's same-repository test (`github.event.pull_request.head.repo.full_name ==
-  github.repository`, false for every fork) together with the repository's "Require approval for all external
-  contributors" setting. The fork-PR approval alone is not the guard: an approved fork run reaches hosted runners only
-  because the guard sends it there.
+  **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
+  lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
+  neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork
+  run after reading its changes; that approval is the boundary. In this repository's own files the guard's
+  same-repository test sends every fork run that is approved to hosted runners.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
