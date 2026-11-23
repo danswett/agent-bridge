@@ -142,6 +142,8 @@ public sealed class LiteDeliver(
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
         return result.Outcome switch
         {
+            // With the flag on, a reply only the agent's own queue holds is accepted, not delivered: acked queued, and the arm stays for the prompt it will record.
+            AnswerOutcome.Delivered when busyQueue && result.Stage == ReplyStage.Queued => new LiteDelivery(false, null) { Outcome = LiteKind.Queued },
             AnswerOutcome.Delivered => new LiteDelivery(true, null),
             // Keys went but nothing was recorded: the sender is told unconfirmed (never delivered, never resent; docs/message-delivery.md, #3856).
             AnswerOutcome.Unconfirmed => new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed },

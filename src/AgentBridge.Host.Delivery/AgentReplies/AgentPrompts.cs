@@ -58,7 +58,7 @@ public static class ClaudePrompts
                     case "queue-operation" when Str(e, "operation") == "enqueue" && Str(e, "content") is { } content:
                         var mine = new List<string>();
                         queued.Add((InjectableText.Flatten(content), mine));
-                        prompts.Add(new AgentPrompt(start, content, mine, Jsonl.Timestamp(e)));
+                        prompts.Add(new AgentPrompt(start, content, mine, Jsonl.Timestamp(e), Queued: true));
                         // Claude is still on the prompt before: its Reads and their results keep
                         // arriving after an enqueue, so its files stay current until the queued
                         // prompt is taken.
