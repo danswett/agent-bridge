@@ -11,6 +11,8 @@ namespace AgentBridge.Host;
 
 // What a credential is bound to (design/agent-principals.md §3.3). Id names the grant in logs and
 // audit and is never the secret.
+public sealed record ScriptInfo(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch);
+
 public sealed record AgentCredential(string Id, string Session, string LaunchId, int RootPid, DateTimeOffset RootStartUtc,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
@@ -496,6 +498,38 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             return removed;
         }
     }
+
+    // What the app lists for its Settings page: names and limits only, never a token, hash, path or credential id.
+    public IReadOnlyList<ScriptInfo> ListScripts()
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var prefix = $"script:{machine}/";
+            return records.Where(r => r.Credential.Kind == "script" && r.Credential.ExpiresAt > now && r.Credential.Principal!.StartsWith(prefix, StringComparison.Ordinal))
+                .GroupBy(r => r.Credential.Principal!)
+                .Select(g => new ScriptInfo(g.Key[prefix.Length..], g.First().Credential.Scope, g.Max(r => r.Credential.ExpiresAt), g.Count(),
+                    g.Any(r => r.Credential.FleetLaunch)))
+                .OrderBy(i => i.Name, StringComparer.Ordinal).ToList();
+        }
+    }
+
+    // The state a person's press is bound to: it changes with every mint, revoke, rotation, tick and expiry, so a
+    // confirmation made for an earlier state cannot be replayed (grants G8 pattern: bound to the id, generation and action).
+    internal string ScriptState(string name)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var principal = $"script:{machine}/{name}";
+            var lines = records.Where(r => r.Credential.Kind == "script" && r.Credential.Principal == principal && r.Credential.ExpiresAt > now)
+                .Select(r => $"{r.Credential.Id}:{r.Credential.FleetLaunch}:{r.Credential.ExpiresAt.UtcTicks}").Order(StringComparer.Ordinal).ToArray();
+            return lines.Length == 0 ? "none" : Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("|", lines))));
+        }
+    }
+
+    internal string ScriptConfirmation(string op, string name) => Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+        $"script-press/v1|{machine}|{op}|{name}|{ScriptState(name)}")));
 
     internal void SetFleetLaunch(string name, bool enabled)
     {

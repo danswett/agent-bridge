@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -12,16 +13,35 @@ public static class ScriptCredentialCommands
     public static object Handle(IProtocolChannel channel, string op, JsonElement data, ICallerGuard callers,
         AgentCredentials? credentials, AgentAuditLog? audit)
     {
-        if (callers.Classify(channel, fresh: true).Kind != CallerKind.HostCli || credentials?.IsCredentialed(channel) == true)
-        { throw new InvalidOperationException("refused: only a person at the machine using the host command line may change script credentials"); }
+        // The person's host command line (until the app path replaces it), or the local app's press. An app press also needs the
+        // host's confirmation bound to the action, the script and the current state (grants G4/G7b/G8 pattern, ruling A).
+        var kind = callers.Classify(channel, fresh: true).Kind;
+        if (kind is not (CallerKind.HostCli or CallerKind.App) || credentials?.IsCredentialed(channel) == true)
+        { throw new InvalidOperationException("refused: only a person at the machine, using the host command line or the app, may change script credentials"); }
         if (credentials is null || credentials.Problem is not null)
         { throw new InvalidOperationException("refused: script credentials are unavailable on this host"); }
-        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("name", out var field)
-            || field.ValueKind != JsonValueKind.String || !AgentCredentials.ValidScriptPart(field.GetString()))
+        if (op == "scripts.list")
+        {
+            return new { Scripts = credentials.ListScripts().Select(i => new { i.Name, i.Scope, i.ExpiresAt, i.Live, i.FleetLaunch }).ToArray() };
+        }
+        if (op == "scripts.confirm")
+        {
+            var asked = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("op", out var o) && o.ValueKind == JsonValueKind.String ? o.GetString() : null;
+            if (asked is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet") || !TryName(data, out var forName))
+            { throw new ArgumentException("scripts.confirm needs a script credential operation and a valid script name"); }
+            return new { Name = forName, Op = asked, Confirm = credentials.ScriptConfirmation(asked, forName) };
+        }
+        if (!TryName(data, out var name))
         { throw new ArgumentException("scripts add or revoke needs a valid script name"); }
-        var name = field.GetString()!;
         if (op is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet"))
         { throw new ArgumentException("unknown script credential operation"); }
+        if (kind == CallerKind.App)
+        {
+            var sent = data.TryGetProperty("confirm", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+            if (sent is null || !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(sent),
+                System.Text.Encoding.ASCII.GetBytes(credentials.ScriptConfirmation(op, name))))
+            { throw new InvalidOperationException("refused: this needs the person's press with the current confirmation for this action and script; ask scripts.confirm again"); }
+        }
         // Record admission before mutation: an unavailable audit must never allow an unrecorded credential write.
         if (audit?.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), "person:local", [],
             op, name, "attempted")) != true)
@@ -38,6 +58,15 @@ public static class ScriptCredentialCommands
         }
         if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
         return new { Name = name, Revoked = true };
+    }
+
+    static bool TryName(JsonElement data, out string name)
+    {
+        name = "";
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("name", out var field)
+            || field.ValueKind != JsonValueKind.String || !AgentCredentials.ValidScriptPart(field.GetString())) { return false; }
+        name = field.GetString()!;
+        return true;
     }
 
     public static async Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)

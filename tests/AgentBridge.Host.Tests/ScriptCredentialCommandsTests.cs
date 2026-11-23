@@ -251,6 +251,130 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         Assert.Contains("person", await error);
     }
 
+    // App press (HA retirement row 1, owner option 1, ruling A): the local app may mint, revoke, rotate and tick the fleet
+    // launch grant, but only with the host's confirmation bound to the action, the script name and the current state.
+    async Task<string> Confirm(string op, string name = "pump-wake", CallerKind kind = CallerKind.App) =>
+        JsonSerializer.SerializeToElement(await Handler(kind)(channel, "scripts.confirm", JsonSerializer.SerializeToElement(new { op, name })),
+            ProtocolJson.Options).GetProperty("confirm").GetString()!;
+    static JsonElement Press(string confirm, string name = "pump-wake") => JsonSerializer.SerializeToElement(new { name, confirm });
+
+    [Theory]
+    [InlineData("scripts.add")]
+    [InlineData("scripts.revoke")]
+    [InlineData("scripts.grant-fleet")]
+    [InlineData("scripts.revoke-fleet")]
+    public async Task An_app_press_without_the_bound_confirmation_is_refused_and_changes_nothing(string op)
+    {
+        credentials.MintScript("pump-wake");
+        var before = credentials.Count;
+        foreach (var data in new[] { Name(), Press("0000"), Press("") })
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, op, data));
+            Assert.Contains("person's press", error.Message);
+        }
+        Assert.Equal(before, credentials.Count);
+        Assert.All(credentials.ListScripts(), s => Assert.False(s.FleetLaunch));
+    }
+
+    [Fact]
+    public async Task An_app_press_with_the_bound_confirmation_mints_once_and_is_audited_as_the_person()
+    {
+        var confirm = await Confirm("scripts.add");
+        var result = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)), ProtocolJson.Options);
+        Assert.Equal("script:machine1/pump-wake", result.GetProperty("principal").GetString());
+        Assert.Equal(1, credentials.Count);
+        Assert.Equal("scripts.add", Assert.Single(Audit()).GetProperty("action").GetString());
+        // The state changed, so the same confirmation cannot be replayed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_confirmation_is_bound_to_its_action_its_script_and_the_current_state()
+    {
+        var add = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(add, "other-script")));
+        credentials.MintScript("pump-wake");
+        var revoke = await Confirm("scripts.revoke");
+        Assert.NotEqual(add, revoke);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(revoke)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(revoke)));
+        Assert.Equal(1, credentials.Count);
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(revoke));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Fact]
+    public async Task An_app_rotate_is_a_second_mint_and_a_revoke_press_ends_both()
+    {
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
+        Assert.Equal(2, Assert.Single(credentials.ListScripts()).Live);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add"))));
+        await Handler(CallerKind.App)(channel, "scripts.revoke", Press(await Confirm("scripts.revoke")));
+        Assert.Empty(credentials.ListScripts());
+    }
+
+    [Fact]
+    public async Task The_launch_fleet_tick_and_untick_are_app_presses_bound_to_state()
+    {
+        credentials.MintScript("pump-wake");
+        // The host's own policy still decides: with agents off the tick is refused even with a valid confirmation.
+        var early = await Confirm("scripts.grant-fleet");
+        var off = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(early)));
+        Assert.Contains("agents.enabled", off.Message);
+        File.WriteAllText(Path.Combine(fixture.Root, HostSettings.FileName), JsonSerializer.Serialize(new { agents = new { enabled = true } }));
+        var tick = await Confirm("scripts.grant-fleet");
+        await Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick));
+        Assert.True(Assert.Single(credentials.ListScripts()).FleetLaunch);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.grant-fleet", Press(tick)));
+        await Handler(CallerKind.App)(channel, "scripts.revoke-fleet", Press(await Confirm("scripts.revoke-fleet")));
+        Assert.False(Assert.Single(credentials.ListScripts()).FleetLaunch);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    public async Task Only_the_app_or_the_host_command_line_can_ask_for_a_confirmation_or_the_list(CallerKind kind)
+    {
+        credentials.MintScript("pump-wake");
+        foreach (var op in new[] { "scripts.confirm", "scripts.list" })
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Handler(kind)(channel, op, JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" })));
+            Assert.Contains("person", error.Message);
+        }
+    }
+
+    [Fact]
+    public async Task A_credentialed_connection_cannot_press_or_list_even_when_classified_as_the_app()
+    {
+        var script = credentials.MintScript("pump-wake");
+        credentials.Accept(channel, script.Credential);
+        foreach (var op in new[] { "scripts.list", "scripts.confirm", "scripts.add" })
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Handler(CallerKind.App)(channel, op, JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake", confirm = "x" })));
+        }
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task The_list_gives_the_app_metadata_only_never_a_token_hash_path_or_credential_id()
+    {
+        var first = credentials.MintScript("pump-wake");
+        credentials.MintScript("other-script");
+        var raw = JsonSerializer.SerializeToElement(await Handler(CallerKind.App)(channel, "scripts.list", JsonSerializer.SerializeToElement(new { })),
+            ProtocolJson.Options);
+        var rows = raw.GetProperty("scripts").EnumerateArray().ToArray();
+        Assert.Equal(["other-script", "pump-wake"], rows.Select(r => r.GetProperty("name").GetString()!).Order().ToArray());
+        Assert.All(rows, r => Assert.Equal(AgentProtocol.ScopeReadReply, r.GetProperty("scope").GetString()));
+        Assert.DoesNotContain(first.Path, raw.GetRawText());
+        Assert.DoesNotContain(first.Credential.Id, raw.GetRawText());
+        Assert.DoesNotContain(AgentProtocol.TokenPrefix, raw.GetRawText());
+    }
+
     sealed class Channel : IProtocolChannel
     {
         public string PeerId => "fixture";

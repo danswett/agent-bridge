@@ -61,7 +61,7 @@ public static class LocalApi
             { throw Refuse(op, caller, "only the signed-in app on this machine may hand this host its roster root", log); }
             return await samePcPin.HandleAsync(data, CancellationToken.None);
         }
-        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet")
+        if (op is "scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet" or "scripts.list" or "scripts.confirm")
         { return Cli.ScriptCredentialCommands.Handle(channel, op, data, callers, credentials, audit); }
         if (op is AgentProtocol.Adopt or AgentProtocol.Revoke or AgentProtocol.Credential)
         {
