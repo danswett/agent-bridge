@@ -29,6 +29,29 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
     });
 
     [Fact]
+    public async Task An_HA_launch_through_the_connectors_composed_delegate_is_attributed_to_the_connector_and_counted_by_the_gate()
+    {
+        var launch = HaRunning.LaunchDelegate(Launcher(Config()), new AgentAuditLog(GateProfile, clock, logged.Enqueue));
+        var request = JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!;
+
+        Assert.Equal(LaunchOutcome.Started, (await launch(request, CancellationToken.None)).Outcome);
+
+        var rows = LaunchAuditRows();
+        Assert.Equal(["intent", "terminal"], rows.Select(r => r.GetProperty("gate").GetProperty("phase").GetString()));
+        Assert.All(rows, r =>
+        {
+            Assert.Equal(("legacy-ha", "ha-component"), (r.GetProperty("gate").GetProperty("path").GetString(), r.GetProperty("gate").GetProperty("actorKind").GetString()));
+            Assert.Equal("ha:connector", r.GetProperty("principal").GetString());
+        });
+        // The windowed gate counts this very launch as an HA dispatch, through the operator command as well as the projection.
+        Assert.Equal(1, GateAuditProjection.ReadWindow(GateProfile, clock.GetUtcNow().AddHours(-1)).LegacyHaDispatches);
+        var output = new StringWriter();
+        Assert.Equal(1, AuditCommands.Run(["audit", "gate", "--profile", "profile", "--since", "1999-12-31T00:00:00Z", "--host", "host-a", "--json"], f.Root, output, new StringWriter()));
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(("fail", 1), (json.RootElement.GetProperty("kind").GetString(), json.RootElement.GetProperty("legacyHaDispatches").GetInt32()));
+    }
+
+    [Fact]
     public async Task A_fresh_launch_records_intent_before_start_and_one_confirmed_terminal()
     {
         JsonElement[] beforeStart = [];

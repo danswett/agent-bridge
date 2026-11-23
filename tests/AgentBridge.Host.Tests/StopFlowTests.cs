@@ -255,6 +255,26 @@ public sealed class StopFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_HA_stop_through_the_connectors_composed_delegate_is_attributed_to_the_connector_and_counted_by_the_gate()
+    {
+        var stopper = Stopper();
+        await WorkingAsync();
+        var stop = HaRunning.StopDelegate(stopper, source, new AgentAuditLog(StopAuditProfile, clock, logged.Enqueue))!;
+        var arm = await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString() }, CancellationToken.None);
+        Assert.Equal(StopOutcome.Confirm, arm.Outcome);
+
+        Assert.Equal(StopOutcome.Ended, (await stop(new StopRequest { Id = Id, Request = Guid.NewGuid().ToString(), Confirm = arm.Confirm }, CancellationToken.None)).Outcome);
+
+        Assert.All(StopRows(), row =>
+        {
+            Assert.Equal(("legacy-ha", "ha-component"), (row.Gate!.Path, row.Gate.ActorKind));
+            Assert.Equal("ha:connector", row.Principal);
+        });
+        // Each press that reaches the host over HA is a dispatch: the one that asked for confirmation and the one that confirmed it.
+        Assert.Equal(2, GateAuditProjection.ReadWindow(StopAuditProfile, clock.GetUtcNow().AddHours(-1)).LegacyHaDispatches);
+    }
+
+    [Fact]
     public async Task An_unwritable_stop_intent_refuses_before_any_fake_process_effect()
     {
         var profile = Path.Combine(f.Root, "gate");

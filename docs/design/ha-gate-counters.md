@@ -188,6 +188,10 @@ counts an HA approval as an HA dispatch; before this an HA approval left no row 
 fallback. **OWNER CHANGE, pending:** an HA answer whose intent cannot be written is refused, as a launch or
 a stop from the card already is, so an HA user whose audit is unwritable cannot approve from the card.
 Quality does not arm this change before the owner answers.
+All three HA actions (launch, stop, answer) now carry the one principal `ha:connector`, composed in one place
+(`HaRunning`), and a test per action drives that composed delegate to its audit rows and to the gate's HA count.
+Launch rows written before this carry the principal `ha-component:local`; path `legacy-ha` and actorKind
+`ha-component` are unchanged, so those earlier rows still read as the same connector and still count.
 
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards

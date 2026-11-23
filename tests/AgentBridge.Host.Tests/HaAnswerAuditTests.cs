@@ -70,7 +70,7 @@ sealed class HaAnswerAuditFixture(string root, ISessionAnswerer answerer, long m
 {
     public string Profile { get; } = Path.Combine(root, "default");
     readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>> answer =
-        HaAnswerAudit.Wrap(answerer, new AgentAuditLog(Path.Combine(root, "default"), maxBytes: maxBytes));
+        HaRunning.AnswerDelegate(answerer, new AgentAuditLog(Path.Combine(root, "default"), maxBytes: maxBytes))!;
     public List<AuditCommands.Row> Rows() => GateAuditProjection.Load(Profile).Rows;
     public Task<AnswerResult> Answer(AnswerRequest request) => answer(request, CancellationToken.None);
 }

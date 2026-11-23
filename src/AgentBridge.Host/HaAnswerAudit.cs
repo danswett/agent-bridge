@@ -13,8 +13,6 @@ namespace AgentBridge.Host;
 // so an HA user whose audit log is unwritable can no longer approve from the card.
 internal static class HaAnswerAudit
 {
-    internal const string Principal = "ha:connector";
-
     internal static Func<AnswerRequest, CancellationToken, Task<AnswerResult>> Wrap(ISessionAnswerer answers, AgentAuditLog audit)
     {
         ArgumentNullException.ThrowIfNull(audit);
@@ -26,7 +24,7 @@ internal static class HaAnswerAudit
     {
         if (SessionService.AnswerGate(session, question, operation, "ha-component") is not { } gate) { return null; }
         gate = gate with { Path = "legacy-ha" };
-        var intent = new AgentAuditEntry("local", gate.Operation.ToString(), Principal, [], Ops.SessionAnswer, gate.Incarnation.ToString(), "attempted", Gate: gate);
+        var intent = new AgentAuditEntry("local", gate.Operation.ToString(), HaRunning.Principal, [], Ops.SessionAnswer, gate.Incarnation.ToString(), "attempted", Gate: gate);
         if (!audit.Append(intent)) { return null; }
         return outcome => audit.Append(intent with
         {

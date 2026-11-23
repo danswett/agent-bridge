@@ -19,6 +19,25 @@ public sealed class HaRunning : IAsyncDisposable
 
     HaRunning(HaConnector connector, HttpClient http, Mutex claim) { this.connector = connector; this.http = http; this.claim = claim; }
 
+
+    // The one name the connector's audit rows carry (launch, stop and answer): path legacy-ha, actorKind ha-component. Rows
+    // written before this carried "ha-component:local" for launches; they still read as the connector's.
+    internal const string Principal = "ha:connector";
+
+    // What the connector is given for each action (composed here only, so a test drives what production runs): audited when the
+    // audit log is there, which it always is in production, and the old unaudited call only for a host without one.
+    internal static Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? AnswerDelegate(ISessionAnswerer? answers, AgentAuditLog? audit) =>
+        answers is null or UnsupportedPlatformAnswerer ? null : audit is not null ? HaAnswerAudit.Wrap(answers, audit)
+            : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
+
+    internal static Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? StopDelegate(ISessionStopper? stops, ISessionSource source, AgentAuditLog? audit) =>
+        stops is null or UnsupportedPlatformStopper ? null : stops is StopService audited && audit is not null
+            ? (request, ct) => StopAudit.StopAsync(audited, source, audit, request, "legacy-ha", Principal, ct)
+            : stops.StopAsync;
+
+    internal static Func<AgentBridge.Protocol.LaunchRequest, CancellationToken, Task<AgentBridge.Protocol.LaunchResult>> LaunchDelegate(AgentBridge.Host.Delivery.Launch.ISessionLauncher launcher, AgentAuditLog? audit) =>
+        (request, ct) => audit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
+            : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", audit, new("legacy-ha", "ha-component", Principal, audit.ControlWriterRun), ct);
     public static HaRunning? Start(HostSettings settings, string folder, ISessionSource source, UsageMonitor? usage,
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
@@ -60,13 +79,8 @@ public sealed class HaRunning : IAsyncDisposable
         var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         // Answers from the cards go through the host's own delivery, as an app's do; a host that
         // cannot type into sessions here serves no answer controls rather than dead ones.
-        Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
-            answers is null or UnsupportedPlatformAnswerer ? null : launchAudit is not null ? HaAnswerAudit.Wrap(answers, launchAudit)
-                : (request, ct) => answers.AnswerAsync(request, ct, sender: "home-assistant");
-        Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? stop =
-            stops is null or UnsupportedPlatformStopper ? null : stops is StopService audited && launchAudit is not null
-                ? (request, ct) => StopAudit.StopAsync(audited, source, launchAudit, request, "legacy-ha", "ha:connector", ct)
-                : stops.StopAsync;
+        var answer = AnswerDelegate(answers, launchAudit);
+        var stop = StopDelegate(stops, source, launchAudit);
         // Launches from the card go through the host's own launcher, as an app's do (its checks,
         // its one-at-a-time start, its following to registration); whether it offers launching
         // here is its own Available, asked when the connector starts.
@@ -74,10 +88,7 @@ public sealed class HaRunning : IAsyncDisposable
         // (#2743): each id launches once, and its outcome is readable for 15 minutes.
         var (requests, requestsProblem) = launcher is null ? (null, null) : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(folder, TimeProvider.System);
         if (requestsProblem is not null) { log($"Home Assistant launch requests with an id are refused: {requestsProblem}"); }
-        var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync,
-            (request, ct) => launchAudit is null ? launcher.LaunchAsync(request, "home-assistant", ct)
-                : GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", launchAudit,
-                    new("legacy-ha", "ha-component", "ha-component:local", launchAudit.ControlWriterRun), ct))
+        var launch = launcher is null ? null : new HaLauncher(() => launcher.Available, launcher.OptionsAsync, LaunchDelegate(launcher, launchAudit))
         { Requests = requests, RequestsProblem = requestsProblem, PublishStatus = (id, request, result) => launcher.PublishAlias("home-assistant", id, request, result) };
         var connector = new HaConnector(new HaConnectorOptions
         {
