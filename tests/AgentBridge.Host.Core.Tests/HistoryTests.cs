@@ -362,6 +362,34 @@ public class HistoryTests
         Assert.Equal(["Revised", "Original"], (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Select(p => p.Text));
     }
 
+    // The person's message sent while Claude works is an attachment, not a user entry (2.1.318, redacted:
+    // tests/fixtures/claude/mid-turn-human-message.jsonl). It must show as its own prompt, in order, once.
+    [Fact]
+    public async Task Claude_a_message_the_person_sent_mid_turn_is_a_history_prompt_in_order_and_a_notice_is_not()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var midTurn = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-human-message.jsonl")).Trim();
+        var notice = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "fixtures", "claude", "mid-turn-queued-command.jsonl"))
+            .Single(l => l.Contains("\"commandMode\":\"task-notification\"", StringComparison.Ordinal) && l.Contains("\"queued_command\"", StringComparison.Ordinal));
+        Fixture.Append(transcript, Claude.User("Start the work", 1),
+            Claude.AssistantMessage("a", 2, null, Claude.Text("Working.")), midTurn, notice,
+            Claude.AssistantMessage("b", 4, "end_turn", Claude.Text("Done both.")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        var turns = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!;
+        Assert.Equal(["Start the work", "Also check the second host."], turns.Select(t => t.Prompt!.Text));
+        Assert.All(turns, t => Assert.Null(t.Prompt!.From));
+        Assert.Equal(["Working."], turns[0].Parts.Select(p => p.Text));
+        Assert.Equal(["Done both."], turns[1].Parts.Select(p => p.Text));
+        var activity = source.Get(Id)!.Activity;
+        Assert.Equal("Also check the second host.", activity.UserMessage);
+        Assert.Equal(turns[1].Id, activity.Turn);
+    }
+
     [Fact]
     public async Task Claude_live_reply_identity_keeps_equal_text_replies_and_streaming_history_parts_after_restart()
     {
@@ -461,7 +489,7 @@ public class HistoryTests
     [Theory]
     [InlineData("missing-message-id")]
     [InlineData("intervening-thinking")]
-    [InlineData("tool-before-text")]
+    [InlineData("text-tool-text")]
     [InlineData("duplicate-record")]
     [InlineData("unreadable-record")]
     [InlineData("skimmed-start")]
@@ -476,7 +504,7 @@ public class HistoryTests
         {
             "missing-message-id" => new[] { Claude.Assistant(2, null, Claude.Text("One"), Claude.Text("Two")) },
             "intervening-thinking" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.Thinking("Plan"), Claude.Text("Two"))],
-            "tool-before-text" => [Claude.AssistantMessage("message", 2, null, Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" }), Claude.Text("Answer"))],
+            "text-tool-text" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" }), Claude.Text("Two"))],
             "duplicate-record" => [first, first],
             "unreadable-record" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), "{\"type\":\"assistant\",\"message\":", Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
             "skimmed-start" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(), Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
@@ -489,7 +517,7 @@ public class HistoryTests
         Assert.Null(session.Activity.ResponseId);
         Assert.Equal(shape switch
         {
-            "missing-message-id" or "intervening-thinking" or "unreadable-record" => "One\n\nTwo",
+            "missing-message-id" or "intervening-thinking" or "unreadable-record" or "text-tool-text" => "One\n\nTwo",
             "skimmed-start" => "Two",
             _ => "Answer",
         }, session.Activity.Response);
@@ -498,6 +526,117 @@ public class HistoryTests
         await source.RefreshAsync();
         var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single(p => p.Kind == HistoryPartKind.Response);
         Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    // History counts a tool (once per call id in the turn) and its question as parts of the record, so the
+    // reply after them has an index the live parser can count exactly, not guess.
+    [Theory]
+    [InlineData("tool-then-text", 1)]
+    [InlineData("thinking-tool-text", 2)]
+    [InlineData("question-then-text", 2)]
+    [InlineData("repeated-tool-id", 0)]
+    [InlineData("tool-in-its-own-record", 0)]
+    public async Task Claude_reply_after_tool_calls_keeps_the_history_part_identity(string shape, int index)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var bash = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        var ask = Claude.ToolUse("ask", "AskUserQuestion", Claude.Ask(("Pick one?", false, ["A", "B"])));
+        string[] lines = shape switch
+        {
+            "tool-then-text" => [Claude.AssistantMessage("m", 2, null, bash, Claude.Text("Answer"))],
+            "thinking-tool-text" => [Claude.AssistantMessage("m", 2, null, Claude.Thinking("Plan"), bash, Claude.Text("Answer"))],
+            "question-then-text" => [Claude.AssistantMessage("m", 2, null, ask, Claude.Text("Answer"))],
+            "repeated-tool-id" => [Claude.AssistantMessage("a", 2, null, bash), Claude.ToolResult("tool", 3), Claude.AssistantMessage("b", 4, null, (JsonObject)bash.DeepClone(), Claude.Text("Answer"))],
+            "tool-in-its-own-record" => [Claude.AssistantMessage("a", 2, null, (JsonObject)bash.DeepClone()), Claude.ToolResult("tool", 3), Claude.AssistantMessage("b", 4, null, Claude.Text("Answer"))],
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        Fixture.Append(transcript, [Claude.User("Question", 1), .. lines]);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Response);
+        Assert.EndsWith("." + index, part.Id);
+        Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+        Assert.Equal("Answer", source.Get(Id)!.Activity.Response);
+    }
+
+    // A long turn (tool calls, a background-task notice) read through a window that opens inside it: the
+    // reply's id is its record's hash and index, so unread earlier records cannot change it. Only the
+    // first message in the window may continue one begun before it, and has none.
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Claude_reply_identity_survives_a_window_that_opens_mid_turn(bool toolBeforeText, bool identified)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        const string notice = "<task-notification><task-id>agent-fixture</task-id><status>completed</status></task-notification>";
+        var delivered = new JsonObject
+        {
+            ["type"] = "attachment", ["timestamp"] = Copilot.At(7),
+            ["attachment"] = new JsonObject { ["type"] = "queued_command", ["commandMode"] = "task-notification", ["prompt"] = notice },
+        }.ToJsonString();
+        var tool = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        var answer = toolBeforeText ? Claude.AssistantMessage("m4", 8, "end_turn", tool, Claude.Text("Answer")) : Claude.AssistantMessage("m4", 8, "end_turn", Claude.Text("Answer"));
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("m1", 2, null, Claude.Text("Unread")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("m2", 3, null, Claude.Text("Edge")),
+            Claude.AssistantMessage("m3", 4, null, (JsonObject)tool.DeepClone()),
+            Claude.ToolResult("tool", 5), delivered, answer);
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        var session = source.Get(Id)!;
+        var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Unread", "Edge", "Answer"], replies.Select(p => p.Text));
+        Assert.Equal("Answer", session.Activity.Response);
+        Assert.Equal(identified ? replies[2].Id : null, session.Activity.ResponseId);
+    }
+
+    // History skips a repeated call id without a part, so a tool-only record at the window edge does not
+    // break a response begun before the window: the later record of that message merges into it.
+    [Fact]
+    public async Task Claude_window_edge_stays_open_through_a_deduplicated_tool_only_record()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var tool = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("z0", 2, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 3, null, Claude.Text("Before")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("z", 4, null, (JsonObject)tool.DeepClone()),
+            Claude.AssistantMessage("y", 5, null, Claude.Text("More")));
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        Fixture.Append(transcript, Claude.AssistantMessage("w", 6, "end_turn", Claude.Text("Final")));
+        await source.RefreshAsync();
+        var replies = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Before\n\nMore", "Final"], replies.Select(p => p.Text));
+        Assert.Equal(replies[1].Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    [Fact]
+    public async Task Claude_message_at_the_window_edge_has_no_identity_even_when_it_continues()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        Fixture.Append(transcript, Claude.User("Question", 1),
+            Claude.AssistantMessage("m1", 2, null, Claude.Text("Unread")),
+            new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(),
+            Claude.AssistantMessage("m1", 3, "end_turn", Claude.Text("Continued")));
+        await using var source = f.Source(tailBytes: 4096);
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.ResponseId);
     }
 
     [Fact]
