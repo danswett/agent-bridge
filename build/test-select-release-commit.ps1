@@ -16,10 +16,10 @@ $failures = 0
 function Check([string]$name, $actual, $expected) {
     if ($actual -ceq $expected) { Write-Host "PASS $name" } else { $script:failures++; Write-Host "FAIL ${name}: expected '$expected', got '$actual'" }
 }
-function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}, [string]$relied = '', [bool]$noFull = $false, [string]$fullConclusion = 'success', [bool]$fullFresh = $true, [hashtable]$fullMore = @{}) {
-    $fullJobs = @{ 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success'; 'app-installer (win-arm64)' = 'success'; 'pwa-ui (webkit 1/3)' = 'success'; 'spikes' = 'success' }
+function Run([string]$sha, [int]$number, [string]$gate = 'success', [string]$x64 = 'success', [string]$arm = 'success', [string]$conclusion = 'success', [bool]$fresh = $true, [hashtable]$more = @{}, [string]$relied = '', [bool]$noFull = $false, [string]$fullConclusion = 'success', [bool]$fullFresh = $true, [hashtable]$fullMore = @{}, [int]$fullNumber = 1) {
+    $fullJobs = @{ 'full-gate' = 'success'; 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success'; 'app-pack (win-arm64)' = 'success'; 'app-installer (win-arm64)' = 'success'; 'app-selftest (win-arm64)' = 'success'; 'pwa-ui (webkit 1/3)' = 'success'; 'spikes' = 'success' }
     foreach ($key in $fullMore.Keys) { if ($null -eq $fullMore[$key]) { $fullJobs.Remove($key) } else { $fullJobs[$key] = $fullMore[$key] } }
-    $full = if ($noFull) { $null } else { [pscustomobject]@{ Conclusion = $fullConclusion; AllJobs = $fullJobs; ArtifactsUnexpired = ($fullFresh -and $fresh) } }
+    $full = if ($noFull) { $null } else { [pscustomobject]@{ Number = $fullNumber; Conclusion = $fullConclusion; AllJobs = $fullJobs; ArtifactsUnexpired = ($fullFresh -and $fresh) } }
     $all = @{ 'quality-gate' = $gate; 'app (win-x64)' = $x64; 'app (win-arm64)' = $arm }
     foreach ($key in $more.Keys) { $all[$key] = $more[$key] }
     [pscustomobject]@{ Sha = $sha; Number = $number; Conclusion = $conclusion
@@ -33,7 +33,7 @@ function Pick($runs, $latest = $out) { $r = Select-ReleaseCommit -Runs $runs -La
 Check 'newest passing commit wins' (Pick @((Run 'sha103' 103), (Run 'sha102' 102))) 'sha103'
 Check 'a red newest run is skipped for the next passing one' (Pick @((Run 'sha103' 103 -gate failure), (Run 'sha102' 102))) 'sha102'
 Check 'an arm64 app job failure does not stop the pick when quality-gate and x64 passed' (Pick @((Run 'sha103' 103 -arm failure), (Run 'sha102' 102))) 'sha103'
-Check 'a run with no arm64 job result at all is still picked' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{}; Full = [pscustomobject]@{ Conclusion = 'success'; AllJobs = @{ 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success' }; ArtifactsUnexpired = $true } }))) 'sha103'
+Check 'a run with no arm64 job result at all is still picked' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{}; Full = [pscustomobject]@{ Conclusion = 'success'; AllJobs = @{ 'full-gate' = 'success'; 'app-selftest (win-x64)' = 'success'; 'app-pack (win-x64)' = 'success'; 'app-installer (win-x64)' = 'success'; 'app-pack (win-arm64)' = 'success'; 'app-installer (win-arm64)' = 'success' }; ArtifactsUnexpired = $true } }))) 'sha103'
 # The FULL lane (full.yml, never a merge gate) gates the release: the newest commit whose FAST lane passed AND whose FULL
 # run passed, its required jobs (the x64 self-test, pack and installer) green. Arm64 stays waived.
 Check 'a commit with no FULL run yet is not picked, the next one with a FULL run is' (Pick @((Run 'sha103' 103 -noFull $true), (Run 'sha102' 102))) 'sha102'
@@ -41,7 +41,7 @@ Check 'a FULL run whose x64 self-test failed is not picked' (Pick @((Run 'sha103
 Check 'a FULL run whose x64 installer failed is not picked' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'a required FULL job that did not run at all is not a pass' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-x64)' = $null }), (Run 'sha102' 102))) 'sha102'
 Check 'a required FULL job that was skipped is not a pass' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-selftest (win-x64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
-Check 'a FULL run red only for Arm64 is publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure'; 'app-selftest (win-arm64)' = 'failure'; 'product (windows-11-arm)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
+Check 'a FULL run red only for Arm64 is publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64)' = 'failure'; 'product (windows-11-arm)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
 Check 'a FULL run red in WebKit is not picked (FULL gates the release, not only its Windows jobs)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'pwa-ui (webkit 1/3)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'a FULL run red in a spikes job is not picked' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'spikes' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'a FULL run still running is not picked' (Pick @((Run 'sha103' 103 -fullConclusion ''), (Run 'sha102' 102))) 'sha102'
@@ -51,7 +51,30 @@ Check 'a green FAST lane is no pass without FULL' (Pick @((Run 'sha103' 103 -noF
 Check 'a FULL run with a FAST red lane is still no pass' (Pick @((Run 'sha103' 103 -gate failure), (Run 'sha102' 102))) 'sha102'
 Check 'nothing picked says there is no FULL run' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -noFull $true)) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*no FULL run') $true
 Check 'nothing picked names the FULL job that failed' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-x64)' = 'failure' })) -Latest $out -IsDescendant $follows -Explain) -match 'sha103.*app-selftest \(win-x64\)') $true
-Check 'a run with no Full property at all (an older record) is not a pass' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success'; 'app-arm64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{ 'quality-gate' = 'success' } }), (Run 'sha102' 102))) 'sha102'Check 'a failed x64 app job is not a pass' (Pick @((Run 'sha103' 103 -x64 failure), (Run 'sha102' 102))) 'sha102'
+Check 'a run with no Full property at all (an older record) is not a pass' (Pick @(([pscustomobject]@{ Sha = 'sha103'; Number = 103; Conclusion = 'success'; Jobs = @{ 'quality-gate' = 'success'; 'app-x64' = 'success'; 'app-arm64' = 'success' }; ArtifactsUnexpired = $true; AllJobs = @{ 'quality-gate' = 'success' } }), (Run 'sha102' 102))) 'sha102'
+# Quality's conditions (4217): the Arm64 package is required, not optional; FULL's own run number is never the version; the FULL run is found by
+# head_sha, never by branch; and a FULL run with a skipped lane (WebKit) is not selectable, which the aggregate full-gate shows.
+Check 'an Arm64 pack that failed is not publishable: only the Arm64 self-test is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-pack (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'an Arm64 pack that did not run is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = $null }), (Run 'sha102' 102))) 'sha102'
+Check 'an Arm64 pack that was skipped is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
+Check 'an Arm64 installer that failed is not publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run with no aggregate full-gate result is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = $null }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run whose full-gate failed (a WebKit job skipped) is not selectable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'full-gate' = 'failure'; 'pwa-ui (webkit 1/3)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
+Check 'a FULL run whose full-gate was skipped is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
+Check 'the version floor is the FAST run number, not the FULL run''s own' (Pick @((Run 'sha099b' 99 -fullNumber 5000), (Run 'sha102' 102))) 'sha102'
+Check 'the FULL run''s own small number does not lower it' (Pick @((Run 'sha103' 103 -fullNumber 1))) 'sha103'
+function Names([string]$v, [string[]]$except = @()) { @("agent-bridge-windows-0.1.$v", "agent-bridge-windows-arm64-0.1.$v", "sbom-win-x64-0.1.$v", "sbom-win-arm64-0.1.$v") | Where-Object { $_ -cnotin $except } }
+Check 'FULL packages complete: both packages and both SBOMs under the FAST run number' (Get-FullPackages (Names 103) 103).Complete $true
+Check 'FULL packages: the version is 0.1.<the FAST run number>' (Get-FullPackages (Names 103) 103).Version '0.1.103'
+Check 'FULL packages: no Arm64 SBOM is incomplete' (Get-FullPackages (Names 103 @('sbom-win-arm64-0.1.103')) 103).Complete $false
+Check 'FULL packages: no Arm64 package is incomplete' (Get-FullPackages (Names 103 @('agent-bridge-windows-arm64-0.1.103')) 103).Complete $false
+Check 'FULL packages: no x64 SBOM is incomplete' (Get-FullPackages (Names 103 @('sbom-win-x64-0.1.103')) 103).Complete $false
+Check 'FULL packages: packages under FULL''s own run number are not the FAST run''s' (Get-FullPackages (Names 7) 103).Complete $false
+Check 'FULL packages: none at all is incomplete and names what is missing' ((Get-FullPackages @() 103).Missing.Count -gt 0) $true
+Check 'the FULL run is looked up by head_sha' ((Get-FullRunsPath 'o/r' ('a' * 40)) -match 'workflows/full\.yml/runs\?head_sha=a{40}') $true
+Check 'the FULL run is never looked up by branch' ((Get-FullRunsPath 'o/r' ('a' * 40)) -match 'branch=') $false
+Check 'a run with an Arm64 SBOM missing (packages incomplete) is not publishable' (Pick @((Run 'sha103' 103 -fullFresh $false), (Run 'sha102' 102))) 'sha102'
+Check 'a failed x64 app job is not a pass' (Pick @((Run 'sha103' 103 -x64 failure), (Run 'sha102' 102))) 'sha102'
 Check 'a cancelled run counts when quality-gate and both apps succeeded' (Pick @((Run 'sha103' 103 -conclusion cancelled))) 'sha103'
 Check 'an arm64-only failed run (conclusion failure, gate and x64 green) is publishable' (Pick @((Run 'sha103' 103 -arm failure -conclusion failure), (Run 'sha102' 102))) 'sha103'
 Check 'a failed run with quality-gate red is not publishable' (Pick @((Run 'sha103' 103 -gate failure -conclusion failure), (Run 'sha102' 102))) 'sha102'
