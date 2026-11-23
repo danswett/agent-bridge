@@ -571,7 +571,7 @@ connector's own guards. Discovery needs no notice: it watches the registration f
 * **A Claude `AskUserQuestion` waiting at the terminal.** Claude writes its `tool_use` to the
   transcript only once it is answered (#59), so the host cannot show the question from the
   transcript. The `claude/ask` notice carries it the moment it is asked, for the Claude/Codex
-  live slice to surface. Seen live (VM4, 2026-11-22): the question went unseen for about 35
+  live slice to surface. Seen live (owner-reported, 2026-11-22): the question went unseen for about 35
   minutes, the session read "Not responding", and remote replies were refused with "input box
   is not on its screen". Design (#3838, Part of #1396 row 5):
   * `claude/ask` records a pending-question marker on the registration from the event's
