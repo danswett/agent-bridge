@@ -478,9 +478,7 @@ public sealed partial class SessionView
         if (!attached || !ConversationList.IsLoaded) { return; }
         if (RestoreReading()) { return; }
         if (pinEnd) { FollowPinnedEnd(); return; }
-        if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
-            || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
-        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+        KeepAnchoredBlock();
     }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;
