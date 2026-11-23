@@ -78,6 +78,9 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     bool _replyIdentityKnown = true;
     readonly HashSet<string> _replyRecords = new(StringComparer.Ordinal);
     const int MaxReplyRecords = 4096;
+    // The tool calls and questions of the turn, as history counts their parts.
+    readonly HashSet<string> _replyTools = new(StringComparer.Ordinal);
+    readonly HashSet<string> _replyQuestions = new(StringComparer.Ordinal);
     // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
     // The queue carries no mark of who wrote to it, and a prompt the person types while the agent
     // works is queued the same way, so a queued notice is not an end until its delivery is (see
@@ -125,6 +128,8 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         _replyIdentityKnown = known;
         _responseContiguous = false;
         _replyRecords.Clear();
+        _replyTools.Clear();
+        _replyQuestions.Clear();
     }
 
     protected override void Unreadable(ReadOnlySpan<byte> line)
@@ -469,7 +474,6 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             S.ResponseId = null;
         }
         var part = 0;
-        var toolBeforeText = false;
         // Without an id, the entry itself is the message.
         var messageId = Json.Str(message, "id");
         var key = messageId ?? Guid.NewGuid().ToString("N");
@@ -492,7 +496,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     {
                         // Legacy text can span several history parts. Never give that
                         // composite a single part id, or guess through an unread window.
-                        S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
+                        S.ResponseId = !append && _replyIdentityKnown && S.TurnId is not null && record is not null
                             ? Conversation.TurnIds.Part(record, part) : null;
                         part++;
                     }
@@ -506,9 +510,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                         var id = Json.Str(block, "id");
                         var name = Json.Str(block, "name");
                         if (id is null || name is null) { break; }
-                        // History dedupes tools across the turn; an unread earlier call
-                        // could change the index of text following this tool.
-                        toolBeforeText = true;
+                        // History adds a part for a call, and one for its question, once per
+                        // id in the turn. The turn was read whole (identity is known), so the
+                        // ids seen say exactly how many parts precede the text after this tool.
+                        if (_replyTools.Count >= MaxReplyRecords) { _replyIdentityKnown = false; S.ResponseId = null; }
+                        if (_replyTools.Add(id)) { part++; }
+                        if (name == "AskUserQuestion" && Json.Get(block, "input") is not null && _replyQuestions.Add(id)) { part++; }
                         _responseContiguous = false;
                         askedForTools = true;
                         var input = Json.Get(block, "input");
