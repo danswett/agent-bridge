@@ -100,6 +100,65 @@ an hour arriving (measured), Option 2 alone does not clear the queue, which is w
 recommendation. The runs that sat in progress for hours were runs that never started (jobs queued, no runner),
 as described above.
 
+## The GraphQL budget: when a full judgement may start
+
+The token's budget is 1,000 GraphQL points an hour for the repository, shared by every workflow. One **full**
+(`--all`) judgement costs about 115 points (R8b, quoted), so at most about 8 an hour fit even if nothing else
+reads. **Rule:** a full judgement starts only when main's CI state changed (a CI push run on main completed, red
+or fixes-main flips) or from the 30-minute backstop or sweep cron. Every other event is **scoped** to its head
+(#4022).
+
+### Last 24 hours (Nov 22 14:28Z to Nov 23 14:28Z), runs API counts
+
+#4016 (the trigger cut) merged at 14:20:10Z today, so this window is almost entirely **before** the cut. The
+first post-cut runs had not finished when I read (0 successes created after 14:20:10Z), so there is no post-cut
+measurement yet. #4022 is open, not merged.
+
+| Event | Executed (success + failure) | Skipped / cancelled | Scope on current main |
+|---|---|---|---|
+| `pull_request_target` | 273 | 0 / 138 | scoped `--pr` |
+| `status` | 195 | 2,428 / 117 | scoped `--sha` (the App's own `merge-rule` statuses skip) |
+| `workflow_run` | 1,172 | 1,067 / 2,378 | scoped `--sha` for a non-main head; **full** for CI's push run on main |
+| `check_suite` | 60 | 0 / 138 | scoped `--sha`; a run on main skips |
+| `schedule` | 3 | 0 / 0 | full (a backstop; 3 ran against 48 timer slots, so GitHub is dropping or delaying them) |
+| `workflow_dispatch` | 0 | 0 / 0 | full |
+
+How to read it: the counts are filtered runs-API totals and the filtered totals for one event can overlap
+(workflow_run skipped + cancelled + success + failure exceeds its unfiltered total, which looks capped), so treat
+them as approximate. The runs API does not record the scope, and this token cannot read the job logs (they came
+back as a 100-character error), so the scope column is **from the workflow code on main, not from logs**. The
+run's branch field is `main` for status, check_suite and workflow_run runs whatever they judged, so it can't
+split full from scoped either.
+
+Executed runs total 1,703 in 24 hours, about 71 an hour. At about 12 points for a scoped run (R8b, quoted) that
+is about 850 points an hour, at the edge of the 1,000; at about 4 points (#4022) it is about 285. The split between
+full and scoped inside those 1,703 is unmeasured.
+
+### Which events still start `--all` after #4016
+
+1. **CI's push run on main, on both `in_progress` and `completed`.** The `workflow_run` list now keeps CI, and
+   admission lets only CI's push run on main through for the main branch, which sweeps. CI push runs on main
+   were **105** in 24 hours (4.4 an hour, exact from the workflow's runs API). Both the start and the finish
+   trigger, so up to about 8.8 full judgements an hour, about **1,000 points an hour**: the whole budget, from this
+   one source. The rule asks for the completed run only; the start does not change main's state, so it is the
+   obvious next cut (halves this to about 4.4 an hour, about 500 points). Runs waiting in the group coalesce
+   some of them, so this is an upper bound.
+2. **The 30-minute cron and manual dispatch:** the cron has 2 slots an hour, about 230 points an hour at most
+   (115 each); dispatch is manual.
+3. **Any scoped run when main is not green.** The evaluator widens a scoped run to every open pull request when
+   main's state is not success (`MergeRuleCommand.cs`, "judging every open pull request"). So while main is red
+   or pending, **every** pull-request, status and check-suite event costs a full judgement, whatever the
+   workflow says. This is the path by which non-main-push events still go `--all`, and it is not closed by
+   #4016. #4022 (open) reads the open list light and only the head's pull requests in full, which is aimed at it;
+   I have not verified that against the code.
+4. **`FLEET_MERGERULE=off`:** every event sweeps. Not the normal state.
+
+So, yes: events other than a main CI completion still start `--all`, through items 1's start event and 3's
+widening. The "scope them" patch is the next change (drop the `in_progress` start of CI's push run on main, and
+make the widening cheap). It may make per-head groups unnecessary: the points budget, not lock throughput, is
+the binding limit once full judgements are rare. That is a judgement, not a measurement: it needs the hours
+after #4016 and #4022 to be read before Option 1 is dropped.
+
 ## Recommendation
 
 Do Option 2's judge-step reductions as 205e98bd's profile supports, then Option 1 with the evaluator's main re-check
