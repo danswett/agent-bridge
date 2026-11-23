@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -29,35 +28,36 @@ public static class ScriptCredentialCommands
             var asked = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("op", out var o) && o.ValueKind == JsonValueKind.String ? o.GetString() : null;
             if (asked is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet") || !TryName(data, out var forName))
             { throw new ArgumentException("scripts.confirm needs a script credential operation and a valid script name"); }
-            return new { Name = forName, Op = asked, Confirm = credentials.ScriptConfirmation(asked, forName) };
+            return new { Name = forName, Op = asked, Confirm = credentials.IssueScriptConfirmation(asked, forName, channel) };
         }
         if (!TryName(data, out var name))
         { throw new ArgumentException("scripts add or revoke needs a valid script name"); }
         if (op is not ("scripts.add" or "scripts.revoke" or "scripts.grant-fleet" or "scripts.revoke-fleet"))
         { throw new ArgumentException("unknown script credential operation"); }
-        if (kind == CallerKind.App)
+        // The audit attempt and the change run as one step. An app press uses up its confirmation and does the step under the store's
+        // lock, so a second press for the same state (a double click) finds the state already changed and is refused.
+        object Change()
         {
-            var sent = data.TryGetProperty("confirm", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
-            if (sent is null || !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(sent),
-                System.Text.Encoding.ASCII.GetBytes(credentials.ScriptConfirmation(op, name))))
-            { throw new InvalidOperationException("refused: this needs the person's press with the current confirmation for this action and script; ask scripts.confirm again"); }
+            // Record admission before mutation: an unavailable audit must never allow an unrecorded credential write.
+            if (audit?.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), "person:local", [],
+                op, name, "attempted")) != true)
+            { throw new InvalidOperationException("refused: the audit log could not be written; no script credential was changed"); }
+            if (op is "scripts.grant-fleet" or "scripts.revoke-fleet")
+            {
+                credentials.SetFleetLaunch(name, op == "scripts.grant-fleet");
+                return new { Name = name, Grant = "launch:fleet", Enabled = op == "scripts.grant-fleet" };
+            }
+            if (op == "scripts.add")
+            {
+                var (credential, path) = credentials.MintScript(name);
+                return new { credential.Id, credential.Principal, credential.Scope, credential.ExpiresAt, Path = path };
+            }
+            if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
+            return new { Name = name, Revoked = true };
         }
-        // Record admission before mutation: an unavailable audit must never allow an unrecorded credential write.
-        if (audit?.Append(new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), "person:local", [],
-            op, name, "attempted")) != true)
-        { throw new InvalidOperationException("refused: the audit log could not be written; no script credential was changed"); }
-        if (op is "scripts.grant-fleet" or "scripts.revoke-fleet")
-        {
-            credentials.SetFleetLaunch(name, op == "scripts.grant-fleet");
-            return new { Name = name, Grant = "launch:fleet", Enabled = op == "scripts.grant-fleet" };
-        }
-        if (op == "scripts.add")
-        {
-            var (credential, path) = credentials.MintScript(name);
-            return new { credential.Id, credential.Principal, credential.Scope, credential.ExpiresAt, Path = path };
-        }
-        if (!credentials.RevokeScript(name)) { throw new InvalidOperationException("no script credential exists for that name"); }
-        return new { Name = name, Revoked = true };
+        if (kind != CallerKind.App) { return Change(); }
+        var sent = data.TryGetProperty("confirm", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+        return credentials.RunScriptPress(sent, op, name, channel, Change);
     }
 
     static bool TryName(JsonElement data, out string name)

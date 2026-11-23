@@ -246,6 +246,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             Prune(now);
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
@@ -496,6 +497,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
             if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
             return removed;
@@ -517,28 +519,72 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
-    // The state a person's press is bound to: it changes with every mint, revoke, rotation, tick and expiry, so a
-    // confirmation made for an earlier state cannot be replayed (grants G8 pattern: bound to the id, generation and action).
-    internal string ScriptState(string name)
+    // A person's press needs a confirmation the host issued for exactly this action and script on this connection. Per script name the
+    // host keeps a generation counter, bumped by every press attempt (right or wrong) and by every mint, revoke, tick, untick and
+    // rotation, and at most ONE outstanding confirmation, bound to that generation. The confirmation is derived from a random
+    // per-process salt and a fresh nonce, lives two minutes, and is checked and used up under the same lock as the change it
+    // allows, so a state that returns to an earlier one can never revalidate an old value (#3883 receipt 7099362785).
+    public static readonly TimeSpan ScriptConfirmationLife = TimeSpan.FromMinutes(2);
+    public const int MaxScriptConfirmations = 64;
+    readonly byte[] confirmationSalt = RandomNumberGenerator.GetBytes(32);
+    readonly Dictionary<string, long> scriptGeneration = [];
+    readonly Dictionary<string, (string Token, string Op, long Generation, IProtocolChannel Channel, DateTimeOffset Expires)> confirmations = [];
+
+    long GenerationOf(string name) => scriptGeneration.TryGetValue(name, out var g) ? g : 0;
+
+    // Called with the gate held: the script's state or its outstanding confirmation is no longer what it was.
+    void BumpGeneration(string name)
+    {
+        scriptGeneration[name] = GenerationOf(name) + 1;
+        confirmations.Remove(name);
+    }
+
+    internal string IssueScriptConfirmation(string op, string name, IProtocolChannel channel)
     {
         lock (gate)
         {
             var now = time.GetUtcNow();
-            var principal = $"script:{machine}/{name}";
-            var lines = records.Where(r => r.Credential.Kind == "script" && r.Credential.Principal == principal && r.Credential.ExpiresAt > now)
-                .Select(r => $"{r.Credential.Id}:{r.Credential.FleetLaunch}:{r.Credential.ExpiresAt.UtcTicks}").Order(StringComparer.Ordinal).ToArray();
-            return lines.Length == 0 ? "none" : Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("|", lines))));
+            foreach (var stale in confirmations.Where(c => c.Value.Expires <= now).Select(c => c.Key).ToList()) { confirmations.Remove(stale); }
+            while (!confirmations.ContainsKey(name) && confirmations.Count >= MaxScriptConfirmations)
+            { confirmations.Remove(confirmations.MinBy(c => c.Value.Expires).Key); }
+            var generation = GenerationOf(name);
+            var seed = System.Text.Encoding.UTF8.GetBytes($"{machine}|{op}|{name}|{generation}|").Concat(RandomNumberGenerator.GetBytes(16)).ToArray();
+            var token = BlobFormat.Base64Url(HMACSHA256.HashData(confirmationSalt, seed));
+            confirmations[name] = (token, op, generation, channel, now + ScriptConfirmationLife);
+            return token;
         }
     }
 
-    internal string ScriptConfirmation(string op, string name) => Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
-        $"script-press/v1|{machine}|{op}|{name}|{ScriptState(name)}")));
+    internal bool ConsumeScriptConfirmation(string? token, string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            var ok = token is not null && confirmations.TryGetValue(name, out var held)
+                && CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(held.Token), System.Text.Encoding.ASCII.GetBytes(token))
+                && held.Op == op && ReferenceEquals(held.Channel, channel) && held.Generation == GenerationOf(name) && held.Expires > time.GetUtcNow();
+            // Every attempt, right or wrong, uses up what the script had outstanding and moves its generation on.
+            BumpGeneration(name);
+            return ok;
+        }
+    }
+
+    // The check and the write under one lock: a second press for the same script finds its generation already moved on and is refused.
+    internal T RunScriptPress<T>(string? token, string op, string name, IProtocolChannel channel, Func<T> act)
+    {
+        lock (gate)
+        {
+            if (!ConsumeScriptConfirmation(token, op, name, channel))
+            { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within two minutes on the same connection; ask scripts.confirm again"); }
+            return act();
+        }
+    }
 
     internal void SetFleetLaunch(string name, bool enabled)
     {
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            BumpGeneration(name);
             var matches = records.FindAll(r => r.Credential.Kind == "script"
                 && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
             if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
