@@ -80,23 +80,25 @@ should not ship.
 
 ## Option 2: do less work per run, no group change
 
-Keep the global lock and shorten what each run does. From the step times above:
+Keep the global lock and shorten what each run does. The evaluator is already cached in `merge-rule.yml`, keyed on
+the build inputs (a key on main's sha would be worse: it would miss on every merge to main). So the cache is not
+the lever. R8b's figure is about 33 seconds a run, of which the **judge step is about 22 seconds** (GitHub reads
+for each pull request); 205e98bd is profiling it, and its numbers are the basis for this option, not mine.
 
-- **Fix the evaluator cache first.** Two sampled runs missed it and built for 6 to 7 seconds (about 22% of the
-  job). The key hashes the evaluator's own source, which changes often, or the cache is evicted or not saved; the
-  cause is unconfirmed.
-- Skipping checkout and `setup-dotnet` (about 5 seconds) needs a prebuilt artifact or image, not a cache.
-- **That leaves the judge, 10 to 12 seconds**, plus overhead: about 17 to 20 seconds a job, roughly 1.5 to 1.8 times
-  today's capacity (**derived** from the timings, not measured after a change).
+For the record, the two runs I sampled show a different split: judge 10 to 12 seconds, and a "Build main's
+evaluator" step of 6 to 7 seconds that ran (its condition is a cache miss). The runs are few and the judge time
+depends on how many pull requests and checks are open, so I do not set them against 205e98bd's profile; whether
+those two were misses, and why, is not established here.
 
-The brief's "about 35 seconds to seconds, 5 to 10 times" (**quoted**) would need the judge itself skipped for
-repeats, keyed by main's sha, the newest CI run's state and the head: a verdict cache. That touches ordering 1 too
-(a cached verdict is an old read of main), so it needs the same re-check as Option 1(a). As measured, caching the
-build and setup alone does not reach 5 to 10 times.
+What this option can reach depends on the profile: the judge's GitHub reads are the part to cut (fewer or batched
+reads, skipping heads whose inputs have not changed). A verdict cache keyed by main's sha, the newest CI run's
+state and the head would touch ordering 1 too (a cached verdict is an old read of main), so it needs the same
+re-check as Option 1(a). The capacity multiple is open until the profile lands; the brief's 5 to 10 times (quoted)
+is not derived here.
 
 ## Recommendation
 
-Do Option 2's cache fix now (it is small and loses nothing), then Option 1 with the evaluator's main re-check
+Do Option 2's judge-step reductions as 205e98bd's profile supports, then Option 1 with the evaluator's main re-check
 before posting. Do not remove `queue: max` or add per-head groups without that re-check. Do not use
 `cancel-in-progress: true` on `evaluate`: it can cancel a job after it has begun posting.
 
