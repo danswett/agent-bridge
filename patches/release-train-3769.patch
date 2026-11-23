@@ -13,10 +13,10 @@ index 63a6053..e725310 100644
      types: [completed] # the only type Actions accepts here
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..9d297b5
+index 0000000..8afaa53
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,219 @@
 +name: Release train
 +
 +# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
@@ -209,6 +209,7 @@ index 0000000..9d297b5
 +          run-id: ${{ needs.pick.outputs.run }}
 +          github-token: ${{ github.token }}
 +      - name: Publish the pre-release
++        id: publish
 +        shell: pwsh
 +        env:
 +          GH_TOKEN: ${{ github.token }}
@@ -222,6 +223,19 @@ index 0000000..9d297b5
 +          # nothing from -MainRepo); a duplicate, an older version or a commit behind the latest
 +          # release is still refused.
 +          ./build/publish-prerelease.ps1 -Version $env:VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository $env:REPOSITORY -Commit $env:SHA -MainHead $env:SHA -MainRepo .
++      - name: Publish the static Beta download manifest
++        # Ported from ci.yml's publish job (owner decision A): the manifest names the release this run published.
++        if: steps.publish.outputs.manifest-tag != ''
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          MANIFEST_TAG: ${{ steps.publish.outputs.manifest-tag }}
++        run: |
++          $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
++          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
++          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
++          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
 diff --git a/quality/catalog.yml b/quality/catalog.yml
 index 65f3eac..45f9f8d 100644
 --- a/quality/catalog.yml
