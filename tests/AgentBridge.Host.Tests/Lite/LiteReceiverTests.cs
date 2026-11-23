@@ -268,8 +268,10 @@ public class LiteReceiverTests
         var delivered = 0;
         for (var i = 1; i <= RateCap.PerMinute * 2; i++) { var ack = await r.Send(r.Request(id: Id(i.ToString()))); if (ack.Status == "delivered") { delivered++; } else { Refused(ack, "busy"); } }
         Assert.Equal(RateCap.PerMinute, delivered);
-        Refused(await r.Send(r.Request(id: Id("99"))), "busy"); // the next one is still reached and refused by delivery, not by rate
-        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("100")))).Status);
+        Refused(await r.Send(r.Request(id: Id("99"))), LiteReceiver.Rate); // six deliveries really did fill the minute
+        r.Time.Advance(TimeSpan.FromSeconds(61));
+        Refused(await r.Send(r.Request(id: Id("100"))), "busy"); // reached and refused by delivery, then refunded
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("101")))).Status);
     }
     [Theory]
     [InlineData(LiteKind.Unconfirmed)]

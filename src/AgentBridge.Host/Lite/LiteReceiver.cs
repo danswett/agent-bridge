@@ -91,6 +91,9 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
         if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
         LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
+        // The budget counts deliveries that may have typed. A plain refusal typed nothing (busy, notReplyTarget, composerNotEmpty, ...), so it gives the hit back:
+        // otherwise busy retries lock a pair out with rate (#1117). Pending, queued, unconfirmed and a thrown delivery may have typed, so they stay spent.
+        if (!replay && !result.Typed && result.Code is not null && result.Outcome is null or LiteKind.Refused) { Rates.Refund(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session); }
         if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
         { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
         return result.Typed && result.Outcome is null or LiteKind.Delivered
@@ -139,7 +142,15 @@ public sealed class RateCap(TimeProvider time)
     readonly object gate = new();
 
     // Gives back the most recent hit of a pair: a delivery that typed nothing must not spend the pair's budget (#1117 busy retries).
-    public void Refund(string peer, string pair) { }
+    public void Refund(string peer, string pair)
+    {
+        lock (gate)
+        {
+            if (!hits.TryGetValue((peer, pair), out var q) || q.Count == 0) { return; }
+            var kept = q.ToArray(); q.Clear();
+            foreach (var t in kept.Take(kept.Length - 1)) { q.Enqueue(t); }
+        }
+    }
 
     public bool Allow(string peer, string pair)
     {
