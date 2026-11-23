@@ -562,7 +562,7 @@ public sealed class FleetStopTests : IDisposable
     // The gate metadata as the previous version read it: no generation, digest or caps.
     sealed record PreviousGate(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
         string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null,
-        string? GrantBinding = null, ProcessInstance? LaunchProcess = null);
+        string? GrantBinding = null, ProcessInstance? LaunchProcess = null, string? ClientKind = null, string? ClientPlatform = null);
     [Fact]
     public void An_old_row_without_the_new_fields_is_unchanged_and_a_new_row_is_read_by_the_previous_shape()
     {

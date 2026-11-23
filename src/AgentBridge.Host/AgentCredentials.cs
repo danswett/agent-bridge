@@ -11,6 +11,8 @@ namespace AgentBridge.Host;
 
 // What a credential is bound to (design/agent-principals.md §3.3). Id names the grant in logs and
 // audit and is never the secret.
+public sealed record ScriptInfo(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch, DateTimeOffset? LastUse = null);
+
 public sealed record AgentCredential(string Id, string Session, string LaunchId, int RootPid, DateTimeOffset RootStartUtc,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
@@ -111,6 +113,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     internal FleetLaunchGrant FleetGrant { get; }
     internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
 
+    // When each script last authenticated, since this host started (not stored: the list says so, never claims more).
+    readonly Dictionary<string, DateTimeOffset> lastUse = [];
     public int Count { get { lock (gate) { return records.Count; } } }
 
     internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
@@ -279,6 +283,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             Prune(now);
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
@@ -445,6 +450,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
+        if (credential.Kind == "script") { lock (gate) { lastUse[principal] = time.GetUtcNow(); } }
         return new AgentHelloResult(principal, credential.Scope);
     }
 
@@ -529,10 +535,87 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
             if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
             return removed;
         }
+    }
+
+    // What the app lists for its Settings page: names and limits only, never a token, hash, path or credential id.
+    public IReadOnlyList<ScriptInfo> ListScripts()
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var prefix = $"script:{machine}/";
+            return records.Where(r => r.Credential.Kind == "script" && r.Credential.ExpiresAt > now && r.Credential.Principal!.StartsWith(prefix, StringComparison.Ordinal))
+                .GroupBy(r => r.Credential.Principal!)
+                .Select(g => new ScriptInfo(g.Key[prefix.Length..], g.First().Credential.Scope, g.Max(r => r.Credential.ExpiresAt), g.Count(),
+                    g.Any(r => r.Credential.FleetLaunch), lastUse.TryGetValue(g.Key, out var used) ? used : null))
+                .OrderBy(i => i.Name, StringComparer.Ordinal).ToList();
+        }
+    }
+
+    // A person's press needs a confirmation the host issued for exactly this action and script on this connection. Per script name the
+    // host keeps a generation counter, moved on by every press attempt (right or wrong) and by every change to the script's
+    // credentials: mint, revoke, rotation, expiry, tick and untick. At most ONE confirmation is outstanding for a name, bound to that
+    // generation. The generation check is the one guard against a state that returns to an earlier one; nothing else drops a held
+    // confirmation when the script changes. The value is derived from a random per-process salt and a fresh nonce, lives two
+    // minutes on the monotonic clock (a wall-clock step cannot stretch it), and is used up atomically under the store's lock
+    // (#3883 receipts 7099362785 and 7101860025).
+    public static readonly TimeSpan ScriptConfirmationLife = TimeSpan.FromMinutes(2);
+    public const int MaxScriptConfirmations = 64;
+    readonly byte[] confirmationSalt = RandomNumberGenerator.GetBytes(32);
+    readonly Dictionary<string, long> scriptGeneration = [];
+    readonly Dictionary<string, (string Token, string Op, long Generation, IProtocolChannel Channel, long Issued)> confirmations = [];
+
+    long GenerationOf(string name) => scriptGeneration.TryGetValue(name, out var g) ? g : 0;
+
+    // Called with the gate held: the script's credentials are no longer what an earlier confirmation was asked for.
+    void BumpGeneration(string name) => scriptGeneration[name] = GenerationOf(name) + 1;
+
+    static string NameOf(string principal) => principal[(principal.LastIndexOf('/') + 1)..];
+
+    internal string IssueScriptConfirmation(string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            foreach (var stale in confirmations.Where(c => time.GetElapsedTime(c.Value.Issued) >= ScriptConfirmationLife).Select(c => c.Key).ToList())
+            { confirmations.Remove(stale); }
+            while (!confirmations.ContainsKey(name) && confirmations.Count >= MaxScriptConfirmations)
+            { confirmations.Remove(confirmations.MinBy(c => c.Value.Issued).Key); }
+            var generation = GenerationOf(name);
+            var seed = System.Text.Encoding.UTF8.GetBytes($"{machine}|{op}|{name}|{generation}|").Concat(RandomNumberGenerator.GetBytes(16)).ToArray();
+            var token = BlobFormat.Base64Url(HMACSHA256.HashData(confirmationSalt, seed));
+            confirmations[name] = (token, op, generation, channel, time.GetTimestamp());
+            return token;
+        }
+    }
+
+    internal bool ConsumeScriptConfirmation(string? token, string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            // Used up by any presentation, right or wrong; the generation then moves on.
+            var found = confirmations.Remove(name, out var held);
+            var ok = found && token is not null
+                && CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(held.Token), System.Text.Encoding.ASCII.GetBytes(token))
+                && held.Op == op && ReferenceEquals(held.Channel, channel) && held.Generation == GenerationOf(name)
+                && time.GetElapsedTime(held.Issued) < ScriptConfirmationLife;
+            BumpGeneration(name);
+            return ok;
+        }
+    }
+
+    // The confirmation is consumed under the store's lock (ConsumeScriptConfirmation is the one atomic winner); the audit attempt and the
+    // change then run with no store lock held. Holding it across the audit append would stall every other store call for as long as that
+    // call waits on the audit log's own lock, up to two seconds (#3883 receipt 7101860025). The write itself takes the lock it needs.
+    internal T RunScriptPress<T>(string? token, string op, string name, IProtocolChannel channel, Func<T> act)
+    {
+        if (!ConsumeScriptConfirmation(token, op, name, channel))
+        { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within two minutes on the same connection; ask scripts.confirm again"); }
+        return act();
     }
 
     internal void SetFleetLaunch(string name, bool enabled)
@@ -540,6 +623,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            BumpGeneration(name);
             var matches = records.FindAll(r => r.Credential.Kind == "script"
                 && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
             if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
@@ -574,6 +658,8 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var gone = records.Where(r => which(r)).ToList();
         if (gone.Count == 0) { return false; }
         records.RemoveAll(which);
+        // Revoke, expiry and rotation all end here: a script whose credentials changed is not what an earlier confirmation was asked for.
+        foreach (var r in gone.Where(r => r.Credential.Kind == "script" && r.Credential.Principal is not null)) { BumpGeneration(NameOf(r.Credential.Principal!)); }
         foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for {PrincipalOf(r.Credential)}: {why}"); }
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
