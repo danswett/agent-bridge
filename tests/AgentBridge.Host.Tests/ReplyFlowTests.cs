@@ -247,7 +247,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         time.Advance(served.HelloCheck);
         probe.Reason = "agent-ha-bridge is running for this user";
         time.Advance(served.HelloCheck);
-        var off = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+        var off = await ch.Events.ReadAsync();
         Assert.Equal((Events.HelloChanged, 1L), (off.Name, off.Seq));
         var now = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
         Assert.DoesNotContain(Capabilities.SessionsReply, Offered(now));
@@ -257,7 +257,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         time.Advance(served.HelloCheck);
         probe.Reason = null;
         time.Advance(served.HelloCheck);
-        var on = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+        var on = await ch.Events.ReadAsync();
         Assert.Equal((Events.HelloChanged, 2L), (on.Name, on.Seq));
         now = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
         Assert.Contains(Capabilities.SessionsReply, Offered(now));
@@ -299,7 +299,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
             Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
         };
         time.Advance(served.HelloCheck);
-        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync()).Name);
         var restore = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result").GetProperty("machine").GetProperty("restore");
         Assert.Equal(("reboot", 1, "s1", true), (restore.GetProperty("cause").GetString(), restore.GetProperty("waiting").GetInt32(),
             restore.GetProperty("offered")[0].GetProperty("id").GetString(), restore.GetProperty("offered")[0].GetProperty("midTurn").GetBoolean()));
@@ -307,13 +307,13 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // The held session judged: said again.
         notice = notice with { Waiting = 0, Offered = [.. notice.Offered, new RestoreSession { Id = "s2", Agent = AgentKind.Copilot }] };
         time.Advance(served.HelloCheck);
-        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync()).Name);
 
         // Copilot on #813: only what it says changed, its counts the same (an uncertain session found
         // live, the cause, time and offers rebuilt from the rest): said again too.
         notice = notice with { Cause = RestoreCause.Crash, Since = notice.At.AddMinutes(-3), Offered = [new RestoreSession { Id = "s3", Agent = AgentKind.Claude }, .. notice.Offered.Skip(1)] };
         time.Advance(served.HelloCheck);
-        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync()).Name);
     }
 
     [Fact]
@@ -456,7 +456,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.Gate = release.Task;
         var request = Guid.NewGuid().ToString();
         var first = ReplyAsync(ch, "mine", request);
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await injector.PlansReached(1);
 
         // An agent drives the session while the person's reply is still going in, and the phone,
         // having lost the outcome, sends the same request again.
@@ -588,7 +588,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
         var data = new { id = Id, request, text = "once", progress = true };
         var first = HearAsync(ch, Ops.SessionReply, data);
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to be typed", Patience);
+        await injector.PlansReached(1);
 
         var heard = new List<string>();
         var repeat = (await OpenAsync()).RequestAsync(Ops.SessionReply, data, progress: p => { lock (heard) { heard.Add(p.GetRawText()); } });
@@ -898,20 +898,20 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var ch = channel ?? await OpenAsync();
         var first = ReplyAsync(ch, "yes");
         // Confirmation starts only after the first reply releases its session's typing claim.
-        await confirming.WaitAsync(Patience);
+        await confirming;
         var next = clock.NextTimer();
         if (recordDuringInjection) { injector.OnInject = _ => RecordPrompt(); }
         var second = ReplyAsync(ch, "yes");
-        await next.WaitAsync(Patience);
+        await next;
         if (!recordDuringInjection)
         {
             next = clock.NextTimer();
             RecordPrompt();
-            await next.WaitAsync(Patience);
+            await next;
         }
 
         // The survivor has rearmed after seeing the claimed prompt, before its deadline moves.
-        var recorded = await Task.WhenAny(first, second).WaitAsync(Patience);
+        var recorded = await Task.WhenAny(first, second);
         Assert.Equal("delivered", (await recorded).Outcome);
         clock.Advance(ReplyConfirmation);
 
@@ -1102,7 +1102,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         injector.Screen = pid => pid == 100 ? CopilotAsking : null;
         var answer = ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" } });
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the answer to start typing", Patience);
+        await injector.PlansReached(1);
         Assert.Equal(("busy", "another answer or reply to this session is being delivered"), await ReplyAsync(ch, "hello"));
         release.SetResult();
         Assert.Equal("delivered", (await answer).GetProperty("result").GetProperty("outcome").GetString());
@@ -1116,7 +1116,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
         var first = ReplyAsync(ch, "first");
         // After the answer's two writes: its walk, then its Enter (#510).
-        await HostWait.UntilAsync(() => injector.Plans.Count == 3, "the first reply to start typing", Patience);
+        await injector.PlansReached(3);
         Assert.Equal("busy", (await ReplyAsync(ch, "second")).Outcome);
         release.SetResult();
         Assert.Equal("delivered", (await first).Outcome);
@@ -1132,7 +1132,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = ReplyAsync(ch, "once only", request);
-        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await injector.PlansReached(1);
         var during = ReplyAsync(ch, "once only", request);
         release.SetResult();
         var again = await ReplyAsync(await OpenAsync(), "once only", request);
@@ -1439,6 +1439,20 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     sealed class FakeInjector : IConsoleInjector
     {
         public readonly List<(int Pid, KeyPlan Plan)> Plans = [];
+        readonly List<(int Count, TaskCompletionSource Reached)> reaching = [];
+
+        // Completes when the typing slot has been asked for exactly count plans: the event, not a poll of the list.
+        public Task PlansReached(int count)
+        {
+            lock (Plans)
+            {
+                if (Plans.Count == count) { return Task.CompletedTask; }
+                var waiter = (count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                reaching.Add(waiter);
+                return waiter.Item2.Task;
+            }
+        }
+
         public Action<KeyPlan>? OnInject;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
@@ -1456,7 +1470,11 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
-            lock (Plans) { Plans.Add((processId, plan)); }
+            lock (Plans)
+            {
+                Plans.Add((processId, plan));
+                foreach (var waiter in reaching.Where(w => w.Count == Plans.Count).ToList()) { waiter.Reached.TrySetResult(); reaching.Remove(waiter); }
+            }
             await Gate;
             Holding?.Invoke();
             if (plan.Proceed?.Invoke() is { } stopped)
