@@ -60,7 +60,8 @@ Two code PRs after S-N1: (a) relay client plus the reader move (about 250 lines)
 (about 250 lines). Each at most 400 changed lines against its parent, tests first, sensitive (reads the relay roster on a person
 device), read by Quality with a second model. If the reader move would exceed that, the move goes first on its own.
 
-## Open for the owner (not decided here)
+## Settled: a stale copy may stand in for a count
 
-* Whether a registry copy may stand in for a count on a machine whose channel failed (the note says yes, labelled); if the owner
-  prefers an empty count there, rule 3 loses its last step and the stale label is only informational.
+When a machine's channel has failed, a stale registry copy may stand in for its count, labelled **stale** and **unverified**. This is not a
+new decision: it follows the rule the PWA already ships (`pwa/js/fleet.js`, slice 6), so the two clients agree. Ruled by the Engineering
+Lead (R9, Nov 23, 2026); no owner step.
