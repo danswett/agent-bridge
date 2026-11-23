@@ -472,8 +472,9 @@ static partial class SelfTest
                 {
                   if (skipped is not null)
                   {
-                    check(true, $"{tookMessage}: SKIPPED ({skipped})");
-                    check(true, $"{keptMessage}: SKIPPED ({skipped})");
+                    // Skipped is not passed: neither check is recorded as a pass or a failure; the result lists them as skipped, with why.
+                    result["skippedChecks"] = new { reason = skipped, checks = new[] { tookMessage, keptMessage } };
+                    AppLog.Write($"self-test: SKIPPED (not counted as a pass): {tookMessage}; {keptMessage}: {skipped}");
                   }
                   else
                   {
