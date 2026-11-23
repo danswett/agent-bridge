@@ -14,7 +14,11 @@ public sealed record GrantAudience(string Device, string Profile);
 public sealed record GrantRole(string Name, GrantSubject Subject);
 public sealed record StopTarget(string Session, ProcessInstance ProcessInstance);
 public sealed record GrantLaunch(Guid GrantId, GrantSubject Subject, StopTarget Target);
-public sealed record GrantCaps(int Hourly, int Daily, int Live);
+public sealed record GrantCaps(int Hourly, int Daily, int Live)
+{
+    public GrantCaps Intersect(GrantCaps other) => new(Math.Min(Hourly, other.Hourly),
+        Math.Min(Daily, other.Daily), Math.Min(Live, other.Live));
+}
 public sealed record GrantScope(ImmutableArray<string> Machines, ImmutableArray<string> Workspaces,
     ImmutableArray<string> Agents, ImmutableArray<string> Models, ImmutableArray<string> Profiles,
     ImmutableArray<string> Efforts, ImmutableArray<string> Contexts, ImmutableArray<string> Permissions);
@@ -171,17 +175,16 @@ public static class GrantEvaluator
         var profile = Resolve(request.Profile, grant.Scope.Profiles, policy.Scope.Profiles);
         var effort = Resolve(request.Effort, grant.Scope.Efforts, policy.Scope.Efforts);
         var context = Resolve(request.Context, grant.Scope.Contexts, policy.Scope.Contexts);
-        var permissions = policy.Scope.Permissions.Where(p => p != LaunchProtocol.AllowAll || policy.AllowAll).ToImmutableArray();
-        var permission = Resolve(request.Permission ?? (Both(LaunchProtocol.Ask, grant.Scope.Permissions, permissions) ? LaunchProtocol.Ask : null),
+        var permissions = policy.Scope.Permissions.Where(p => p != LaunchProtocol.AllowAll || policy.AllowAll && grant.AllowAllLaunch).ToImmutableArray();
+        var permission = Resolve(request.Permission ?? LaunchProtocol.Ask,
             grant.Scope.Permissions, permissions);
         if (model is null || profile is null || effort is null || context is null) { return new(GrantRefusal.Scope); }
         if (permission is null) { return new(GrantRefusal.Permission); }
-        var caps = new GrantCaps(Math.Min(grant.Caps.Hourly, policy.Caps.Hourly),
-            Math.Min(grant.Caps.Daily, policy.Caps.Daily), Math.Min(grant.Caps.Live, policy.Caps.Live));
+        var caps = grant.Caps.Intersect(policy.Caps);
         return new(GrantRefusal.None, new(model, profile, effort, context, permission, caps));
     }
     static bool Both(string value, ImmutableArray<string> grant, ImmutableArray<string> policy) =>
         grant.Contains(value, StringComparer.Ordinal) && policy.Contains(value, StringComparer.Ordinal);
     static string? Resolve(string? value, ImmutableArray<string> grant, ImmutableArray<string> policy) =>
-        value is null ? policy.FirstOrDefault(v => grant.Contains(v, StringComparer.Ordinal)) : Both(value, grant, policy) ? value : null;
+        value is null ? grant.FirstOrDefault(v => policy.Contains(v, StringComparer.Ordinal)) : Both(value, grant, policy) ? value : null;
 }

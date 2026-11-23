@@ -20,12 +20,12 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
         RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
-        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null, SamePcPinHandoff? samePcPin = null) =>
-        Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin);
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null) =>
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop);
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
-        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin) => async (channel, op, data) =>
+        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop) => async (channel, op, data) =>
     {
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
@@ -169,6 +169,21 @@ public static class LocalApi
             throw Refuse(op, new Caller(CallerKind.Agent, credentials.PrincipalOf(answering)),
                 "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
+        if (op == FleetStopCommands.Op)
+        {
+            // Same grant gate as a granted launch: only a live agent session credential, never a script, the app or the CLI.
+            var ending = callers.Classify(channel, fresh: true);
+            if (fleetStop is null || credentials is null || ending.Kind != CallerKind.Agent || credentials.Of(channel) is not { Kind: "session" } ender)
+            { throw Refuse(op, ending, "fleet end needs a live agent session credential", log); }
+            return await fleetStop.HandleAsync(ender, data);
+        }
+        if (grantLaunch is not null && op == LaunchProtocol.Launch && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("grant", out _)
+            && credentials is { } grantIssuer && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } granted
+            && grantIssuer.Of(channel) is { Kind: "session" } grantee)
+        {
+            if (!grantIssuer.IsLive(grantee)) { throw Refuse(op, granted, "the credential is no longer live", log); }
+            return await grantLaunch.LaunchGrantedAsync(grantee, data);
+        }
         if (op is LaunchProtocol.Launch or LaunchProtocol.Options
             && callers.Classify(channel).Kind == CallerKind.Agent)
         {
@@ -193,6 +208,13 @@ public static class LocalApi
             }
             if (op == LaunchProtocol.Options)
             { throw Refuse(op, callers.Classify(channel), "a live session read credential is required", log); }
+        }
+        if (agentLaunch is not null && op == AgentPipeLaunch.StatusOp)
+        {
+            var asking = callers.Classify(channel, fresh: true);
+            if (asking.Kind != CallerKind.Agent || credentials?.Of(channel) is not { Kind: "session" } statusReader || !credentials.IsLive(statusReader))
+            { throw Refuse(op, asking, "a live session read+reply+launch credential is required", log); }
+            return agentLaunch.Status(statusReader, data);
         }
         if (agentLaunch is not null && op == LaunchProtocol.Launch && credentials is { } launchIssuer
             && callers.Classify(channel, fresh: true) is { Kind: CallerKind.Agent } launching && launchIssuer.Of(channel) is { Kind: "session" } launcher)

@@ -36,7 +36,7 @@ public static class ConfigCommands
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
-        "agentMessaging.remote", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "security.roster",
+        "agentMessaging.remote", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "agentMessaging.laneDelivery", "security.roster",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];

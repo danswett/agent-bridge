@@ -144,6 +144,28 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task A_grant_replay_without_a_terminal_does_not_trust_the_launchers_started_cache()
+    {
+        var held = GateFolder + ".held";
+        starter.BeforeStart = () => { Directory.Move(GateFolder, held); File.WriteAllText(GateFolder, "blocked"); };
+        var launcher = Launcher(Config());
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App", Permissions = "ask" };
+        var ingress = new GateLaunchIngress("local", "agent", "fixture", null, Guid.NewGuid().ToString("D"));
+        LaunchResult first;
+        try { first = await GateLaunchAudit.LaunchAsync(launcher, request, ingress.Principal, audit, ingress); }
+        finally
+        {
+            if (File.Exists(GateFolder)) { File.Delete(GateFolder); Directory.Move(held, GateFolder); }
+        }
+        Assert.True(first.Outcome == LaunchOutcome.Unconfirmed, first.Reason);
+        var replay = await GateLaunchAudit.LaunchAsync(launcher, request, ingress.Principal, audit, ingress);
+        Assert.Equal(LaunchOutcome.Unconfirmed, replay.Outcome);
+        Assert.Single(starter.Specs);
+        Assert.Equal("intent", Assert.Single(LaunchAuditRows()).GetProperty("gate").GetProperty("phase").GetString());
+    }
+
     sealed class GateAuditChannel : IProtocolChannel
     {
         public string PeerId => "local-app";
