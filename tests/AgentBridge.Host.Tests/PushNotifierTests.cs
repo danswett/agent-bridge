@@ -2410,8 +2410,67 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(("failures", 3, ""), (d.GetProperty("kind").GetString(), d.GetProperty("failures").GetInt32(), d.GetProperty("session").GetString()));
         Assert.False(n.TryGetProperty("silent", out _));  // always a visible notification, never silent
         Assert.Equal((21600, "normal", PushNotice.Topic(Machine, PushNotice.FailuresKey)), (ttl, urgency, topic));
-        // A count only: no message id, no text.
-        Assert.DoesNotContain("id=", n.GetRawText());
+        // A count only: exactly these fields, and no message id (a GUID) anywhere in the payload.
+        Assert.Equal(["at", "failures", "kind", "machine", "session", "v"], d.EnumerateObject().Select(p => p.Name).Order());
+        Assert.DoesNotMatch(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-", n.GetRawText());
+    }
+
+    // #4040 (acceptance conditions of S2b-2b): a long storm is capped, an opt-out is honoured at send time, and a count
+    // waiting out a relay outage is never lost.
+    [Fact]
+    public async Task A_storm_of_failures_is_capped_at_six_pushes_an_hour_then_one_summary_with_the_total()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        int[] counts = [1, 1, 1, 1, 1, 1, 2, 3];
+        foreach (var c in counts)
+        {
+            notifier.NoteDeliveryFailure(c);
+            await After(TimeSpan.FromSeconds(61));
+        }
+        Assert.Equal(6, Received().Count);  // the seventh and eighth windows are held back
+        await After(TimeSpan.FromMinutes(40));
+        Assert.Equal(6, Received().Count);  // still within the hour of the first push
+        await After(TimeSpan.FromMinutes(14));
+        var bodies = Received().Select(r => r.Notification.GetProperty("body").GetString()).ToList();
+        Assert.Equal(7, bodies.Count);  // ONE summary, when the hour ends
+        Assert.Equal("DEV · 5 messages not delivered", bodies[^1]);
+        await After(TimeSpan.FromMinutes(30));
+        Assert.Equal(7, Received().Count);
+    }
+
+    [Fact]
+    public async Task A_failures_count_waiting_for_the_relay_is_not_sent_to_a_device_that_has_turned_them_off_since()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        sender.Connected = false;
+        notifier.NoteDeliveryFailure();
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal(1, notifier.Pending);
+        Subscribe(Phone, notify: Filters(failures: false));  // the person turns it off while it waits
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(10));
+        Assert.Empty(sender.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
+    public async Task Counts_waiting_out_a_relay_outage_are_summed_not_replaced()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(failures: true));
+        sender.Connected = false;
+        notifier.NoteDeliveryFailure(5);
+        await After(TimeSpan.FromSeconds(61));
+        notifier.NoteDeliveryFailure(3);
+        await After(TimeSpan.FromSeconds(61));
+        Assert.Equal(1, notifier.Pending);  // one waiting notice, not two
+        sender.Connected = true;
+        await After(TimeSpan.FromSeconds(10));
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("DEV · 8 messages not delivered", n.GetProperty("body").GetString());
+        Assert.Equal(8, n.GetProperty("data").GetProperty("failures").GetInt32());
     }
 
     [Fact]
