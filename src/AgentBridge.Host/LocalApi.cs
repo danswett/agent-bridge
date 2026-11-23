@@ -27,24 +27,41 @@ public static class LocalApi
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
         AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop) => async (channel, op, data) =>
     {
+        try
+        {
+            if (op != LaunchProtocol.Launch || credentials?.Of(channel)?.FleetLaunch != true)
+            { credentials?.CheckScriptOperation(channel, op, log); }
+        }
+        catch (InvalidOperationException e)
+        {
+            AuditScriptAction(credentials?.ScriptPrincipal(channel), op, "refused", audit, e.Message);
+            throw;
+        }
         if (op == LaunchProtocol.Launch && credentials?.IsScriptConnection(channel) == true)
         {
-            if (credentials.Of(channel)?.FleetLaunch != true) { credentials.CheckScriptOperation(channel, op, log); }
+            InvalidOperationException FleetRefusal(string why)
+            {
+                var refusal = Refuse(op, callers.Classify(channel), why, log);
+                AuditScriptAction(credentials.ScriptPrincipal(channel), op, "refused", audit, refusal.Message);
+                return refusal;
+            }
             if (data.ValueKind != JsonValueKind.Object || System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > LaunchProtocol.MaxRequest
                 || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1)
                 || data.EnumerateObject().Any(p => p.Name is not ("request" or "agent" or "workspace" or "permissions"
                     or "model" or "effort" or "context" or "prompt" or "role" or "fleetName")))
-            { throw Refuse(op, callers.Classify(channel), "fleet launch contains unsupported fields or exceeds its size limit", log); }
-            var request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet launch needs a request");
+            { throw FleetRefusal("fleet launch contains unsupported fields or exceeds its size limit"); }
+            LaunchRequest request;
+            try { request = data.Deserialize<LaunchRequest>(ProtocolJson.Options) ?? throw new ArgumentException("fleet launch needs a request"); }
+            catch (JsonException) { throw FleetRefusal("fleet launch needs a valid request"); }
             string? Refusal() => credentials.Of(channel) is not { } script ? "the script credential is no longer live"
                 : callers.Classify(channel, fresh: true).Kind == CallerKind.Agent ? "fleet launch is refused inside an agent session"
                 : credentials.FleetGrant.CheckLaunch(script, (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown, request);
-            if (Refusal() is { } reason) { throw Refuse(op, callers.Classify(channel), reason, log); }
-            var live = credentials.Of(channel) ?? throw Refuse(op, callers.Classify(channel), "the script credential is no longer live", log);
+            if (Refusal() is { } reason) { throw FleetRefusal(reason); }
+            var live = credentials.Of(channel) ?? throw FleetRefusal("the script credential is no longer live");
+            AuditScriptAction(credentials.PrincipalOf(live), op, "attempted", audit);
             return await sessions.LaunchFleetAsync(request, credentials.PrincipalOf(live), audit, Refusal,
                 actual => credentials.FleetGrant.CheckDispatch(actual, request));
         }
-        credentials?.CheckScriptOperation(channel, op, log);
         if (op is "launches.status" or "launches.list") { return sessions.LaunchStatus(data, op == "launches.list"); }
         if (op == FleetWorkerSettings.Op)
         {
@@ -115,7 +132,17 @@ public static class LocalApi
             }
             return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
-            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: audit is null ? null : audit.Append); }
+            if (op == AgentBridge.Host.Lite.LiteAgentSend.Op)
+            {
+                var attempted = false;
+                bool Append(AgentAuditEntry entry, string? text) { attempted = true; return audit?.Append(entry, text) == true; }
+                try { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data, appendAttempt: Append); }
+                catch (Exception) when (!attempted && credentials?.ScriptPrincipal(channel) is not null)
+                {
+                    AuditScriptAction(credentials.ScriptPrincipal(channel), op, "refused", audit);
+                    throw;
+                }
+            }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data, auditLog: audit); }
             if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data, auditLog: audit); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
@@ -126,12 +153,15 @@ public static class LocalApi
                 try { request = data.Deserialize<AgentHelloRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.hello needs a token"); }
                 catch (JsonException) { throw new ArgumentException("agent.hello needs a token"); }
                 var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
+                var scriptPrincipal = credentials.ScriptPrincipal(request.Token);
                 var decision = credentials.Check(request.Token, ancestry, agentCaller: callers.Classify(channel, fresh: true).Kind == CallerKind.Agent);
                 if (decision.Accepted is not { } credential)
                 {
+                    AuditScriptAction(scriptPrincipal, op, "refused", audit);
                     log?.Invoke($"local pipe: refused agent.hello: {decision.Refusal}");
                     throw new InvalidOperationException($"refused: {decision.Refusal}");
                 }
+                AuditScriptAction(scriptPrincipal, op, "accepted", audit);
                 return credentials.Accept(channel, credential);
             }
         // Managing a machine from another device (#801) is for the relay alone. Refused here for
@@ -333,8 +363,21 @@ public static class LocalApi
         if (!written) { throw AgentActionAuditUnavailable(); }
     }
 
-    static InvalidOperationException AgentActionAuditUnavailable() =>
-        new("refused: auditUnwritable: the agent audit log could not be written; nothing was done");
+    static void AuditScriptAction(string? principal, string op, string outcome, AgentAuditLog? audit, string? refusal = null)
+    {
+        if (principal is null) { return; }
+        // Unknown operation names are untrusted content, not safe audit fields.
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString("D"), principal, [],
+            AgentCredentials.ScriptOperation(op), "credential", outcome);
+        bool written;
+        try { written = audit?.Append(entry) == true; }
+        catch (Exception) { throw AgentActionAuditUnavailable(refusal); }
+        if (!written) { throw AgentActionAuditUnavailable(refusal); }
+    }
+
+    static InvalidOperationException AgentActionAuditUnavailable(string? refusal = null) =>
+        new("refused: auditUnwritable: the agent audit log could not be written; nothing was done"
+            + (refusal is null ? "" : $"; {refusal}"));
 
     static InvalidOperationException Refuse(string op, Caller caller, string why, Action<string>? log)
     {

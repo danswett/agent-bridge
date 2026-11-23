@@ -88,9 +88,13 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
                 replay = true; break;
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        long rateToken = 0;
+        if (!replay && !Rates.TryAllow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, out rateToken)) { return Refuse(Rate, body.Request); }
         LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
+        // The budget counts deliveries that may have typed. A plain refusal typed nothing (busy, notReplyTarget, composerNotEmpty, ...), so it gives the hit back:
+        // otherwise busy retries lock a pair out with rate (#1117). Pending, queued, unconfirmed and a thrown delivery may have typed, so they stay spent.
+        if (!replay && !result.Typed && result.Code is not null && result.Outcome is null or LiteKind.Refused) { Rates.Refund(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, rateToken); }
         if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
         { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
         return result.Typed && result.Outcome is null or LiteKind.Delivered
@@ -132,14 +136,21 @@ public sealed class ReplayStore(TimeProvider time)
 
 // Per sending session to receiving session: 6 a minute, 60 an hour, in memory. An active pair keeps its window; only idle
 // pairs are dropped. One peer holds at most MaxPerPeer pairs, so it cannot starve the rest.
+// Every accepted hit has its own token, so a delivery that typed nothing gives back exactly the hit its own request took. Giving back
+// "the newest hit" instead would take a later, typed send's and free the budget too early (an overlapping send admits a seventh).
 public sealed class RateCap(TimeProvider time)
 {
     public const int PerMinute = 6, PerHour = 60, MaxPairs = 1024, MaxPerPeer = 64;
-    readonly Dictionary<(string Peer, string Pair), Queue<DateTimeOffset>> hits = new();
+    readonly Dictionary<(string Peer, string Pair), List<(long Id, DateTimeOffset At)>> hits = new();
     readonly object gate = new();
+    long next;
 
-    public bool Allow(string peer, string pair)
+    public bool Allow(string peer, string pair) => TryAllow(peer, pair, out _);
+
+    // token is this request's own hit, for Refund; 0 when refused.
+    public bool TryAllow(string peer, string pair, out long token)
     {
+        token = 0;
         lock (gate)
         {
             var now = time.GetUtcNow();
@@ -148,15 +159,25 @@ public sealed class RateCap(TimeProvider time)
             {
                 if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer)
                 {
-                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Last() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
+                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value[^1].At >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
                     if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer) { return false; }
                 }
                 hits[key] = q = new();
             }
-            while (q.Count > 0 && now - q.Peek() >= TimeSpan.FromHours(1)) { q.Dequeue(); }
-            if (q.Count >= PerHour || q.Count(t => now - t < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
-            q.Enqueue(now);
+            q.RemoveAll(h => now - h.At >= TimeSpan.FromHours(1));
+            if (q.Count >= PerHour || q.Count(h => now - h.At < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
+            token = ++next;
+            q.Add((token, now));
             return true;
+        }
+    }
+
+    // Gives back exactly the hit issued as token. A hit already pruned, a second refund, an unknown pair or token 0 (a replay) finds nothing and does nothing.
+    public void Refund(string peer, string pair, long token)
+    {
+        lock (gate)
+        {
+            if (token > 0 && hits.TryGetValue((peer, pair), out var q)) { q.RemoveAll(h => h.Id == token); }
         }
     }
 }
