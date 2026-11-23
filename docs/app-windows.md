@@ -446,7 +446,9 @@ The Velopack package holds the app, the host, its launcher, the injector and the
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
 into one folder with one version. An app update is a host update, so they skew mostly when an
 update did not finish: the app restarted onto the new release while the host kept running the old one (or
-the reverse). That is said, not repaired by itself (the version-skew banner, under Ready, below).
+the reverse). The app restarts its own host onto files already installed once the machine is quiet
+(the host restart, below); any other skew is said, not repaired by itself (the version-skew banner,
+under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -643,6 +645,29 @@ controls consume that same contract; this extraction does not disable or remove 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
+    moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
+    release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
+    0.1.7684, and "Check for updates" said up to date). When the host is older than the app, the host files
+    for the app's release are already installed beside it (the version of `current\agent-bridge-host.exe`,
+    read at the time, and exactly the app's own release: files newer than the app are not restarted onto), no
+    release is waiting to install, the halt policy allows it (a stale policy, or the app's release halted,
+    holds it), "Download updates automatically" is on (off, nothing happens unasked), and the machine is
+    quiet (no turn running and no question or approval waiting, over a whole snapshot settled for
+    `SettleFor`, 5 seconds, as for Install between turns), the app asks the
+    host to restart (`host.restart`: it ends with code 75 once fully stopped, and the launcher starts the
+    replacement from `current\`). **Not an install,** and in either mode: nothing is downloaded, and
+    Restart to update is unchanged. Only this machine's own host, over its own pipe, is ever restarted,
+    never a remote one. `VersionSkewHeal.Decide` decides (the installed files as the release it needs),
+    once for a release: a restart that fails backs off (an hour at most) and is given up on after three; one
+    the host answers that leaves it old is not asked again until the app restarts (what is remembered is
+    the run's). A skew it does not heal (the files missing or not the app's release, the host newer) is only
+    said, in the banner. **Quiet is decided at the moment of the ask,** as for Stop and an install between
+    turns: the host then settles its usage probes and holds its delivery gate (up to 15 seconds) before it
+    exits, so a delivery or typing in progress is waited for, but a turn or question that begins in that
+    window is not looked for again. That is acceptable for the same reason it is for those: the agents'
+    consoles are separate processes and keep running, and what the host was carrying (a question or
+    approval) is the cost the restart warning already names.
   * **Update now, from another device** (#1159; design in
     [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
     the clients' buttons not yet): the
@@ -700,15 +725,17 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
-  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only): the app and its host on different
-    releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only, but for the one case in the bullet above): the app and
+    its host on different releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
     (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
     the person's press for this too. With no release ready it is words only, no button: "The bridge host
     is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
     older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
-    card keeps its own Restart advice. **A skew is only shown, never repaired by itself:** nothing is
-    installed or restarted because of it, in either mode, and the person's press is the only action,
-    Restart to update when a release is ready, or Settings' host Restart. What counts as skew is `VersionSkewHeal.Decide` (a version that
+    card keeps its own Restart advice. **The banner only shows it:** nothing is installed because of a skew, in
+    either mode, and the one thing done unasked is the host restart in the bullet above (the host's files
+    for the app's release installed, the machine quiet); every other skew is only shown, and the person's
+    press is the only action, Restart to update when a release is ready, or Settings' host Restart.
+    What counts as skew is `VersionSkewHeal.Decide` (a version that
     is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
     screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
     installed release and the connected host's.
