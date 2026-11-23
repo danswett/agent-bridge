@@ -2482,6 +2482,50 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
+    // Main's product job as attempts: id 1 failed in setup (an allowed infra step), the last is `later`.
+    static (string Posted, FakeGitHub GitHub) PostMainWithProductAttempts(string annotations, string? later, bool unreadableFirst)
+    {
+        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+        object Attempt(int id, int attempt, string conclusion, params object[] steps) =>
+            new { id, name = "product (ubuntu-latest)", status = "completed", conclusion, run_attempt = attempt, runner_id = 1, steps };
+        object[] attempts = [Attempt(1, 1, "failure", Step("Run actions/setup-dotnet@v6", "failure"), Step("Run tests", "skipped"))];
+        if (later is not null)
+            attempts = [.. attempts, Attempt(2, 2, later, Step("Run actions/setup-dotnet@v6", "success"), Step("Run tests", later))];
+        var jobs = MergeRuleConfig.Load(config).MainGreen.Jobs.Where(n => n != "product").Append("plan")
+            .Select((name, id) => (object)new { id = 100 + id, name, status = "completed", conclusion = "success", run_attempt = 1, runner_id = 1 })
+            .Concat(attempts).ToArray();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((5, "completed", later ?? "failure", later is null ? 1 : 2)),
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }), annotations: annotations,
+            unreadableCheckRuns: unreadableFirst ? [1] : null);
+        MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+        return (Assert.Single(github.Posted), github);
+    }
+
+    [Theory]
+    [InlineData("success", "success")]
+    [InlineData("failure", "failure")]
+    public void Main_does_not_read_annotations_of_a_failure_that_a_later_attempt_settled(string later, string state)
+    {
+        var (posted, github) = PostMainWithProductAttempts("[]", later, unreadableFirst: true);
+
+        Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain(github.RestPaths, path => path.Contains("/check-runs/1/annotations", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""[{"message":"HTTP 503"}]""", "failure")]
+    [InlineData("""[{"annotation_level":null,"message":"HTTP 503"}]""", "failure")]
+    [InlineData("""[{"annotation_level":5,"message":"HTTP 503"}]""", "failure")]
+    [InlineData("""[{"annotation_level":"failure","message":"HTTP 503"},{"message":"HTTP 503"}]""", "failure")]
+    [InlineData("""[{"annotation_level":"warning","message":"Node.js 20 is deprecated"},{"annotation_level":"failure","message":"HTTP 503"}]""", "success")]
+    public void Main_accepts_infra_evidence_only_from_annotations_with_a_valid_level(string annotations, string state)
+    {
+        var (posted, _) = PostMainWithProductAttempts(annotations, later: null, unreadableFirst: false);
+
+        Assert.Contains($" {state} merge-rule ", posted, StringComparison.Ordinal);
+    }
+
     static string WriteConfig(bool arm64Waiver = false)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
@@ -2580,7 +2624,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]") : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", long[]? unreadableCheckRuns = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -2655,7 +2699,8 @@ public class MergeRuleTests
                 }));
             }
             if (path.Contains("/check-runs/", StringComparison.Ordinal) && path.Contains("/annotations", StringComparison.Ordinal))
-                return JsonDocument.Parse(annotations);
+                return unreadableCheckRuns?.Any(id => path.Contains($"/check-runs/{id}/annotations", StringComparison.Ordinal)) == true
+                    ? throw new InvalidOperationException("gh: HTTP 404") : JsonDocument.Parse(annotations);
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)
