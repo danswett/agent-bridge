@@ -29,13 +29,13 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
         {
             var now = store.Get(request, principal);
             if (now is null || !now.Held || now.State == BusyQueueStore.Delivered) { return; }
-            if (transcript is not null && Read(transcript, offset, request)) { store.Settle(request, BusyQueueStore.Delivered, null, held: false, principal: principal); return; }
+            if (transcript is not null && Read(transcript, offset, request)) { store.Settle(request, BusyQueueStore.Delivered, null, held: false, principal: principal, expected: now.State); return; }
             // The session ended: nothing can take the prompt any more, so the slot is released (sessionEnded). An unknown answer is not an end.
-            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false, principal: principal); return; }
+            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false, principal: principal, expected: now.State); return; }
             if (time.GetUtcNow() >= until)
             {
                 // An unconfirmed noRow send keeps its reason; a queued one is now reported watchEnded. Either stays held.
-                if (now.State == BusyQueueStore.Queued) { store.Settle(request, BusyQueueStore.Unconfirmed, "watchEnded", held: true, principal: principal); }
+                if (now.State == BusyQueueStore.Queued) { store.Settle(request, BusyQueueStore.Unconfirmed, "watchEnded", held: true, principal: principal, expected: BusyQueueStore.Queued); }
                 return;
             }
             try { await Task.Delay(Poll, time, ct); }

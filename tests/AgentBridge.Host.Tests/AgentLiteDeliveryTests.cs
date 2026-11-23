@@ -843,6 +843,35 @@ public sealed class AgentLiteDeliveryTests
         }
         finally { File.Delete(path); }
     }
+    // #4129: a second send can take the first one's prompt as taken before the first send's replier has returned; the first send's own settle then
+    // must not turn the delivered record back into a held one with no slot.
+    [Fact]
+    public async Task A_second_send_that_finds_the_first_taken_before_the_first_replier_returns_leaves_the_record_delivered_and_no_held_orphan()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-race-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var f = BusyClaude(ReplyStage.Queued); f.Transcript = path; var lite = f.Build();
+            string? firstText = null; var nested = false; Task<LiteDelivery>? second = null;
+            f.OnWait = text => firstText ??= text;
+            f.AfterKeys = () =>
+            {
+                if (nested) { return; }
+                nested = true;
+                File.AppendAllText(path, TakenRow(firstText!) + "\n");
+                second = SendNew(lite);
+                second.GetAwaiter().GetResult();
+            };
+            Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+            Assert.Equal(LiteKind.Queued, (await second!).Outcome);
+            var records = f.Store.Records();
+            Assert.Single(records, r => r.State == BusyQueueStore.Delivered && !r.Held);
+            Assert.Single(records, r => r.Held);                                     // only the second send holds, and it holds the slot
+            Assert.True(f.Store.SlotHeld(Target));
+            Assert.Equal(2, records.Count);
+        }
+        finally { File.Delete(path); }
+    }
     [Fact]
     public async Task A_held_slot_stays_held_without_a_known_transcript_or_a_matching_taken_entry()
     {

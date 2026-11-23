@@ -185,14 +185,14 @@ public sealed class LiteDeliver(
             if (store is null) { return; }
             switch (r)
             {
-                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer); break;
-                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer); break;
-                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); break;
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer, BusyQueueStore.InFlight); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer, BusyQueueStore.InFlight); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer, BusyQueueStore.InFlight); break;
                 default:
                     // KeysGoing runs before the injector's own fence, so it proves nothing by itself: a result carries the replier's word (NoKeysSent frees the slot);
                     // only a thrown exception, with no result, falls back to whether KeysGoing ran.
                     var mayHaveBeenSent = r is null ? keysWent : r.KeyDisposition != ReplyKeyDisposition.NoKeysSent;
-                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
+                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer, BusyQueueStore.InFlight); } else { store.Release(body.Request, peer); }
                     break;
             }
             // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
@@ -291,8 +291,7 @@ public sealed class LiteDeliver(
     {
         var held = store.Holder(session);
         if (held is null || held.ProcessStart is not { } was || process is not { } now || was == now) { return false; }
-        store.Settle(held.Request, BusyQueueStore.Unconfirmed, "claudeRestart", held: false, principal: held.Principal);
-        return true;
+        return store.Settle(held.Request, BusyQueueStore.Unconfirmed, "claudeRestart", held: false, principal: held.Principal, expected: held.State);
     }
     // A relay prompt Claude took after its send was reported: the record becomes delivered and the slot frees. A held send whose transcript
     // is unknown, or whose prompt has not been taken, stays held.
@@ -300,8 +299,7 @@ public sealed class LiteDeliver(
     {
         var held = store.Holder(session);
         if (held?.Transcript is not { } path || !ClaudeQueue.Taken(path, held.Offset, held.Request)) { return false; }
-        store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false, principal: held.Principal);
-        return true;
+        return store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false, principal: held.Principal, expected: held.State);
     }
     static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
 

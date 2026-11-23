@@ -56,28 +56,32 @@ public sealed class BusyQueueStore(TimeProvider time)
         }
     }
 
-    // The keys went: from now the prompt may sit in Claude's own queue.
+    // The keys went: from now the prompt may sit in Claude's own queue. Only a record still in flight; one already settled stays as it is.
     public void KeysWent(string request, string? principal = null)
     {
-        lock (gate) { if (Find(request, principal) is { } key) { records[key] = records[key] with { Held = true }; } }
+        lock (gate) { if (Find(request, principal) is { } key && records[key].State == InFlight) { records[key] = records[key] with { Held = true }; } }
     }
 
-    // A later state. held false frees the slot; queued sets until to the watch after now.
-    public void Settle(string request, string state, string? reason, bool held, string? principal = null)
+    // A later state, as a compare-and-set (#4125, #4129): it applies only to a record still in the state the caller read (expected, when given),
+    // and never to one already settled: delivered, or settled and freed. A late settle returns false and changes nothing, so it can neither turn a
+    // delivered record back into a held one nor leave a held record with no slot. held false frees the slot; queued sets until to the watch after now.
+    public bool Settle(string request, string state, string? reason, bool held, string? principal = null, string? expected = null)
     {
         lock (gate)
         {
-            if (Find(request, principal) is not { } key) { return; }
+            if (Find(request, principal) is not { } key) { return false; }
             var r = records[key];
+            if (expected is not null && r.State != expected || r.State == Delivered || r.State != InFlight && !r.Held) { return false; }
             records[key] = r with { State = state, Reason = reason, Held = held, Until = state == Queued ? time.GetUtcNow() + Watch : r.Until };
             if (!held) { FreeSlot(key); }
+            return true;
         }
     }
 
-    // Nothing was typed: the record and the slot go.
+    // Nothing was typed: the record and the slot go. A delivered record is never removed.
     public void Release(string request, string? principal = null)
     {
-        lock (gate) { if (Find(request, principal) is { } key) { records.Remove(key); FreeSlot(key); } }
+        lock (gate) { if (Find(request, principal) is { } key && records[key].State != Delivered) { records.Remove(key); FreeSlot(key); } }
     }
 
     public Record? Get(string request, string? principal = null)
@@ -85,7 +89,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { return Find(request, principal) is { } key ? records[key] : null; }
     }
 
-    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null, string? Principal = null);
+    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null, string? Principal = null, string State = InFlight);
     // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
     public void Track(string request, string? transcript, long offset, DateTimeOffset? processStart = null, string? principal = null)
     {
@@ -103,7 +107,7 @@ public sealed class BusyQueueStore(TimeProvider time)
         {
             if (!slots.TryGetValue(session, out var key) || !records.TryGetValue(key, out var held)) { return null; }
             tracked.TryGetValue(key, out var where);
-            return new Holding(held.Request, where.Transcript, where.Offset, where.ProcessStart, held.Principal);
+            return new Holding(held.Request, where.Transcript, where.Offset, where.ProcessStart, held.Principal, held.State);
         }
     }
 

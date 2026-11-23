@@ -28,6 +28,23 @@ public sealed class BusyQueueArmKeeperTests
         await keeping.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    // #4125: a sessionEnded settle that loses to another path's move (the watcher's watchEnded) is retried against the new state, so no held record is left behind.
+    [Fact]
+    public async Task A_session_end_settle_that_loses_the_race_is_retried_and_frees_the_slot()
+    {
+        var (s, r) = Held(); var calls = 0;
+        s.Settle(r, BusyQueueStore.Queued, null, held: true, expected: BusyQueueStore.Unconfirmed);   // a queued send, as the watcher sees it
+        var keeping = new BusyQueueArmKeeper(s, clock).KeepAsync(r, () => { }, default, () =>
+        {
+            if (++calls == 1) { s.Settle(r, BusyQueueStore.Unconfirmed, "watchEnded", held: true); }   // the watcher moved the state meanwhile
+            return true;
+        });
+        for (var i = 0; i < 3 && !keeping.IsCompleted; i++) { clock.Advance(BusyQueueArmKeeper.Every); await Task.WhenAny(keeping, Task.Delay(5)); }
+        await keeping.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(("sessionEnded", false), (s.Get(r)!.Reason, s.Get(r)!.Held));
+        Assert.False(s.SlotHeld("sess1"));
+    }
+
     [Fact]
     public async Task A_record_that_is_not_held_or_unknown_is_never_kept_and_a_failing_keep_does_not_end_the_keeper()
     {

@@ -85,6 +85,18 @@ public sealed class BusyQueueWatcherTests
         await new BusyQueueWatcher(s, clock).WatchAsync(Req());      // an unknown request: nothing to watch
     }
 
+    // #4125: the end-of-watch settle is a compare-and-set: a record another path delivers while the watcher decides is not turned back into unconfirmed or held.
+    [Fact]
+    public async Task A_record_delivered_elsewhere_while_the_watch_ends_stays_delivered_and_frees_its_slot()
+    {
+        var (s, r) = Held();
+        clock.Advance(BusyQueueStore.Watch);
+        var w = new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => { s.Settle(r, BusyQueueStore.Delivered, null, held: false); return false; } };
+        await w.WatchAsync(r).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal((BusyQueueStore.Delivered, false, (string?)null), (s.Get(r)!.State, s.Get(r)!.Held, s.Get(r)!.Reason));
+        Assert.False(s.SlotHeld("sess1"));
+    }
+
     [Fact]
     public async Task An_unknown_transcript_and_a_failing_reader_never_stop_the_watch_from_reporting()
     {
