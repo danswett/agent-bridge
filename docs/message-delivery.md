@@ -190,6 +190,14 @@ Every successful current-authority check appends a `checked` fact that advances 
 clock is refused after replay too (a rollback inside the last unrecorded second is accepted); slice 3b still owns the wider record-growth bound. Consumed UUIDs never renew.
 Clock refusal before a write does not mark the journal uncertain; actual append failure does.
 Slice 3b alone integrates Offer/Query, scheduler-locked preflight and final fenced capability rechecks.
+Offer takes an optional `DeliveryPriorityRequest` and receiver binding; only a non-owner explicit non-normal request reaches
+`DecidePriority`, whose admission predicate checks the effective lane before any grant is consumed (a full lane refuses
+`lane-full`, spends nothing and permits a same-UUID retry). Agent urgent exists only for a journaled grant; Query reports a
+demotion and its reason. The scheduler rechecks `PriorityCurrent` at preflight and in the final fence: a lapsed grant is
+journaled `demoted` and waits as normal, never typed urgent, evicting the oldest fyi if the normal lane is full. A priority append
+failure latches the scheduler and the shared gate, so no later owner or lifecycle step proceeds; a clock refusal does not. The demotion
+is a journal fact: Query keeps it after handoff, beside any delivery reason. Owner overflow demotes the newest agent, then system.
+Nothing calls this yet: no wiring or activation.
 No scheduler wiring, issuing UI, registered adapter, second scheduler or activation exists in 3a.
 Canonical Fleet flags remain [#651](https://github.com/danswett/slipgates-fleet/issues/651), owned by Fleet Quality.
 - **Hygiene:** `-Topic` replaces an unsent item from the same principal and topic, in its queue place.

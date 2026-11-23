@@ -109,6 +109,12 @@ public sealed partial class DeliveryJournal
         }
     }
 
+    // A runtime demotion (revoked, expired, displaced) must outlive the latest delivery record so Query keeps its reason.
+    internal void RecordDemotion(Guid request, string target, DeliverySender sender, string reason, DateTimeOffset now)
+    {
+        lock (gate) { PriorityRecord(request, target, sender, "demoted", now, reason: reason); }
+    }
+
     internal bool PriorityCurrent(Guid request, string target, DeliverySender sender, GrantAudience? receiver,
         DateTimeOffset now)
     {
