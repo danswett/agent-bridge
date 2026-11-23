@@ -302,10 +302,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
         var ch = await OpenAsync();
 
+        var gate = new DeliveryGate();
+        gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Serve(Answerer(gate: gate));
         var first = AnswerAsync(ch, new { pick = "b" });
         await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
-        await Task.Delay(300);
+        // Queued for the typing slot, as the gate says, not a guessed 300 ms after it was sent.
+        await gate.TypingQueued.Task.WaitAsync(Patience);
         // Only one answer is typed at a time, and the second session's question is answered
         // at the machine while it waits.
         Assert.Single(injector.Attempts);
@@ -2561,10 +2565,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
         var ch = await OpenAsync();
 
+        var gate = new DeliveryGate();
+        gate.TypingQueued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Serve(Answerer(gate: gate));
         var first = AnswerAsync(ch, new { pick = "b" });
         await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
-        await Task.Delay(300);
+        // Queued for the typing slot, as the gate says, not a guessed 300 ms after it was sent.
+        await gate.TypingQueued.Task.WaitAsync(Patience);
         Fixture.Append(other, Copilot.ToolStart("r9", "ask_user", new { message = "Which one?", requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } } } } }, 3, "helper"));
         await source.RefreshAsync();
         Assert.True(source.Get(Second)?.Question is { Id: "r1", AnswerAtMachine: true });
