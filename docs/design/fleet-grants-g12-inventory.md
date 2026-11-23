@@ -4,7 +4,14 @@ Part of #3237 and the Home Assistant (HA) retirement (#1396). This is the design
 inventory for G12 in [fleet-grants.md](fleet-grants.md) ("G9 wire and cutover rows", rows
 G9 to G12). **It deletes nothing.** Each later G12 deletion PR names the rows it removes
 from this table and the gate that unlocked them. Wrapper rules come from
-[fleet-grants-cli.md](fleet-grants-cli.md) ("Wrapper mapping", "G11 slices").
+[fleet-grants-cli.md](fleet-grants-cli.md) ("Wrapper mapping").
+
+Slice names used below are defined here, because the docs above name only G9 to G12:
+
+- **G9b2**: the receiving host's remote launch (the `fleet.launch` envelope check, replay cache and grant gate, in `FleetRemoteLaunch`).
+- **G9c2**: the wire op that serves `fleet.launch` to host peers over the relay, and the sender's relay link.
+- **G11 A / G11 B**: the two wrapper slices. A makes `launch-remote.ps1` call `fleet launch`; B makes the end wrappers call `fleet end`, one request per session. Both are policy-only and remove no wrapper.
+- **Slice 11** (owner gate, see E4) is a different thing: the 24 h session-registry dual run, not G11.
 
 ## Why a table, and the order it enforces
 
@@ -37,17 +44,17 @@ A row names the *earliest* gate that unlocks it. A deletion PR cites the receipt
 
 "Slice" is the stack slice that makes the row redundant. Sizes are current line counts.
 
-### A. Fleet tools (the wrappers and their HA presses)
+### A. Fleet tools (the wrappers and their HA presses; every path here is in the Fleet repository, not this one)
 
 | # | Item | What it does over HA | Replaced by (slice) | Unlocked by |
 |---|---|---|---|---|
-| A1 | `launch-remote.ps1` HA transport: the `Call button press` on the machine's `new_session` button, the `new_prompt_payload` write, and the pre-launch snapshot of the HA `new_session_result` and `sessions` entities | Submits a launch as an HA payload plus a button press | `fleet launch --target` (G9c2, then G11 A) | E2 |
-| A2 | `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | E2 |
-| A3 | `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | E3 |
-| A4 | `end-sessions.ps1`: its `button/press` of `button.<target>_stop` and its `AGENT_HA_AGENT_TOKEN` read. `end-one.ps1`, `end-many.ps1` and `end-remote.ps1` are already thin wrappers with no HA press of their own; they change only in G11 B | Ending press over HA | One `fleet end` per session (G10, G11 B) | E3 |
-| A6 | The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2, **and** only after A3 has stopped reading the ledger (E3) |
-| A7 | The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | E1, then E2 |
-| A8 | `launch-remote.ps1 -Transport` value `HA` and its default | Selects HA | Default `Host` first (cutover row 1); the `HA` value is removed last | Default flip: E1. Value removed: E4 |
+| A1 | (fleet repo) `launch-remote.ps1` HA transport: the `Call button press` on the machine's `new_session` button, the `new_prompt_payload` write, and the pre-launch snapshot of the HA `new_session_result` and `sessions` entities | Submits a launch as an HA payload plus a button press | `fleet launch --target` (G9c2, then G11 A) | E2 |
+| A2 | (fleet repo) `launch-remote.ps1` HA lease reads (the HA server date, the foreign launch lease wait) and the three-minute foreign-lease wait | Guards one HA launch at a time per target | Receiver-side dedupe and counters (G5, G9b2) | E2 |
+| A3 | (fleet repo) `launch-remote.ps1` HA end path: the `button.<node>_stop` press and its observe-after-press loop | Ends an idle session by one press | `fleet end` (G10, G11 B) | E3 |
+| A4 | (fleet repo) `end-sessions.ps1`: its `button/press` of `button.<target>_stop` and its `AGENT_HA_AGENT_TOKEN` read. `end-one.ps1`, `end-many.ps1` and `end-remote.ps1` are already thin wrappers with no HA press of their own; they change only in G11 B | Ending press over HA | One `fleet end` per session (G10, G11 B) | E3 |
+| A6 | (fleet repo) The launch mutex/duplicate/counter logic inside `launch-remote.ps1` (not the `FleetLaunchLedger.psm1` module, see "not retired") | Fleet-side duplicate and counter bookkeeping | Receiver durable counters and request dedupe (G5) | E2, **and** only after A3 has stopped reading the ledger (E3) |
+| A7 | (fleet repo) The Fleet dispatcher's `FleetLaunch` and its three HA calls | Dispatch a launch through HA | The host verb (cutover row 2 in fleet-grants.md) | E1, then E2 |
+| A8 | (fleet repo) `launch-remote.ps1 -Transport` value `HA` and its default | Selects HA | Default `Host` first (cutover row 1); the `HA` value is removed last | Default flip: E1. Value removed: E4 |
 
 Other allowlisted HA call sites that touch launch but are **not** retired by the G9 to G11 stack. They
 are listed so no deletion PR assumes they are covered; each belongs to its own fleet slice and issue
@@ -56,9 +63,9 @@ PR that removes one names the issue and the gate that issue's slice sets:
 
 | # | Item | Why it is listed |
 |---|---|---|
-| A9 | `dispatcher/Invoke-DispatcherCycle.ps1` reads of `launch_options` and `new_workspace` | The dispatcher still reads HA launch entities; A7 moves only its `FleetLaunch` calls. These reads must be replaced before B2 can go, so B2 also waits on this row |
-| A10 | `messenger/FleetMessenger.psm1` and its tests, and `tools/handover-updaters/waiting-list-watch.ps1` | HA token reads for messaging; messaging has separate umbrella slices (see "not retired") |
-| A11 | `tools/find-nodes.ps1` and the roster/lookup scripts | Lookup over HA; separate slice, and G9 `--target` resolves from relay presence, not from them |
+| A9 | (fleet repo) `dispatcher/Invoke-DispatcherCycle.ps1` reads of `launch_options` and `new_workspace` | The dispatcher still reads HA launch entities; A7 moves only its `FleetLaunch` calls. These reads must be replaced before B2 can go, so B2 also waits on this row |
+| A10 | (fleet repo) `messenger/FleetMessenger.psm1` and its tests, and `tools/handover-updaters/waiting-list-watch.ps1` | HA token reads for messaging; messaging has separate umbrella slices (see "not retired") |
+| A11 | (fleet repo) `tools/find-nodes.ps1` and the roster/lookup scripts | Lookup over HA; separate slice, and G9 `--target` resolves from relay presence, not from them |
 
 ### B. Host (agent-bridge): the HA connector's launch surface
 
@@ -82,7 +89,7 @@ cannot go before the dispatcher (A7) has stopped calling it.
 | C2 | `tests/AgentBridge.HomeAssistant.Tests/Fixtures/ha-launch.json` and the launch parts of `ha-contract.json` | B3 | E4 |
 | C3 | Launch cases in `UpkeepTests.cs` and `LiveHomeAssistantTests.cs` | B1, B3 | E4 |
 | C4 | `docs/ha-connector.md` launch sections (`launch_options`, `new_session_result`, the launch card, the purple-edge note for a launched session) and the launch rows in `docs/parity.md` | B1 to B4 | E4 |
-| C5 | Fleet tests that exercise the HA press paths (`Test-LaunchEvidence.ps1` HA cases) | A1 to A4 | The row that unlocks the code |
+| C5 | (fleet repo) Fleet tests that exercise the HA press paths (`Test-LaunchEvidence.ps1` HA cases) | A1 to A4 | The row that unlocks the code |
 | C6 | `tests/AgentBridge.Host.Tests/LaunchFlowTests.HomeAssistant.cs` (launch flow over the HA connector) | B1, B6 | E4 |
 | C7 | `docs/design/ha-gate-counters.md` HA launch parts, and `docs/protocol/local-pipe.md` / `docs/parity.md` lines naming the HA launch entities | B1 to B4, B6 | E4 |
 
