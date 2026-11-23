@@ -1,0 +1,7 @@
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -195,3 +195,4 @@
+           MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
+           ARM64_WAIVER: ${{ vars.ARM64_WAIVER }}
++          CODEX_WAIVER: ${{ vars.CODEX_WAIVER }}
+           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

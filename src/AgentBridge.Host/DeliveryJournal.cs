@@ -32,11 +32,17 @@ public sealed partial class DeliveryJournal : IDisposable
 
     public DeliveryJournal(string diagnosticsFile, Action<string> log)
         : this(HostKey(diagnosticsFile), b => Append(JournalFile(diagnosticsFile), b), log,
-            Reservations(JournalFile(diagnosticsFile))) { }
+            Reservations(JournalFile(diagnosticsFile)), HeadAnchor(diagnosticsFile)) { }
+
+    // HostKey has already required Windows and made this folder private.
+    static IPriorityAnchor HeadAnchor(string diagnosticsFile) => OperatingSystem.IsWindows()
+        ? new DpapiPriorityAnchor(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(diagnosticsFile))!, "delivery.head"))
+        : throw new PlatformNotSupportedException("The priority head requires DPAPI.");
 
     internal DeliveryJournal(byte[] key, Action<byte[]> append, Action<string> log,
-        IEnumerable<DeliveryJournalRecord>? reservations = null)
+        IEnumerable<DeliveryJournalRecord>? reservations = null, IPriorityAnchor? anchor = null)
     {
+        this.anchor = anchor;
         hmac = new HMACSHA256(key);
         CryptographicOperations.ZeroMemory(key);
         this.append = append;
@@ -69,6 +75,7 @@ public sealed partial class DeliveryJournal : IDisposable
             var lane = (r.Session, seq[0]);
             reserved[lane] = Math.Max(reserved.GetValueOrDefault(lane), long.Parse(seq[1..], System.Globalization.CultureInfo.InvariantCulture));
         }
+        VerifyAnchor();
     }
 
     static string JournalFile(string diagnosticsFile) =>
