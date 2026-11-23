@@ -246,8 +246,9 @@ public class CiPlanTests
     [InlineData(" && needs.quality-gate.outputs.app == 'success'", "", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
     [InlineData("needs.quality-gate.outputs.app == 'success'", "needs.quality-gate.outputs.app != 'failure'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
     [InlineData("needs.quality-gate.outputs.app == 'success'", "!(false && needs.quality-gate.outputs.app == 'success' && false)", "ci.yml publish-gate's if: doesn't require needs.quality-gate.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish")]
-    [InlineData("app: ${{ needs.app.result }}", "app: success", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
-    [InlineData("app: ${{ needs.app.result }}", "apps: ${{ needs.app.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }}, so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "app: success", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "apps: ${{ needs.app.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
+    [InlineData("app: ${{ needs.app.result }}", "app: ${{ steps.app.outputs.result }}", "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app")]
     public void A_publish_gate_that_would_publish_a_run_that_skipped_the_app_is_reported(string from, string to, string problem)
     {
         Assert.Equal([problem], Check(Wired.Replace(from, to)));
