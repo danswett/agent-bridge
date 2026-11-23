@@ -54,6 +54,8 @@ static partial class RunnerRouting
         var jobs = map.Children.Where(p => p.Key is YamlScalarNode && p.Value is YamlMappingNode)
             .ToDictionary(p => ((YamlScalarNode)p.Key).Value!, p => (YamlMappingNode)p.Value, StringComparer.Ordinal);
         var privileged = Triggers(root).Intersect(Privileged).ToList();
+        // The dispatch alternative reads inputs.use_ab_ci: only a boolean input is safe ('false' as a string is truthy).
+        var booleanDispatch = DispatchInputType(root, "use_ab_ci") == "boolean";
         var problems = new List<string>();
         foreach (var (name, job) in jobs)
         {
@@ -66,6 +68,10 @@ static partial class RunnerRouting
                 routes.AddRange(inputs.Children.Values.Where(v => Label().IsMatch(Text(v))));
             }
             var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, job, name, file))).OfType<string>().ToList();
+            if (!booleanDispatch && routes.Any(r => Text(r).Contains("inputs.use_ab_ci", StringComparison.Ordinal)))
+            {
+                problems.Add($"{file} job {name} reads inputs.use_ab_ci, which must be a workflow_dispatch input of type: boolean (as a string, 'false' is truthy)");
+            }
             if (whys.Count == 0) { continue; }
             if (whys.FirstOrDefault(w => w.Length > 0) is { } why) { problems.Add($"{file} job {name} can run on a self-hosted runner without the guard ({Guard}) around it: {why}"); }
             foreach (var trigger in privileged) { problems.Add($"{file} job {name} can take a self-hosted runner in a workflow that a {trigger} can run"); }
@@ -151,7 +157,10 @@ static partial class RunnerRouting
             || !strategy.Children.TryGetValue(new YamlScalarNode("matrix"), out var m) || m is not YamlMappingNode matrix) { return false; }
         var values = new List<string>();
         var include = matrix.Children.TryGetValue(new YamlScalarNode("include"), out var inc) ? inc : null;
-        switch (matrix.Children.TryGetValue(new YamlScalarNode(key), out var own) ? own : null)
+        // GitHub reads context keys case-insensitively: OS and os are one key, so both spellings count, and two fail.
+        var owns = matrix.Children.Where(p => p.Key is YamlScalarNode { Value: { } k } && k.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (owns.Count > 1) { return false; }
+        switch (owns.Count == 1 ? owns[0].Value : null)
         {
             case YamlScalarNode { Value: var v } when Regex.Replace(v ?? "", @"\s+", " ").Trim() == ProductMatrix:
                 return file == "ci.yml" && name == "product" && key == "os" && include is null;
@@ -168,19 +177,88 @@ static partial class RunnerRouting
                 foreach (var row in rows.Children)
                 {
                     if (row is not YamlMappingNode r) { return false; }
-                    if (!r.Children.TryGetValue(new YamlScalarNode(key), out var cell)) { continue; }
-                    if (cell is not YamlScalarNode { Value: { } c } || c.Contains("${{", StringComparison.Ordinal)) { return false; }
+                    var cells = r.Children.Where(p => p.Key is YamlScalarNode { Value: { } k } && k.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (cells.Count == 0) { continue; }
+                    if (cells.Count > 1 || cells[0].Value is not YamlScalarNode { Value: { } c } || c.Contains("${{", StringComparison.Ordinal)) { return false; }
                     values.Add(c);
                 }
                 break;
+            // Rows an expression builds from literals: every string it can yield is parsed as JSON, never scraped (B421 P2-1).
             case YamlScalarNode { Value: { } built }:
-                if (ContextRead().IsMatch(built)) { return false; }
-                values.AddRange(Regex.Matches(built, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"([^\"]*)\"").Select(x => x.Groups[1].Value));
+                if (ContextRead().IsMatch(built) || BuiltRows(built, key) is not { } rowValues) { return false; }
+                values.AddRange(rowValues);
                 break;
             case null: break;
             default: return false;
         }
         return values.Count > 0 && values.All(v => Hosted().IsMatch(v));
+    }
+
+    // The key's values in rows built by ${{ fromJSON(<literals>) }}, or null if anything can't be read: a string other than
+    // a JSON array of objects, a non-string value, or the key twice in one row (OS and os are one key).
+    static List<string>? BuiltRows(string built, string key)
+    {
+        var whole = WholeExpression().Match(built);
+        Expr expr;
+        try { expr = whole.Success ? Expr.Parse(whole.Groups[1].Value) : throw new FormatException(); }
+        catch (FormatException) { return null; }
+        if (expr is not Expr.Call { Name: var fn, Args: [var arg] } || !fn.Equals("fromJSON", StringComparison.OrdinalIgnoreCase)) { return null; }
+        var found = new List<string>();
+        foreach (var json in Strings(arg) ?? [])
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) { return null; }
+                foreach (var row in doc.RootElement.EnumerateArray())
+                {
+                    if (row.ValueKind != JsonValueKind.Object) { return null; }
+                    var cells = row.EnumerateObject().Where(p => p.Name.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (cells.Count > 1 || cells.Count == 1 && cells[0].Value.ValueKind != JsonValueKind.String) { return null; }
+                    if (cells.Count == 1) { found.Add(cells[0].Value.GetString()!); }
+                }
+            }
+            catch (JsonException) { return null; }
+        }
+        return Strings(arg) is null ? null : found;
+    }
+
+    // Every string a literal-only expression can yield (a literal, format of literals, or the arms of && and ||), or null
+    // if any arm is something else.
+    static List<string>? Strings(Expr expr)
+    {
+        var all = new List<string>();
+        foreach (var (value, _) in Values(expr, []))
+        {
+            switch (value)
+            {
+                case Expr.Literal { Value: string s }: all.Add(s); break;
+                // format of literal-only arguments (ci.yml's app include): every combination of the strings each can yield.
+                case Expr.Call { Name: var n, Args: [Expr.Literal { Value: string f }, .. var rest] } when n.Equals("format", StringComparison.OrdinalIgnoreCase):
+                    var combos = new List<object[]> { Array.Empty<object>() };
+                    foreach (var a in rest)
+                    {
+                        if (Strings(a) is not { } options) { return null; }
+                        combos = [.. combos.SelectMany(c => options.Select(o => (object[])[.. c, o]))];
+                        if (combos.Count > 64) { return null; }
+                    }
+                    try { all.AddRange(combos.Select(c => string.Format(System.Globalization.CultureInfo.InvariantCulture, f, c))); }
+                    catch (FormatException) { return null; }
+                    break;
+                default: return null;
+            }
+        }
+        return all;
+    }
+
+    // The declared type of a workflow_dispatch input, or null when there is no such input or type.
+    static string? DispatchInputType(YamlMappingNode root, string input)
+    {
+        var on = root.Children.FirstOrDefault(p => p.Key is YamlScalarNode { Value: "on" or "true" or "True" }).Value;
+        return on is YamlMappingNode triggers && triggers.Children.TryGetValue(new YamlScalarNode("workflow_dispatch"), out var d) && d is YamlMappingNode dispatch
+            && dispatch.Children.TryGetValue(new YamlScalarNode("inputs"), out var i) && i is YamlMappingNode inputs
+            && inputs.Children.TryGetValue(new YamlScalarNode(input), out var x) && x is YamlMappingNode spec
+            && spec.Children.TryGetValue(new YamlScalarNode("type"), out var type) && type is YamlScalarNode { Value: { } kind } ? kind : null;
     }
 
     static HashSet<string> Triggers(YamlMappingNode root)

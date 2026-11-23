@@ -12,12 +12,12 @@ public sealed partial class CiRunnerResolutionTests
     const string Guard = "vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)";
     const string ProductMatrix = "${{ fromJSON(needs.plan.outputs.product-os) }}";
 
-    static string Workflow(string runsOn, string matrix = "", string job = "product")
+    static string Workflow(string runsOn, string matrix = "", string job = "product", string triggers = "on: [push, pull_request]")
     {
         var strategy = matrix.Length > 0 ? "strategy: { matrix: " + matrix + " }" : "";
         return $$"""
             name: ci
-            on: [push, pull_request]
+            {{triggers}}
             jobs:
               {{job}}:
                 {{strategy}}
@@ -64,6 +64,16 @@ public sealed partial class CiRunnerResolutionTests
     [InlineData("{ include: \"${{ fromJSON(github.event.inputs.rows) }}\" }", false)]
     [InlineData("{ include: \"${{ fromJSON(env.ROWS) }}\" }", false)]
     [InlineData("{ os: ['${{ secrets.RUNNER }}'] }", false)]
+    // B421 P2-1: a built include is parsed, not scraped. GitHub reads keys case-insensitively and JSON decodes escapes,
+    // so an array or object value, an "OS" key or an escaped "os" key is read too, and an unreadable row fails.
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"os\\\":[\\\"ab-ci\\\"]}]') }}\" }", false)]
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"os\\\":{\\\"x\\\":\\\"ab-ci\\\"}}]') }}\" }", false)]
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"OS\\\":\\\"ab-ci\\\"}]') }}\" }", false)]
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"\\\\u006fs\\\":\\\"ab-ci\\\"}]') }}\" }", false)]
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('[{\\\"OS\\\":\\\"windows-latest\\\"}]') }}\" }", true)]
+    [InlineData("{ os: [ubuntu-latest], include: \"${{ fromJSON('not json') }}\" }", false)]
+    [InlineData("{ os: [ubuntu-latest], include: [{ OS: ab-ci }] }", false)]
+    [InlineData("{ os: [ubuntu-latest], OS: [ab-ci] }", false)]
     public void A_matrix_runner_is_hosted_only_when_every_value_resolves(string matrix, bool hosted)
         => Assert.Equal(hosted, Check(Workflow("${{ matrix.os }}", matrix)).Count == 0);
 
@@ -96,7 +106,20 @@ public sealed partial class CiRunnerResolutionTests
     [InlineData("${{ (" + Guard + " || inputs.use_ab_ci) && 'ab-ci' || 'windows-latest' }}", false)]
     [InlineData("${{ (" + Guard + " || " + Dispatch + " || true) && 'ab-ci' || 'windows-latest' }}", false)]
     public void A_dispatch_on_main_with_use_ab_ci_is_the_one_alternative_to_the_guard(string runsOn, bool allowed)
-        => Assert.Equal(allowed, Check(Workflow(runsOn)).Count == 0);
+        => Assert.Equal(allowed, Check(Workflow(runsOn, triggers: BooleanInput)).Count == 0);
+
+    const string BooleanInput = "on: { push: {}, pull_request: {}, workflow_dispatch: { inputs: { use_ab_ci: { type: boolean, default: false } } } }";
+
+    // B421 P3: use_ab_ci must be a boolean input. As a string, 'false' is non-empty and so true in an expression: a run by
+    // hand that says no would still take the pool. Undeclared, it is always empty, and the alternative is a typo.
+    [Theory]
+    [InlineData(BooleanInput, true)]
+    [InlineData("on: { push: {}, workflow_dispatch: { inputs: { use_ab_ci: { type: string } } } }", false)]
+    [InlineData("on: { push: {}, workflow_dispatch: { inputs: { use_ab_ci: { default: false } } } }", false)]
+    [InlineData("on: { push: {}, workflow_dispatch: {} }", false)]
+    [InlineData("on: [push, pull_request]", false)]
+    public void Use_ab_ci_must_be_a_boolean_workflow_dispatch_input(string triggers, bool allowed)
+        => Assert.Equal(allowed, Check(Workflow("${{ (" + Guard + " || " + Dispatch + ") && 'ab-ci' || 'windows-latest' }}", triggers: triggers)).Count == 0);
 
     // The named key's chain: ci.yml product's matrix and plan's product-os binding are pinned by CiPlan; the binding's
     // literals are CiPlan.ProductRunners, and the rest comes from plan.ps1's $runners map. All of it must be hosted.
@@ -115,11 +138,35 @@ public sealed partial class CiRunnerResolutionTests
         var map = RunnersMap().Match(plan);
         Assert.True(map.Success, "plan.ps1 has no $runners = [ordered]@{ ... } map");
         Assert.Equal(allowlist, MapValue().Matches(map.Groups[1].Value).Select(m => m.Groups[1].Value));
-        // Every value product-os takes comes out of that map: no literal runner anywhere it is assigned.
-        var assignments = plan.Split('\n').Where(l => l.TrimStart().StartsWith("$productOs =", StringComparison.Ordinal)).ToList();
-        Assert.NotEmpty(assignments);
-        Assert.All(assignments, l => Assert.True(l.Contains("$runners[$_]", StringComparison.Ordinal) && !l.Contains('\'') && !l.Contains('"'), l));
+        // Every value product-os takes comes out of that map: no literal runner anywhere it is written, and the output
+        // is exactly the variable (B421 P2-2).
+        Assert.Empty(ProductOsProblems(plan));
     }
+
+    // Every write to $productOs, wherever it sits (an if, a +=), must take its values from $runners[$_] alone, and
+    // $outputs['product-os'] must be ConvertTo-JsonArray $productOs.
+    internal static List<string> ProductOsProblems(string plan)
+    {
+        var problems = new List<string>();
+        var writes = ProductOsWrite().Matches(plan).Select(m => m.Value.Trim()).ToList();
+        if (writes.Count == 0) { problems.Add("no write to $productOs"); }
+        problems.AddRange(writes.Where(w => !w.Contains("$runners[$_]", StringComparison.Ordinal) || w.Contains('\'') || w.Contains('"') || w.Contains("+=", StringComparison.Ordinal)));
+        var outputs = ProductOsOutput().Matches(plan).Select(m => m.Groups[1].Value.Trim()).ToList();
+        if (outputs.Count != 1 || outputs[0] != "ConvertTo-JsonArray $productOs") { problems.Add($"$outputs['product-os'] is written {outputs.Count} time(s): {string.Join(" | ", outputs)}"); }
+        return problems;
+    }
+
+    [Theory]
+    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs += 'my-runner' }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
+    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs = @('ab-ci') }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
+    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = '[\"ab-ci\"]'")]
+    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = ConvertTo-JsonArray $productOs\n$outputs['product-os'] = '[]'")]
+    public void A_product_os_write_or_output_from_anything_but_the_map_is_caught(string plan) => Assert.NotEmpty(ProductOsProblems(plan.Replace("\\n", "\n")));
+
+    [GeneratedRegex(@"\$productOs\s*\+?=(?!=)[^\n]*")]
+    private static partial Regex ProductOsWrite();
+    [GeneratedRegex(@"\$outputs\[\s*'product-os'\s*\]\s*=([^\n]*)")]
+    private static partial Regex ProductOsOutput();
 
     [GeneratedRegex(@"\$runners\s*=\s*\[ordered\]@\{([^}]*)\}")]
     private static partial Regex RunnersMap();

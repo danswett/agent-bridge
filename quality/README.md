@@ -887,9 +887,18 @@ start within about a minute; a queue that grows is the signal to add runners or 
   `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It
   fails closed: a runner is hosted only when every value it can take is on the hosted allowlist (`ubuntu-*`,
   `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a literal, and the one runtime
-  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. Fork-PR
-  approval is not the guard: an approved fork run reaches hosted runners only because the guard sends it there. This lint
+  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. This lint
   passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  **The one alternative to the guard: a run by hand on main.** `(<guard>) || github.event_name == 'workflow_dispatch' &&
+  github.ref == 'refs/heads/main' && inputs.use_ab_ci` may also reach the pool, to try it before `AB_CI_SELF_HOSTED` flips.
+  `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
+  fails a workflow that reads it otherwise, since a string `'false'` is non-empty and so true. Only people with write
+  access can dispatch, and only main's workflow file runs.
+  **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
+  lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
+  neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork
+  run after reading its changes; that approval is the boundary. In this repository's own files the guard's
+  same-repository test sends every fork run that is approved to hosted runners.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
