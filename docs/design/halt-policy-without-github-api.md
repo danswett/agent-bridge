@@ -125,12 +125,12 @@ restart these 72 hours, so the cap is measured against the same `gitHubAnsweredA
 **Residual, recorded (Nov 23):** the verification is a digest check, not a signature (the signed anchor below is not built). A
 compromised or stale relay that keeps serving an older but still verified list (the same release as the one known, its `Age` within the
 hour) keeps the grace open, and a NEWER halt stays hidden from this machine, but **for at most 72 hours since GitHub last answered the
-release list here**; after that the policy goes stale and the machine holds unasked installs until GitHub answers. It can never forge a halt or
+release list here**; after that the policy goes stale and the machine holds unasked installs (a GitHub answer to the release list ends that, as it restarts the clocks). It can never forge a halt or
 clear a known one. A follow-up issue for real signing is Quality's to file; the signed anchor below remains the real fix.
 
 **Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
-hidden for up to the 24-hour grace**. It can never forge a halt or clear a known one: the carrier's bytes
+hidden for up to the grace, which the relay's own verified lists extend to at most 72 hours since GitHub last answered the release list (see the cap above)**. It can never forge a halt or clear a known one: the carrier's bytes
 come from `github.com` and must match the listed digest, and an older release never replaces a newer
 one. This is the same class of risk as the relay withholding an update. It relaxes this document's
 "a compromised CDN cannot renew freshness" rule only inside that grace, and only when GitHub's own policy read fails.
