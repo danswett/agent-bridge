@@ -438,7 +438,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     lock (gate)
                     {
                         if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
-                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
+                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant, request.Notify));
                     }
                     log($"push subscription from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}, {new Uri(request.Endpoint).Host}); {store.Count} in all");
                     // A sign-in notice held back for want of any device to tell goes to this one now.
@@ -481,6 +481,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             return "keys must be base64url: p256dh a P-256 point, auth 16 bytes";
         }
         if (!WebUrl(r.App, 1024)) { return "app must be an https URL"; }
+        if (r.Notify is { } n)
+        {
+            if ((object?)n.PinnedSessions is null) { return "notify.pinnedSessions must be a list"; }
+            if (n.PinnedSessions.Count > PushNotify.MaxPinned) { return $"notify.pinnedSessions has at most {PushNotify.MaxPinned} ids"; }
+            if (n.PinnedSessions.Any(id => string.IsNullOrEmpty(id) || id.Length > PushNotify.MaxIdChars)) { return $"notify.pinnedSessions ids are 1 to {PushNotify.MaxIdChars} characters"; }
+        }
         return null;
     }
 
@@ -898,6 +904,18 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
                     }
                     Enqueue(s, NoticeKind.Finished, null, unseen, queued: due.Queued);
+                    // A device that filters this session's finished turns is sent none, so nothing replaces
+                    // the question it was told: one still waiting to go is stale, and one it shows is withdrawn
+                    // there, as a refused finished notice's would be (below).
+                    foreach (var d in unseen.Where(d => !d.Wants(NoticeKind.Finished, id)))
+                    {
+                        outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
+                        // Whatever question it shows, not only the one just answered: a later one may have been held back.
+                        if (shownOn.TryGetValue((d.Device, id), out var shown))
+                        {
+                            Enqueue(s, NoticeKind.Resolved, shown, [d], ended: t.Removed, queued: due.Queued);
+                        }
+                    }
                     break;
                 // Checked again as it goes: a question asked once more is not resolved.
                 case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
@@ -978,7 +996,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     {
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, GroupKey)) { continue; }
             var alerts = kind == NoticeKind.Group && (!silent || groupAlertOwed.Contains(sub.Device));
             if (alerts) { groupAlertOwed.Add(sub.Device); }
             outbox.Add(GroupOutgoing(sub, kind, count, alerts, now));
@@ -1191,7 +1209,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         var now = time.GetUtcNow();
         foreach (var sub in to)
         {
-            if (!MayNotify(sub)) { continue; }
+            if (!MayNotify(sub) || !sub.Wants(kind, s.Id)) { continue; }
             var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended, reminder));
             var ttl = kind == NoticeKind.Finished ? options.FinishedTtl : options.QuestionTtl;
             // The latest state of a session wins: a newer notice replaces one still waiting.

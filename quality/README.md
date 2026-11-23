@@ -592,6 +592,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     **A run whose jobs cannot be read is passed over only after 15 minutes, and only if it is not a failure.** The API can answer 404, a 5xx,
+     or an empty or cut-short body for a main run's jobs (a zombie run it never serves took every pull request's merge-rule to `error` for as
+     long as it sat newest). Such a run is skipped, and the status says `skipped unreadable run <id>` (first among the alerts, and in the
+     failure when nothing readable is left), only when all of these hold: it was created over 15 minutes ago (a fresh run can 404 briefly, and
+     until then the judge errors as it always has); it is not completed, or ended `cancelled`, `success`, `neutral`, `skipped`, `stale` or
+     `action_required` (an ALLOW-list: a failure, a conclusion GitHub doesn't document, a completed run with none, and a run with no status are
+     never skipped, so the unexpected fails closed); and a second read of its jobs, 3 seconds after the first, also failed. There is no memory
+     between evaluations, so a run unreadable on both reads of one evaluation is skipped even if the outage was brief: that is the limit.
+     A run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
+     The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
+     failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
@@ -636,7 +647,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
      retry: older runs are read back to its last real result, and a success there (or earlier in the
      same run) stops the lookup. The arm64 waiver applies to that result as to the latest one.
-     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     Unreadable history, plan or product data fails closed without fallback, with one exception: a main run whose jobs stay unreadable past
+     the grace and aren't a failure is skipped and named (above). No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing

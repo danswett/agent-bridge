@@ -29,6 +29,9 @@ public sealed record AgentReadiness(
     ReadinessCheck Authentication,
     ReadinessCheck Activation,
     DateTimeOffset? LastHookHandledAt = null,
-    HookSetupState HookSetup = HookSetupState.Unknown);
+    HookSetupState HookSetup = HookSetupState.Unknown,
+    // Set up by migration: the hooks agent-ha-bridge had there were re-pointed at this host, so there is
+    // no owned record of this profile's and Remove has nothing to undo (docs/design/ui.md §6.11).
+    bool HookMigrated = false);
 
 public sealed record AgentReadinessReport(DateTimeOffset CheckedAt, IReadOnlyList<AgentReadiness> Agents, string? ReadOnlyReason = null);
