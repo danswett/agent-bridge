@@ -131,6 +131,29 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     // The host as it is when the app starts: its status and sessions, then connected.
+    // #2869 G2 (owner: banner only): the app and the host on different releases is said, never acted on. With no
+    // release downloaded, nothing installs and the host is never stopped, in either mode, however long it waits.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_host_on_another_release_than_the_app_installs_nothing_in_either_mode(bool betweenTurns)
+    {
+        if (betweenTurns) { InstallBetweenTurns(); }
+        updater.InstalledVersion = "0.1.7684";
+        updater.Found = null;
+        await StartAsync(FakeHost.StatusOf() with { Version = "0.1.7522" });
+
+        for (var i = 0; i < 6; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.WaitAtMost);
+        }
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(("0.1.7684", "0.1.7522"), auto.Versions);
+    }
     async Task StartAsync(HostStatus? status = null, params Session[] sessions)
     {
         host.Status = status ?? FakeHost.StatusOf();

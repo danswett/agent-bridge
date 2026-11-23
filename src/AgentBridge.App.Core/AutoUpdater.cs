@@ -330,6 +330,11 @@ public sealed class AutoUpdater
     // failure): never offered when pressing it could not install it.
     public string? Ready => installing || updater.InstalledVersion is null || seenSource != updater.Source || updater.Ready != Pending ? null : Pending;
 
+    // The release this app runs and the one its host reports, for the skew the banner says (#2869 G2,
+    // SkewNote): only said, never acted on. Null for what is not known: not installed by the updater,
+    // or a host not connected now.
+    public (string? App, string? Host) Versions => (updater.InstalledVersion, host.State == LinkState.Connected ? host.Status?.Version : null);
+
     // What a restart now would interrupt on this machine, for the warning Restart to update gives
     // first; null when nothing here is waiting on the person.
     public string? WaitingOnYou => RestartWarning.For(host);

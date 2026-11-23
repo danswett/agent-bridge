@@ -47,6 +47,30 @@ public static class RestartWarning
     static string Count(int n) => n == 1 ? "1 session here" : $"{n} sessions here";
 }
 
+// The app and the host on different releases (#2869 G2, #2833), said in the update banner and nothing
+// more: the owner chose "banner only", so no skew installs or restarts anything, in any mode, and the
+// person's own press is Restart to update, which a release that is ready already has (the Ready words
+// take the banner then). This is the other case: no release downloaded to install, so no button, only
+// what differs and where the next step is. VersionSkewHeal decides what is skew; a version that is not
+// known, or cannot be ordered, is not.
+public static class SkewNote
+{
+    public static string? For(string? app, string? host)
+    {
+        var decision = VersionSkewHeal.Decide(app, host, verifiedCached: null, failures: 0, lastAttempt: null, now: DateTimeOffset.UtcNow);
+        if (decision.Kind != SkewHealKind.Hold || decision.Reason != "no-verified-package") { return null; }
+        // Decide has read both as releases, so these parse.
+        var a = UpdateVersions.Identity(app)!;
+        var h = UpdateVersions.Identity(host)!;
+        ReleaseVersions.TryRun(a, out var appRun);
+        ReleaseVersions.TryRun(h, out var hostRun);
+        var same = $"The bridge host is on version {h} and this app on {a}.";
+        return hostRun < appRun
+            ? $"{same} Restart the host in Settings to bring it to {a}."
+            : $"{same} Check for updates in Settings to bring the app to {h}.";
+    }
+}
+
 // This machine's update once it is downloaded (#516): the app's banner, over every page, with
 // Restart to update. It stays while the release waits, and nothing restarts until they press
 // it. It is the only signal: no toast says an update is ready, as one can wait (Creative, #719).
@@ -55,6 +79,7 @@ public sealed class AppUpdateViewModel : Observable
     readonly Func<string?> ready;
     readonly Func<Func<string, Task<bool>>?, Task<string?>> restart;
     readonly Func<string?> updating;
+    readonly Func<(string? App, string? Host)> versions;
     string? problem;
     bool restarting;
 
@@ -64,14 +89,18 @@ public sealed class AppUpdateViewModel : Observable
     // restart(confirm): AutoUpdater.RestartToUpdateAsync, which asks confirm(warning) itself, last,
     // when a session here is busy. updating: the release the Updating screen names (AutoUpdater
     // .Updating), while there is one.
-    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart, Func<string?>? updating = null)
+    // versions: the app's release and its host's (AutoUpdater.Versions), for the skew note, which only
+    // shows while no release is ready.
+    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart, Func<string?>? updating = null,
+        Func<(string? App, string? Host)>? versions = null)
     {
         this.ready = ready;
         this.restart = restart;
         this.updating = updating ?? (() => null);
+        this.versions = versions ?? (() => (null, null));
     }
 
-    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync, () => auto.Updating);
+    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync, () => auto.Updating, () => auto.Versions);
 
     // The Updating screen (#1167): the window's content while the release is handed to Velopack,
     // only where the window was open when the install began. Its words are the screen's whole say:
@@ -110,7 +139,9 @@ public sealed class AppUpdateViewModel : Observable
     string? couldNotWith;
 
     public string? Version => ready();
-    public bool Shown => restarting || Version is not null || problem is not null || couldNot is not null;
+    // Said only when nothing else is: one banner at a time, a ready release's first (its press is the same).
+    string? Skew => Version is null ? SkewNote.For(versions().App, versions().Host) : null;
+    public bool Shown => restarting || Version is not null || problem is not null || couldNot is not null || Skew is not null;
     public bool CanRestart => !restarting && Version is not null;
     // The button stays while a restart is being checked, so it keeps keyboard focus, and the
     // confirmation dialog has it to return to (ui.md §9.1 A4); RestartAsync ignores a second press.
@@ -119,7 +150,7 @@ public sealed class AppUpdateViewModel : Observable
         : problem is { } p ? DidNotInstall(p, Version is not null)
         : couldNot is { } c ? c
         : Version is { } v ? Ready(v)
-        : "";
+        : Skew ?? "";
     // The bar's state, for its severity and its button (Creative on #719, 6675195544): a failed
     // install is a warning, and its button is Try again; while restarting, the button shows its
     // progress ring and says so to a screen reader, ignores presses, and keeps focus.

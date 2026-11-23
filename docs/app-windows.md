@@ -444,7 +444,9 @@ without copying exception messages or inventing holder PID/path evidence.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they never skew.
+into one folder with one version. An app update is a host update, so they skew only when an
+update did not finish: the app restarted onto the new release while the host kept running the old one (or
+the reverse). That is said, not repaired by itself (the version-skew banner, under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -689,6 +691,17 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only): the app and its host on different
+    releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+    (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
+    the person's press for this too. With no release ready it is words only, no button: "The bridge host
+    is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
+    older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
+    card keeps its own Restart advice. **Nothing installs or restarts because of a skew, in either
+    mode:** no automatic heal, only a press. What counts as skew is `VersionSkewHeal.Decide` (a version that
+    is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
+    screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
+    installed release and the connected host's.
   * **Every package is checked against its release** (`DownloadMark`, Engineering's
     second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
     folder under the release's file name for the release without checking its bytes, so one
