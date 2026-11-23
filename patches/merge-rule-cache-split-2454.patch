@@ -1,0 +1,56 @@
+diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
+index 63a6053e..105bbcb3 100644
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -171,17 +171,26 @@ jobs:
+       # The built evaluator, kept per its own source: the key hashes everything the build reads
+       # from main's checkout, so a hit is exactly what building would produce. Only main's
+       # workflow runs here, in main's cache scope, so no pull request can plant a binary. A miss
+-      # (main changed the evaluator) builds below, and the job saves it for the next run.
++      # (main changed the evaluator) builds below; restore and save are apart (ci.yml's cache
++      # rule, #2454), and only a run main's own events start saves (below).
+       - name: Restore main's built evaluator
+         id: evaluator
+         if: vars.FLEET_MERGERULE != 'off'
+-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+         with:
+           path: tools/AgentBridge.Quality/bin/Release/net10.0
+           key: merge-rule-evaluator-${{ runner.os }}-${{ hashFiles('tools/AgentBridge.Quality/**/*.cs', 'tools/AgentBridge.Quality/*.csproj', 'nuget.config', 'global.json') }}
+       - name: Build main's evaluator
+         if: vars.FLEET_MERGERULE == 'off' || steps.evaluator.outputs.cache-hit != 'true'
+         run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
++      # Nothing here runs on a push to main, so the save is held to main's ref and never a run a
++      # pull request starts (pull_request_target), and only on a miss: it is always main's build.
++      - name: Save main's built evaluator
++        if: vars.FLEET_MERGERULE != 'off' && steps.evaluator.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request_target'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: tools/AgentBridge.Quality/bin/Release/net10.0
++          key: ${{ steps.evaluator.outputs.cache-primary-key }}
+       # Minted after the build, so nothing the build runs holds it, and limited to posting statuses.
+       - name: Mint the merge-rule App's token
+         id: app
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 0ee599da..672b2df5 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1121,6 +1121,18 @@ public class MergeRuleTests
+         Assert.Contains("vars.FLEET_MERGERULE != 'off'", Scalar(Step("Restore main's built evaluator"), "if"), StringComparison.Ordinal);
+         Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Build main's evaluator"), "if"), StringComparison.Ordinal);
+         Assert.Contains("FAST: ${{ vars.FLEET_MERGERULE != 'off' }}", File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")), StringComparison.Ordinal);
++
++        // Restore and save apart (#2454): the save only on a miss, on main's ref, never in a run a pull request starts.
++        Assert.StartsWith("actions/cache/restore@", Scalar(Step("Restore main's built evaluator"), "uses"), StringComparison.Ordinal);
++        var save = Step("Save main's built evaluator");
++        Assert.StartsWith("actions/cache/save@", Scalar(save, "uses"), StringComparison.Ordinal);
++        foreach (var part in new[] { "steps.evaluator.outputs.cache-hit != 'true'", "github.ref == 'refs/heads/main'", "github.event_name != 'pull_request_target'" })
++        {
++            Assert.Contains(part, Scalar(save, "if"), StringComparison.Ordinal);
++        }
++        Assert.DoesNotContain("||", Scalar(save, "if"), StringComparison.Ordinal);
++        Assert.True(steps.IndexOf(save) > steps.IndexOf(Step("Build main's evaluator")));
++        Assert.DoesNotContain(steps, s => s.Children.ContainsKey(new YamlScalarNode("uses")) && Scalar(s, "uses").StartsWith("actions/cache@", StringComparison.Ordinal));
+     }
+ 
+     // A sweep displaced by a scoped run for another head must not leave a stale success: while
