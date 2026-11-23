@@ -27,7 +27,7 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, the warm-up restarts, and the restart that ends the established relay connection in every relay drop at S5 and S8) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
+| Drop the **drop host's** relay connection, then restore it (S5, S8; the one host only) | The **elevated relay-drop session** (see below), at SRE's request, running exactly the command block below per event (arm the dead-man, drop, restore, disarm) and nothing else. Drop (**outbound only**, scoped to the AgentBridge host program **and** the relay addresses on TCP 443): `New-NetFirewallRule -DisplayName 'SG-relay-drop-<event id>' -Group 'SG-relay-drop' -Direction Outbound -Action Block -Program '<AgentBridge host exe path from the frozen plan>' -Protocol TCP -RemotePort 443 -RemoteAddress <relay addresses from the frozen plan>`. Restore, one command: `Remove-NetFirewallRule -Group 'SG-relay-drop'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never an inbound rule, never a profile-wide or default-action change, never a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **There is no disposable HA and the HA comparison is waived by the owner**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says "no HA comparison" |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
@@ -36,8 +36,14 @@ Nothing else: no trust change, no key or credential change, no ACL, no settings 
 
 ### The elevated relay-drop session
 
-The firewall commands need elevation, so the run uses **one elevated session, for this run only**.
+The firewall commands need elevation, so the run uses **one elevated session, for this run only**, and it runs **on one host only**.
 
+- **ALL relay-drop events run on ONE target host, the drop host** (SRE ruling). The frozen plan names it (one of the three disposable hosts, never in this
+  repository), and the elevated session is started on that host and nowhere else: **no remoting, one approval**. The lost-response events (S5) use pairs
+  whose **target is the drop host**, so the reply is the one that is lost; the induced relay reconnect and its restarts (S8) are on it too. The other two hosts
+  take part in launches and the owner's plain restarts (the warm-up restarts and the deploy restarts), which need no elevation. The relay-drop coverage is
+  therefore **one host, not three**, and the receipt says so. If the run proves to need drops on several hosts, that is a **new owner decision** (remoting, or one
+  session per host); it is not done here.
 - **Its own approval.** It is launched later as its **own owner approval through the Chief**, not as part of any other approval here. This runbook does not
   launch it and the run does not start until it exists.
 - **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the command block below (arm the dead-man, drop, scope check, restore, disarm), in order, with the
@@ -110,7 +116,7 @@ the dead-man task runs that removal after N minutes.
    WAIVED by the owner (about 09:10 PT).** With no HA there is nothing to compare against, so the run proves the **Slipgates launch path on its own bars** and
    claims no parity with HA: the receipt says **"no HA comparison"**, makes **no parity claim**, and the 100 compared pairs and the mismatch bar are not claimed.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
-5. **The run plan is frozen before request 1** and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
+5. **The run plan is frozen before request 1** (it names the drop host) and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
    every coverage floor, the live-session cap, the unique launch names (from the fixed `SG Builder <n>` / `SG Worker <n>` list), the batch
    sizes, the window, and the exact controls named per host. A number chosen or changed after a request is sent voids the run.
 6. An evidence folder exists **off the repository**, with a sha256 recorded for every raw record, and no name, token, URL, path or
@@ -150,7 +156,7 @@ sha256, and the load readings before and after.
 | **S2** | SRE | **Smoke:** one Host launch on one pair (no HA twin: the comparison is waived by the owner). Stop if it does not start and register exactly once | The receipt, the three double-launch counts |
 | **S3** | SRE | **Main Host launches** (the HA comparison is waived by the owner, so these are Slipgates-path launches on their own bars, not compared pairs; no parity claim), in batches no larger than the cap, each batch ended by list before the next | Per launch: the receipt and exit code, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
-| **S5** | SRE; **OWNER presses the host restart** that ends the established relay connection in each drop | **Lost response x3:** the elevated relay-drop session drops the target's relay connection after the send on the Host side, at SRE's request (no HA-side twin: the comparison is waived); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
+| **S5** | SRE; **OWNER presses the host restart** that ends the established relay connection in each drop, on the drop host | **Lost response x3:** the elevated relay-drop session drops the target's relay connection after the send on the Host side, at SRE's request (no HA-side twin: the comparison is waived); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
 | **S6** | SRE | **Concurrent bursts x3** inside the cap | The invariants: sessions equal accepted requests, one session per request, counter rise equal, no double |
 | **S7** | SRE | **Long prompts x5**, one near 60 KB | Receipts, and that the prompt text is not kept in any record |
 | **S8** | **OWNER** presses each restart, including the one that ends the established relay connection in each drop; the elevated relay-drop session adds and removes the block at SRE's request | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
