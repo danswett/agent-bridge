@@ -1,10 +1,13 @@
 # Pairing without a person at the machine (non-person principals)
 
-**Status: PROPOSED CHANGE. Owner approval required; not in force.** Part A below records the rules already
-decided, each with its build status (several are decided but not built). Part B is a proposal that would change one
-of them. Nothing here authorizes code, a credential, a
-policy change or a rollout; the build waits for the owner's answer (open questions, section 8). Written
-November 22, 2026 (Pacific Time) for the Home Assistant retirement (epic #1396), parity row 20 (agent credential
+**Status: Part B direction APPROVED by the owner for script credentials only; its build is gated on Part A. Nothing here
+is built or in force.** Owner decision of November 23, 2026, about 08:25 PT, relayed by the Engineering Lead (no direct
+owner link exists): the direction of Part B is approved **for script credentials only**, and it is to be built **only
+after Part A exists**: the in-app press and device approval (section 4). Approving the direction is not approving code, a
+credential, a policy change or a rollout: the grant's fields, lifetimes and defaults below remain a proposal, and each
+build slice is designed, reviewed and gated on its own. Part A records the rules already decided, each with its build
+status (several are decided but not built). Written November 22, 2026 (Pacific Time) for the Home Assistant retirement
+(epic #1396), parity row 20 (agent credential
 distribution) and row 11 (pairing).
 
 Sources, all read in this repository: [device-approval.md](device-approval.md) (#55),
@@ -70,7 +73,11 @@ and script credentials with no HA token step and no pasted token, but a person m
 script credential press, and someone with the approving device reads the new machine's code. **Today it does not
 meet row 20**: the CLI mints (a terminal step), and device approval and roster v2 are not built.
 
-## 5. Part B: Proposed CHANGE (owner approval, not in force)
+## 5. Part B: approved direction for script credentials only (build gated on Part A; not built)
+
+**The owner's decision (about 08:25 PT, November 23, 2026; relayed, see the status above):** the direction is approved for
+**script credentials only** (not agent sessions, fleet children, hosts or connectors) and is built **only after Part A exists**:
+the in-app press (4.2) and device approval (4.1). Until both exist Part B is not built and no code for it is written.
 
 **What it would change:** the rule in 4.2, "only a person's press at the machine, never a remote device". It would
 allow one more way to authorize a script credential on an unattended machine: a **provisioning grant**, issued by a
@@ -213,7 +220,7 @@ Evidence is recorded in the epic (#1396) per row, every client the parity rule r
   with the matching code; one app press per script mints its credential; the script then calls `fleet.list` and
   `agent.send` with it; a credential from another machine is refused; a revoked one is refused; the refusals in
   section 6 that apply to Part A each return their reason.
-* **Part B (only if approved).** All of Part A, and: a provisioning grant consumed once mints the credential with no
+* **Part B (approved for script credentials only; checked only once Part A exists).** All of Part A, and: a provisioning grant consumed once mints the credential with no
   person at the machine and no HA present; replaying it, an expired one and one for another machine are each
   refused; a revoked unconsumed grant (also one revoked before it reached the host) is refused; a grant signed before a lost or restored store's `notBefore` is
   refused, as is one whose expiry is not later than `notBefore` plus 24 hours, one with no `issuedAt` and one with too long a lifetime
@@ -222,24 +229,26 @@ Evidence is recorded in the epic (#1396) per row, every client the parity rule r
 * **Row 11, the pairing itself** (a new machine joins only after a matching code is approved) is the device-approval
   build (#55), checked in the clean-VM release-gate harness (#736); this note adds no step to it.
 
-## 8. Open questions for the owner
+## 8. The owner's decision and what is still open
 
-**If the owner says nothing: Part A stays as decided, Part B stays NOT in force, and nothing in Part B is built.**
-Each question below states what happens by default.
+**Decided (about 08:25 PT, November 23, 2026, relayed by the Engineering Lead):** Part B is approved as a direction for
+script credentials only, to be built only after Part A (the in-app press and device approval) exists. That answers question
+1 below. If the owner says nothing further, Part A stays as decided and Part B is not built.
 
-1. **Keep Part A as it is, or approve Part B?** Part A would meet row 20's "no HA token step" once the app press and
-   device approval are built, with a person's press per script per machine; today it does not (the CLI mints, and
-   neither is built). Part B is only needed if provisioning must work with nobody at the machine. This reverses
-   "never a remote device" for script credentials, so it is the owner's call.
-   **Default (no answer): Part A only; Part B not in force.**
-2. **If B is approved:** the grant's longest lifetime, and whether provisioning is off by default on every host.
-   **Default if B is approved and nothing else is said:** 24 hours at most, and off on every host until a person
-   turns it on for that host. Principals are `script` only (not a question: nothing wider is proposed).
+1. **Keep Part A as it is, or approve Part B?** **Answered: Part B approved, script credentials only, gated on Part A.**
+   Part A would meet row 20's "no HA token step" once the app press and device approval are built, with a person's press per
+   script per machine; today it does not (the CLI mints, and neither is built). Part B removes the need for a person at the
+   machine, and reverses "never a remote device" for script credentials; the owner has now approved that direction.
+2. **If B is built:** the grant's longest lifetime, and whether provisioning is off by default on every host. **Not yet
+   answered.** The stated defaults apply until the owner says otherwise: 24 hours at most, and off on every host until a
+   person turns it on for that host. Principals are `script` only, as decided.
 3. **Confirm the HA component (S8) pairs as a connector principal** with its own key, approved by the mutual code
-   exchange (agent-principals.md 9.2), rather than carrying any shared secret.
-   **Default (no answer): as designed in agent-principals.md 9.2, which Part B does not touch.**
+   exchange (agent-principals.md 9.2), rather than carrying any shared secret. **Not yet answered.** Default: as designed in
+   agent-principals.md 9.2, which Part B does not touch.
 
-## 9. What the C-build waits on
+## 9. What the build waits on
 
-The pairing build starts only when all of these are recorded as landed: #1359 (enforcement), #1825 (roster v2 and
-enrolment), the #736 harness, and the owner's answer to section 8. No host code is written before it.
+Two builds, in order. **Part A** (device approval, the in-app press, roster v2) starts only when #1359 (enforcement), #1825
+(roster v2 and enrolment) and the #736 harness are recorded as landed. **Part B**, approved for script credentials only,
+starts only after Part A exists, and then as its own designed and reviewed slices (the grant, the revoke, the consumed-id
+store). No host code is written for either before its gate.
