@@ -43,6 +43,12 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         driving = Task.Run(DriveAsync);
     }
 
+    // The other way: a test that needs a budget to run out only for a later step keeps time still until then.
+    public void Freeze()
+    {
+        lock (gate) { frozen = true; afterFrozen = false; lastActive = Stopwatch.GetTimestamp(); }
+    }
+
     public void Run()
     {
         lock (gate) { afterFrozen = frozen; frozen = false; lastActive = Stopwatch.GetTimestamp(); }
