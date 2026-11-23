@@ -12,6 +12,8 @@ namespace AgentBridge.Host.Delivery.Launch;
 // launch.options and session.launch for a host: what hello offers, the options, and one launch.
 public interface ISessionLauncher
 {
+    // The folder-trust questions launched agents wait on now; the host tells the owner of one that waits long (PushNotifier).
+    IReadOnlyList<TrustQuestion> TrustQuestions() => [];
     // Whether hello offers sessions.launch now; asked per hello, like answers.
     bool Available { get; }
 
