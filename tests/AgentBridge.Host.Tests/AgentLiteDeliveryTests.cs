@@ -50,6 +50,7 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        public bool Watch;
         public string? Transcript;
         public SessionFiles? Files(string id) => Transcript is null ? null : new SessionFiles(Agent, Transcript, null);
         BusyQueueStore? busyStore;
@@ -68,7 +69,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
+            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store, Watcher = Watch ? new BusyQueueWatcher(Store, Clock) : null };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -833,6 +834,33 @@ public sealed class AgentLiteDeliveryTests
             File.AppendAllText(path, TakenRow(framed.Replace("request ", "request 0")) + "\n");   // another request's entry
             Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(l2));
             Assert.Single(f.Typed);
+        }
+        finally { File.Delete(path); }
+    }    // D2b-2b2 (#3856): with the active watch on, a prompt Claude takes is noticed without another send; a silent one is reported watchEnded and stays held.
+    static async Task Tick(Fixture f, Func<bool> done, TimeSpan limit)
+    {
+        for (var spent = TimeSpan.Zero; spent <= limit && !done(); spent += BusyQueueWatcher.Poll) { f.Clock.Advance(BusyQueueWatcher.Poll); await Task.Delay(5); }
+    }
+    [Fact]
+    public async Task With_the_watch_on_a_taken_prompt_is_noticed_without_another_send_and_a_silent_one_is_reported_watchEnded_and_stays_held()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-watch-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var taken = BusyClaude(ReplyStage.Queued); taken.Watch = true; taken.Transcript = path;
+            Assert.Equal(LiteKind.Queued, (await SendNew(taken.Build())).Outcome);
+            File.AppendAllText(path, TakenRow(Assert.Single(taken.Typed).Text!) + "\n");
+            await Tick(taken, () => taken.Store.Records().Single().State == BusyQueueStore.Delivered, TimeSpan.FromSeconds(30));
+            var done = taken.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Delivered, false), (done.State, done.Held));
+            Assert.False(taken.Store.SlotHeld(Target));
+
+            var silent = BusyClaude(ReplyStage.Queued); silent.Watch = true; silent.Transcript = path + ".none";
+            Assert.Equal(LiteKind.Queued, (await SendNew(silent.Build())).Outcome);
+            await Tick(silent, () => silent.Store.Records().Single().Reason == "watchEnded", TimeSpan.FromSeconds(130));
+            var ended = silent.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded", true), (ended.State, ended.Reason, ended.Held));
+            Assert.True(silent.Store.SlotHeld(Target));
         }
         finally { File.Delete(path); }
     }    [Fact]
