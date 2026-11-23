@@ -138,6 +138,8 @@ self.addEventListener('fetch', (e) => {
 // signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
 // group (#913): one notice for several questions on a machine, tagged <machine>:~needsyou and
 // withdrawn by a resolved under that tag; it alerts unless the host says silent.
+// failures (S2b): a count of messages the machine's lane could not deliver, tagged <machine>:~failures; it alerts,
+// and its tap opens the machine. Kept as its own kind: read as a question, the app would close it as stale.
 const KINDS = ['question', 'finished', 'resolved', 'signIn', 'group', 'failures'];
 const CLASSES = ['needsYou', 'done', 'fyi'];
 const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
