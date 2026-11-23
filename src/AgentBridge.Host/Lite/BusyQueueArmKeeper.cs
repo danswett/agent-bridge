@@ -7,9 +7,9 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
     public static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
 
     // Starts keeping in the background. A keeper that fails leaves the arm as it was.
-    public Task Start(string request, Action keep, Func<bool>? ended = null) => Task.Run(async () =>
+    public Task Start(string request, Action keep, Func<bool>? ended = null, string? principal = null) => Task.Run(async () =>
     {
-        try { await KeepAsync(request, keep, default, ended); }
+        try { await KeepAsync(request, keep, default, ended, principal); }
         catch (Exception e) when (e is not OutOfMemoryException) { }
     });
 
@@ -18,13 +18,14 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
         try { return ended?.Invoke() == true; }
         catch (Exception e) when (e is not OutOfMemoryException) { return false; }
     }
-    public async Task KeepAsync(string request, Action keep, CancellationToken ct = default, Func<bool>? ended = null)
+    public async Task KeepAsync(string request, Action keep, CancellationToken ct = default, Func<bool>? ended = null, string? principal = null)
     {
         while (!ct.IsCancellationRequested)
         {
-            if (store.Get(request) is not { Held: true }) { return; }
+            if (store.Get(request, principal) is not { Held: true }) { return; }
             // The session ended: no arm is left to keep and no prompt can be taken, so the slot is released (sessionEnded) and the keeper stops.
-            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false); return; }            try { keep(); }
+            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false, principal: principal); return; }
+            try { keep(); }
             catch (Exception e) when (e is not OutOfMemoryException) { }
             try { await Task.Delay(Every, time, ct); }
             catch (OperationCanceledException) { return; }
