@@ -136,28 +136,21 @@ public sealed class ReplayStore(TimeProvider time)
 
 // Per sending session to receiving session: 6 a minute, 60 an hour, in memory. An active pair keeps its window; only idle
 // pairs are dropped. One peer holds at most MaxPerPeer pairs, so it cannot starve the rest.
+// Every accepted hit has its own token, so a delivery that typed nothing gives back exactly the hit its own request took. Giving back
+// "the newest hit" instead would take a later, typed send's and free the budget too early (an overlapping send admits a seventh).
 public sealed class RateCap(TimeProvider time)
 {
     public const int PerMinute = 6, PerHour = 60, MaxPairs = 1024, MaxPerPeer = 64;
-    readonly Dictionary<(string Peer, string Pair), Queue<DateTimeOffset>> hits = new();
+    readonly Dictionary<(string Peer, string Pair), List<(long Id, DateTimeOffset At)>> hits = new();
     readonly object gate = new();
+    long next;
 
-    // Gives back the most recent hit of a pair: a delivery that typed nothing must not spend the pair's budget (#1117 busy retries).
-    public void Refund(string peer, string pair)
+    public bool Allow(string peer, string pair) => TryAllow(peer, pair, out _);
+
+    // token is this request's own hit, for Refund; 0 when refused.
+    public bool TryAllow(string peer, string pair, out long token)
     {
-        lock (gate)
-        {
-            if (!hits.TryGetValue((peer, pair), out var q) || q.Count == 0) { return; }
-            var kept = q.ToArray(); q.Clear();
-            foreach (var t in kept.Take(kept.Length - 1)) { q.Enqueue(t); }
-        }
-    }
-
-    public bool TryAllow(string peer, string pair, out long token) { token = 0; return Allow(peer, pair); }
-    public void Refund(string peer, string pair, long token) => Refund(peer, pair);
-
-    public bool Allow(string peer, string pair)
-    {
+        token = 0;
         lock (gate)
         {
             var now = time.GetUtcNow();
@@ -166,15 +159,25 @@ public sealed class RateCap(TimeProvider time)
             {
                 if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer)
                 {
-                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Last() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
+                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value[^1].At >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
                     if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer) { return false; }
                 }
                 hits[key] = q = new();
             }
-            while (q.Count > 0 && now - q.Peek() >= TimeSpan.FromHours(1)) { q.Dequeue(); }
-            if (q.Count >= PerHour || q.Count(t => now - t < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
-            q.Enqueue(now);
+            q.RemoveAll(h => now - h.At >= TimeSpan.FromHours(1));
+            if (q.Count >= PerHour || q.Count(h => now - h.At < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
+            token = ++next;
+            q.Add((token, now));
             return true;
+        }
+    }
+
+    // Gives back exactly the hit issued as token. A hit already pruned, a second refund, an unknown pair or token 0 (a replay) finds nothing and does nothing.
+    public void Refund(string peer, string pair, long token)
+    {
+        lock (gate)
+        {
+            if (token > 0 && hits.TryGetValue((peer, pair), out var q)) { q.RemoveAll(h => h.Id == token); }
         }
     }
 }
