@@ -258,7 +258,8 @@ public class CiPlanTests
     // result from the waiver-adjusted needs, so it can't be pointed at something else.
     const string AppStepProblem = "ci.yml quality-gate's output app isn't exactly ${{ needs.app.result }} (or ${{ steps.app.outputs.result }} with a step id app), so publish-gate can't tell this run built the app";
 
-    static string WithAppStep(string needs, string run) => Wired.Replace("      app: ${{ needs.app.result }}\n",
+    // Line endings normalized first: a default Windows checkout has CRLF in the fixture above.
+    static string WithAppStep(string needs, string run) => Wired.ReplaceLineEndings("\n").Replace("      app: ${{ needs.app.result }}\n",
         "      app: ${{ steps.app.outputs.result }}\n    steps:\n      - id: app\n        env:\n          NEEDS: " + needs + "\n        run: " + run + "\n");
 
     [Fact]
@@ -271,6 +272,8 @@ public class CiPlanTests
     [InlineData("${{ toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"")]
     [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=success\" >> \"$GITHUB_OUTPUT\"")]
     [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "echo \"result=$(echo \"$NEEDS\" | jq -r '.light.result')\" >> \"$GITHUB_OUTPUT\"")]
+    // A shell comment in the run script that merely mentions the expression is not the command (YAML comments never reach the scalar).
+    [InlineData("${{ steps.waiver.outputs.needs || toJSON(needs) }}", "|\n          # jq -r '.app.result'\n          echo \"result=success\" >> \"$GITHUB_OUTPUT\"")]
     public void The_waiver_adjusted_app_output_is_reported_when_its_step_does_not_compute_the_apps_result_from_the_waiver_needs(string needs, string run)
     {
         Assert.Equal([AppStepProblem], Check(WithAppStep(needs, run)));

@@ -1026,7 +1026,7 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
   Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
   `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly (no
-  pattern), on main and PRs, and every other leg of that job succeeded. There is no switch and no
+  pattern), on main and PRs, and every other leg of that job succeeded. Once the workflow change lands (a separate patch: until then `ci.yml` still guards its waiver step with `vars.ARM64_WAIVER` and the date), there is no switch and no
   expiry: `ARM64_WAIVER` and the date are ignored. A leftover `until:` or `switch:`
   in `merge-rule.yml`'s `arm64_waiver` block fails the config load (the block takes only `jobs`). The warning and
   summary identify each waived job and

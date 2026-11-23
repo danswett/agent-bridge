@@ -1911,6 +1911,18 @@ public class MergeRuleTests
         Assert.Throws<FormatException>(() => MergeRuleConfig.Parse(yaml.Replace(before, after, StringComparison.Ordinal)));
     }
 
+    // The waiver is permanent (#2454): the block takes only its jobs, so a leftover until: or switch: fails the load.
+    [Theory]
+    [InlineData("until: 2026-11-27T08:00:00Z")]
+    [InlineData("switch: ARM64_WAIVER")]
+    public void A_leftover_until_or_switch_in_the_arm64_waiver_block_fails_the_config_load(string leftover)
+    {
+        var yaml = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+        Assert.Contains("\n  jobs:", yaml.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+
+        Assert.ThrowsAny<Exception>(() => MergeRuleConfig.Parse(yaml.ReplaceLineEndings("\n").Replace("\n  jobs:", "\n  " + leftover + "\n  jobs:", StringComparison.Ordinal)));
+    }
+
     static string WaiverPullRequest(string name = "app (win-arm64)", string result = "FAILURE",
         string workflow = "CI", string gate = "SUCCESS", string receipt = "CLEAN claude-opus-5.5 500",
         string runResult = "FAILURE", string slug = "github-actions", params object[] extraJobs) =>
