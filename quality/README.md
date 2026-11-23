@@ -1022,23 +1022,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, renewed by the owner
-  2026-11-19 22:50 PT until **2026-11-27 00:00 PT**, exactly `2026-11-27T08:00:00Z`):
-  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
-  sets it), `quality-gate` counts a failed needed job as success when its only failures are
-  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
-  on main and PRs, and every other leg of that job succeeded. The warning and summary identify
-  each waived job, its run and the expiry.
-  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
-  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
-  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
-  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
-  `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
-  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green. The Nov 19 renewal supersedes the earlier Nov 20 hard expiry;
-  it changes neither the three-job scope nor the switch or safeguards. The waiver applies only
-  strictly before the new cutoff and waives nothing at or after it; any further extension needs
-  a new owner decision. This is not proof of Arm64 runtime correctness or landing authorization.
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
+  [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
+  Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly (no
+  pattern), on main and PRs, and every other leg of that job succeeded. There is no switch and no
+  expiry: `ARM64_WAIVER` and the date are ignored. The warning and summary identify each waived job and
+  its run. [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is
+  one result in `needs`. Any API error, any other failed job (x64, `relay-image-sarif`, `pwa-e2e`,
+  `product (ubuntu-latest)`, any), and a cancelled, timed-out or skipped Arm64 leg waive nothing, in the
+  merge rule and in `main_green` alike. The Arm64 jobs still run and stay red. Publishing still needs
+  both architectures' packages, and the release train
+  ([app-windows.md](../docs/app-windows.md#the-release-train-2225)) publishes a run that is red only for
+  Arm64. This is not proof of Arm64 runtime correctness or landing authorization.
   **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
   whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not

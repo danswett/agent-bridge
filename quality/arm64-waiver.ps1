@@ -1,30 +1,24 @@
-# quality-gate's time-boxed win-arm64 waiver (#2564, owner decision 2026-11-13). Reads the needs
+# quality-gate's win-arm64 waiver (#2564; made permanent by the owner on Nov 22, #2454). Reads the needs
 # JSON and this run's jobs (GitHub's jobs API, paginated and slurped) and writes to -OutFile the ids
 # of the needed jobs whose failures are only the three waived jobs named below; ci.yml then reads
 # those as success. A matrix collapses to one result per job id in needs, so the legs can only be
-# told apart through the API. Anything doubtful waives nothing: the switch not exactly "on", the
-# expiry reached, an API answer of an unexpected shape, or any other job that did not succeed.
+# told apart through the API. Anything doubtful waives nothing: an API answer of an unexpected shape,
+# or any other job that did not succeed.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$NeedsFile,
     [Parameter(Mandatory)][string]$JobsFile,
     [Parameter(Mandatory)][string]$OutFile,
-    [string]$Setting = '',
     [string]$SummaryFile = '',
+    # Accepted and ignored: the waiver is permanent (owner, Nov 22, #2454), and the run's older ci.yml still passes them.
+    [string]$Setting = '',
     [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
 )
 $ErrorActionPreference = 'Stop'
-# The only expiry, computed here so the waiver stops by itself; 2026-11-27 00:00 PT.
-$expiry = [DateTimeOffset]::Parse('2026-11-27T08:00:00Z', [cultureinfo]::InvariantCulture)
 $waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
 $ids = @()
 $lines = @()
 try {
-    if ($Setting -cne 'on') {
-        $lines += 'ARM64_WAIVER is not on: nothing waived.'
-    } elseif ($Now -ge $expiry) {
-        $lines += 'The waiver ended 2026-11-27 00:00 PT (08:00 UTC): nothing waived.'
-    } else {
         $needs = Get-Content -Raw -LiteralPath $NeedsFile | ConvertFrom-Json
         $pages = @(Get-Content -Raw -LiteralPath $JobsFile | ConvertFrom-Json)
         $jobs = @()
@@ -62,15 +56,14 @@ try {
             }
             if ($ids.Count -eq 0) { $lines += 'No failed Arm64 leg to waive.' }
         }
-    }
 } catch {
     $ids = @()
     $lines += "Nothing waived, failing closed: $($_.Exception.Message)"
 }
 ConvertTo-Json -InputObject @($ids) -Compress | Set-Content -LiteralPath $OutFile
 if ($ids.Count -gt 0) {
-    $lines += 'The waiver ends 2026-11-27 00:00 PT (08:00 UTC); the Arm64 jobs still run and stay red.'
-    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line; expires 2026-11-27 00:00 PT (08:00 UTC)" }
+    $lines += 'The waiver is permanent (owner, #2454); the Arm64 jobs still run and stay red.'
+    foreach ($line in $lines | Where-Object { $_ -like 'Waived:*' }) { "::warning title=quality-gate win-arm64 waiver::$line;" }
 }
 $lines
 if ($SummaryFile) { Add-Content -LiteralPath $SummaryFile -Value (@('### quality-gate: win-arm64 waiver (#2564)') + ($lines | ForEach-Object { "- $_" })) }
