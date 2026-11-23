@@ -27,6 +27,7 @@ public sealed partial class SettingsView : UserControl
             if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; viewModel.PropertyChanged -= OnViewModelChanged; }
             viewModel = value;
             if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; viewModel.PropertyChanged += OnViewModelChanged; }
+            ScriptsSection.Attach(viewModel);
             Bindings.Update();
         }
     }
@@ -44,6 +45,7 @@ public sealed partial class SettingsView : UserControl
     public void Opened()
     {
         viewModel?.RefreshLog();
+        ScriptsSection.Opened();
         AnnounceOffers();
     }
 

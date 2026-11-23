@@ -171,6 +171,12 @@ passed `agent.hello` are refused.
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
   a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps
   only the hash, so a later list cannot recover them).
+* **The Settings page (P2).** Settings > Script credentials lists each script (name, scope, expiry, live count, when it last
+  authenticated, and the launch tick) and offers Add, Rotate, Revoke and Allow/Stop launching. Each press shows a confirmation dialog
+  with plain words, then asks `scripts.confirm` and sends the press; a host refusal is shown as the page's notice. The page never holds,
+  shows or copies a secret. It appears only for the app, on Windows, when the host offers the `host.scripts` capability. "Last used" is
+  kept in memory since the host started, so it says so; the last four characters of a credential are not shown, because the host
+  keeps only the hash. Showing them would need a stored field, which is a store-format change left to a decision.
 * **The tick keeps the host's own policy.** `scripts.grant-fleet` is still refused unless the script's
   credential is `read+reply` and the host's agents setting is on; the press cannot widen what the grant
   allows (fleet caps, ticked workspaces and isolation are unchanged and owner-run).

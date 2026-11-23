@@ -205,6 +205,8 @@ public sealed class SessionService
 
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
+    // The client the host's verified roster says a relay channel's device is, for the audit rows; unset or null, a row carries none.
+    internal Func<SecureChannel, ClientIdentity?>? ClientOf { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
     public Lite.LiteKill? LiteKill { get; init; }
 
@@ -510,6 +512,7 @@ public sealed class SessionService
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
             gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            if (channel is SecureChannel viaRelay && ClientOf?.Invoke(viaRelay) is { } client) { gate = gate with { ClientKind = client.Kind, ClientPlatform = client.Platform }; }
             var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
             var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
@@ -785,7 +788,7 @@ public sealed class SessionService
         if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
         return stops is StopService audited && audit is not null
             ? await StopAudit.StopAsync(audited, source, audit, request, Direct(channel) ? "local" : "relay",
-                Direct(channel) ? "person:local" : $"person:{channel.PeerId}")
+                Direct(channel) ? "person:local" : $"person:{channel.PeerId}", client: channel is SecureChannel relayed ? ClientOf?.Invoke(relayed) : null)
             : await stops.StopAsync(request);
     }
 

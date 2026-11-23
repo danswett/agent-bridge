@@ -459,7 +459,7 @@ public class HistoryTests
     }
 
     [Fact]
-    public async Task Claude_a_delayed_notice_cannot_give_composite_text_the_first_history_parts_identity()
+    public async Task Claude_a_delayed_notice_keeps_composite_text_on_the_first_history_parts_identity()
     {
         using var f = new Fixture();
         var transcript = f.ClaudeTranscript(Id);
@@ -483,13 +483,12 @@ public class HistoryTests
         var parts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts;
         Assert.Equal(["One", "Two"], parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Text));
         Assert.Equal("One\n\nTwo", source.Get(Id)!.Activity.Response);
-        Assert.Null(source.Get(Id)!.Activity.ResponseId);
+        // The composite is one reply that grew: it keeps the id its first part had (a client that held "One" under it
+        // updates that card, and never rewrites an earlier reply's), and history then shows the two parts.
+        Assert.Equal(parts.First(p => p.Kind == HistoryPartKind.Response).Id, source.Get(Id)!.Activity.ResponseId);
     }
 
     [Theory]
-    [InlineData("missing-message-id")]
-    [InlineData("intervening-thinking")]
-    [InlineData("text-tool-text")]
     [InlineData("duplicate-record")]
     [InlineData("unreadable-record")]
     [InlineData("skimmed-start")]
@@ -502,10 +501,7 @@ public class HistoryTests
         var first = Claude.Assistant(2, null, Claude.Text("Answer"));
         var lines = shape switch
         {
-            "missing-message-id" => new[] { Claude.Assistant(2, null, Claude.Text("One"), Claude.Text("Two")) },
-            "intervening-thinking" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.Thinking("Plan"), Claude.Text("Two"))],
-            "text-tool-text" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One"), Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" }), Claude.Text("Two"))],
-            "duplicate-record" => [first, first],
+            "duplicate-record" => new[] { first, first },
             "unreadable-record" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), "{\"type\":\"assistant\",\"message\":", Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
             "skimmed-start" => [Claude.AssistantMessage("message", 2, null, Claude.Text("One")), new JsonObject { ["type"] = "bookkeeping", ["padding"] = new string('x', 5000) }.ToJsonString(), Claude.AssistantMessage("message", 3, null, Claude.Text("Two"))],
             _ => throw new ArgumentOutOfRangeException(nameof(shape)),
@@ -517,7 +513,7 @@ public class HistoryTests
         Assert.Null(session.Activity.ResponseId);
         Assert.Equal(shape switch
         {
-            "missing-message-id" or "intervening-thinking" or "unreadable-record" or "text-tool-text" => "One\n\nTwo",
+            "unreadable-record" => "One\n\nTwo",
             "skimmed-start" => "Two",
             _ => "Answer",
         }, session.Activity.Response);
@@ -526,6 +522,42 @@ public class HistoryTests
         await source.RefreshAsync();
         var part = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Last().Parts.Single(p => p.Kind == HistoryPartKind.Response);
         Assert.Equal(part.Id, source.Get(Id)!.Activity.ResponseId);
+    }
+
+    // One message whose text is split by a thinking block, a tool or a missing message id is one composite reply live
+    // (legacy text "One\n\nTwo") and two parts in history. It keeps the id of its FIRST part, which does not change as
+    // the composite grows, so a client never rewrites an earlier reply (#3649: the Chief's replies overwrote each other).
+    [Theory]
+    [InlineData("missing-message-id")]
+    [InlineData("intervening-thinking")]
+    [InlineData("text-tool-text")]
+    public async Task Claude_composite_text_keeps_the_first_parts_identity_and_history_has_both_parts(string shape)
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var bash = Claude.ToolUse("tool", "Bash", new JsonObject { ["command"] = "echo test" });
+        var composite = shape switch
+        {
+            "missing-message-id" => Claude.Assistant(4, null, Claude.Text("One"), Claude.Text("Two")),
+            "intervening-thinking" => Claude.AssistantMessage("message", 4, null, Claude.Text("One"), Claude.Thinking("Plan"), Claude.Text("Two")),
+            "text-tool-text" => Claude.AssistantMessage("message", 4, null, Claude.Text("One"), bash, Claude.Text("Two")),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+        Fixture.Append(transcript, Claude.User("Question", 1), Claude.AssistantMessage("earlier", 2, null, Claude.Text("Earlier reply")));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var earlier = source.Get(Id)!.Activity.ResponseId;
+        Assert.NotNull(earlier);
+        Fixture.Append(transcript, composite);
+        await source.RefreshAsync();
+        var session = source.Get(Id)!;
+        var texts = (await source.HistoryAsync(Id, null, HistoryLimits.DefaultTurns)).Turns!.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).ToArray();
+        Assert.Equal(["Earlier reply", "One", "Two"], texts.Select(p => p.Text));
+        Assert.Equal("One\n\nTwo", session.Activity.Response);
+        Assert.NotEqual(earlier, session.Activity.ResponseId);
+        Assert.Equal(texts[1].Id, session.Activity.ResponseId);
     }
 
     // History counts a tool (once per call id in the turn) and its question as parts of the record, so the

@@ -350,9 +350,13 @@ Legacy text dedup counts currently retained texts only.
 Claude keeps the first part id across contiguous blocks with the same message id;
 a marked delegate notice breaks that continuity, even when live ignores its stale run.
 Text after a tool or question in the same record keeps its identity: the index counts those
-parts as history does, once per call id in the readable turn. It omits identity for composite
-legacy text (text, tool, text of one message), duplicate records, an unreadable record, a turn
-whose prompt was not read, or more than 4,096 assistant records in a turn. A window that opens
+parts as history does, once per call id in the readable turn. Composite legacy text (one message's
+text blocks split by a thinking block, a tool or a delivered notice, shown live as one reply whose text
+grows) keeps the id its FIRST part had, which does not change as it grows (#3649: with no id a client
+rewrote the last reply's part, so a Chief's briefing was replaced); history then shows the parts. A
+composite that crosses a turn, or whose first part had no id, has none. It omits identity for duplicate
+records, an unreadable record, a turn whose prompt was not read, or more than 4,096 assistant records
+in a turn. A window that opens
 inside a turn whose prompt was read (a long turn) keeps identity for each text record whose message
 id first appears in the window, because the id is the record's hash and its index in that record,
 which unread earlier records cannot change. History skips a repeated tool call without a part, so
