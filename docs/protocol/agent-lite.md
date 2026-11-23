@@ -78,6 +78,46 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
+## Receipt lookup for an unconfirmed send (design, not implemented)
+
+When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
+cannot say whether the text was typed, and `reply-session` prints "Delivery is uncertain; Receipt lookup is unavailable; do not
+resend automatically". On one machine that was 190 of 1,384 sends in about twelve hours (14%). This section designs the lookup. It
+changes no code and no wire format until its slices land.
+
+**What already holds.** The envelope id is the request id. The receiver remembers `peer/request` for 150 s (in memory, at most 4,096
+ids, a restart forgets them), and a same-id offer from the same peer never types a second time: it is refused `replay`. An envelope
+lives 120 s. What is missing is an answer: `replay` does not say what the first attempt became, and the sender keeps no copy of what it sent.
+
+**The design.**
+
+1. **Receiver journal.** Beside the replay id the receiver records the first attempt's outcome and nothing else: `in-flight`, `delivered`
+   (typed), `refused` with its code, or the lane's `pending`/`queued`/`unconfirmed`. The same 150 s and 4,096 bounds; no text, no name. A
+   same-id offer from the same peer (the channel's static key, as today) is answered with that outcome as a `receipt`, still without typing.
+2. **A probe that never types.** A lookup is a re-offer of the same sealed envelope carrying a probe marker inside the signed body (a new,
+   versioned lite marker). A probe of an id the receiver has no record of is answered `unknown` and nothing is typed; without the marker
+   an unseen id is a first offer and would deliver (that is idempotent resend, below).
+3. **Sender keeps the sealed envelope.** For a send that ends `unconfirmed`, the sender's host keeps the sealed bytes in memory until the
+   envelope expires (at most 120 s, at most 64 entries, dropped on expiry or restart) and serves them to a new agent pipe op,
+   `agent.receipt { request }`, which returns `delivered`, `refused:<code>`, `pending`, `queued`, `in-flight` (ask again shortly), or
+   `unknown` (the target has no record, the id is too old, or the host restarted). It never returns more than that.
+4. **Fleet tool.** After `unconfirmed`, `reply-session` asks `agent.receipt` up to three times, 5 s apart, and prints one of: delivered
+   (confirmed by receipt), not delivered with the refusal code, or still unknown with the sentence it prints today. It never resends the text.
+
+**Limits that stay.** The journal is memory only (a restart forgets it, so a lookup after one is `unknown`); beyond the envelope's 120 s
+a lookup cannot be made; the Home Assistant fallback keeps its own separate memory, so a double delivery across the two routes remains
+the known rare limit above; a lookup is rate-limited with the pair's other offers and refused when the mode is off or killed.
+
+**Who can ask.** Only the peer that sent the request, on the channel that authenticates it. The reply carries the request id, a state and
+a refusal code, so it exposes nothing about the target's sessions or text, and it grants no authority to type.
+
+**Slices** (each at most 400 lines, tests first): (1) receiver journal and `receipt` answer, with the probe marker; (2) the sender's
+sealed-envelope memory and `agent.receipt`; (3) `reply-session`.
+
+**Open decisions for the owner.** (a) Strict probe (this design) against exactly-once resend, where a re-offer of an unseen id delivers it
+late; the probe is safer for stale messages and costs a wire marker. (b) Whether the journal should survive a host restart; this design says
+no, since the envelope's 120 s already bounds what a lookup could reach.
+
 ## Turn it on (a person at each machine, in the agreed order)
 
 1. Nothing to set for the mode itself: a signed-in host with no `agentMessaging.remote` key is `own-account`
