@@ -788,6 +788,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
+        ClientOf = channel => PersonDevices.Client(personRoster, channel),
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,

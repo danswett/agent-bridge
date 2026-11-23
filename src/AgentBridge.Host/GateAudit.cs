@@ -1,11 +1,20 @@
+using System.Text.Json.Serialization;
 using AgentBridge.Host.Fleet.Grants;
 
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null,
-    ProcessInstance? LaunchProcess = null)
+    ProcessInstance? LaunchProcess = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientKind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null)
 {
+    // The client the host's verified roster says the principal device is (ha-audit-client-field.md): both or neither, from closed sets,
+    // only on a relay person-client answer or stop. Omitted when absent, so a row written without it keeps its exact bytes and chain hash.
+    static readonly HashSet<string> ClientKinds = new(["app", "pwa", "phone"], StringComparer.Ordinal);
+    static readonly HashSet<string> ClientPlatforms = new(["windows", "macos", "linux", "ios", "ipados", "android"], StringComparer.Ordinal);
+    bool ClientValid(string action) => ClientKind is null && ClientPlatform is null || ActorKind == "person-client" && Path == "relay" && Phase != "control"
+        && action is "session.answer" or "session.stop" && ClientKind is { } kind && ClientKinds.Contains(kind) && ClientPlatform is { } platform && ClientPlatforms.Contains(platform);
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop" or "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
@@ -15,6 +24,7 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
             && target is { } session && GrantValidator.Target(new(session, LaunchProcess)))
         && (GrantBinding is null ? action is not ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update")
             : action is ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && GrantBinding.Length == 64 && GrantBinding.All(char.IsAsciiHexDigit))
+        && ClientValid(action)
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")
@@ -23,6 +33,8 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
             && (outcome == success || outcome is "attempted" or "reserved" or "refused" or "failed" or "unconfirmed" || action == "session.stop" && outcome is "confirm" or "busy")
             && (action == "session.answer" ? Question is { } question && question != Guid.Empty : Question is null));
 }
+
+internal sealed record ClientIdentity(string Kind, string Platform);
 
 internal sealed record GateAuditTotal(string Action, string Path, string ActorKind, int Successes);
 internal sealed record GateAuditReport(IReadOnlyList<GateAuditTotal> Totals, IReadOnlyList<string> IncompleteReasons, bool Invalidated,
