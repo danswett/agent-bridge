@@ -778,6 +778,7 @@ async Task<int> ServeAsync(HostHandover handover)
     RelayClient? pinRelay = null;
     var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
         ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now, mode: () => settings.Security.Roster);
+    var rosterGate = HostRosterGate.For(hostRoster, () => identity.Account?.AccountId);
     var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
@@ -1080,6 +1081,8 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
+                // security.roster enforce only: a device the pinned roster does not approve is told to approve this machine. Off and observe: always true.
+                RosterGate = (ch, op) => settings.Security.Roster != SecuritySettings.Enforce || rosterGate.Allows(ch.PeerId, op),
                 // The approver's enrollment steps reach only an attempt the person opened here, from a relay-asserted person (pinned while device pins are on).
                 Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
                     ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,

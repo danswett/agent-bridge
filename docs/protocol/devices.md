@@ -568,6 +568,14 @@ A host reads the relay's copy with `roster-get` once after each connection and v
 
 Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; enforce mode, pinning and the ChannelHub gate are later slices.
 
+## Enforce mode: the channel gate
+
+`security.roster = "enforce"` (#1359, slice R3b) is the host's first refusal. It is off by default, is never set by an upgrade, and is set only by `config set security.roster enforce` run at the machine by a person (an agent session is refused, #67). `off` and `observe` never consult it: `ChannelHub.RosterGate` is not set to refuse anything and the frames on the wire are exactly those of a hub without a gate (`RosterGateTests` compares them).
+
+In `enforce`, `ChannelHub` asks `HostRosterGate.Allows(peer, op)` before it runs any request, on both the XX and the IK path and for the early request in an IK first message. It allows a peer only when the host's pinned, verified roster lists it as active and not held (§3.4, §3.5). Otherwise the reply is `{ ok: false, error: "approve this machine" }` and no handler runs. That covers a device the roster does not list, one that was removed (checked on every request, so a removal ends an open channel's use at its next request), and any device when there is no pin or the roster is unreadable, another account's or not yet verified. An op the host lists as needing a senior device is also refused to a device still on probation (§3.4); the list is empty in this slice and is filled with the commands that use it (R6).
+
+Not in this slice: the handshake's empty introduction and the `transport` member of `hello` (device-approval.md §7.1), the relay's own enforce and admission (R2), and any screen to approve a device (R4, R5). A refused device is refused at its first request, not in its handshake.
+
 ### Retained pin-reader foundation (#1358, part 1)
 
 `HostRosterReader` reads an existing `roster-pin.json` in a private host-state folder
