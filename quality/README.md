@@ -867,8 +867,8 @@ request is otherwise reviewed.
   owner waiver (owner-waiver (Nov 22 15:25))` when it was used. **Off switch:** the repository variable `CODEX_WAIVER` must be
   exactly `on`; unset is off and the rule is as before (`codex_waiver` in `quality/merge-rule.yml`; `merge-rule.yml` passes the
   variable, as it does `ARM64_WAIVER`). **Revert when Codex returns:** delete the `codex_waiver` block, or unset the variable.
-  The rule does not compare the receipt's poster with the PR's author: every receipt and PR here is posted through `danswett`, so
-  that comparison would refuse them all; reviewer independence stays Quality's manual check (AGENTS.md rule 4).
+  The existing independence rule is unchanged: reviewer independence comes from Quality's separate reader sessions, which each
+  receipt names, not from a comparison of the poster with the PR's author (every receipt and PR here is posted through `danswett`).
 - **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
   EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
   owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
