@@ -778,6 +778,7 @@ async Task<int> ServeAsync(HostHandover handover)
     RelayClient? pinRelay = null;
     var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
         ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now, mode: () => settings.Security.Roster);
+    var rosterGate = HostRosterGate.For(hostRoster, () => identity.Account?.AccountId);
     var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
@@ -788,6 +789,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
+        ClientOf = channel => PersonDevices.Client(personRoster, channel),
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,
@@ -1080,6 +1082,8 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
+                // security.roster enforce only: a device the pinned roster does not approve is told to approve this machine. Off and observe: always true.
+                RosterGate = (ch, op) => settings.Security.Roster != SecuritySettings.Enforce || rosterGate.Allows(ch.PeerId, op),
                 // The approver's enrollment steps reach only an attempt the person opened here, from a relay-asserted person (pinned while device pins are on).
                 Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
                     ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
@@ -1091,6 +1095,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustedPeers.Attach(hub);
             hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
+            hub.Log = Log;
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
@@ -1124,7 +1129,8 @@ async Task<int> ServeAsync(HostHandover handover)
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
             await liveRoster.ServeAsync(() => relay.GetRosterAsync(current.Token), () => fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
-                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability)));
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability),
+                relaySupportsEvidence: relay.Capabilities.Contains(SessionEvidence.RelayCapability)));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");

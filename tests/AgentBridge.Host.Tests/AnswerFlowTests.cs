@@ -394,6 +394,28 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.OnInject = () => { if (Enters() == 2) { Fixture.Append(events, Recorded("q2", recorded)); } };
     }
 
+    // Owner decision (Nov 23): a required multi-select needs at least one choice, for Copilot as for every agent. The
+    // shared check refuses the empty list before any key is planned, so nothing is typed and the question stays open.
+    [Fact]
+    public async Task A_required_multi_select_answered_with_nothing_ticked_is_refused_with_nothing_typed_and_stays_answerable()
+    {
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
+            Copilot.ToolStart("q2", "ask_user", new
+            {
+                message = "Which?",
+                requestedSchema = new { properties = new { l = new { type = "array", items = new { @enum = new[] { "a", "b" } } } }, required = new[] { "l" } },
+            }, second++));
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { l = Array.Empty<string>() }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.EndsWith("\"l\" needs an answer", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Equal("q2", source.Get(Id)?.Question?.Id);
+    }
+
     [Fact]
     public async Task An_answer_that_would_be_added_to_a_pre_filled_default_is_refused_with_nothing_typed_and_the_question_stays_answerable()
     {

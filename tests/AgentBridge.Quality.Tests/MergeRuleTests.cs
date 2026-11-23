@@ -1078,11 +1078,13 @@ public class MergeRuleTests
     // or the backstop (the named residual; each of these is an operations job, not a pull request check):
     //   Pages (schedule every 5 min, CI-on-main workflow_run, dispatch), Revert culprit (schedule every 5 min, dispatch),
     //   Ops probe, Flake hunt (daily schedule, dispatch), Update gap, Beta acceptance, ARM64 self-test loop (dispatch only),
-    //   Lab nightly and Lab release verification (dispatch / workflow_call; held).
+    //   Lab nightly and Lab release verification (dispatch / workflow_call; held),
+    //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
+    //   verdict and a finished one needn't re-judge anything, #2454).
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Ops probe", "Pages", "Revert culprit", "Update gap",
+        "Merge rule sweep", "Ops probe", "Pages", "Revert culprit", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
@@ -1429,6 +1431,102 @@ public class MergeRuleTests
 
             Assert.Contains(github.Queries, q => q.Contains("pullRequests(", StringComparison.Ordinal) && q.Contains("reviews(", StringComparison.Ordinal));
             Assert.Equal(2, github.Posted.Count);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+    // Reading main's CI is the first thing a run does, and while newer runs are still going the
+    // newest completed evidence is several runs down. Once the newest run has not answered, the runs
+    // below it are read together, not one after another; a newest run that does answer is read alone
+    // (a quota point per read: nothing is read ahead of an answer).
+    [Fact]
+    public void Main_s_older_runs_are_read_together_once_the_newest_has_not_answered()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "in_progress", null, 1), (7, "in_progress", null, 1), (6, "in_progress", null, 1), (5, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, overlapOf: 2, overlapOn: path => path.Contains("/jobs?", StringComparison.Ordinal) && !path.Contains("/actions/runs/9/jobs?", StringComparison.Ordinal));
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.DoesNotContain(" failure merge-rule Main is red", github.Posted[0], StringComparison.Ordinal);
+            Assert.True(github.MaxConcurrentRest > 1, $"main's runs were read one at a time: {string.Join(" ", github.RestPaths)}");
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Main's older runs are read ahead of an answer. Once the answer is found (run 8, read at once), the
+    // reads behind it (7 and 6, slow) are still in flight: they finish before the run returns, so nothing
+    // is read, counted or recorded after its verdict, and what a caller enumerates is not written under it.
+    [Fact]
+    public void Main_s_reads_ahead_are_all_finished_by_the_time_the_run_returns()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "completed", "success", 1), (7, "completed", "success", 1), (6, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs,
+            restDelayFor: path => path.Contains("/actions/runs/8/jobs?", StringComparison.Ordinal) || !path.Contains("/jobs?", StringComparison.Ordinal) ? 0 : 400);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            var atReturn = github.RestPaths.Count;
+            Thread.Sleep(900);
+
+            Assert.Equal(atReturn, github.RestPaths.Count);
+            // What the run says it spent is every read it made.
+            Assert.Contains($"REST {atReturn} call(s)", shown.ToString(), StringComparison.Ordinal);
+            // The runs behind the answer were read (ahead), and are in the count.
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+    [Fact]
+    public void Main_s_newest_run_is_read_alone_when_it_answers()
+    {
+        var runs = MainRuns((9, "completed", "success", 1), (8, "completed", "success", 1), (7, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.RestPaths, p => p.Contains("/actions/runs/", StringComparison.Ordinal) && p.Contains("/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Each head's facts and files are read apart from the others', so a sweep over several heads
+    // reads them together; what is printed and posted keeps the open list's order.
+    [Fact]
+    public void A_sweep_reads_each_heads_facts_together_and_posts_in_the_open_lists_order()
+    {
+        string[] heads = [Head, Older, "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"];
+        var prs = heads.Select((h, i) => GraphQLPullRequest(h, number: 40 + i)).ToArray();
+        var github = new FakeGitHub(prs[0], listed: prs, byNumber: prs.Select((p, i) => (n: 40 + i, p)).ToDictionary(x => x.n, x => x.p), overlapOf: 2, overlapOn: path => path.Contains("/compare/", StringComparison.Ordinal));
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Equal(4, github.Posted.Count);
+            Assert.Equal(heads, github.Posted.Select(p => p.Split(' ')[0]).ToArray());
+            Assert.True(github.MaxConcurrentRest > 1, "the heads were read one after another");
+            Assert.Equal(heads.Length, github.RestPaths.Count(p => p.Contains("/compare/", StringComparison.Ordinal)));
         }
         finally
         {
@@ -3057,16 +3155,24 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
-        public List<string> RestPaths { get; } = [];
+        // What was recorded, as a copy: a read still in flight may add to it while a test looks, and a list
+        // enumerated while it is written throws.
+        public List<string> RestPaths { get { lock (this) return [.. restPaths]; } }
+
+        readonly List<string> restPaths = [];
 
         /// <summary>Every GraphQL query's text, and the pull request numbers asked for one at a time.</summary>
-        public List<string> Queries { get; } = [];
+        public List<string> Queries { get { lock (this) return [.. queries]; } }
 
-        public List<int> NumbersRead { get; } = [];
+        public List<int> NumbersRead { get { lock (this) return [.. numbersRead]; } }
+
+        readonly List<string> queries = [];
+
+        readonly List<int> numbersRead = [];
 
         readonly Dictionary<long, int> unreadableSeen = [];
 
@@ -3079,14 +3185,33 @@ public class MergeRuleTests
             return seen < times;
         }
 
+        /// <summary>The most REST reads that were in flight at once, and how many were made.</summary>
+        public int MaxConcurrentRest { get; private set; }
+
+        int inFlight;
+
+        // A rendezvous, not a delay: each read that overlapOn picks (all, when null) waits until overlapOf of them
+        // are in flight at once, then they all go. Reads that really overlap pass at once however slow the machine;
+        // reads made one after another never meet, and the first fails after the safety wait (a failure path only:
+        // a pass never waits on the clock).
+        readonly ManualResetEventSlim overlapped = new(false);
+
+        int meeting;
+
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
-            Queries.Add(query);
+            lock (this)
+                return GraphQLCore(query, variables);
+        }
+
+        JsonDocument GraphQLCore(string query, IReadOnlyDictionary<string, object> variables)
+        {
+            queries.Add(query);
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
             {
-                NumbersRead.Add((int)number);
+                numbersRead.Add((int)number);
                 return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
             }
             if (listFailsAfterFirstPage && variables.ContainsKey("cursor"))
@@ -3102,7 +3227,32 @@ public class MergeRuleTests
 
         public JsonDocument Rest(string path)
         {
-            RestPaths.Add(path);
+            var now = Interlocked.Increment(ref inFlight);
+            lock (this)
+                MaxConcurrentRest = Math.Max(MaxConcurrentRest, now);
+            try
+            {
+                if (overlapOf > 0 && (overlapOn?.Invoke(path) ?? true))
+                {
+                    if (Interlocked.Increment(ref meeting) >= overlapOf) { overlapped.Set(); }
+                    if (!overlapped.Wait(TimeSpan.FromSeconds(20)))
+                        throw new InvalidOperationException($"reads were never in flight together: {path}");
+                }
+                var delay = restDelayFor?.Invoke(path) ?? restDelayMs;
+                if (delay > 0)
+                    Thread.Sleep(delay);
+                lock (this)
+                    return RestCore(path);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
+        }
+
+        JsonDocument RestCore(string path)
+        {
+            restPaths.Add(path);
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
                 if (failMain) throw new InvalidOperationException("gh: HTTP 502");

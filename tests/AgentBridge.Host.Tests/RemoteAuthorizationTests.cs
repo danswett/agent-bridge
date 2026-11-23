@@ -521,6 +521,51 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("hit")]
+    [InlineData("miss")]
+    [InlineData("another-device")]
+    [InlineData("unknown-platform")]
+    public async Task A_relay_answer_row_carries_the_roster_client_and_never_a_claim_in_the_payload(string mode)
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        var profile = Path.Combine(fixture.Root, "answer-audit-client");
+        var audit = new AgentAuditLog(profile);
+        var roster = new ClientRoster(mode);
+        host.Hub.Handler = authorization.Handler(
+            new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"), answers: answers)
+            { ClientOf = channel => AgentBridge.Host.SignIn.PersonDevices.Client(roster, channel) }, audit);
+        var peer = await PeerAsync("pwa");
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var request = new
+        {
+            id = SessionId, question = "q1", request = Guid.NewGuid().ToString(), text = "yes",
+            client = "forged-client", clientKind = "app", clientPlatform = "forged-platform", kind = "app", platform = "forged-platform",
+        };
+
+        Assert.Equal("delivered", Result(await channel.RequestAsync(Ops.SessionAnswer, request, Patience)).GetProperty("outcome").GetString());
+
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal(mode == "hit" ? ("pwa", "ios") : (null, null), (row.Gate!.ClientKind, row.Gate.ClientPlatform)));
+        var stored = string.Concat(Directory.GetFiles(Path.Combine(profile, AgentAuditLog.FolderName)).Select(File.ReadAllText));
+        Assert.DoesNotContain("forged", stored);
+    }
+
+    // The roster's own record of the device (kind and platform), never the channel's declaration.
+    sealed class ClientRoster(string mode) : AgentBridge.Host.SignIn.IPersonDeviceRoster
+    {
+        public AgentBridge.Host.SignIn.RosterState State => AgentBridge.Host.SignIn.RosterState.Ready;
+        public AgentBridge.Host.SignIn.PinnedDevice? Find(byte[] key, string account) => mode == "miss" ? null
+            : new AgentBridge.Host.SignIn.PinnedDevice(AgentBridge.Transport.Wire.DeviceId(mode == "another-device" ? new byte[32] : key), "pwa", mode == "unknown-platform" ? "symbian" : "ios", "phone", "key", "g1", "h1");
+        public IReadOnlyList<AgentBridge.Host.SignIn.PinnedDevice> Pinned(string account) => [];
+        public bool StillPinned(AgentBridge.Host.SignIn.PinnedDevice device) => mode != "miss";
+        public event Action? Changed { add { } remove { } }
+    }
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Relay_answers_audit_the_channel_device_and_relay_origin_not_payload_claims(bool pinned)

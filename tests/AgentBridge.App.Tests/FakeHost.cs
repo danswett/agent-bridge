@@ -99,7 +99,7 @@ sealed class FakeHost : IAsyncDisposable
     {
         _ = Task.Run(StopAsync);
         return Task.CompletedTask;
-    }));
+    }, RunsIfUnsent: true));
 
     // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,
     // SpinWait) each one kept a pool thread for up to Patience, and the tests side by side then
