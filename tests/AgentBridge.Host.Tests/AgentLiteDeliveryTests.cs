@@ -430,7 +430,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { HideOthersFromSnapshot = true }; f.Launch(LaunchProtocol.Ask);
         f.Others.Add(Sibling);
         if (duringScan) { f.OnSnapshot = () => f.Held = Hold; } else { f.Held = Hold; }
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
 
@@ -440,7 +440,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { Held = Hold }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await SendTo(f, Target)).Typed);
         Assert.True(Assert.Single(f.Typed).StillCurrent!());
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
         f.Held = null;
         Assert.True((await SendTo(f, Node)).Typed);
         Assert.All(f.Typed, t => Assert.Equal(Target, t.Id));
@@ -457,7 +457,7 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
         Action change = () => { if (hold) { f.Held = Hold; } else { f.Others.Add(Sibling); } };
         if (inSlot) { f.OnReply = change; } else { f.OnReadScreen = change; }
-        Assert.Equal(new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
+        Assert.Equal(hold ? new LiteDelivery(false, "sessionResolutionIncomplete") : new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
     [Fact]

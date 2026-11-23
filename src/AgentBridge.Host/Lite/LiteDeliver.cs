@@ -85,7 +85,7 @@ public sealed class LiteDeliver(
             if (query) { return FromLane(prior); }
         }
         if (Lane is not null) { Resolve(); }
-        if (session is null) { return Refused(LiteCodes.NoSuchSession); }
+        if (session is null) { return Refused(UnresolvedCode(target)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
@@ -110,7 +110,7 @@ public sealed class LiteDeliver(
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
         // A node id is resolved again: a sibling or a hold that appeared while the composer was read
         // makes it ambiguous now, whatever it named a moment ago.
-        if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(LiteCodes.NoSuchSession); }
+        if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
         if (!Idle(now)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
@@ -132,7 +132,7 @@ public sealed class LiteDeliver(
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
-            AnswerOutcome.Stale => Refused(Signed() ? LiteCodes.NoSuchSession : LiteReceiver.NotSameAccount),
+            AnswerOutcome.Stale => Refused(Signed() ? (byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession) : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
         };
     }
@@ -171,6 +171,15 @@ public sealed class LiteDeliver(
     // known while discovery is not held (ISessionSource.Held): a held pass may not list a second
     // live session with the same node id. So Held is read before the one materialised snapshot and
     // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
+    // A node id that did not resolve while discovery is held may name a live session the pass did not list, so the
+    // sender is told to retry, not that the session does not exist (#1396).
+    string UnresolvedCode(string target) =>
+        IsNodeId(target) && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
+
+    static bool IsNodeId(string target) =>
+        target.Length == "agent_bridge_".Length + 16 && target.StartsWith("agent_bridge_", StringComparison.Ordinal)
+        && !target.AsSpan("agent_bridge_".Length).ContainsAnyExcept("0123456789abcdef");
+
     string? FromNodeId(string target)
     {
         const string prefix = "agent_bridge_";
