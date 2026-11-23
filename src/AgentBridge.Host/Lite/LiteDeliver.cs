@@ -115,19 +115,27 @@ public sealed class LiteDeliver(
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = Frame(body.Principal, body.Request, safe), RequireIdle = true,
-            StillCurrent = byNode || stillAllowed is not null || account is not null
-                ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null };
-        // The prompt this types is the sender's: armed with the exact words typed and a label from the
-        // verified principal, never from the body, so userMessageFrom=agent is set by the host alone.
-        // An undelivered arm is put back, or a prompt the owner types in the same words would wear it.
+        var framed = Frame(body.Principal, body.Request, safe);
+        // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
+        // about to go, with the exact words and a label from the verified principal, never from the body,
+        // so userMessageFrom=agent is set by the host alone. A delivery that typed nothing (refused,
+        // busy, or already delivered earlier) never arms, so a prompt the owner types in the same words
+        // stays theirs; one not confirmed puts back an arm still waiting, for the same reason.
         var driver = Drivers?.For(id);
-        var before = driver?.Save();
-        driver?.ArmDriver(SessionDrivers.Agent, time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), reply.Text, label: SenderLabel(body.Principal));
+        DriverArm? armed = null;
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = true,
+            StillCurrent = byNode || stillAllowed is not null || account is not null
+                ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
+            KeysGoing = driver is null ? null : () =>
+            {
+                var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
+                armed = new DriverArm(saved, generation);
+            } };
+        void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { if (driver is not null) { driver.Restore(before!.Value); } throw; }
-        if (driver is not null && result.Outcome is not (AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)) { driver.Restore(before!.Value); }
+        catch { Unarm(); throw; }
+        if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
         return result.Outcome switch
         {
             AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
@@ -215,6 +223,9 @@ public sealed class LiteDeliver(
         }
         catch (Exception e) when (e is not OperationCanceledException) { return false; }
     }
+
+    // The arm this delivery made, to put back only while it is still the one waiting.
+    readonly record struct DriverArm(SessionDriver.Saved Before, long Generation);
 
     // Both from the verified principal's own fields, one line, nothing hidden (Clean), and cut to the
     // protocol's byte limits where they are shown. The sender's title and the body are not read.

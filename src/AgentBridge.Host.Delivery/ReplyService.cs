@@ -562,7 +562,11 @@ public sealed partial class ReplyService : ISessionReplier
                 keys = keys with { Sends = [keys.Sends[0] with { Text = words }, keys.Sends[1]] };
             }
             timeline.InjectStart();
-            try { result = await injector.InjectAsync(pid, keys); }
+            try
+            {
+                request.KeysGoing?.Invoke();
+                result = await injector.InjectAsync(pid, keys);
+            }
             catch (Exception e)
             {
                 return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"reply delivery to {Short(session.Id)} is uncertain after an injector failure; no background recovery will type further keys", e), null, KeysWent: true);
