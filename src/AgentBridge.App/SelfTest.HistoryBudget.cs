@@ -452,6 +452,8 @@ static partial class SelfTest
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
                     offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
                     target = wheelTarget,
+                    // #3982: where the posted wheel was aimed and what took it, every run (diagnosis only).
+                    wheelDiagnosis = WheelDiagnosisNow(),
                 };
                 if (observerDiagnostics)
                 {
@@ -475,6 +477,7 @@ static partial class SelfTest
             {
                 scroll.ViewChanged -= WheelChanged;
                 scroll.RemoveHandler(UIElement.PointerWheelChangedEvent, heardWheel);
+                StopWatchingWheel();
             }
         }
         finally
@@ -954,7 +957,10 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
+        // #3982: watch which window this thread takes the wheel for, and record what it was aimed at (diagnosis only).
+        WatchWheel();
         if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        DiagnoseWheel(window.Handle, mouse.X, mouse.Y);
     }
 
     struct WheelPoint { public int X, Y; }
