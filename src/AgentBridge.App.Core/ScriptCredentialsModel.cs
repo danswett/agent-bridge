@@ -13,10 +13,19 @@ public sealed class ScriptCredentialsModel(HostConnection host)
     public bool Available => host.Can(HostOps.ScriptCredentialsCapability);
     public IReadOnlyList<ScriptCredentialRow> Rows { get; private set; } = [];
     public string? Notice { get; private set; }
+    // Changes only when the list does, so the page redraws its rows only then (a redraw drops keyboard focus).
+    public string RowsKey { get; private set; } = "";
+
+    // What the page says when the host's reply is not the shape it sends; never the reply, never a .NET exception message.
+    public const string UnreadableReply = "The host sent a reply this page could not read.";
 
     // The host's rule for a script name: 1 to 64 ASCII letters, digits, '.', '_' or '-', and not '.' or '..'.
     public static bool ValidName(string? name) => name is { Length: >= 1 and <= 64 } && name is not ("." or "..")
         && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+
+    // The dialog text for a press on this page's own list: a name that already has a credential is rotated by an Add, so it says so.
+    public string ConsentFor(string op, string name) =>
+        Consent(op, name, Rows.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.Ordinal))?.Live ?? 0);
 
     public static string Consent(string op, string name, int live) => op switch
     {
@@ -28,19 +37,32 @@ public sealed class ScriptCredentialsModel(HostConnection host)
         _ => throw new ArgumentException("unknown script credential action", nameof(op)),
     };
 
-    public async Task RefreshAsync()
+    // A person's refresh (opening Settings) shows only what this read found, so an old notice does not outlive a good read.
+    public async Task RefreshAsync() => Notice = await ReadRowsAsync();
+
+    // Reads the list. Returns the notice for a failure, or null; a transport failure keeps the rows already shown.
+    async Task<string?> ReadRowsAsync()
     {
-        if (!Available) { Rows = []; return; }
+        if (!Available) { Rows = []; RowsKey = ""; return null; }
+        JsonElement reply;
+        try { reply = await host.CallAsync(HostOps.ScriptList); }
+        catch (Exception e) when (e is InvalidOperationException or IOException or TimeoutException or HostErrorException) { return e.Message; }
         try
         {
-            var reply = await host.CallAsync(HostOps.ScriptList);
-            Rows = [.. reply.GetProperty("scripts").EnumerateArray().Select(r => new ScriptCredentialRow(
-                r.GetProperty("name").GetString()!, r.GetProperty("scope").GetString()!, r.GetProperty("expiresAt").GetDateTimeOffset(),
-                r.GetProperty("live").GetInt32(), r.GetProperty("fleetLaunch").GetBoolean(),
+            var read = reply.GetProperty("scripts").EnumerateArray().Select(r => new ScriptCredentialRow(
+                r.GetProperty("name").GetString() ?? throw new FormatException(), r.GetProperty("scope").GetString() ?? throw new FormatException(),
+                r.GetProperty("expiresAt").GetDateTimeOffset(), r.GetProperty("live").GetInt32(), r.GetProperty("fleetLaunch").GetBoolean(),
                 r.TryGetProperty("lastUse", out var used) && used.ValueKind == JsonValueKind.String ? used.GetDateTimeOffset() : null))
-                .OrderBy(r => r.Name, StringComparer.Ordinal)];
+                .OrderBy(r => r.Name, StringComparer.Ordinal).ToList();
+            Rows = read;
+            RowsKey = string.Join(Environment.NewLine, read.Select(r => $"{r.Name}|{r.Scope}|{r.ExpiresAt:O}|{r.Live}|{r.FleetLaunch}|{r.LastUse:O}"));
+            return null;
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or TimeoutException or HostErrorException) { Notice = e.Message; }
+        catch (Exception e) when (e is KeyNotFoundException or InvalidOperationException or FormatException or ArgumentException or OverflowException or JsonException)
+        {
+            Rows = []; RowsKey = "";
+            return UnreadableReply;
+        }
     }
 
     public Task AddAsync(string name) => PressAsync(HostOps.ScriptAdd, name);
@@ -52,12 +74,19 @@ public sealed class ScriptCredentialsModel(HostConnection host)
         Notice = null;
         if (!Available) { return; }
         if (!ValidName(name)) { Notice = "A script name is 1 to 64 letters, digits, dots, dashes or underscores."; return; }
+        string? pressNotice = null;
         try
         {
             var asked = await host.CallAsync(HostOps.ScriptConfirm, new { op, name });
-            await host.CallAsync(op, new { name, confirm = asked.GetProperty("confirm").GetString() });
+            string? confirm;
+            try { confirm = asked.GetProperty("confirm").GetString(); }
+            catch (Exception e) when (e is KeyNotFoundException or InvalidOperationException) { confirm = null; }
+            if (string.IsNullOrEmpty(confirm)) { pressNotice = UnreadableReply; }
+            else { await host.CallAsync(op, new { name, confirm }); }
         }
-        catch (Exception e) when (e is InvalidOperationException or IOException or TimeoutException or HostErrorException) { Notice = e.Message; }
-        await RefreshAsync();
+        catch (Exception e) when (e is InvalidOperationException or IOException or TimeoutException or HostErrorException) { pressNotice = e.Message; }
+        // The list is read again so the page shows what the host now holds; the press result (or its failure) stays the notice.
+        var readNotice = await ReadRowsAsync();
+        Notice = pressNotice ?? readNotice;
     }
 }
