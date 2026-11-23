@@ -10,9 +10,8 @@ namespace AgentBridge.Relay;
 // signed by the account's own devices. The relay is an untrusted store (design §3.6): it keeps an
 // entry only if it is valid against its own copy, so a stranger cannot fill the log, but a host
 // verifies what it is given for itself and never takes the relay's word. Nothing here decides who
-// may connect while an account's mode is "observe", which every account starts in. "enforce" (#1359 R2) is only ever set by
-// an active person's device on its own connection and never moves back here: the relay then tags each socket approved,
-// pending or removed (Admission). It is defense in depth: a host verifies and enforces for itself.
+// may connect while an account is in "observe" (the start). "enforce" (#1359 R2) is set only by an active person's device on its
+// own connection, never moves back, and tags each socket approved, pending or removed (Admission): defense in depth only.
 //
 // Kept apart from MachineRoster (the last-seen list of offline machines): that one is disposable
 // and expires, this one is what an account's trust rests on.
@@ -20,11 +19,10 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
 {
     public const string Observe = "observe";
     public const string Enforce = "enforce";
-    // Unavailable: the store could not say (an error, a timeout, a body that does not read) for an account that is, or may be, in
-    // enforce. It is never Open: enforce does not fail open.
+    // Unavailable: the store could not answer for an account latched in enforce. Never Open: enforce does not fail open.
     public enum Admission { Open, Approved, Pending, Removed, Unavailable }
-    // Accounts this relay has seen in enforce, kept in memory only: the mode moves one way, so a latched account that the store then
-    // cannot answer for (an error, a body that does not read, a roster gone missing, a mode gone back) is Unavailable, never Open.
+    // Accounts seen in enforce, in memory only: the mode moves one way, so for one of these a store error, a body that does not
+    // read, a missing roster or a mode gone back is Unavailable, never Open.
     readonly ConcurrentDictionary<string, bool> latched = new();
     // One append carries a few entries (an add, its confirmation), never a whole history.
     public const int MaxPerAppend = 16;
@@ -256,9 +254,8 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         return (results, changed ? new Stored(1, generation, kept, stored?.Mode) : null);
     }
 
-    // Where a device stands with the account's roster. Open: the account is in observe, has no roster, or the store cannot say
-    // (the relay is never the gate, so it fails open). In enforce: Approved when the key is active, Removed when an add of this
-    // key was revoked, otherwise Pending. Replays the stored log, which the store bounds.
+    // Where a device stands. Open: observe, no roster, or an outage for an account not latched. In enforce: Approved when the key is
+    // active, Removed when an add of it was revoked, else Pending.
     public async Task<Admission> AdmissionAsync(string accountId, string deviceId)
     {
         if (store is null) { return Admission.Open; }
@@ -270,8 +267,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 return latched.ContainsKey(accountId) ? Admission.Unavailable : Admission.Open;
             }
             latched[accountId] = true;
-            var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
-            verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
+            var verifier = Replay(accountId, s);
             if (verifier.State.Active.ContainsKey(deviceId)) { return Admission.Approved; }
             for (var i = 0; i < verifier.Graph.Count; i++)
             {
@@ -287,8 +283,15 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         }
     }
 
-    // Moves the account to enforce, once, when the asker's key is active in its roster. One way: nothing here moves it back.
-    // False when the asker is not approved, there is no roster, or the store cannot be written.
+    RosterVerifier Replay(string accountId, Stored s)
+    {
+        var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+        verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
+        return verifier;
+    }
+
+    // Moves the account to enforce, one way, when the asker is an active person device. False if not, there is no roster, or the
+    // store cannot be written.
     public async Task<bool> EnforceAsync(string accountId, string deviceId)
     {
         if (store is null) { return false; }
@@ -300,9 +303,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             var read = await store.ReadAsync(NameOf(accountId), cts.Token);
             if (Decode(read) is not { } s) { return false; }
             if (s.Mode == Enforce) { latched[accountId] = true; return true; }
-            var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
-            verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
-            if (!verifier.State.PersonDevices.Contains(deviceId)) { return false; }
+            if (!Replay(accountId, s).State.PersonDevices.Contains(deviceId)) { return false; }
             var body = JsonSerializer.SerializeToUtf8Bytes(s with { Mode = Enforce }, Json);
             var written = await store.WriteAsync(NameOf(accountId), body, read?.ETag, cts.Token) is not null;
             if (written) { latched[accountId] = true; }

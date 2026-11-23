@@ -37,29 +37,18 @@ public class RosterEnforceTests
     {
         var w = Scenario();
         var roster = Make(w, new MemoryRosterStore());
+        Assert.False(await roster.EnforceAsync(Account, w.Id("G")));  // no roster yet: nobody can switch it
         await roster.AppendAsync(Account, [Wire(w, "G"), Wire(w, "addB")]);
         Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("X")));
         Assert.Equal(DeviceRoster.Observe, (await roster.GetAsync(Account))!.Mode);
-
         Assert.False(await roster.EnforceAsync(Account, w.Id("X")));  // not in the roster
         Assert.Equal(DeviceRoster.Observe, (await roster.GetAsync(Account))!.Mode);
         Assert.True(await roster.EnforceAsync(Account, w.Id("G")));
         Assert.True(await roster.EnforceAsync(Account, w.Id("G")));   // again: still enforce
         Assert.Equal(DeviceRoster.Enforce, (await roster.GetAsync(Account))!.Mode);
-
-        // More entries do not move it back.
         w.Remove("rmB", "G", "addB", "addB");
         await roster.AppendAsync(Account, [Wire(w, "rmB")]);
         Assert.Equal(DeviceRoster.Enforce, (await roster.GetAsync(Account))!.Mode);
-    }
-
-    [Fact]
-    public async Task No_roster_means_nobody_can_switch_enforce_on()
-    {
-        var w = Scenario();
-        var roster = Make(w, new MemoryRosterStore());
-        Assert.False(await roster.EnforceAsync(Account, w.Id("G")));
-        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("G")));
     }
 
     [Fact]
@@ -80,11 +69,10 @@ public class RosterEnforceTests
         Assert.Equal(4030, CloseCodes.Removed);
     }
 
-    // A store that can be told to fail: every read, or every read after the next write.
+    // A store that fails every read once Broken, or from the next write on (BreakAfterWrite).
     sealed class FlakyStore(IRosterStore inner) : IRosterStore
     {
-        public volatile bool Broken;
-        public volatile bool BreakAfterWrite;
+        public volatile bool Broken, BreakAfterWrite;
         public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => Broken ? throw new IOException("down") : inner.ReadAsync(name, ct);
         public async Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct)
         {
@@ -95,9 +83,7 @@ public class RosterEnforceTests
         public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => inner.DeleteAsync(name, etag, ct);
     }
 
-    // Enforce does not fail open: an account latched in enforce (in memory, once the relay has seen it or switched it) is Unavailable
-    // when the store cannot say (an error, a malformed body, a roster that has gone missing, a mode that went back), and the device
-    // is told to try again. An account never seen in enforce is Open through an outage, which is what it always was.
+    // A latched account (seen in enforce) is Unavailable when the store cannot say; one never seen in enforce stays Open.
     [Fact]
     public async Task A_store_that_cannot_be_read_never_opens_an_account_that_is_or_may_be_in_enforce()
     {
@@ -201,7 +187,7 @@ public class RosterEnforceTests
         return (relay, roster, w, relay.TokenFor(1, "octo"));
     }
 
-    // As an approved device does: the append goes over its socket, which is what re-tags the account's connected devices.
+    // The append goes over the socket, which is what re-tags connected devices.
     static Task AppendOverSocketAsync(Device from, string wrapper) => from.Relay.SendRawAsync(
         System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new { t = "roster-append", id = 1, entries = new[] { wrapper } })),
         System.Net.WebSockets.WebSocketMessageType.Text);
@@ -271,8 +257,7 @@ public class RosterEnforceTests
         Assert.Equal(CloseCodes.Removed, refused.Code);
     }
 
-    // One failed read after a roster change must not un-pend the devices that are connected, and a device that connects while the
-    // store is down is turned away to try again, not served.
+    // A failed read after a roster change must not un-pend connected devices; a device connecting then is turned away.
     [Fact]
     public async Task A_store_error_after_an_append_leaves_pending_devices_pending_and_turns_new_connections_away()
     {

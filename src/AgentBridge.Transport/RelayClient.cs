@@ -255,8 +255,8 @@ public sealed class RelayClient : IAsyncDisposable
         finally { rosterReads.TryRemove(id, out _); }
     }
 
-    // Asks the relay to move this account to enforce mode (docs/protocol/devices.md, "The relay's enforce mode"): honoured only
-    // for a person's device that is active in the account's roster, one way. True when the account is now in enforce.
+    // Asks the relay to move the account to enforce (devices.md, "The relay's enforce mode"): honoured only for an active person
+    // device, one way. True when it is now in enforce.
     public async Task<bool> EnforceRosterAsync(CancellationToken ct = default)
     {
         var id = Interlocked.Increment(ref nextPush);
