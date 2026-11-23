@@ -572,6 +572,62 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.True(PhoneApprovalEvidence.Read(profile, [peer.Id]).Passed);
     }
 
+    // HA retirement row 5 (approvals): only a device that holds a current person pin can answer. A device with no
+    // current pin (never pinned, pin revoked, pin expired) has its channel closed by the host; a service pin gets
+    // the role refusal. Nothing is typed in either case. The person case is the control: the same request is
+    // delivered, so the refusals are the pin and not a broken fixture.
+    [Theory]
+    [InlineData("person", "delivered")]
+    [InlineData("unpinned", "closed")]
+    [InlineData("revoked", "closed")]
+    [InlineData("expired", "closed")]
+    [InlineData("service", "refused")]
+    public async Task Only_a_current_person_pin_can_answer_a_question_and_any_other_device_types_nothing(string pin, string expected)
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        host.Hub.Handler = authorization.Handler(
+            new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"), answers: answers),
+            new AgentAuditLog(Path.Combine(fixture.Root, "answer-pins")));
+        var peer = await PeerAsync("pwa");
+        switch (pin)
+        {
+            case "person": Pin(peer, TrustedPeerStore.Person); break;
+            case "service": Pin(peer, TrustedPeerStore.Service); break;
+            case "revoked": Pin(peer, TrustedPeerStore.Person); store.Revoke(peer.Key.Public); break;
+            case "expired": Pin(peer, TrustedPeerStore.Person); time.Advance(TimeSpan.FromHours(2)); break;
+        }
+
+        JsonElement? response = null;
+        try
+        {
+            var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+            response = await channel.RequestAsync(Ops.SessionAnswer, new
+            {
+                id = SessionId, question = "q1", request = Guid.NewGuid().ToString(), text = "yes",
+            }, Patience);
+        }
+        catch (IOException) when (expected == "closed") { }
+
+        switch (expected)
+        {
+            case "delivered":
+                Assert.Equal("delivered", Result(response!.Value).GetProperty("outcome").GetString());
+                Assert.Equal(1, answers.Deliveries);
+                return;
+            case "refused":
+                Assert.False(response!.Value.GetProperty("ok").GetBoolean(), response.Value.GetRawText());
+                Assert.Equal("the peer role does not allow this operation", response.Value.GetProperty("error").GetString());
+                break;
+            default:
+                Assert.Null(response);
+                break;
+        }
+
+        Assert.Equal(0, answers.Deliveries);
+    }
+
     [Theory]
     [InlineData(TrustedPeerStore.Host)]
     [InlineData(TrustedPeerStore.Service)]

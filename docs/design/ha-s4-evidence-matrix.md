@@ -109,6 +109,27 @@ honestly and Claude's terminal-only gap. Three repetitions per client/stage, and
 30 real approvals across shipped clients in the row-5 ledger with distribution
 shown, each reaching its session within 10 seconds, away from the home network; retain tap-to-transcript timings. Unsupported authorized-person paths remain gaps, not permission bypasses.
 
+### Row 5: offline evidence with Home Assistant off (tests, not a live run)
+
+Everything here is a fixture test that runs with no Home Assistant: a fake injector or answer stub, a fixture host and an
+in-process relay. It shows the behavior is built and independent of HA. It is **not** the row's pass: the 30 real approvals
+across shipped clients, three repetitions per client, away from the home network, with tap-to-transcript timings, stay
+open (gap keys above). Part of #1396; fleet checklist row 5.
+
+| Pass criterion | Offline tests (host unless noted) | Status |
+|---|---|---|
+| A person approves and it reaches the session | `CopilotPermissionFlowTests.Approve_types_only_the_digit_of_the_plain_Yes_and_is_delivered_when_the_request_is_recorded_approved`; `AgentAnswerFlowTests.A_Codex_approval_types_y_or_n_and_is_unconfirmed_since_Codex_records_no_answer_to_it`; `CliApprovalTests.Cli_approve_sends_the_current_single_choice_bound_to_session_question_and_request`; PWA `answer.spec.mjs` (a Copilot permission prompt is approved once on a tap) | Covered offline; Codex is unconfirmed by design |
+| A person denies, and a cancel is never an approval | `CopilotPermissionFlowTests.Deny_types_a_lone_Escape_and_is_delivered_when_the_request_is_recorded_denied_with_no_message`; `A_cancel_and_stopped_turn_is_never_taken_for_an_approval` | Partial: no test asserts the guarded action itself never ran; no Claude deny test found |
+| A stale approval is refused and nothing is typed | `AnswerFlowTests.An_answer_to_a_question_no_longer_asked_is_stale_and_types_nothing`; `CopilotPermissionFlowTests.A_request_answered_at_the_machine_just_before_typing_is_stale_and_nothing_is_typed`; `CliApprovalTests.Cli_approve_refuses_stale_at_machine_truncated_and_escaped_prompts` | Covered offline |
+| A device with no current person pin is refused and nothing is typed | `RemoteAuthorizationTests.Only_a_current_person_pin_can_answer_a_question_and_any_other_device_types_nothing` (new: person delivers; never pinned, revoked and expired close the channel; a service pin gets the role refusal); `Revocation_or_expiry_ends_feeds_and_pending_calls_without_disturbing_other_pins` | Covered offline (gap closed) |
+| An agent can never approve or answer | `ScriptCredentialScopeTests.A_script_is_refused_operations_outside_read_and_reply_even_when_classified_as_the_app`; `CliApprovalTests.Cli_approve_from_an_agent_child_sends_nothing` | Host refusal covered; the MCP agent has no answer tool (absent by design, see the table) |
+| Answered once, with a matching audit | `AnswerFlowTests.A_repeated_request_returns_the_first_outcome_and_never_types_again`; `ApprovalGateAuditTests.A_confirmed_multifield_answer_records_intent_before_typing_and_one_credit_despite_duplicates_or_stale_answers` | Covered offline |
+| Row 17: a multi-field question is answered with named fields | `Protocol.Tests` `AnswerTests.Required_fields_must_be_answered_and_unknown_fields_are_refused`; PWA `unit/answers.test.mjs`; Windows `CardTests.A_form_is_checked_before_it_goes_and_the_field_at_fault_is_marked`; `AnswerFlowTests.A_nine_field_card_with_long_titles_is_answered_field_by_field` | Mostly covered; no single test drives one form with all five field types end to end (open) |
+| The path never needs Home Assistant | `HomeAssistantIndependenceTests` (Quality tests, new): the projects the answer path is built from (`Protocol`, `Host.Delivery`, `Host.Core`) never reach the HA project, and the ten source files that answer and approve never name an HA type | Covered structurally. The host project as a whole still links the HA connector, so this is independence of the path, not of the assembly |
+
+Mutation checks for the two new tests (not in the change): letting a service pin answer turns the pin test red; naming an HA
+type in `SessionService.cs` turns the independence test red.
+
 ## Row 8: owner-only updates
 
 | Client | Built evidence | Live evidence | Gap keys |
