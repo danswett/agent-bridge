@@ -46,8 +46,10 @@ public static class FleetActionEnvelope
 
     // Verifies signature, canonical form, account, audience, action and a live short expiry. Replay is the
     // caller's FleetActionReplayCache step; it must run only after this succeeds.
+    // expectedSource is the device whose key is trusted: the body's sourceDevice must be that device, so a valid signature
+    // from one peer's key can never be presented as another device's action.
     public static FleetActionBody Verify(FleetActionSigned signed, ReadOnlySpan<byte> trustedSourceHostSign,
-        string expectedAccount, string expectedAudience, DateTimeOffset now)
+        string expectedAccount, string expectedSource, string expectedAudience, DateTimeOffset now)
     {
         if (signed is null || !P256.IsPoint(trustedSourceHostSign)
             || signed.Body is not { Length: > 0 and <= MaxBody * 4 / 3 + 4 }
@@ -60,7 +62,7 @@ public static class FleetActionEnvelope
         var body = Read(raw);
         var remaining = body.ExpiresAt - now;
         if (!raw.AsSpan().SequenceEqual(Write(body)) || !Shape(body) || body.Action != LaunchAction
-            || body.Account != expectedAccount || body.Audience != expectedAudience
+            || body.Account != expectedAccount || body.SourceDevice != expectedSource || body.Audience != expectedAudience
             || remaining <= TimeSpan.Zero || remaining > TimeSpan.FromSeconds(MaxLifetimeSeconds)) { throw Bad(); }
         return body;
     }
@@ -120,22 +122,43 @@ public static class FleetActionEnvelope
     }
 }
 
-// Receiver replay cache keyed by (sourceDevice, nonce), kept until expiry plus skew. Bounded: a full cache
-// refuses new entries (fail closed) instead of evicting a live one. In memory; a restart is covered by the
-// short envelope expiry plus the receiver's own request-id duplicate store (G5).
-public sealed class FleetActionReplayCache(int capacity, TimeSpan skew)
+// Receiver replay cache keyed by (sourceDevice, nonce), kept until expiry plus skew. Bounded in count (1..MaxCapacity; a full
+// cache refuses new entries instead of evicting a live one) and in time (an expiry-ordered queue drops entries as they lapse; an
+// expiry already past, or beyond the envelope lifetime, is refused here too). In memory, so a restart is covered by a WARM-UP:
+// nothing is accepted until every envelope sealed before the start has expired (lifetime plus skew), which also closes replay
+// of a pre-restart envelope without a disk store. A restart therefore pauses remote launches for about 2.5 minutes.
+public sealed class FleetActionReplayCache
 {
+    public const int MaxCapacity = 65536;
+    static readonly TimeSpan MaxSkew = TimeSpan.FromMinutes(5);
     readonly Dictionary<(string, string), DateTimeOffset> seen = [];
+    readonly PriorityQueue<(string, string), DateTimeOffset> byExpiry = new();
     readonly object gate = new();
+    readonly int capacity;
+    readonly TimeSpan skew;
+    readonly DateTimeOffset warmUntil;
+
+    public FleetActionReplayCache(int capacity, TimeSpan skew, DateTimeOffset startedAt)
+    {
+        if (capacity is < 1 or > MaxCapacity) { throw new ArgumentOutOfRangeException(nameof(capacity)); }
+        if (skew < TimeSpan.Zero || skew > MaxSkew) { throw new ArgumentOutOfRangeException(nameof(skew)); }
+        this.capacity = capacity;
+        this.skew = skew;
+        warmUntil = startedAt + TimeSpan.FromSeconds(FleetActionEnvelope.MaxLifetimeSeconds) + skew;
+    }
 
     public bool TryAdd(FleetActionBody body, DateTimeOffset now)
     {
         lock (gate)
         {
-            foreach (var key in seen.Where(e => e.Value <= now).Select(e => e.Key).ToArray()) { seen.Remove(key); }
+            if (now < warmUntil || body.ExpiresAt <= now || body.ExpiresAt - now > TimeSpan.FromSeconds(FleetActionEnvelope.MaxLifetimeSeconds))
+            { return false; }
+            while (byExpiry.TryPeek(out var key, out var until) && until <= now) { byExpiry.Dequeue(); seen.Remove(key); }
             var id = (body.SourceDevice, body.Nonce);
             if (seen.ContainsKey(id) || seen.Count >= capacity) { return false; }
-            seen[id] = body.ExpiresAt + skew;
+            var keep = body.ExpiresAt + skew;
+            seen[id] = keep;
+            byExpiry.Enqueue(id, keep);
             return true;
         }
     }
