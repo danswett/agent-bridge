@@ -159,13 +159,19 @@ credentials) and exits 4 without opening a store, and the host refuses the same 
 even with a valid confirmation. The command line may still read `scripts.list`. This is what the Nov 19 rule (no terminal
 step for credentials) requires; a mint no longer has a PowerShell or terminal path anywhere.
 
-* **Bound confirmation.** An app press must carry the host's confirmation for exactly that action. The app
-  asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. The
-  confirmation is a SHA-256 over this machine, the operation, the script name and the credential state for
-  that name (the live credential ids, their `launch:fleet` flag and expiry). Any mint, revoke, rotation,
-  tick or expiry changes the state, so a used, stale or replayed confirmation, or one made for another
-  action or another script, is refused and changes nothing. This is the grants G8 pattern; the host does
-  not trust the app's say-so alone (the same-user imitation residual stays OPEN, Q7).
+* **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
+  asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
+  name the host keeps a **generation counter**, moved on by every press attempt (right or wrong) and by every mint,
+  revoke, rotation, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
+  generation, the operation and the connection it was issued to. The value is derived from a random per-process
+  salt and a fresh nonce, lives **two minutes**, and is checked and used up under the same lock as the audit
+  attempt and the change it allows. So a used, expired, replayed or guessed value, one presented on another
+  connection, one made for another action or script, and one whose script has since changed (even if it has
+  since come back, as after a mint and a revoke) is refused and changes nothing; two presses at once with one
+  confirmation make one credential, and two confirmations asked at once never make two. A wrong try also uses up
+  what the script had outstanding, so the person is asked again. At most 64 confirmations are held (the oldest
+  goes first), and a restart forgets them all. This is the grants G8 pattern; the host does not trust the app's
+  say-so alone (the same-user imitation residual stays OPEN, Q7).
 * **The list.** `scripts.list` returns, per script name, the scope, the soonest-lived expiry, how many
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
   a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps
