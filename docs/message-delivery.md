@@ -266,6 +266,31 @@ uses `Submit` explicitly. Compatibility `Enter=false` preserves Queue; removing 
 | 3a | Standalone person-issued priority capability, DTO/wire decision core, principal/receiver quota, journal replay and MAC-chain; no scheduler wiring | <=400 | after 2b2b |
 | 3b | Host-only Offer/Query capacity-before-consumption, final-slot priority checks and truthful demotion; Fleet flags #651 separate | <=400 | after 3a lands on main |
 | 4 | Topic, TTL, summary line, confirmation by id, gap detector, bounded retry; over 250: 4b takes confirmation and retry | ~200 | after 3 |
+## Busy sends to Claude: let Claude Code queue (Part of #2568; proposed, owner decision pending)
+Status: DRAFT, docs only, no code. Goal: stop refusing a working Claude on the default transport so the HA fallback can retire. Phase 1 lane delivery stays Copilot-only and is untouched; this is the legacy Lite/`AgentAsync` path that Claude uses today.
+**Today.** `LiteDeliver` refuses a working Claude: `Idle(s)` is `Status==Idle && Question is null` (LiteDeliver.cs:207) and the `ReplyRequest` sets `RequireIdle = true` (:126); `AgentAsync` rechecks it (ReplyService.cs:715, :749) and returns Busy. Lite also checks the composer (`ComposerEmptyAsync`, :109, `ComposerNotEmpty`) and rate limit. HA (`HaReplies.cs:26`) sets no `RequireIdle`, so `AgentAsync` types the line and Enter into a working Claude, which queues it natively. `ReplyMode {Steer,Queue}` is read by nothing; `QueueSubmit` (ctrl+q) is Copilot-only, Claude needs plain Enter.
+**Evidence.** [host-replies.md](host-replies.md): a Claude prompt typed while it works is a `queue-operation` `enqueue` with that content (2.1.312, seen live), confirming by identity. Real transcripts then show `dequeue`/`remove` (`absorbed_mid_turn`) and an attachment `queued_command` (`commandMode` prompt, `origin` human, `delivery_id`).
+### Owner change (the rule, for approval)
+For a Claude target on the default transport, a **busy** session (`Working`, no pending `Question`) is no longer refused: Lite sends with `RequireIdle=false`, the relay types the message once, Claude Code queues it. Copilot, Codex, the urgent lane and the lane journal are unchanged. Flag `claudeBusyQueue`, default off, read afresh, fail closed, ANDed with `liteKill.On`. Guards kept: rate limit, pending `Question` (refuse), unknown status (refuse), `StillCurrent` fence before the first key, `KeysGoing` after.
+### Risks and decisions
+1. **Duplicate or ambiguous handoff.** Claude is not on the lane, so there is no `handoff` journal. A timeout or unknown result after any key went is never resent by the relay or `reply-session.ps1` and is reported `Unconfirmed`. Retry is allowed only for a refusal before the first key.
+2. **composerNotEmpty.** A Claude suggested prompt looks like typed text, so keeping the check can refuse good sends; skipping it (HA behaviour) can type over a person's draft. **Owner decides**: (a) keep the check and recognise a suggestion, fail closed when unsure (recommended); (b) skip it for a busy Claude only.
+3. **Screen Expect.** The screen redraws while Claude works, so a screen match is not evidence while busy; confirmation is the transcript only.
+4. **Ordering.** Claude Code queues first in, first out. One send per node at a time; the next waits for the previous `enqueue` row or its timeout. No urgent overtaking (agent urgent stays refused).
+5. **Prompt appears between check and keys.** The fence is taken before the first key; a prompt or question seen then aborts with no key typed.
+6. **Queue cleared after enqueue** (Esc, cancel): `enqueue` then `remove` without a `queued_command` is not Delivered.
+7. **Provenance and arming.** The text keeps the framed sender prefix and arrives as `origin` human. The flag is host config only; no message can arm it.
+### What Delivered and Unconfirmed mean for a queued message
+- **Accepted:** the `queue-operation` `enqueue` row with this send's identity is seen.
+- **Delivered:** a later `queued_command` attachment with the same `delivery_id` and `origin` human.
+- **Unconfirmed:** keys went but no `enqueue` row within the timeout, or `enqueue` then `remove` without consumption. Never retried, journaled by status warning, the sender is told.
+- **Not sent:** refused before any key (question, fence, rate limit, composer). Safe to resend; the one HA fallback applies only after a clean busy refusal while the flag is off.
+### Tests (RED first, extend `AgentReplyFlowTests`)
+Busy Claude types once and reports Accepted; busy Copilot still refuses; pending question refuses with no key; draft in composer refuses with no key; unknown result stays Unconfirmed with no second typing; enqueue then remove is not Delivered; flag off restores the Busy refusal.
+### Rollback
+Turn `claudeBusyQueue` off: `RequireIdle=true` and the Busy refusal return and senders fall back as today. No data migration.
+### Slices (each at most 250 changed lines, sensitive, after owner approval)
+A this doc. B tests RED plus Lite rule behind the flag. C transcript mapping to Accepted/Delivered/Unconfirmed. D sender maps the result; retire the HA fallback after a disposable-session live test. Coordinate with the Phase 1 builder (S2b, S3, S4, S6): no edits to their branches or the slice table above.
 ## Live test (SRE Lead, disposable sessions; builder's harness): 1, 3, 4, 5 after slice 2; 2 after 4
 1. Urgent, 5 queued and urgent within 2 s: 2 steered entries and 5 separate `queued` turns, in order.
 2. ctrl+c, esc esc mid-queue, then a host kill: nothing silently lost or duplicated; replay per rule 5.
