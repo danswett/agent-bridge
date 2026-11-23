@@ -86,7 +86,7 @@ Get-NetFirewallRule -Direction Inbound -Enabled True | Where-Object { ($_ | Get-
 **Each event is ONE local script that the elevated session starts itself.** Nobody can message the session while the relay is down, so nothing about an event is
 done by hand mid-drop: the owner approves the event beforehand, then presses **Restart host** once SRE tells them the script has started (the script waits for it for up to 8 minutes; a restart before the block is in place is caught by the 3c proof and voids the event). In order the script: reads
 this event's relay addresses (step 0), arms the dead-man, adds the block, **waits for the host process id to change** (the owner's restart) with a timeout, does the
-3c read, holds, restores, disarms, and does the 4b read. A **timeout is 8 minutes**, the hold is 60 seconds, so with the proofs an event ends well inside the
+3c read, holds, restores, disarms, and does the 4b read; **the 3c and 4b reads also check the relay hostnames from the plan, resolved again at that moment** (`Resolve-DnsName`), so a new relay IP is not missed. A **timeout is 8 minutes**, the hold is 60 seconds, so with the proofs an event ends well inside the
 20-minute dead-man. Any failure restores and disarms (in `finally`), records why, and exits non-zero; the event is then void.
 
 **Evidence stays local until the relay is back.** The script writes its log into the evidence folder **on the drop host** (`relay-drop-<event id>.log`), because
@@ -96,7 +96,7 @@ cannot outlive an event, and the missing 4b line in the log marks the event void
 
 **Fallback if the session does not survive the host restart.** The answer above is read from the code and is not yet confirmed. If the dry run shows otherwise (the session dies with the host),
 the event is run by a **scheduled task the session registers before the block** instead: `Register-ScheduledTask -TaskName 'SG-relay-drop-event' -Action
-(New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File <script path> -EventId <event id> -HostExe <host exe path> -HostPid <host pid> -Evidence <evidence folder>')
+(New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -File <script path> -EventId <event id> -HostExe <host exe path> -HostPid <host pid> -Evidence <evidence folder> -RelayHosts <relay hostnames>')
 -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10)) -User 'SYSTEM' -RunLevel Highest`, started by `Start-ScheduledTask`, and removed with
 `Unregister-ScheduledTask -TaskName 'SG-relay-drop-event' -Confirm:$false -ErrorAction SilentlyContinue` afterwards. It runs the same script and nothing else.
 
@@ -107,11 +107,14 @@ param(
   [Parameter(Mandatory)][string]$HostExe,      # AgentBridge host exe path from the frozen plan
   [Parameter(Mandatory)][int]$HostPid,         # host process id before the owner's restart
   [Parameter(Mandatory)][string]$Evidence,     # evidence folder (off the repository)
+  [Parameter(Mandatory)][string[]]$RelayHosts, # relay hostnames from the frozen plan (resolved again at each proof read)
   [int]$RestartTimeoutMinutes = 8, [int]$HoldSeconds = 60)
 $ErrorActionPreference = 'Stop'
 $ok = $false
 function Note($m) { Add-Content -Path (Join-Path $Evidence "relay-drop-$EventId.log") -Value ("{0:o} {1}" -f (Get-Date), $m) }
 function Relays($p) { @(Get-NetTCPConnection -OwningProcess $p -RemotePort 443 -State Established -ErrorAction SilentlyContinue | Select-Object -ExpandProperty RemoteAddress -Unique) }
+# The relay set at the moment of a read: this event's addresses plus the hostnames resolved NOW, so a new relay IP is not missed.
+function RelayNow { @($addr) + @($RelayHosts | ForEach-Object { Resolve-DnsName -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress) | Select-Object -Unique }
 function Defaults { Get-NetFirewallProfile | Select-Object Name, DefaultInboundAction, DefaultOutboundAction | ConvertTo-Json -Compress }
 $addr = Relays $HostPid                                  # 0. this event's relay addresses (a read)
 if (-not $addr) { throw 'no established relay connection to drop' }
@@ -139,9 +142,9 @@ try {
   Note "3b new host pid $newPid"
   # 3c. PROOF the drop happened: no Established connection from the host to a relay address, now and again after the hold.
   Start-Sleep -Seconds 15
-  if (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) { throw 'drop did not happen: an Established relay connection exists' }
+  if (@(Relays $newPid | Where-Object { $_ -in (RelayNow) }).Count) { throw 'drop did not happen: an Established relay connection exists' }
   Note '3c proof: no Established relay connection'; Start-Sleep -Seconds $HoldSeconds
-  if (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) { throw 'drop did not hold' }
+  if (@(Relays $newPid | Where-Object { $_ -in (RelayNow) }).Count) { throw 'drop did not hold' }
   Note '3c proof held'
   $ok = $true
 } catch { Note "FAILED: $($_.Exception.Message)" }
@@ -155,8 +158,8 @@ finally {
 if ($ok) {
   # 4b. PROOF of the reconnect: the host sets up a new connection by itself (it reconnects with backoff).
   $deadline = (Get-Date).AddMinutes(3)
-  while (-not (@(Relays $newPid | Where-Object { $_ -in $addr }).Count) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
-  $back = [bool](@(Relays $newPid | Where-Object { $_ -in $addr }).Count)
+  while (-not (@(Relays $newPid | Where-Object { $_ -in (RelayNow) }).Count) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+  $back = [bool](@(Relays $newPid | Where-Object { $_ -in (RelayNow) }).Count)
   Note "4b reconnect proof: $back"
   if (-not $back) { $ok = $false }
 }
