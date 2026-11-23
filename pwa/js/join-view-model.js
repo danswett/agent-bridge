@@ -8,6 +8,7 @@ export class JoinViewModel {
   fingerprint = '';
   statusText = '';
   #joiner;
+  #offering = false;
 
   constructor(joiner) { this.#joiner = joiner; }
 
@@ -17,13 +18,16 @@ export class JoinViewModel {
     const commit = this.#joiner.commit();
     if (commit === null) { this.state = 'locked'; this.statusText = EnrollmentTexts.LOCKED; return null; }
     this.state = 'waiting-for-approver';
+    this.code1 = ''; this.fingerprint = ''; this.statusText = ''; // a new attempt after a lock starts clean
     return commit;
   }
 
   // The approver's offer: the reveal to send back, and code 1 to show. Null when the offer cannot be taken.
-  onOffer(nonceA) {
-    if (this.state !== 'waiting-for-approver' || this.code1 !== '') return null;
-    const reveal = this.#joiner.onOffer(nonceA);
+  async onOffer(nonceA) {
+    if (this.state !== 'waiting-for-approver' || this.code1 !== '' || this.#offering) return null;
+    this.#offering = true;
+    let reveal;
+    try { reveal = await this.#joiner.onOffer(nonceA); } finally { this.#offering = false; }
     if (reveal === null) return null;
     this.code1 = this.#joiner.code1Shown ?? '';
     return reveal;

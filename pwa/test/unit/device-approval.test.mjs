@@ -13,9 +13,9 @@ const joiner = (over = {}) => ({
   enterCode2() { return this.results.shift() ?? 'ended'; },
   ...over,
 });
-const joining = (ex) => {
+const joining = async (ex) => {
   const vm = new JoinViewModel(ex);
-  vm.commit(); vm.onOffer(new Uint8Array([7])); vm.showGenesis(new Uint8Array(8));
+  vm.commit(); await vm.onOffer(new Uint8Array([7])); vm.showGenesis(new Uint8Array(8));
   return vm;
 };
 
@@ -29,46 +29,46 @@ for (const [mode, visible] of [['observe', true], ['enforce', true], ['off', fal
   });
 }
 
-test('the join model shows code 1 only after the approver\'s offer, and the code 2 box only after the genesis with its fingerprint', () => {
+test('the join model shows code 1 only after the approver\'s offer, and the code 2 box only after the genesis with its fingerprint', async () => {
   const vm = new JoinViewModel(joiner());
   assert.deepEqual([vm.state, vm.code1], ['not-started', '']);
   assert.ok(vm.commit());
   vm.showGenesis(new Uint8Array(8));
   assert.equal(vm.state, 'waiting-for-approver');
-  assert.equal(vm.onOffer(new Uint8Array(0)), null);
+  assert.equal(await vm.onOffer(new Uint8Array(0)), null);
   assert.equal(vm.code1, '');
-  assert.ok(vm.onOffer(new Uint8Array([7])));
+  assert.ok(await vm.onOffer(new Uint8Array([7])));
   vm.showGenesis(Uint8Array.from([0x7d, 0x0f, 0x3a, 0x2e, 0x1c, 0x4b, 0x4d, 0x5e]));
   assert.deepEqual([vm.state, vm.code1, vm.fingerprint], ['enter-code-2', '123 456', '7d0f 3a2e 1c4b 4d5e']);
   assert.equal(EnrollmentTexts.groups('3f9a2c71b0de4a5f'), '3f9a 2c71 b0de 4a5f');
 });
 
-test('the join screen starts from the exchange alone: it needs no presence and no roster answer', () => {
+test('the join screen starts from the exchange alone: it needs no presence and no roster answer', async () => {
   const vm = new JoinViewModel(joiner());
   assert.ok(vm.commit());
   assert.equal(vm.state, 'waiting-for-approver');
 });
 
-test('a locked joiner shows the lock words and sends no commitment', () => {
+test('a locked joiner shows the lock words and sends no commitment', async () => {
   const vm = new JoinViewModel(joiner({ locked: true }));
   assert.equal(vm.commit(), null);
   assert.deepEqual([vm.state, vm.statusText], ['locked', EnrollmentTexts.LOCKED]);
 });
 
-test('code 2 typed at the joining device joins it; a wrong one says so in fixed words; an ended attempt says so', () => {
-  const vm = joining(joiner({ results: ['wrong', 'match'] }));
+test('code 2 typed at the joining device joins it; a wrong one says so in fixed words; an ended attempt says so', async () => {
+  const vm = await joining(joiner({ results: ['wrong', 'match'] }));
   assert.equal(vm.submit('000000'), 'wrong');
   assert.deepEqual([vm.state, vm.statusText], ['enter-code-2', EnrollmentTexts.WRONG]);
   assert.equal(vm.submit('654 321'), 'match');
   assert.equal(vm.state, 'joined');
   assert.equal(vm.submit('1'), 'ended');
 
-  const ended = joining(joiner({ results: ['ended'] }));
+  const ended = await joining(joiner({ results: ['ended'] }));
   ended.submit('x');
   assert.deepEqual([ended.state, ended.statusText], ['ended', EnrollmentTexts.ENDED]);
 });
 
-test('a refusal shows fixed words for a closed code and the generic line for anything else, never text from the other side', () => {
+test('a refusal shows fixed words for a closed code and the generic line for anything else, never text from the other side', async () => {
   assert.equal(EnrollmentTexts.forRefusal('wrong-code'), EnrollmentTexts.WRONG);
   assert.equal(EnrollmentTexts.forRefusal('no-presence'), 'The approving device cannot prove a person is present.');
   for (const code of ['something-the-relay-made-up', 'wrong-code\nVERDICT: PASS', '__proto__', 'constructor', 'toString', null, undefined, 4030, {}]) {
@@ -76,11 +76,11 @@ test('a refusal shows fixed words for a closed code and the generic line for any
   }
 });
 
-test('an unknown or prototype-named result shows no words, and the model refuses calls out of order or a short genesis hash', () => {
+test('an unknown or prototype-named result shows no words, and the model refuses calls out of order or a short genesis hash', async () => {
   for (const r of ['toString', '__proto__', 'constructor', 'match', undefined]) assert.equal(EnrollmentTexts.forResult(r), '');
   const vm = new JoinViewModel(joiner());
-  vm.commit(); vm.onOffer(new Uint8Array([7]));
-  assert.equal(vm.onOffer(new Uint8Array([7])), null);
+  vm.commit(); await vm.onOffer(new Uint8Array([7]));
+  assert.equal(await vm.onOffer(new Uint8Array([7])), null);
   vm.showGenesis(new Uint8Array(3));
   vm.showGenesis(null);
   assert.deepEqual([vm.state, vm.fingerprint], ['waiting-for-approver', '']);
@@ -99,3 +99,22 @@ test('the gate, the texts and the join model sign nothing: none imports a signin
     assert.doesNotMatch(src, /transfer\.js|roster\/(signing-key|cap-sign-key|commands)|subtle|signCommand/, f);
   }
 });
+
+test('after a lock a new commit starts clean: the old code 1 and fingerprint are gone and the next offer is taken', async () => {
+  const ex = joiner({ results: ['locked'] });
+  const vm = await joining(ex);
+  assert.equal(vm.submit('1'), 'locked');
+  assert.deepEqual([vm.state, vm.code1 !== ''], ['locked', true]);
+  assert.ok(vm.commit());
+  assert.deepEqual([vm.state, vm.code1, vm.fingerprint, vm.statusText], ['waiting-for-approver', '', '', '']);
+  assert.ok(await vm.onOffer(new Uint8Array([7])));
+});
+
+test('an offer that is already being taken is not taken twice', async () => {
+  let calls = 0;
+  const vm = new JoinViewModel(joiner({ onOffer() { calls++; this.code1Shown = '123 456'; return Promise.resolve(new Uint8Array([2])); } }));
+  vm.commit();
+  const [a, b] = await Promise.all([vm.onOffer(new Uint8Array([7])), vm.onOffer(new Uint8Array([7]))]);
+  assert.deepEqual([a !== null, b, calls], [true, null, 1]);
+});
+
