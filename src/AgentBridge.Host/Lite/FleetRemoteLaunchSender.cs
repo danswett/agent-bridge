@@ -21,8 +21,8 @@ public interface IFleetLaunchLink
 // G9c1 (docs/design/fleet-grants.md, "Remote targets"): the source host of a remote `fleet launch --target`. It judges the
 // local agent credential afresh (the AP1 check the receiver relies on), seals a FleetActionEnvelope with the host key, sends once,
 // and reports a typed receipt. It never retries, never queues for an offline peer and never falls back to HA.
-public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredentials credentials,
-    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, TimeProvider? clock = null, ILiteMode? mode = null, Func<bool>? settingsOn = null,
+public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredentials credentials, ILiteMode mode,
+    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, TimeProvider? clock = null,
     AgentAuditLog? audit = null, TimeSpan? watchEvery = null)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
@@ -32,9 +32,9 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
     public bool IsRemote(string? target) =>
         target is not null && !(link.Self.Length >= 16 && (target == link.Self || target == "agent_bridge_" + link.Self[..16]));
 
-    // The lite kill (ILiteMode.On) and the settings switch (launch/agents enabled, not read-only) are the remote-launch kill switches on the source host,
-    // checked before AND after signing, as AgentLiteSender does for messaging. Unset means no extra gate (tests); Program sets both.
-    bool On() => (mode?.On ?? true) && (settingsOn?.Invoke() ?? true);
+    // ILiteMode.On is the remote-launch kill switch on the source host: it reads the agentMessaging.remote setting and any recorded lite kill, the same check
+    // AgentLiteSender makes for messaging, and it is made before AND after signing and while waiting for the reply.
+    bool On() => mode.On;
 
     public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, CancellationToken ct)
     {
@@ -78,7 +78,7 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
         // From here a request may have reached the peer: any failure, a cancel, or a kill while waiting is unconfirmed, never a resend with a fresh nonce.
         using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
         using var watching = new CancellationTokenSource();
-        var watcher = mode is null && settingsOn is null ? Task.CompletedTask : Task.Run(async () =>
+        var watcher = Task.Run(async () =>
         {
             try
             {

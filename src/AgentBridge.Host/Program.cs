@@ -1000,10 +1000,9 @@ async Task<int> ServeAsync(HostHandover handover)
     AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null;
     if (agentCredentials is { } grantCredentials)
     {
-        // Gated like AgentLiteSender: the lite kill and the settings switch before and after signing, and the source host audits its own refusals.
-        remoteLaunch = new AgentBridge.Host.Lite.FleetRemoteLaunchSender(liteLink, grantCredentials,
-            AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill), mode: liteKill,
-            settingsOn: () => FleetGrantLaunch.LaunchSwitchOn(identity.Folder), audit: agentAudit);
+        // Gated like AgentLiteSender: ILiteMode.On (the agentMessaging.remote setting and any lite kill) before and after signing, and the source host audits its own refusals.
+        remoteLaunch = new AgentBridge.Host.Lite.FleetRemoteLaunchSender(liteLink, grantCredentials, liteKill,
+            AgentBridge.Host.Lite.AgentLiteSender.HostSigner(identity.Folder, liteKill), audit: agentAudit);
         var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
             : AgentBridge.Host.Core.Launch.LaunchRequestStore.Open(identity.Folder, TimeProvider.System);
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,

@@ -513,12 +513,11 @@ host peer of the same account, over the relay channel, and never on this machine
 accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
 documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse.
 
-Sender gates (G9c2), as `AgentLiteSender` does for messaging. The sending host checks the lite kill and the settings switch (the host settings with launch, agents or
-inbound launch on and not read-only: the same conditions the receiving gate refuses as `kill-switch`) before AND after signing, and rechecks the agent credential after the
-signer returns, so a kill, a settings change or a lapsed caller signs and sends nothing. A cancel, or a kill while waiting for the reply, after the send is `unconfirmed`
-(exit 7), never a refusal and never a resend. The source host audits its own refusals before anything is sent (the row names the request, grant, caller and reason, and
-the refusal is `audit-unavailable` if it cannot be written). Only the fixed receipt codes of the CLI refusal table are believed: a reply naming another reason is
-`unconfirmed`.
+Sender gates (G9c2), copied from `AgentLiteSender`, not a new check. The sending host checks `ILiteMode.On` (it reads the `agentMessaging.remote` setting and any
+recorded lite kill, the same switch lite messaging uses) before AND after signing, and rechecks the agent credential after the signer returns, so a kill, the setting
+turned off or a lapsed caller signs and sends nothing. A kill while waiting for the reply, or a cancel, after the send is `unconfirmed` (exit 7), never a refusal and
+never a resend. The source host audits its own refusals before anything is sent (the row names the request, grant, caller and reason, and the refusal is
+`audit-unavailable` if it cannot be written). Only the fixed receipt codes of the CLI refusal table are believed: a reply naming another reason is `unconfirmed`.
 
 Receiver order:
 

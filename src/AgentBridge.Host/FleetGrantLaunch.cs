@@ -174,13 +174,6 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         return new(context.Input.Request, row.Grant, row.Generation, new(outcome) { Session = row.Target?.Session },
             row.Permissions, row.Target is not null && row.Permissions is "ask" or "allowAll", record.Usage, row.Caps, row.Reason);
     }
-    // The settings kill switch for a remote-launch sender: false when the host's settings are unreadable, have launch, agents or inbound launch off, or are
-    // read-only (the same conditions the receiving gate refuses as kill-switch).
-    internal static bool LaunchSwitchOn(string folder)
-    {
-        var (settings, problem) = HostSettings.Load(folder);
-        return problem is null && !settings.SectionProblems.Any() && !settings.ReadOnly && settings.Launch.Enabled && settings.Agents.Enabled && settings.Agents.LaunchEnabled;
-    }
     internal static FleetLaunchReceipt Receipt(FleetLaunchContext? context, LaunchResult result, FleetLaunchInput? input, string? reason) =>
         new((input ?? context?.Input)?.Request ?? Guid.Empty, (input ?? context?.Input)?.Grant ?? Guid.Empty, context?.Grant?.Generation ?? 0,
             result, null, false, null, context?.Caps, reason);

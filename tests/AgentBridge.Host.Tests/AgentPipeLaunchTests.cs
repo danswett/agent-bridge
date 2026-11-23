@@ -973,7 +973,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     (FleetRemoteLaunchSender Sender, Link Link, Pipe Pipe, GrantDocument Grant, AgentCredential Caller) OpenSender(P256KeyPair key,
-        Func<JsonElement, Task<JsonElement>>? serve = null, bool present = true, ILiteMode? mode = null, Func<bool>? settingsOn = null, bool audited = false,
+        Func<JsonElement, Task<JsonElement>>? serve = null, bool present = true, ILiteMode? mode = null, bool audited = false,
         Action<AgentCredentials, AgentCredential>? duringSign = null, Func<JsonElement, CancellationToken, Task<JsonElement>>? serveCt = null)
     {
         var statik = RandomNumberGenerator.GetBytes(32);
@@ -994,8 +994,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var link = new Link(self, present ? [new(new('a', 32), "Target", "host", now)] : [], serve ?? (async data =>
             JsonSerializer.SerializeToElement(await receiver.ReceiveAsync(channel, data), ProtocolJson.Options)));
         link.ServeCt = serveCt;
-        var sender = new FleetRemoteLaunchSender(link, pipe.Credentials, () => { duringSign?.Invoke(pipe.Credentials, caller); return (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]); },
-            mode: mode, settingsOn: settingsOn, audit: audited ? new AgentAuditLog(folder) { DeviceKey = key } : null, watchEvery: TimeSpan.FromMilliseconds(20));
+        var sender = new FleetRemoteLaunchSender(link, pipe.Credentials, mode ?? new Mode(true), () => { duringSign?.Invoke(pipe.Credentials, caller); return (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]); },
+            audit: audited ? new AgentAuditLog(folder) { DeviceKey = key } : null, watchEvery: TimeSpan.FromMilliseconds(20));
         return (sender, link, pipe, grant, caller);
     }
     FleetLaunchInput SenderInput(GrantDocument grant, string? target = null) => new(1, Guid.Parse(request), grant.Id, "SG Builder 266", "App",
@@ -1029,7 +1029,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             return Task.FromResult(JsonSerializer.SerializeToElement(
                 FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "scope"), ProtocolJson.Options));
         });
-        var sender = new FleetRemoteLaunchSender(link, credentials, () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]));
+        var sender = new FleetRemoteLaunchSender(link, credentials, new Mode(true), () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]));
         var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: true, credentials: credentials, remoteLaunch: sender);
         var body = JsonSerializer.SerializeToElement(new FleetLaunchInput(1, Guid.Parse(request), Guid.NewGuid(), "SG Builder 266", "App", "claude",
             Target: remote ? new string('b', 32) : null, Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello"), ProtocolJson.Options);
@@ -1084,13 +1084,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     // G9c2 (R10 / Quality R4zzB559): the sender is gated like AgentLiteSender: the lite kill and the settings switch are checked before AND after signing,
     // the credential is rechecked after the signer, a cancel after the send is unconfirmed, and the source host audits its own refusals.
-    [Theory]
-    [InlineData("kill")]
-    [InlineData("settings")]
-    public async Task A_sender_whose_lite_kill_or_settings_switch_is_off_signs_and_sends_nothing_and_audits_the_refusal(string off)
+    [Fact]
+    public async Task A_sender_whose_lite_mode_is_off_signs_and_sends_nothing_and_audits_the_refusal()
     {
         using var key = P256KeyPair.Generate();
-        var s = OpenSender(key, mode: new Mode(off != "kill"), settingsOn: () => off != "settings", audited: true);
+        var s = OpenSender(key, mode: new Mode(false), audited: true);
         var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal((LaunchOutcome.Refused, "kill-switch", 0, 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls, launcher.Launches));
         Assert.Contains(AuditRows(), row => row.Contains(request) && row.Contains("kill-switch"));
@@ -1098,15 +1096,14 @@ public sealed class AgentPipeLaunchTests : IDisposable
 
     [Theory]
     [InlineData("kill")]
-    [InlineData("settings")]
     [InlineData("credential")]
-    public async Task A_kill_a_settings_change_or_a_lapsed_credential_during_signing_sends_nothing(string change)
+    public async Task A_kill_or_a_lapsed_credential_during_signing_sends_nothing(string change)
     {
         using var key = P256KeyPair.Generate();
-        var mode = new Mode(true); var settings = true;
-        var s = OpenSender(key, mode: mode, settingsOn: () => settings, audited: true, duringSign: (credentials, caller) =>
+        var mode = new Mode(true);
+        var s = OpenSender(key, mode: mode, audited: true, duringSign: (credentials, caller) =>
         {
-            if (change == "kill") { mode.On = false; } else if (change == "settings") { settings = false; } else { credentials.Revoke(caller.Session, "test"); }
+            if (change == "kill") { mode.On = false; } else { credentials.Revoke(caller.Session, "test"); }
         });
         var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal((LaunchOutcome.Refused, change == "credential" ? "policy" : "kill-switch", 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
