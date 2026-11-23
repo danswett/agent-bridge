@@ -15,7 +15,8 @@ rows"); the remote launch it proves is described there and in [fleet-grants-cli.
   comparison named **E2**, both in `fleet-grants-g12-inventory.md` (#3864). It is **not** slice 11
   (the 24 h session-registry dual run) and **not** E4 (the connector-removal gate). Nothing is deleted
   on the strength of this document.
-- It adds no code and asks the owner to type or press nothing.
+- It adds no code and asks the owner for nothing in this document. The run itself needs a few **person steps at run time**,
+  named in "Person steps" below, and nothing else from the owner.
 
 ## Preconditions
 
@@ -88,10 +89,16 @@ and the concurrent bursts. Each HA twin is the same inputs sent over the HA tran
 window, with its own request id. The three less obvious twins are:
 
 - **Burst twin:** the same K launches issued at the same moment over HA to one target (HA serializes them by its lock
-  and lease); compared on how many sessions result and each request's outcome, not on timing.
-- **Same-id twin:** the same HA request id sent twice; HA must show one session and the recorded outcome, as Host does.
+  and lease). A burst passes on **invariants**, not timing or order: new sessions equal accepted requests, each request has
+  exactly one session, the counter rise equals the started count, and there is no double and no unexplained session.
+- **Same-id twin:** the HA wrapper makes a fresh request per call, so a small **harness** is built for the run (and listed in
+  the run plan) that sends the same HA request id twice to the disposable HA. HA must show one session and the recorded
+  outcome, as Host does. If the harness cannot be built, this twin is dropped and the run is INCONCLUSIVE.
 - **Lost-response twin:** an HA press whose result is unreadable (reported uncertain, not repeated), resolved by reading
-  what the target actually started; it matches a Host exit 7 resolved by `launches status`.
+  what the target actually started; it matches a Host exit 7 resolved by `launches status`. **Induced** by a fault after the
+  request is sent, never before: on the Host side the disposable target's relay connection is dropped before its reply returns;
+  on the HA side the response read to the disposable HA is cut after the press. The fault is injected by a person at run time
+  (see "Person steps") and the run plan records when it was injected relative to the send.
 
 **Host only, no twin** (counted against their own floors, not the 100): replay of the sealed envelope, the warm-up
 refusal, grant revoked, kill switch, scope or cap exceeded, peer not trusted or not own-account, target offline, and
@@ -108,6 +115,7 @@ hash, the source and target, and the time. A request without its twin is not com
 | `outcome` `refused` or `failed`, with a `reason` | 5 | the same refusal or failure; the Host reason is a documented refusal code |
 | host, pipe or audit not usable | 6 | HA reports the target unavailable |
 | `accepted` or `unconfirmed` (may have started) | 7 | HA `unconfirmed`; both are resolved with `launches status` before they are counted |
+| receiver busy (Host) / host busy (HA) | 5, `refused`, with the busy reason | HA: the wrapper waits and resubmits up to 5 times 30 s apart. The pair matches on the **final** outcome and reason; every HA resubmit that starts a session is counted by the double check, and a Host busy is never resent automatically |
 
 **Denominators.** The 100 is compared pairs. A pair that ends exit 7 is counted only after it is resolved to one of the
 other rows. A mismatch is any pair that lands in different rows, or in the same row with a different reason. Pairs
@@ -119,10 +127,11 @@ so a second session for the same request would not show as a second row. Doubles
 **sessions**, never from rows. Every request in the run plan carries its own unique launch name. At the end of each
 request, and again after the 5 minute late wait, for each target compare three counts for that launch name:
 
-1. **every new session** that appears on the target during the request's window (the session list before and after,
-   by start time), not only those with the request's launch name: a stray or misnamed second session is exactly
-   what this check exists to find. The ones carrying the launch name are matched to the request; any other new
-   session in the window is an unexplained session and fails the run;
+1. **every new session** that appears on the target during the request's window, read from the host's `sessions.list`
+   verb before and after (each entry carries the launch name in `Title` and the start time in `StartedAt`; `fleet.list`
+   carries the name only, so it is not used for the time match), not only the sessions with the request's launch name:
+   a stray or misnamed second session is exactly what this check exists to find. The ones carrying the launch name are
+   matched to the request; any other new session in the window is an unexplained session and fails the run;
 2. the **started rows** in `launches list --json` for the same request;
 3. the **receiver's counter rise** for the grant (hourly, daily and live usage), read before and after.
 
@@ -185,6 +194,20 @@ Rollback is **HA kept**: nothing on this gate deletes HA code (deletion needs E4
 - **Dispatcher:** revert the dispatcher's switch in its own small Fleet PR so `FleetLaunch` makes its three HA calls
   again; those calls stay in the code until E4, so this is a revert, not a rewrite.
 - If a Host-path request is `unconfirmed`, rolling back does not resend it: it is resolved by `launches status` first.
+
+## Person steps
+
+The run needs a person at run time; an agent, a script or a builder does none of these (guard 67).
+
+- **Grant:** the person who owns the disposable hosts' account issues the grant for the run and confirms it on the host's
+  own person surface (the app), after seeing its scope and caps. Nothing issues, widens or confirms it for them.
+- **Induced host restart:** a host restart is person-only. The person restarts the disposable target host from that host's own
+  control (the app's host Restart), once, at the time the run plan names.
+- **Induced relay reconnect and the lost-response faults:** the person drops and restores the disposable host's relay
+  connection (and the disposable HA response read) at the times the plan names, using the same host control.
+- **What they press** is recorded per host in the run plan (the control, the host, the time); Quality/SRE writes the exact
+  control names there, and the receipt records each press with the time. The owner approves each induced event at run time
+  before it happens, and this document grants none of them.
 
 ## Names, and ending the sessions the run starts
 
