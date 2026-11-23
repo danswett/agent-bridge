@@ -494,6 +494,8 @@ test.describe('notifications', () => {
       keys: { p256dh: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4', auth: 'BTBZMqHH6r4Tts7J_aSIgg' },
       app: appUrl,
       device: expect.stringContaining(BRAND.name),
+      // This device's filters at their defaults, and the pinned set of this machine (none pinned).
+      notify: { questions: true, pinned: true, all: false, deliveryFailures: false, pinnedSessions: [] },
     });
     // Subscribed with the relay's own VAPID key, for visible notifications only.
     const key = (await (await fetch(`${relayUrl}/v1/push/key`)).json()).key;

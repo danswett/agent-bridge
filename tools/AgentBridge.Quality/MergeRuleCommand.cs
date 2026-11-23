@@ -21,9 +21,11 @@ interface IGitHub
 /// Posts use MERGE_RULE_POST_TOKEN when it's set: the merge-rule App's token, which can post
 /// statuses but not read checks (docs/merge-rule-app.md).
 /// </summary>
-sealed class GhCli : IGitHub
+/// <param name="exec">Runs gh: its exit code, stdout and stderr. A test hands in its own; the default starts the gh process.</param>
+sealed class GhCli(Func<IReadOnlyList<string>, string?, (int Exit, string Out, string Err)>? exec = null) : IGitHub
 {
     public static readonly GhCli Instance = new();
+    readonly Func<IReadOnlyList<string>, string?, (int Exit, string Out, string Err)> run = exec ?? RunProcess;
 
     public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
     {
@@ -34,14 +36,14 @@ sealed class GhCli : IGitHub
                 args.AddRange(list.SelectMany(item => new[] { "-f", $"{name}[]={item}" }));
             else
                 args.AddRange(value is int n ? ["-F", $"{name}={n.ToString(CultureInfo.InvariantCulture)}"] : ["-f", $"{name}={value}"]);
-        var doc = JsonDocument.Parse(Run(args));
+        var doc = JsonDocument.Parse(Run(args, body: true));
         // GraphQL answers 200 with errors, and partial data would read as "no review", "no files".
         if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
             throw new InvalidOperationException($"GitHub's GraphQL API answered with errors: {errors}");
         return doc;
     }
 
-    public JsonDocument Rest(string path) => JsonDocument.Parse(Run(["api", path]));
+    public JsonDocument Rest(string path) => JsonDocument.Parse(Run(["api", path], body: true));
 
     // A job's log holds the runner's colour codes, which newer gh versions refuse to print without
     // this flag; older ones don't know it, and print them anyway.
@@ -65,7 +67,35 @@ sealed class GhCli : IGitHub
         Run(args, Environment.GetEnvironmentVariable("MERGE_RULE_POST_TOKEN") is { Length: > 0 } token ? token : null);
     }
 
-    static string Run(IEnumerable<string> args, string? token = null)
+    // gh's own word for an answer that was cut short or never came: the API's response did not parse. One flaky read must not error every
+    // pull request's merge-rule, so a read that gets this, or an empty body where a body is due, is asked for once more.
+    static bool Truncated(int exit, string stdout, string stderr, bool body) =>
+        exit != 0 ? stderr.Contains("unexpected end of JSON input", StringComparison.OrdinalIgnoreCase) || stderr.Contains("unexpected EOF", StringComparison.OrdinalIgnoreCase)
+            : body && string.IsNullOrWhiteSpace(stdout);
+
+    // body: a read whose answer is JSON, so an empty one is a failure. A POST (a status) is never asked for again: it may have gone.
+    string Run(IEnumerable<string> args, string? token = null, bool body = false)
+    {
+        var list = args.ToList();
+        var retry = body && !list.Contains("-X", StringComparer.Ordinal);
+        var attempts = 0;
+        while (true)
+        {
+            attempts++;
+            var (exit, stdout, stderr) = run(list, token);
+            var label = $"gh {string.Join(' ', list.Take(4))}";
+            if (exit == 0 && !(body && string.IsNullOrWhiteSpace(stdout)))
+                return stdout;
+            if (retry && attempts == 1 && Truncated(exit, stdout, stderr, body))
+                continue;
+            var after = attempts > 1 ? $" after {attempts} attempts" : "";
+            throw new InvalidOperationException(exit == 0
+                ? $"{label} returned an empty response{after}"
+                : $"{label} failed ({exit}){after}: {stderr.Trim()}");
+        }
+    }
+
+    static (int Exit, string Out, string Err) RunProcess(IReadOnlyList<string> args, string? token)
     {
         var start = new ProcessStartInfo("gh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         if (token is not null)
@@ -76,9 +106,7 @@ sealed class GhCli : IGitHub
         var stderr = process.StandardError.ReadToEndAsync();
         var stdout = process.StandardOutput.ReadToEnd();
         process.WaitForExit();
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"gh {string.Join(' ', start.ArgumentList.Take(4))} failed ({process.ExitCode}): {stderr.Result.Trim()}");
-        return stdout;
+        return (process.ExitCode, stdout, stderr.Result);
     }
 }
 
@@ -157,6 +185,10 @@ static class MergeRuleCommand
     /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
     sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver)
     {
+        /// <summary>The CODEX_WAIVER variable is "on" (codex_waiver); unset is off.</summary>
+        public bool CodexWaiver { get; init; }
+        /// <summary>The time, for how long a main run has been unreadable.</summary>
+        public Func<DateTimeOffset> Now { get; init; } = () => DateTimeOffset.UtcNow;
         public IGitHub GitHub { get; } = github;
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
@@ -247,9 +279,10 @@ static class MergeRuleCommand
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
-        var switchValue = (variable ?? Environment.GetEnvironmentVariable)("ARM64_WAIVER");
-        var session = new Session(github, config, slug, config.Arm64Waiver?.Active(now, switchValue) == true)
+        var session = new Session(github, config, slug, config.Arm64Waiver?.Active() == true)
         {
+            Now = utcNow ?? (() => DateTimeOffset.UtcNow),
+            CodexWaiver = config.CodexWaiver is { } codexWaiver && codexWaiver.Switch == "CODEX_WAIVER" && (variable ?? Environment.GetEnvironmentVariable)(codexWaiver.Switch) == "on",
             PostMerge = PostMergeJobs(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "catalog.yml"), output),
         };
         var problems = 0;
@@ -453,14 +486,16 @@ static class MergeRuleCommand
         var config = session.Config;
         try
         {
-            using var evidence = CompletedMain(session).GetEnumerator();
+            var skipped = new List<long>();
+            using var evidence = CompletedMain(session, skipped).GetEnumerator();
             var found = false;
             while (!found && evidence.MoveNext())
                 found = evidence.Current.Usable;
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
+                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one"
+                    + (skipped.Count == 0 ? "" : $" (skipped unreadable run {string.Join(", ", skipped)})"));
             }
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
@@ -580,11 +615,15 @@ static class MergeRuleCommand
                 + (held.Count == 0 ? "named jobs passed." : $"named jobs not green: {string.Join(", ", held)}.")
                 + "\n" + string.Join("\n", latest.OrderBy(j => j.Key, StringComparer.Ordinal).Select(j =>
                     $"Main job [{(j.Key == "plan" || Required(j.Key) ? "required" : session.PostMerge.Contains(j.Key) ? "post-merge" : "non-gating")}]: {j.Key}: {j.Value.GetProperty("status").GetString()}/{j.Value.GetProperty("conclusion").GetString() ?? "pending"} (attempt {RunAttempt(j.Value)})."))
-                + string.Concat(alerts.Select(a => $"\n{a}"));
+                + string.Concat(alerts.Select(a => $"\n{a}"))
+                + (skipped.Count == 0 ? "" : $"\nMain: skipped unreadable run(s) {string.Join(", ", skipped)}: their jobs could not be read for over {UnreadableGrace.TotalMinutes:0} minutes.");
             var fact = held.Count == 0
                 ? new("success", $"{config.Base}'s CI {MergeRule.Short(sha!)} named jobs passed")
                 : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
-            return fact with { Alerts = alerts };
+            // A run whose jobs stayed unreadable past the grace was passed over for an older readable one: the status says which, so it is
+            // never silent (alerts follow the blocking reasons in the description).
+            // First, ahead of any infra alert: the description shows the first alert and counts the rest, and cuts at 140 characters.
+            return fact with { Alerts = skipped.Count == 0 ? alerts : [$"skipped unreadable run {string.Join(", ", skipped)}", .. alerts] };
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -593,7 +632,19 @@ static class MergeRuleCommand
         }
     }
 
-    static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session)
+    /// <summary>
+    /// How long a main run's jobs must have been unreadable before it is passed over (a fresh run can 404 briefly): until then the judge errors,
+    /// as it always has. A zombie run the API never serves must not hold every pull request's merge-rule for good.
+    /// </summary>
+    internal static readonly TimeSpan UnreadableGrace = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// A run old enough to skip is read once more after this pause before it is: one transient 404 or 5xx must not skip a main run (they take
+    /// 26 to 35 minutes, so most are older than the grace). There is no memory between evaluations: a run unreadable on both reads of one evaluation is skipped.
+    /// </summary>
+    internal static TimeSpan UnreadableRetryAfter { get; set; } = TimeSpan.FromSeconds(3);
+
+    static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session, List<long>? skipped = null)
     {
         var config = session.Config;
         var seen = 0;
@@ -605,15 +656,44 @@ static class MergeRuleCommand
             {
                 var id = run.GetProperty("id").GetInt64();
                 var jobs = new List<JsonElement>();
+                var unreadable = false;
                 for (var jobPage = 1; ; jobPage++)
                 {
-                    using var listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}");
-                    var batch = listed.RootElement.GetProperty("jobs");
+                    JsonDocument listed;
+                    JsonElement batch;
+                    var jobsPath = $"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}";
+                    try
+                    {
+                        (listed, batch) = ReadJobs(session, jobsPath);
+                    }
+                    // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
+                    catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
+                    {
+                        // Skipped only once unreadable for over the grace, never a failure or a state not known (it would hide a red main),
+                        // and never when the run's age isn't known: those error, as before. An old enough run is read once more first.
+                        if (!MayBeSkipped(session, run)) { throw; }
+                        Thread.Sleep(UnreadableRetryAfter);
+                        try
+                        {
+                            (listed, batch) = ReadJobs(session, jobsPath);
+                        }
+                        catch (Exception again) when (again is InvalidOperationException or JsonException or KeyNotFoundException)
+                        {
+                            unreadable = true;
+                            break;
+                        }
+                    }
+                    using var held = listed;
                     jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
                     if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
                         break;
                     if (batch.GetArrayLength() == 0 || jobPage >= 20)
                         throw new InvalidOperationException("CI job list is incomplete");
+                }
+                if (unreadable)
+                {
+                    skipped?.Add(id);
+                    continue;
                 }
                 // A concurrency-displaced run is cancelled before any job exists.
                 if (jobs.Count == 0 && (Incomplete(run) || run.GetProperty("conclusion").GetString() == "cancelled"))
@@ -657,6 +737,41 @@ static class MergeRuleCommand
             if (runs.GetArrayLength() == 0 || page >= 5)
                 throw new InvalidOperationException("CI run history is incomplete (100-run window)");
         }
+    }
+
+    // A page of a run's jobs, the document disposed if its body turns out to have no jobs.
+    static (JsonDocument Doc, JsonElement Jobs) ReadJobs(Session session, string path)
+    {
+        var doc = session.Rest(path);
+        try
+        {
+            return (doc, doc.RootElement.GetProperty("jobs"));
+        }
+        catch
+        {
+            doc.Dispose();
+            throw;
+        }
+    }
+
+    // A run may be passed over when its jobs can't be read only if it is old enough and isn't a completed failure.
+    // An ALLOW-list, so what isn't known fails closed: a run not yet completed, or one that ended in a conclusion GitHub documents as not a failure.
+    // An unknown status or conclusion, a completed run with none, and a failure of any kind are never skipped.
+    static bool MayBeSkipped(Session session, JsonElement run)
+    {
+        if (!run.TryGetProperty("status", out var statusNode) || statusNode.ValueKind != JsonValueKind.String)
+            return false;
+        if (statusNode.GetString() == "completed")
+        {
+            if (!run.TryGetProperty("conclusion", out var conclusion) || conclusion.ValueKind != JsonValueKind.String
+                || conclusion.GetString() is not ("cancelled" or "success" or "neutral" or "skipped" or "stale" or "action_required"))
+                return false;
+        }
+        else if (statusNode.GetString() is not ("queued" or "in_progress" or "waiting" or "pending" or "requested"))
+            return false;
+        return run.TryGetProperty("created_at", out var created) && created.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(created.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
+            && session.Now() - at > UnreadableGrace;
     }
 
     // Network or runner evidence in a failed job's annotations; a step's name only locates the failure.
@@ -763,7 +878,7 @@ static class MergeRuleCommand
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge);
+        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge) with { CodexWaiverOn = session.CodexWaiver };
         return history ? WithReceiptHistory(session, facts) : facts;
     }
 

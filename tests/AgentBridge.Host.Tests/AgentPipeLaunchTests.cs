@@ -41,9 +41,11 @@ public sealed class AgentPipeLaunchTests : IDisposable
         credentials ??= new AgentCredentials(folder, "machine");
         launcher.FleetConfig ??= Running();
         var channel = new Chan();
-        var token = credentials.Mint(session, launch, 100, DateTimeOffset.UtcNow, scope, depth, depth > 0 ? ["ancestor"] : null);
+        // One start time for the credential and the caller's process: Check refuses them more than 1 s apart, and two reads can straddle a stall (#2558).
+        var started = DateTimeOffset.UtcNow;
+        var token = credentials.Mint(session, launch, 100, started, scope, depth, depth > 0 ? ["ancestor"] : null);
         credentials.Accept(channel, credentials.Check(token,
-            new ProcessAncestry([new PeerProcess(100, DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted!);
+            new ProcessAncestry([new PeerProcess(100, started, "agent.exe")], true)).Accepted!);
         var (requests, problem) = store ?? LaunchRequestStore.Open(folder, TimeProvider.System);
         var audit = new AgentAuditLog(folder) { DeviceKey = grantKey };
         var service = new SessionService(source ?? new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);

@@ -1,12 +1,16 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class DeliveryLaneSchedulerTests
 {
+    static readonly DeliverySender Person = new("person", Owner: true);
+    static readonly GrantAudience Receiver = new(new string('a', 32), "profile");
+
     sealed class Fake : IDisposable
     {
         public readonly FakeTimeProvider Clock = new();
@@ -63,6 +67,15 @@ public sealed class DeliveryLaneSchedulerTests
                 new(sender == DeliveryClass.System ? "system" : sender == DeliveryClass.Owner ? "owner:user" : "agent:user",
                     id, null, Clock.GetUtcNow(), priority, 0), "body " + id, sender);
         public Task<LaneResult> Next(string session = "target") => Scheduler.DeliverNextAsync(session);
+        public PriorityCapability Grant(int hourly = 3)
+        {
+            var cap = new PriorityCapability(Guid.NewGuid(), "agent", new("person", Receiver.Device, "verified-person-proof",
+                Clock.GetUtcNow(), new string('b', 64)), Receiver, Clock.GetUtcNow(), Clock.GetUtcNow().AddHours(2), hourly);
+            Journal.IssuePriority(cap, Person, Receiver, () => true, Clock.GetUtcNow());
+            return cap;
+        }
+        public DeliveryOfferStatus Urgent(Guid id, string? reason = "stop wrong work") => Scheduler.Offer(id, "target", new("agent"),
+            "body", () => true, priority: new("urgent", reason), receiver: Receiver);
         public DeliveryJournalRecord[] Records => Disk.Select(b =>
             JsonSerializer.Deserialize<DeliveryJournalRecord>(b, ProtocolJson.Options)!).ToArray();
         public void Dispose() => Journal.Dispose();
@@ -76,6 +89,75 @@ public sealed class DeliveryLaneSchedulerTests
         f.Noticing = () => { f.Noticing = null; Assert.True(f.Add("reentrant")); };
         Assert.True(f.Add("normal"));
         Assert.Equal(2, f.Records.Count(r => r.State == "dropped"));
+    }
+
+    [Fact]
+    public async Task Person_granted_agent_urgent_overtakes_queued_work_and_consumes_one_grant()
+    {
+        using var f = new Fake(dispatch: true); f.Grant();
+        var queued = Guid.NewGuid(); var urgent = Guid.NewGuid();
+        f.Scheduler.Offer(queued, "target", new("agent"), "body", () => true);
+        Assert.Equal(DeliveryOfferState.Pending, f.Urgent(urgent).State);
+        Assert.Single(f.Records, r => r.State == "priority" && r.Reason == "consumed" && r.Header.Id == urgent.ToString());
+        f.Screen = (false, true);
+        Assert.Equal(LaneResult.HandedOff, await f.Next());
+        Assert.False(f.LastRequireIdle);
+        Assert.Equal(urgent.ToString(), Assert.Single(f.Sent).Id);
+        Assert.Equal("u1", f.Sent[0].Seq);
+        Assert.Contains(f.Records, r => r.State == "enqueued" && r.Header.Id == urgent.ToString() && r.Header.Priority == "urgent");
+    }
+
+    [Fact]
+    public async Task Agent_urgent_without_a_capability_is_demoted_truthfully_and_waits_for_idle()
+    {
+        using var f = new Fake(dispatch: true) { Screen = (false, true) };
+        var id = Guid.NewGuid(); var status = f.Urgent(id);
+        Assert.Equal(DeliveryOfferState.Pending, status.State);
+        Assert.Contains("no-capability", status.Reason);
+        Assert.Contains("no-capability", f.Scheduler.Query(id, "target", new("agent")).Reason);
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Empty(f.Sent);
+        Assert.DoesNotContain(f.Records, r => r.Reason == "consumed");
+        Assert.Contains(f.Records, r => r.State == "enqueued" && r.Header.Priority == "normal");
+    }
+
+    [Fact]
+    public void Missing_reason_is_refused_naming_the_target_and_spends_nothing()
+    {
+        using var f = new Fake(dispatch: true); f.Grant();
+        var status = f.Urgent(Guid.NewGuid(), " ");
+        Assert.Equal(DeliveryOfferState.Refused, status.State);
+        Assert.Contains("target", status.Reason); Assert.Contains("missing-reason", status.Reason);
+        Assert.DoesNotContain(f.Records, r => r.Reason is "granted" or "consumed");
+    }
+
+    [Fact]
+    public async Task Full_urgent_lane_refuses_before_consumption_and_the_same_UUID_retries_after_space_opens()
+    {
+        using var f = new Fake(dispatch: true); f.Grant(1);
+        for (var i = 0; i < 10; i++) { f.Scheduler.Offer(Guid.NewGuid(), "target", new("user", Owner: true), "owner", () => true); }
+        var id = Guid.NewGuid(); var status = f.Urgent(id);
+        Assert.Equal(DeliveryOfferState.Refused, status.State); Assert.Contains("lane-full", status.Reason);
+        Assert.DoesNotContain(f.Records, r => r.Reason is "granted" or "consumed");
+        Assert.Equal(LaneResult.HandedOff, await f.Next());
+        Assert.Equal(DeliveryOfferState.Pending, f.Urgent(id).State);
+        Assert.Single(f.Records, r => r.Reason == "consumed");
+        Assert.Contains("quota", f.Urgent(Guid.NewGuid()).Reason);
+    }
+
+    [Fact]
+    public async Task Revoked_capability_demotes_the_pending_urgent_item_before_any_key_is_sent()
+    {
+        using var f = new Fake(dispatch: true); var cap = f.Grant();
+        var id = Guid.NewGuid(); f.Urgent(id);
+        f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow());
+        f.Screen = (false, true);
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Empty(f.Sent);
+        Assert.Contains(f.Records, r => r.State == "demoted" && r.Header.Id == id.ToString() && r.Header.Priority == "normal");
+        f.Screen = (true, true);
+        Assert.Equal(LaneResult.HandedOff, await f.Next());
+        Assert.True(f.LastRequireIdle); Assert.Equal("q1", Assert.Single(f.Sent).Seq);
     }
 
     [Fact]
@@ -340,5 +422,100 @@ public sealed class DeliveryLaneSchedulerTests
         Assert.Equal(LaneResult.Waiting, await f.Next());
         Assert.Single(f.Sent);
         Assert.Contains(f.Notices, n => n.Reason.Contains("unconfirmed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Failed_priority_append_latches_the_scheduler_and_gate_even_after_storage_recovers()
+    {
+        using var f = new Fake(dispatch: true); f.Grant();
+        f.Scheduler.Offer(Guid.NewGuid(), "target", new("user", Owner: true), "owner", () => true);
+        f.FailWrite = true;
+        Assert.Throws<IOException>(() => f.Urgent(Guid.NewGuid()));
+        f.FailWrite = false;
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Empty(f.Sent);
+        Assert.Null(f.Gate.TryExclude(TimeSpan.FromSeconds(5), out var blocker));
+        Assert.Equal(DeliveryGate.Blocker.JournalUncertain, blocker);
+    }
+
+    [Fact]
+    public async Task Failed_expiry_append_in_the_final_fence_latches_the_gate_and_refuses_lifecycle_exclusion()
+    {
+        using var f = new Fake(dispatch: true); f.Grant();
+        f.Urgent(Guid.NewGuid());
+        await f.Gate.WaitToTypeAsync();
+        var waiting = f.Next();
+        f.Clock.Advance(TimeSpan.FromHours(3)); f.FailWrite = true;
+        f.Gate.DoneTyping();
+        await Assert.ThrowsAsync<IOException>(() => waiting);
+        f.FailWrite = false;
+        Assert.Empty(f.Sent);
+        Assert.Null(f.Gate.TryExclude(TimeSpan.FromSeconds(5), out var blocker));
+        Assert.Equal(DeliveryGate.Blocker.JournalUncertain, blocker);
+    }
+
+    [Fact]
+    public async Task Backwards_clock_refusal_is_not_journal_uncertainty()
+    {
+        using var f = new Fake(dispatch: true); var cap = f.Grant();
+        f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow().AddMinutes(1));
+        Assert.Throws<InvalidOperationException>(() => f.Urgent(Guid.NewGuid()));
+        f.Screen = (true, true);
+        f.Scheduler.Offer(Guid.NewGuid(), "target", new("user", Owner: true), "owner", () => true);
+        Assert.Equal(LaneResult.HandedOff, await f.Next());
+        using var exclusion = f.Gate.TryExclude(TimeSpan.FromSeconds(5), out _);
+        Assert.NotNull(exclusion);
+    }
+
+    [Fact]
+    public void Owner_overflow_demotes_the_newest_granted_agent_before_a_newer_system_item()
+    {
+        using var f = new Fake(dispatch: true); f.Grant();
+        for (var i = 0; i < 8; i++) { f.Scheduler.Offer(Guid.NewGuid(), "target", new("user", Owner: true), "owner", () => true); }
+        var agent = Guid.NewGuid(); f.Urgent(agent);
+        Assert.True(f.Add("sys", DeliveryClass.System));
+        f.Scheduler.Offer(Guid.NewGuid(), "target", new("user", Owner: true), "owner", () => true);
+        Assert.Contains(f.Records, r => r.State == "demoted" && r.Header.Id == agent.ToString());
+        Assert.DoesNotContain(f.Records, r => r.State == "demoted" && r.Header.Id == "sys");
+    }
+
+    [Fact]
+    public async Task Lapsed_urgent_evicts_the_oldest_fyi_and_stays_queued_when_the_normal_lane_is_full()
+    {
+        using var f = new Fake(dispatch: true); var cap = f.Grant();
+        f.Add("fyi", priority: "fyi");
+        for (var i = 0; i < 49; i++) { f.Add("n" + i); }
+        var id = Guid.NewGuid(); f.Urgent(id);
+        f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow());
+        f.Screen = (false, true);
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.DoesNotContain(f.Records, r => r.State == "dropped" && r.Header.Id == id.ToString());
+        Assert.Contains(f.Records, r => r.State == "dropped" && r.Header.Id == "fyi" && r.Reason == "overflow");
+        Assert.Equal(DeliveryOfferState.Pending, f.Scheduler.Query(id, "target", new("agent")).State);
+    }
+
+    [Fact]
+    public async Task Query_keeps_a_runtime_demotion_after_handoff_and_beside_a_transport_reason()
+    {
+        using var f = new Fake(dispatch: true) { DispatchResult = new(AnswerOutcome.Unconfirmed, "typed unknown") };
+        var cap = f.Grant(); var id = Guid.NewGuid(); f.Urgent(id);
+        f.Journal.RevokePriority(cap.Id, Person, Receiver, () => true, f.Clock.GetUtcNow());
+        Assert.Equal(LaneResult.Waiting, await f.Next());
+        Assert.Equal(LaneResult.Unconfirmed, await f.Next());
+        var status = f.Scheduler.Query(id, "target", new("agent"));
+        Assert.Equal(DeliveryOfferState.Unconfirmed, status.State);
+        Assert.Contains("priority no longer current", status.Reason);
+        Assert.Contains("typed unknown", status.Reason);
+    }
+
+    [Fact]
+    public async Task Query_keeps_an_admission_demotion_beside_a_transport_reason()
+    {
+        using var f = new Fake(dispatch: true) { DispatchResult = new(AnswerOutcome.Unconfirmed, "typed unknown") };
+        var id = Guid.NewGuid(); f.Urgent(id);
+        Assert.Equal(LaneResult.Unconfirmed, await f.Next());
+        var status = f.Scheduler.Query(id, "target", new("agent"));
+        Assert.Contains("no-capability", status.Reason);
+        Assert.Contains("typed unknown", status.Reason);
     }
 }
