@@ -852,7 +852,10 @@ start within about a minute; a queue that grows is the signal to add runners or 
   one `||`, one hosted fallback. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner
   group, a bare self-hosted label, a runner from a variable, input or event field, a file it can't parse, and a
   self-hosted job in a workflow `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`,
-  `CiRunnerGuardProbeTests`). Fork-PR approval is not the guard: it only holds a fork's run until someone approves it,
+  `CiRunnerGuardProbeTests`). It fails closed: a runner is hosted only when every value it can take is on the hosted
+  allowlist (`ubuntu-*`, `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a
+  literal, and the one runtime matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by
+  `CiRunnerResolutionTests`. Fork-PR approval is not the guard: it only holds a fork's run until someone approves it,
   and an approved fork run reaches hosted runners only because the guard sends it there.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
   `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
