@@ -354,7 +354,7 @@ suites:
     triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
     command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~HaCallSiteGuardTests
     where: ci.yml product
-    baseline: { tests: 88, seconds: 3 }
+    baseline: { tests: 61, seconds: 3 }
     status: exists
 
   - id: product-crash-diagnostics

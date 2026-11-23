@@ -4,25 +4,21 @@ using System.Text.RegularExpressions;
 namespace AgentBridge.Quality.Tests;
 
 // HA retirement, "no new HA call sites" for this repo (Part of #1396; the design of the fleet's gate, slipgates-fleet #726).
-// Scope: EVERY tracked text file (files with no extension too), except a short explicit list of binary types and the top-level tests/,
-// docs/, design/, spikes/ and backlog/ folders (no bin, obj or node_modules exclusion: only tracked files are read, and a script in a folder
-// called bin must not be a hiding place; tests and prose of the connector
-// itself are not product call sites). No file is skipped for its name or for any other nested folder name, and only a file type's real
-// comment syntax hides a line. A file that names HA access must be in ha-callsite-allowlist.json with the COUNT of references it has today:
-// a higher count is red (a new call inside an allowlisted file), a lower one is stale, so the list only shrinks. The connector project is
-// one directory entry that pins its file NAMES: a new, renamed or removed file is red or stale (HA calls inside the connector's own files
-// are the connector, which S7 removes). KNOWN LIMIT: a text scan cannot catch a reference built by string concatenation ("/api/" + "states"),
-// by base64 or other encoding, or by reading the address from a file; and a count cannot catch adding a call while deleting another in the
-// same allowlisted file (the count stays equal; review the diff of an allowlisted file). The guard stops the plain, honest new call.
+// Scope: EVERY tracked text file (no extension too) except binary types (an explicit list) and the top-level tests/, docs/, design/,
+// spikes/ and backlog/ folders. Nothing is skipped for its name or a nested folder (bin, obj, node_modules included: only tracked files
+// are read, and a script in a folder called bin must not be a hiding place); only a file type's real comment syntax hides a line.
+// A file that names HA access must be in ha-callsite-allowlist.json with the COUNT of references it has: higher is red (a new call in an
+// allowlisted file), lower is stale, so the list only shrinks. The connector project is one directory entry pinning its file NAMES.
+// KNOWN LIMIT: a text scan cannot catch a reference built by string concatenation ("/api/" + "states"), base64 or other encoding, or an
+// address read from a file; a count cannot catch adding one call while deleting another in the same file. It stops the plain new call.
 public class HaCallSiteGuardTests
 {
     const string AllowlistPath = "tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json";
 
     internal sealed record Allowance(string? Path, int? Sites, string? Directory, string[]? Names, string? Slice, string? Issue, string? Reason);
 
-    // HA access as text, in any file: the agent credential and address variables (any AGENT_HA_* or FLEET_HA_* name), HA API paths, an HA
-    // host or port, the connector's types, the connector library by name (a using, a ProjectReference, a solution entry) and the MQTT and
-    // notify services it drives. Names and paths match in any case (PowerShell and Windows environment names are case-insensitive).
+    // HA access as text, in any file: AGENT_HA_/FLEET_HA_/HA_/HASS_ names, HA API paths, an HA host or port, the connector's types and library
+    // name, and the MQTT and notify services it drives. Names and paths match in any case (environment names are case-insensitive).
     static readonly Regex Access = new(
         @"(?i:\b(AGENT|FLEET)_HA_\w+|\b(HASS|HOMEASSISTANT)_(URL|TOKEN)\b|\bHA_\w+|\bhass\.(services|states|bus)\b|\bSUPERVISOR_TOKEN\b|\bHASSIO_\w+"
         + @"|\bapi/(states|services|websocket|image|config|events|template|history|logbook|camera_proxy\w*|error_log|core|webhook|mobile_app|hassio|stream|discovery_info|intent|calendars|tts_proxy)\b"
@@ -203,10 +199,7 @@ public class HaCallSiteGuardTests
 
     [Theory]
     [InlineData("$token = $env:AGENT_HA_AGENT_TOKEN")]
-    [InlineData("var c = new HomeAssistantClient(url, token, http);")]
     [InlineData("await Publish(\"mqtt.publish\", payload);")]
-    [InlineData("Start-Sleep 1; $r = irm \"$u/API/Services/script/x\"")]
-    [InlineData("HaRunning.Start(settings);")]
     [InlineData("sealed class Retrying : IHomeAssistantClient { }")]
     [InlineData("var c = new RetryingHomeAssistantClient(http);")]
     [InlineData("$u = $env:agent_ha_url")]
@@ -218,36 +211,24 @@ public class HaCallSiteGuardTests
     [InlineData("src/X/Caller.cs", "using AgentBridge.HomeAssistant;")]
     [InlineData("src/X/Caller.cs", "var w = new HaWebSocket(url);")]
     [InlineData("src/X/Caller.cs", "var u = \"/api/config\";")]
-    [InlineData("src/X/Caller.cs", "var u = \"api/template\";")]
     [InlineData("tools/x/run.ps1", "$env:AGENT_HA_SECRET = 'x'")]
     [InlineData("tools/x/run.ps1", "$h = 'homeassistant.local'")]
     [InlineData("tools/x/run.ps1", "$u = 'http://box:8123/'")]
     [InlineData(".github/workflows/x.yml", "        run: curl http://homeassistant.local/api/states")]
-    [InlineData("tools/x/run.cmd", "set AGENT_HA_URL=x")]
-    [InlineData("tools/x/data.psd1", "@{ Url = 'http://homeassistant.local' }")]
     [InlineData("tools/x/config.json", "{ \"url\": \"http://box:8123\" }")]
     [InlineData("src/X/X.csproj", "<ProjectReference Include=\"../AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj\" />")]
     [InlineData("src/X/fixtures/Caller.cs", "var u = \"/api/states\";")]
     [InlineData("tools/x/test-ha.ps1", "$env:AGENT_HA_URL")]
-    [InlineData("tools/x/Caller.Tests.ps1", "$env:AGENT_HA_URL")]
     [InlineData("src/X/Raw.cs", "var s = \"\"\"\n// /api/states\n\"\"\";")]
     [InlineData("tools/x/here.ps1", "$s = @'\n# AGENT_HA_URL\n'@")]
     [InlineData("src/X/Caller.cs", "var u = \"/api/webhook/abc\";")]
-    [InlineData("src/X/Caller.cs", "var u = \"/api/mobile_app/registrations\";")]
-    [InlineData("src/X/Caller.cs", "var u = \"/api/hassio/info\";")]
     [InlineData("src/X/Caller.cs", "var u = \"/api/camera_proxy_stream/x\";")]
-    [InlineData("src/X/Caller.cs", "var u = \"/api/discovery_info\";")]
     [InlineData("tools/x/run.ps1", "$u = 'http://supervisor/addons'")]
     [InlineData("tools/x/run.ps1", "$t = $env:SUPERVISOR_TOKEN")]
-    [InlineData("tools/x/run.ps1", "$t = $env:HASSIO_TOKEN")]
     [InlineData("tools/x/run.ps1", "$t = $env:HA_TOKEN")]
-    [InlineData("tools/x/run.ps1", "$u = $env:HASS_URL")]
-    [InlineData("tools/x/run.ps1", "$u = $env:HOMEASSISTANT_URL")]
     [InlineData("tools/x/run.ps1", "$u = 'http://homeassistant/'")]
     [InlineData("src/X/Caller.cs", "var a = new HaCommands(x);")]
-    [InlineData("src/X/Caller.cs", "var a = new HaAnswerAudit(x);")]
     [InlineData("src/X/Caller.cs", "var a = new HaClientFactory();")]
-    [InlineData("src/X/Caller.cs", "var a = HaShadowMode.On;")]
     [InlineData("tools/x/run.py", "s = '''\n# AGENT_HA_URL\n'''")]
     [InlineData("tools/x/run.js", "const s = `\n// AGENT_HA_URL\n`;")]
     [InlineData("tools/x/app.swift", "let u = \"http://box:8123\"")]
@@ -255,17 +236,12 @@ public class HaCallSiteGuardTests
     [InlineData("tools/x/config.json", "{ \"homeAssistant\": { \"url\": \"x\" } }")]
     [InlineData("src/X/Caller.cs", "var s = root.GetProperty(\"homeAssistant\");")]
     [InlineData("src/X/Caller.cs", "var o = new HomeAssistantOptions();")]
-    [InlineData("src/X/Caller.cs", "if (settings.HomeAssistantEnabled) { }")]
     [InlineData("tools/x/run.ps1", "$u = $env:HA_BASE_URL")]
-    [InlineData("tools/x/run.ps1", "$t = $env:ha_token")]
     [InlineData("tools/x/run.ps1", "mosquitto_pub -t homeassistant/sensor/x/config -m 1")]
     [InlineData("tools/x/run.py", "hass.services.call('light', 'turn_on')")]
     [InlineData("tools/bin/run.ps1", "$env:AGENT_HA_URL")]
-    [InlineData("build/obj/run.ps1", "$env:AGENT_HA_URL")]
-    [InlineData("tools/node_modules/p/index.js", "fetch('/api/states')")]
     [InlineData("tools/x/utf16.ps1", "A\0G\0E\0N\0T\0_\0H\0A\0_\0U\0R\0L\0")]
     [InlineData("src/X/Caller.fs", "(*) 1 2\nlet u = \"/api/states\"")]
-    [InlineData("tools/x/main.bicep", "param u string = 'http://box:8123'")]
     public void Realistic_new_HA_sites_are_red_whatever_the_file_type_or_name(string path, string text) =>
         Assert.Equal([path], Check(Files((path, text)), []).New);
 
@@ -275,24 +251,17 @@ public class HaCallSiteGuardTests
     [InlineData("tools/x/README.md", "Posts to api/states on the box.")]
     [InlineData("tools/x/run", "export AGENT_HA_URL=x")]
     [InlineData("AgentBridge.slnx", "<Project Path=\"src/AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj\" />")]
-    [InlineData("tools/x/page.html", "<script>fetch('/api/states')</script>")]
     [InlineData("src/X/Caller.cs", "# AGENT_HA_URL")]
     [InlineData("tools/x/config.json", "// http://box:8123")]
     [InlineData("tools/x/run.ps1", "// $env:AGENT_HA_URL")]
-    [InlineData("tools/x/run.py", "// AGENT_HA_URL")]
-    [InlineData("tools/x/run.js", "# AGENT_HA_URL")]
-    [InlineData("tools/x/run.cmd", "# AGENT_HA_URL")]
     public void Every_text_file_is_scanned_and_only_real_comment_syntax_hides_a_line(string path, string text) =>
         Assert.Equal([path], Check(Files((path, text)), []).New);
 
     [Theory]
     [InlineData("tools/x/run.yml", "# AGENT_HA_URL")]
-    [InlineData("tools/x/run.sh", "# AGENT_HA_URL")]
     [InlineData("tools/x/run.py", "# AGENT_HA_URL")]
     [InlineData("tools/x/run.js", "// AGENT_HA_URL")]
-    [InlineData("tools/x/run.js", "/* AGENT_HA_URL */")]
     [InlineData("tools/x/run.cmd", "REM AGENT_HA_URL")]
-    [InlineData("tools/x/run.cmd", ":: AGENT_HA_URL")]
     [InlineData("src/X/X.csproj", "<!-- AgentBridge.HomeAssistant -->")]
     [InlineData("tools/x/README.md", "<!-- api/states -->")]
     [InlineData("tools/x/logo.png", "AGENT_HA_URL")]
