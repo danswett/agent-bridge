@@ -95,11 +95,19 @@ sealed class FakeHost : IAsyncDisposable
 
     // Asked to stop, it stops once its answer has gone, as the real host does (HostControl), rather
     // than a guessed 50 ms after it.
-    public void StopsWhenAsked() => On(HostOps.Stop, data => new ChannelReply(new { stopping = true }, ch =>
+    public void StopsWhenAsked() => StopsWhenAsked(_ => { });
+
+    // The same, for a test that also notes what the host had seen when it was asked (the probe holds so far, say): `asked` runs as the
+    // request arrives, before the answer is built, and the stop still waits for the answer to have gone.
+    public void StopsWhenAsked(Action<JsonElement> asked) => On(HostOps.Stop, data =>
     {
-        _ = Task.Run(StopAsync);
-        return Task.CompletedTask;
-    }));
+        asked(data);
+        return new ChannelReply(new { stopping = true }, ch =>
+        {
+            _ = Task.Run(StopAsync);
+            return Task.CompletedTask;
+        });
+    });
 
     // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,
     // SpinWait) each one kept a pool thread for up to Patience, and the tests side by side then
