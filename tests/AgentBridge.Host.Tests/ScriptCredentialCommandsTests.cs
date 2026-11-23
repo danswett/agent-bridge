@@ -418,6 +418,78 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
 
     // P1 finding (#3883 receipt 7101860025): the press must not hold the credential store's lock while it waits on the audit log's
     // own lock, which can take up to two seconds; every other store call (Count, a hello, a list) would stall behind it.
+    // P1 review 2/2 (receipt 7101860025): the generation moves on rotation and expiry too, and the two minutes run on a monotonic clock.
+    // Each test below would stay green with the generation check removed only if another guard carried it, so each pins it: the
+    // generation check is the one mechanism, and nothing else drops an outstanding confirmation when the script changes.
+    [Fact]
+    public async Task A_mint_between_the_ask_and_the_press_voids_the_confirmation()
+    {
+        var confirm = await Confirm("scripts.add");
+        credentials.MintScript("pump-wake");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(confirm)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_rotation_that_retires_the_old_credential_voids_an_outstanding_confirmation()
+    {
+        credentials.MintScript("pump-wake");
+        var newest = credentials.MintScript("pump-wake");
+        var revoke = await Confirm("scripts.revoke");
+        // The newest credential completes a fleet read, so the old one is retired: the script is no longer what was shown.
+        credentials.CompleteFleetRead(newest.Credential, new { });
+        Assert.Equal(1, credentials.Count);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.revoke", Press(revoke)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task Expiry_pruning_voids_an_outstanding_confirmation()
+    {
+        var clock = new StepClock();
+        var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), log: logs.Add, credentials: timed, audit: new AgentAuditLog(fixture.Root, log: logs.Add));
+        timed.MintScript("pump-wake", TimeSpan.FromSeconds(60));
+        var asked = JsonSerializer.SerializeToElement(await handler(channel, "scripts.confirm",
+            JsonSerializer.SerializeToElement(new { op = "scripts.revoke", name = "pump-wake" })), ProtocolJson.Options).GetProperty("confirm").GetString()!;
+        clock.Advance(TimeSpan.FromSeconds(90));
+        // Another mint prunes the expired credential; the confirmation (90 s old, still inside its two minutes) must not survive that.
+        timed.MintScript("other-script");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.revoke", Press(asked)));
+        Assert.Contains("person's press", error.Message);
+    }
+
+    [Fact]
+    public async Task A_wall_clock_step_back_does_not_stretch_a_confirmation()
+    {
+        var clock = new StepClock();
+        var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
+        var handler = LocalApi.Handler(new SessionService(null!, new MachineInfo("machine1", "Test", "windows", "0.1.0")),
+            null!, new FixedCallerGuard(new Caller(CallerKind.App, "fixture")), log: logs.Add, credentials: timed, audit: new AgentAuditLog(fixture.Root, log: logs.Add));
+        var asked = JsonSerializer.SerializeToElement(await handler(channel, "scripts.confirm",
+            JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" })), ProtocolJson.Options).GetProperty("confirm").GetString()!;
+        clock.StepWall(TimeSpan.FromHours(-1));
+        clock.Advance(TimeSpan.FromMinutes(59));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Press(asked)));
+        Assert.Contains("person's press", error.Message);
+        Assert.Equal(0, timed.Count);
+    }
+
+    // Wall time and the monotonic timestamp move apart only when a test says so.
+    sealed class StepClock : TimeProvider
+    {
+        DateTimeOffset utc = DateTimeOffset.UtcNow;
+        long stamp;
+        public override DateTimeOffset GetUtcNow() => utc;
+        public override long GetTimestamp() => stamp;
+        public override long TimestampFrequency => 1000;
+        public void Advance(TimeSpan by) { utc += by; stamp += (long)by.TotalMilliseconds; }
+        public void StepWall(TimeSpan by) => utc += by;
+    }
+
     [Fact]
     public async Task A_press_waiting_on_the_audit_lock_does_not_block_the_credential_store()
     {

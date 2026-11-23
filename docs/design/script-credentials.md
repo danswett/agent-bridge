@@ -135,9 +135,9 @@ press, no phone issuance and no signed remote envelope for these actions.
 
 * **Mint.** In app Settings the person presses "Add script credential" and picks a script name.
   The host writes the token straight into an owner-only file for that script (§7) and the app shows
-  the name, scope, expiry date and last use. It shows no part of the token, not even its last four characters
-  (R9 ruling: no credential-store format change; name, scope, expiry and last use identify a credential). The token
-  is never printed, logged, put in an argument, or sent over any channel, and no person ever handles it.
+  the name, scope, expiry date and last use, and no part of the token (not even its last four characters: R9 ruling, no
+  credential-store format change). The token is never printed,
+  logged, put in an argument, or sent over any channel, and no person ever handles it.
 * **Revoke.** The "Revoke" press beside the script in the app. The record is deleted, every open
   connection on it is closed and the next call is refused.
 * **Rotate.** The "Rotate" press, or minting the same name again. The host writes the new file
@@ -162,9 +162,9 @@ step for credentials) requires; a mint no longer has a PowerShell or terminal pa
 * **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
   asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
   name the host keeps a **generation counter**, moved on by every press attempt (right or wrong) and by every mint,
-  revoke, rotation, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
+  revoke, rotation, expiry, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
   generation, the operation and the connection it was issued to. The value is derived from a random per-process
-  salt and a fresh nonce, lives **two minutes**, and is checked and used up in one atomic step under the
+  salt and a fresh nonce, lives **two minutes on the monotonic clock** (a wall-clock step cannot stretch it), and is checked and used up in one atomic step under the
   credential store's lock; the audit attempt and the change follow, with no store lock held while the audit log is written. So a used, expired, replayed or guessed value, one presented on another
   connection, one made for another action or script, and one whose script has since changed (even if it has
   since come back, as after a mint and a revoke) is refused and changes nothing; two presses at once with one
@@ -172,7 +172,7 @@ step for credentials) requires; a mint no longer has a PowerShell or terminal pa
   what the script had outstanding, so the person is asked again. At most 64 confirmations are held (the oldest
   goes first), and a restart forgets them all. This is the grants G8 pattern; the host does not trust the app's
   say-so alone (the same-user imitation residual stays OPEN, Q7).
-* **The list.** `scripts.list` returns, per script name, the scope, the soonest-lived expiry, how many
+* **The list.** `scripts.list` returns, per script name, the scope, the latest expiry among its live credentials, how many
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
   a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps
   only the hash, so a later list cannot recover them).
@@ -185,8 +185,10 @@ step for credentials) requires; a mint no longer has a PowerShell or terminal pa
 * **The tick keeps the host's own policy.** `scripts.grant-fleet` is still refused unless the script's
   credential is `read+reply` and the host's agents setting is on; the press cannot widen what the grant
   allows (fleet caps, ticked workspaces and isolation are unchanged and owner-run).
-* **Audit before change.** Each press is recorded as an attempt before anything is written, as for the CLI,
-  and an unwritable audit log refuses the press.
+* **Audit before change.** Each accepted press is recorded as an attempt before anything is written, as for the CLI,
+  and an unwritable audit log refuses the press (its confirmation is already used up, so the person asks again). Refusals
+  before that point (an unclassified caller, an agent, a credentialed connection, a missing, wrong or expired confirmation)
+  write no audit row: they change nothing, and a wrong try only costs the person a fresh confirmation.
 
 * **Automatic revocation.** Expiry; an unreadable store (fail closed, nothing is accepted until
   the owner deals with it).
@@ -337,7 +339,7 @@ these script credentials grant no roster verification or additional actions.
 |---|---|
 | `kind` and `name` on the record; mint without a session; check that skips the process binding | about 90 |
 | Caller rule: ancestry in full, no agent session in it, else refuse | about 60 |
-| Host mint, revoke and rotate ops behind the local app presses (grants G4/G7b/G8 pattern), owner-only file write, last-four display | about 100 |
+| Host mint, revoke and rotate ops behind the local app presses (grants G4/G7b/G8 pattern), owner-only file write | about 100 |
 | Script principal in the audit and the UI label; op allow-list for `kind: "script"` | about 50 |
 | Tests (kind confusion, refusal from inside a session, expiry, revoke, canary) | about 90 |
 | **Total** | **about 390** |
