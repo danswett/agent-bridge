@@ -205,8 +205,9 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
 
 **Script caller slice (#2346, Windows).** A registered script uses the same hashed token store
 but authenticates as `script:<machine>/<name>`, without a session/process binding. Its complete,
-traceable ancestry must contain no named or host-known agent process. Only `fleet.list` and
-`fleet.find` are enabled, with the host's own account scope; unsigned results stay `unverified`.
+traceable ancestry must contain no named or host-known agent process. #2763 permits only
+`fleet.list`, `fleet.find` and `agent.send` with `read+reply` scope, on the host's own account;
+unsigned lookup results stay `unverified`. Launch still requires a separate person-set fleet grant.
 The connection retains its script restriction after expiry, record removal or a store fault,
 so it never falls back to person authority. See [script-credentials.md](script-credentials.md)
 for protected files, expiry and successful-read rotation. Session binding below is unchanged.
@@ -2083,17 +2084,23 @@ unchanged. Only the principal and its source change.
 * The receiving host sets `driver`, `driverFrom` and `userMessageFrom` from the **verified
   principal** (step 5) and its **own roster** (machine name). The envelope's free text and the
   reply's words can't set them.
-* **Relay delivery arms the prompt (AP6a, #3732).** `LiteDeliver` arms the session's driver with the
-  exact framed words it types and a `userMessageLabel` of `"<session> on <machine>"` (or
-    `"script <id>"`), built only from the verified envelope principal (the machine as its envelope
-    names it, until a roster name is wired in), cleaned of brackets, `·` and
-  hidden characters and cut to 64 bytes. The prompt is marked `userMessageFrom=agent` (live
-  `activity` and `session.history` `prompt.from`/`label`) only when the transcript's prompt is those
-  exact words inside the arm window. An arm whose delivery did not go is put back, so an owner who
-  types the same words later is still the owner. Nothing in the text sets or clears it, and the
-  prompt's text is kept as typed, header included. Missing provenance means no field, and clients
-  show the owner's text as typed. The mark is held in memory with the session's turns, as for Home
-  Assistant replies: after a host restart, earlier relayed prompts carry no mark and show as typed.
+* **Relay delivery arms the prompt (AP6, #3732, #3740).** `LiteDeliver` arms the session's driver
+  with the exact framed words it types and a `userMessageLabel` of `"<session> on <machine>"` (or
+  `"script <id>"`), built only from the verified envelope principal (the machine as its envelope
+  names it, until a roster name is wired in), cleaned of brackets, `·` and hidden characters and cut
+  to 64 bytes. The arm is made only once the typing slot is held and the keys are about to go
+  (`ReplyRequest.KeysGoing`), so a delivery that is refused, busy, stale or answered without typing
+  (a signed resend of a request already delivered) never arms, and owner text typed while the slot
+  is awaited is not marked. The prompt is marked `userMessageFrom=agent` (live `activity` and
+  `session.history` `prompt.from`/`label`) only when the transcript's prompt is those exact words
+  inside the arm window. An arm still waiting when the delivery ends other than Delivered (including
+  Unconfirmed or an exception) is put back, but only while it is still the arm that delivery made (a
+  generation check under the driver lock), so an owner who types the same words later is still the
+  owner and a newer arm is never overwritten. Lane deliveries (the queueable lane) are not armed:
+  their prompts show as typed. Nothing in the text sets or clears the mark, and the prompt's text is
+  kept as typed, header included. Missing provenance means no field, and clients show the owner's
+  text as typed. The mark is held in memory with the session's turns, as for Home Assistant replies:
+  after a host restart, earlier relayed prompts carry no mark and show as typed.
 * **Which display fields are trusted.** Only names from a verified source are shown as identity:
   * the machine name from the receiving host's own roster;
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the

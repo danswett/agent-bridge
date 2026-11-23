@@ -157,6 +157,22 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_reply_calls_KeysGoing_once_just_before_its_first_keys_and_not_for_a_refusal_before_them()
+    {
+        console.Rows = ClaudeIdle();
+        var calls = new List<int>();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", KeysGoing = () => calls.Add(console.Plans.Count) };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(typed, Peer)).Outcome);
+        Assert.Equal([0], calls); // before any key went, and only once
+
+        var refused = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true, KeysGoing = () => calls.Add(-1) };
+        Assert.Equal(AnswerOutcome.Refused, (await replier.ReplyAsync(refused, Peer)).Outcome);
+        Assert.Equal([0], calls);
+    }
+
+    [Fact]
     public async Task A_Claude_reply_that_requires_an_idle_session_is_refused_as_busy_while_it_works()
     {
         console.Rows = ClaudeIdle(); // the fixture's transcript ends on the person's prompt: the turn is still running
@@ -376,6 +392,36 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
         Assert.Equal(2, console.Plans.Count);
         Assert.NotNull(console.Plans[1].Plan.Proceed);
+    }
+
+    // Claude Code drops the head of a burst it takes for a paste. The console here keeps only the last 300
+    // characters of any one send, as the live one did to a 4514-character reply, and records the prompt on Enter.
+    [Fact]
+    public async Task A_long_Claude_reply_arrives_whole_because_no_one_send_is_long_enough_to_be_taken_for_a_paste()
+    {
+        var words = string.Concat(Enumerable.Range(1, 90).Select(i => $"word{i:000} ")).Trim();
+        var typed = new System.Text.StringBuilder();
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            foreach (var send in plan.Sends)
+            {
+                typed.Append(send.Text.Length > 300 ? send.Text[^300..] : send.Text);
+                if (send.Enter) { Fixture.Append(claude, ClaudePrompt(typed.ToString())); }
+            }
+        };
+
+        var result = await ReplyAsync(ClaudeId, words);
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        var sends = console.Plans.SelectMany(p => p.Plan.Sends).ToList();
+        Assert.True(sends.Count > 1, "typed in one burst");
+        Assert.All(sends, s => Assert.True(s.Text.Length <= 100));
+        Assert.NotNull(sends[0].Expect);
+        Assert.All(sends.Skip(1), s => Assert.Null(s.Expect));
+        Assert.All(sends.SkipLast(1), s => Assert.False(s.Enter));
+        Assert.True(sends[^1].Enter);
+        Assert.Equal(words, typed.ToString().Trim());
     }
 
     [Fact]

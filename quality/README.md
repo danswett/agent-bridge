@@ -281,12 +281,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (`-FastRing`: ring 0, Linux only, §2). Its `tiers` output and the summary's Tier column give
    each gated job's tier, blocking or post-merge, and each post-merge leg by exact name (item 9).
 
-   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
-   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
-   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
-   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
-   so it runs beside them and can't take a waiting push run's place and leave that push's commit
-   untested (#938's review). GitHub promises no
+   **Main: every push runs, nothing is cancelled.** Each push to `main` has the concurrency group
+   `ci-main-<sha>`, which never cancels a run in progress, so every merge gets its full run (a single
+   shared group kept one running and one waiting run, and a newer push cancelled the one waiting:
+   3 of 10 main runs on Nov 22). A re-run (attempt 2 on) gets its own run-id group, like a run by hand,
+   so it runs beside the first attempt and can't take its place (#938's review). GitHub promises no
    order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
    over unfinished product evidence, and judges the newest usable named-job result.
    So a main run's change is everything since the last commit main's CI
@@ -396,6 +395,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
+   - `app`'s published-app self-test is sharded (#1755, Part of #2454): `AgentBridge.exe --self-test <result.json>
+     --self-test-shard i/n` runs the common start (display, the demo's rows) and then only shard `i` of `n`'s stages. The
+     stages are named and run in a fixed order (`SelfTestStages.All`: layout, launch, approve, themes, signin, progress,
+     contrast, resize); n is 1, 2 or 3, each shard takes a contiguous run of them, and without the option the one run
+     does them all, as before. A pure function in `AgentBridge.App.Core` assigns them, so its tests (every stage in exactly
+     one shard for every n, in order) run on every pull request. The result records `shard`, the `stages` it ran and
+     `stagesAll`; `build/app-self-test.ps1 -Shard i/n` passes the option, and `build/app-self-test-join.ps1` fails a run
+     whose shards are missing, doubled, of another count, or whose stages do not add up to `stagesAll`, or whose
+     result names a failure. Target for three shards: the `app` check from about 12 to about 7 minutes. The CI side
+     (the shard matrix, the join, the pinned check names in `catalog.yml` and `merge-rule.yml`) is Quality's to push, in two
+     steps: shard jobs first run beside the whole self-test, which `app` still runs and which still decides, until three main
+     runs of every shard agree with it (a shard that left out state a later stage needs, such as the launched session or
+     the approval, shows there, not in a merge); then `app` stops running the whole self-test and joins the shards instead.
+     The names `app (win-x64)` and `app (win-arm64)`, the one `needs.app.result` that `quality-gate` reads and the arm64
+     waiver names do not change at either step. Live resize stays last of its shard and measures only what its shard drew (#765).
    - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
      distribution-notice and installed-app self-test checks. It waits for `app`, downloads that
      run's existing architecture/version release artifact and a small notice/identity artifact,
@@ -497,8 +511,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
-     never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). A named test job cancelled after its tests or build started holds
+     never cancel a run in progress either, and none is replaced: each has its own group
+     `ci-main-<sha>` (item 7). A named test job cancelled after its tests or build started holds
      merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
@@ -612,7 +626,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      started, and a step that failed before it is judged like any other; a never-assigned runner
      also needs a nonempty step manifest. Cancelled runs are
      inspected rather than hiding a test failure behind older green evidence; a cancelled run
-     with no jobs (displaced in `ci-main`) is passed over.
+     with no jobs (cancelled before it started: only runs from before per-commit groups) is passed over.
      An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
      merge-rule description (after any blocking reason, compacted) and to the detailed log;
      [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
@@ -983,6 +997,16 @@ request is otherwise reviewed.
   `independent-review-2` from two different model families, the depth table above applies, and a
   security-subject document is read in full by both reviewers, whichever entitlement ran them.
   Each receipt's description names its model, so a failover is visible afterwards.
+- **Codex outage: the owner waiver (owner decision, #2454, Nov 22 15:25).** While Codex is down, a second receipt
+  (`independent-review-2`) whose description is **exactly** `owner-waiver (Nov 22 15:25)` (the whole description, case-sensitive; one
+  that merely contains it does not count) stands in for the second model family on a sensitive change, next to a successful
+  first receipt (`independent-review`) on the exact head that names a model family (a clean Sonnet FULL review). It never stands
+  in for the first receipt, only an allowed poster's counts, and the merge-rule status says `One model family's review and the
+  owner waiver (owner-waiver (Nov 22 15:25))` when it was used. **Off switch:** the repository variable `CODEX_WAIVER` must be
+  exactly `on`; unset is off and the rule is as before (`codex_waiver` in `quality/merge-rule.yml`; `merge-rule.yml` passes the
+  variable, as it does `ARM64_WAIVER`). **Revert when Codex returns:** delete the `codex_waiver` block, or unset the variable.
+  The existing independence rule is unchanged: reviewer independence comes from Quality's separate reader sessions, which each
+  receipt names, not from a comparison of the poster with the PR's author (every receipt and PR here is posted through `danswett`).
 - **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
   EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
   owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
@@ -1146,23 +1170,21 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, renewed by the owner
-  2026-11-19 22:50 PT until **2026-11-27 00:00 PT**, exactly `2026-11-27T08:00:00Z`):
-  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
-  sets it), `quality-gate` counts a failed needed job as success when its only failures are
-  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
-  on main and PRs, and every other leg of that job succeeded. The warning and summary identify
-  each waived job, its run and the expiry.
-  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
-  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
-  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
-  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
-  `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
-  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green. The Nov 19 renewal supersedes the earlier Nov 20 hard expiry;
-  it changes neither the three-job scope nor the switch or safeguards. The waiver applies only
-  strictly before the new cutoff and waives nothing at or after it; any further extension needs
-  a new owner decision. This is not proof of Arm64 runtime correctness or landing authorization.
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
+  [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
+  Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly (no
+  pattern), on main and PRs, and every other leg of that job succeeded. Once the workflow change lands (a separate patch: until then `ci.yml` still guards its waiver step with `vars.ARM64_WAIVER` and the date), there is no switch and no
+  expiry: `ARM64_WAIVER` and the date are ignored. A leftover `until:` or `switch:`
+  in `merge-rule.yml`'s `arm64_waiver` block fails the config load (the block takes only `jobs`). The warning and
+  summary identify each waived job and
+  its run. [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is
+  one result in `needs`. Any API error, any other failed job (x64, `relay-image-sarif`, `pwa-e2e`,
+  `product (ubuntu-latest)`, any), and a cancelled, timed-out or skipped Arm64 leg waive nothing, in the
+  merge rule and in `main_green` alike. The Arm64 jobs still run and stay red. This change does not touch
+  publishing: `publish-gate` still reads `app`'s raw result, so a red Arm64 leg still blocks a release
+  until the separate workflow change (#2454) lands, which makes it need both architectures' package
+  artifacts instead. This is not proof of Arm64 runtime correctness or landing authorization.
   **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
   whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
   it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
