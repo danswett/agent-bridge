@@ -226,6 +226,38 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
     }
 
+    // HA deletion gate E4(f) (docs/design/ha-gate-counters.md; Part of #1396): an HA launch whose terminal audit write fails AFTER dispatch
+    // leaves only its intent row. The windowed gate must read it as an HA dispatch with an unresolved intent: FAIL ha-fallback, never PASS.
+    [Fact]
+    public async Task A_failed_HA_launch_terminal_write_reaches_the_window_gate_as_an_ha_fallback_with_an_unresolved_intent()
+    {
+        var since = clock.GetUtcNow().AddMinutes(-1);
+        var held = GateFolder + ".held";
+        starter.BeforeStart = () => { Directory.Move(GateFolder, held); File.WriteAllText(GateFolder, "blocked"); };
+        var launcher = Launcher(Config());
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App", Permissions = "ask" };
+        var ingress = new GateLaunchIngress("legacy-ha", "ha-component", "ha-component:local", null);
+        LaunchResult result;
+        try { result = await GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", audit, ingress); }
+        finally
+        {
+            if (File.Exists(GateFolder)) { File.Delete(GateFolder); Directory.Move(held, GateFolder); }
+        }
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Single(starter.Specs);
+        Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
+        var intent = Assert.Single(LaunchAuditRows()).GetProperty("gate");
+        Assert.Equal(("intent", "legacy-ha", "ha-component"), (intent.GetProperty("phase").GetString(), intent.GetProperty("path").GetString(), intent.GetProperty("actorKind").GetString()));
+
+        var report = GateAuditProjection.ReadWindow(GateProfile, since);
+        Assert.Equal(1, report.LegacyHaDispatches);
+        Assert.Contains("unresolved-intent", report.IncompleteReasons);
+        var verdict = GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0));
+        Assert.Equal(GateVerdictKind.Fail, verdict.Kind);
+        Assert.Contains("ha-fallback: 1 legacy-ha dispatches", verdict.Reasons);
+    }
+
     [Fact]
     public async Task A_grant_replay_without_a_terminal_does_not_trust_the_launchers_started_cache()
     {

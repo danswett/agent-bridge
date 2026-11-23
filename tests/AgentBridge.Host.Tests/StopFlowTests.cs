@@ -520,6 +520,35 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
     }
 
+    // HA deletion gate E4(f) (docs/design/ha-gate-counters.md; Part of #1396): an HA stop whose terminal audit write fails AFTER dispatch
+    // leaves only its intent row. The windowed gate must read it as an HA dispatch with an unresolved intent: FAIL ha-fallback, never PASS.
+    [Fact]
+    public async Task A_failed_HA_stop_terminal_write_reaches_the_window_gate_as_an_ha_fallback_with_an_unresolved_intent()
+    {
+        var since = clock.GetUtcNow().AddMinutes(-1);
+        var folder = Path.Combine(StopAuditProfile, AgentAuditLog.FolderName);
+        var held = folder + ".held";
+        injector.OnInject = (pid, _) => { Directory.Move(folder, held); File.WriteAllText(folder, "blocked"); control.Exit(pid); };
+        StopResult result;
+        try { result = await AuditStopAsync(Stopper(), path: "legacy-ha"); }
+        finally
+        {
+            if (File.Exists(folder)) { File.Delete(folder); Directory.Move(held, folder); }
+        }
+        Assert.Equal(StopOutcome.Ended, result.Outcome);
+        Assert.Single(injector.Plans);
+        Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
+        var intent = Assert.Single(StopRows());
+        Assert.Equal(("intent", "legacy-ha", "ha-component"), (intent.Gate!.Phase, intent.Gate.Path, intent.Gate.ActorKind));
+
+        var report = GateAuditProjection.ReadWindow(StopAuditProfile, since);
+        Assert.Equal(1, report.LegacyHaDispatches);
+        Assert.Contains("unresolved-intent", report.IncompleteReasons);
+        var verdict = GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0));
+        Assert.Equal(GateVerdictKind.Fail, verdict.Kind);
+        Assert.Contains("ha-fallback: 1 legacy-ha dispatches", verdict.Reasons);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
