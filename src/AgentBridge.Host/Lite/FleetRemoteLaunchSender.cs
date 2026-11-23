@@ -27,6 +27,7 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
     readonly TimeProvider time = clock ?? TimeProvider.System;
+    readonly LocalApi.RefusalAudits refusals = new(clock ?? TimeProvider.System);
 
     // True when the request names a host other than this one (by device id or node id): the local grant path never serves it.
     public bool IsRemote(string? target) =>
@@ -38,12 +39,15 @@ public sealed class FleetRemoteLaunchSender(IFleetLaunchLink link, AgentCredenti
 
     public async Task<FleetLaunchReceipt> SendAsync(AgentCredential caller, FleetLaunchInput input, CancellationToken ct)
     {
-        // A refusal before anything is sent is the source host's own refused use: it is audited here. If the row cannot be written, that is the refusal.
+        // A refusal before anything is sent is the source host's own refused use: it is audited here with the same row and the same hourly limiter every other
+        // refused launch uses (LocalApi.AuditRefusal, the function the receiver audit of #4170 also writes through). If the row cannot be written, that is the refusal.
         FleetLaunchReceipt Refuse(string reason)
         {
-            if (audit is not null && !audit.Append(new AgentAuditEntry("local", input.Request.ToString("D"), credentials.PrincipalOf(caller), caller.Chain,
-                LaunchProtocol.Launch, "remote", "refused", reason) { Grant = input.Grant.ToString("D") }))
-            { return FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "audit-unavailable"); }
+            if (audit is not null)
+            {
+                try { LocalApi.AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, LaunchProtocol.Launch, JsonSerializer.SerializeToElement(input, ProtocolJson.Options), audit, reason, refusals); }
+                catch (InvalidOperationException) { return FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "audit-unavailable"); }
+            }
             return FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);
         }
         if (!On()) { return Refuse("kill-switch"); }
