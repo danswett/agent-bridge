@@ -1277,6 +1277,110 @@ public class MergeRuleTests
         }
     }
 
+    // A main run whose jobs cannot be read (a zombie run the API 404s on, a 5xx, an empty or cut-short body) used to error every pull request's
+    // merge-rule. It is skipped only once it has been unreadable for over 15 minutes (a fresh run can 404 briefly), never when it is a
+    // completed failure, and the status names it.
+    static readonly DateTimeOffset MainNow = new(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
+
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable);
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain, utcNow: () => MainNow);
+            return (Assert.Single(github.Posted), output.ToString());
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("404")]
+    [InlineData("500")]
+    [InlineData("empty")]
+    [InlineData("truncated")]
+    public void A_main_run_unreadable_for_over_15_minutes_is_skipped_and_named_and_the_newest_readable_run_is_judged(string kind)
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 16), (6, "completed", "success", 1, 40));
+
+        var (posted, output) = JudgeMain(runs, new Dictionary<long, string> { [7] = kind });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+        Assert.Contains("Main: ci.yml run 6 (attempt 1) on c600000", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_404_on_a_run_under_15_minutes_old_is_not_skipped_and_the_judge_errors_as_before()
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 14), (6, "completed", "success", 1, 40));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("read main's CI", posted, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_without_a_creation_time_is_treated_as_fresh_so_it_is_never_skipped()
+    {
+        var runs = MainRuns((7, "in_progress", null, 1), (6, "completed", "success", 1));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_newer_readable_completed_failed_run_always_blocks_even_when_an_unreadable_run_was_skipped()
+    {
+        // 9 is the zombie (skipped), 8 is the newest readable run and it failed, 7 passed before it.
+        var runs = MainRunsAged(MainNow, (9, "in_progress", null, 1, 60), (8, "completed", "failure", 1, 30), (7, "completed", "success", 1, 90));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [9] = "404" });
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("Main is red (CI c800000): named job light is not green", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 9", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_completed_failed_run_is_never_skipped_however_long_its_jobs_have_been_unreadable()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "failure", 1, 600), (7, "completed", "success", 1, 700));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [8] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_cancelled_run_whose_jobs_are_unreadable_is_skipped_after_the_grace_like_a_zombie()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "cancelled", 1, 20), (6, "completed", "success", 1, 40));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Every_unreadable_run_skipped_is_named_not_only_the_first()
+    {
+        var runs = MainRunsAged(MainNow, (9, "in_progress", null, 1, 90), (8, "completed", "cancelled", 1, 60), (7, "completed", "success", 1, 120));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [9] = "404", [8] = "500" });
+
+        Assert.Contains("skipped unreadable run 9, 8", posted, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_green_main_lets_a_ready_pull_request_pass()
     {
@@ -2591,6 +2695,18 @@ public class MergeRuleTests
     }
 
     // Main's CI runs as REST lists them, newest first: an id, then its status, conclusion and attempt.
+    // Runs created AgeMinutes before now, newest first as given.
+    static string MainRunsAged(DateTimeOffset now, params (long Id, string Status, string? Conclusion, int Attempt, int AgeMinutes)[] runs) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = runs.Length,
+            workflow_runs = runs.Select(r => new
+            {
+                id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt,
+                created_at = now.AddMinutes(-r.AgeMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+            }),
+        });
+
     static string MainRuns(params (long Id, string Status, string? Conclusion, int Attempt)[] runs) =>
         JsonSerializer.Serialize(new
         {
@@ -2671,7 +2787,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]") : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -2724,6 +2840,17 @@ public class MergeRuleTests
             }
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))
             {
+                // A run whose jobs gh can't give: a 404 or another non-2xx (gh exits 1 and says so), or a body that is empty or cut short.
+                if (unreadableRuns is not null)
+                    foreach (var (id, kind) in unreadableRuns)
+                        if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal))
+                            throw kind switch
+                            {
+                                "404" => new InvalidOperationException($"gh api repos/danswett/agent-bridge/actions/runs/{id}/jobs failed (1): gh: Not Found (HTTP 404)"),
+                                "500" => new InvalidOperationException($"gh api repos/danswett/agent-bridge/actions/runs/{id}/jobs failed (1): gh: Internal Server Error (HTTP 500)"),
+                                "empty" => new JsonException("The input does not contain any JSON tokens."),
+                                _ => new JsonException("Expected depth to be zero at the end of the JSON payload."),
+                            };
                 if (jobsByRun is not null)
                     foreach (var (id, json) in jobsByRun)
                         if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal))
