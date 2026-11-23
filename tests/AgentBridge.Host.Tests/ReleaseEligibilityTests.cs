@@ -370,7 +370,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
 
     // A refused GitHub policy read renews from the relay's copy of the same list while the release
     // list's relay grace is open (halt policy below; the signed anchor stays the real fix).
-    ReplyHandler HeldGitHub(byte[] halts, Func<byte[]> relayList, Func<TimeSpan?> relayAge, Func<bool>? limited = null, string githubRun = "2349") => new(request =>
+    ReplyHandler HeldGitHub(byte[] halts, Func<byte[]> relayList, Func<TimeSpan?> relayAge, Func<bool>? limited = null, string githubRun = "2349", (string Run, byte[] Body)? carrier = null) => new(request =>
     {
         var uri = request.RequestUri!.AbsoluteUri;
         if (uri == GitHubHaltListSource.Releases)
@@ -385,7 +385,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
             if (relayAge() is { } age) { response.Headers.Age = age; }
             return response;
         }
-        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(halts) };
+        return new(HttpStatusCode.OK) { Content = new ByteArrayContent(carrier is { } c && uri.Contains($"/v0.1.{c.Run}/") ? c.Body : halts) };
     });
 
     async Task GitHubAnswersTheReleaseList(ReplyHandler handler)
@@ -450,7 +450,7 @@ public sealed class ReleaseEligibilityTests : IDisposable
         var known = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2350"]}""");
         var older = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
         var (relay, limited) = (Metadata("2349", older), false);
-        var handler = HeldGitHub(known, () => relay, () => TimeSpan.Zero, () => limited, "2350");
+        var handler = HeldGitHub(known, () => relay, () => TimeSpan.Zero, () => limited, "2350", ("2349", older));
         await GitHubAnswersTheReleaseList(handler);
         var source = Policy(handler);
         await source.ReadAsync(default);
@@ -488,6 +488,63 @@ public sealed class ReleaseEligibilityTests : IDisposable
 
         Assert.Equal(time.GetUtcNow(), source.Snapshot.At);
         Assert.Equal(2, handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases));
+    }
+
+    [Fact]
+    public async Task A_relay_renewal_is_never_fresh_past_the_end_of_the_relay_grace()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2349"]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
+        await GitHubAnswersTheReleaseList(handler);
+        var graceEnd = time.GetUtcNow() + ReleaseDiscovery.GithubRelayAtMost;
+        time.Advance(TimeSpan.FromHours(20));
+        var source = Policy(handler);
+
+        await source.ReadAsync(default);
+
+        // Stamped so that it is stale a revalidation period before the grace ends, not six hours after the read.
+        Assert.Equal(graceEnd - ReleaseDiscovery.GithubRevalidateEvery, source.Snapshot.At);
+        Assert.True(source.Snapshot.Fresh);
+        time.AdjustTime(graceEnd);
+        Assert.False(source.Snapshot.Fresh);
+        Assert.Contains("0.1.2349", source.KnownHalts);
+    }
+
+    [Fact]
+    public async Task A_relay_policy_that_omits_a_known_halt_renews_nothing_and_never_clears_it()
+    {
+        var known = Encoding.UTF8.GetBytes("""{"v":1,"halted":["0.1.2350"]}""");
+        var omits = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var limited = false;
+        var handler = HeldGitHub(known, () => Metadata("2351", omits), () => TimeSpan.Zero, () => limited, "2350", ("2351", omits));
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+        await source.ReadAsync(default);
+        time.Advance(TimeSpan.FromHours(7));
+        limited = true;
+
+        await Assert.ThrowsAsync<IOException>(() => source.ReadAsync(default));
+
+        Assert.Equal(2350, source.Snapshot.Policy!.Release);
+        Assert.Contains("0.1.2350", source.KnownHalts);
+        Assert.Contains("0.1.2350", source.Snapshot.Policy.Body);
+        Assert.False(source.Snapshot.Fresh);
+    }
+
+    [Fact]
+    public async Task The_relay_is_not_asked_again_while_the_refusal_hold_lasts()
+    {
+        var halts = Encoding.UTF8.GetBytes("""{"v":1,"halted":[]}""");
+        var handler = HeldGitHub(halts, () => Metadata("2349", halts), () => TimeSpan.Zero);
+        await GitHubAnswersTheReleaseList(handler);
+        var source = Policy(handler);
+        await source.ReadAsync(default);
+        time.Advance(TimeSpan.FromMinutes(10));
+
+        await source.ReadAsync(default);
+
+        Assert.Equal((1, 1), (handler.Requests.Count(uri => uri.AbsoluteUri == GitHubHaltListSource.Releases),
+            handler.Requests.Count(uri => uri.AbsoluteUri == ReleaseDiscovery.CdnPolicyList)));
     }
 
     sealed class Source(string? json) : IHaltListSource

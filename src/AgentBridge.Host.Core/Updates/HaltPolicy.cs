@@ -75,9 +75,16 @@ public sealed partial class ReleaseDiscovery
                         && await AskCdnPolicyAsync(cancellationToken) is { } relayed)
                     {
                         var verified = await verify(relayed.Body, cancellationToken);
-                        if (policy.Policy is null || verified.Release >= policy.Policy.Release)
+                        // The relay path never clears a halt: a policy that omits one already known is
+                        // refused, whole. Only GitHub's own answer clears (a reviewed edit).
+                        var omitted = policy.Policy?.Halted?.Except(verified.Halted ?? [], StringComparer.Ordinal).Any() == true;
+                        if (omitted) { log?.Invoke("update policy: a relay policy that omits a known halt was refused; known halts retained"); }
+                        else if (policy.Policy is null || verified.Release >= policy.Policy.Release)
                         {
-                            policy = policy with { Policy = verified, At = now - relayed.Age, ETag = null, Verified = policy.Attempt };
+                            // Stale a revalidation period before the relay grace ends, so a halt it hides lasts no
+                            // longer than the grace (the 6 hours of freshness never run past its end).
+                            var graceEnd = (state.GitHubAnsweredAt ?? state.RelayBootstrapAt)!.Value + GithubRelayAtMost;
+                            policy = policy with { Policy = verified, At = Earlier(now - relayed.Age, graceEnd - GithubRevalidateEvery), ETag = null, Verified = policy.Attempt };
                             log?.Invoke($"update policy: renewed from the relay's list, its copy {Span(relayed.Age)} old; GitHub refused");
                         }
                         else { log?.Invoke("update policy: older relay policy ignored; known halts retained"); }
@@ -131,6 +138,8 @@ public sealed partial class ReleaseDiscovery
             return null;
         }
     }
+
+    static DateTimeOffset Earlier(DateTimeOffset a, DateTimeOffset b) => a < b ? a : b;
 
     static long NextAttempt(HaltPolicyCache policy) =>
         policy.Attempt >= policy.Verified && policy.Attempt is >= 0 and < long.MaxValue ? policy.Attempt + 1 : throw new IOException("update policy: cache generation unavailable");

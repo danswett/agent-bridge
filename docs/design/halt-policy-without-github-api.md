@@ -78,11 +78,15 @@ answered here within `GithubRelayAtMost`, 24 hours), the same list is read from 
 say its `Age` (at most `CdnOldest`, one hour), and be no larger than a GitHub list. It then goes
 through the same verification as GitHub's: the highest canonical `v0.1.N` with `draft: false`, exactly
 one `halts.json` whose size and sha256 the list names, **downloaded from `github.com`**, and the
-strict body. The renewal is stamped as old as the relay's copy (`now - Age`). An older release than
-the one known is ignored, known halts are never dropped, and any failure leaves the policy
-unrenewed as before. GitHub's own answer always wins, and it is asked first every hour.
+strict body. **The relay path never clears a halt:** a relay policy that omits any halt already known is
+refused whole, and an older release than the one known is ignored; only GitHub's own answer can
+clear one (a reviewed edit). Any failure leaves the policy unrenewed. **The renewal is stamped
+`min(now - Age, graceEnd - GithubRevalidateEvery)`**, where `graceEnd` is `GithubRelayAtMost` after
+GitHub last answered here, so its six hours of freshness (also at action time, in the app and the host)
+never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
+the read. GitHub's own answer always wins, and it is asked first every hour.
 
-**Accepted risk** (owner, Nov 22): the relay is unsigned transport, so a compromised or stale relay
+**Accepted risk** (owner, Nov 22; evidence: the owner's answer to Chief, relayed by Eng R8, with Chief's receipt to be linked on #3778): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
 hidden for up to the 24-hour grace**. It can never forge a halt or clear a known one: the carrier's bytes
 come from `github.com` and must match the listed digest, and an older release never replaces a newer
