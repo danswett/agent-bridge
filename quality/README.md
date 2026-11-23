@@ -592,6 +592,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
      walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     **A run whose jobs cannot be read is passed over only after 15 minutes.** The API can answer 404, a 5xx, or an empty or cut-short body
+     for a main run's jobs (a zombie run it never serves took every pull request's merge-rule to `error` for as long as it sat newest).
+     Such a run is skipped, and the status says `skipped unreadable run <id>`, only once it was created over 15 minutes ago: a fresh run
+     can 404 briefly, and until then the judge errors as it always has. A completed failed run is never skipped (that would hide a red main),
+     and a run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
+     The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
+     failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
      A candidate needs a successful completed plan and completed product instances;
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
