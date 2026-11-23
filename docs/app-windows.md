@@ -68,10 +68,14 @@ and reading position; a missing or stale session falls back to the first availab
 The record contains only opaque session/turn keys and scroll geometry, not transcript text.
 This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
-following the pinned end) are skipped while more than 60 layout passes arrive within a second, and `app.log`
-records the first such storm with its count. They also run once, at low priority, after the layout event rather than in it,
-because setting the panel's scroll mode or the scroll offset there starts the next layout pass; layout that a correction itself
-causes runs it at most once more in that turn (#3782, the suspect named in #3716's anchoring, not yet a proven fix).
+following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
+nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
+and `app.log` records the first skipped correction of a storm with its count (#3842). The guard keeps at most 60 stamps however dense the burst, and a skipped
+pass while a saved reading position still waits schedules one retry after the window, so a finite burst cannot leave
+the restore undone (#3811). They also run once, at low priority,
+after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
+layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
+#3716's anchoring, not yet a proven fix).
 
 Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
 turns even while the pointer remains over the conversation. Older drawing still waits for
@@ -958,6 +962,14 @@ controls consume that same contract; this extraction does not disable or remove 
 
 ### Releases and updates: every merge to main is a pre-release
 
+**Planned change (owner decision, Nov 23, as Eng R8b ruled; proposed, not yet built).** Main is green on build and test only.
+Packing, the installer check, `sign`, `attest` and `vpk` stay in `ci.yml` as non-required jobs, so they hold neither main nor
+a merge. The release train never rebuilds; #3769 (merged) is only its commit selector, which requires both architectures'
+package artifacts (the Arm64 jobs may be red). **Proposed, a separate change:** the train installs and self-tests those exact
+bytes before it publishes, and a failure publishes nothing and raises an alert, so a bad installer blocks the release, not a
+merge. `publish` is then the train's, and release order is the train's. Until that is built, what follows is what runs. The speed plan and the main concurrency
+change (one group per commit, nothing cancelled) are in quality/README.md, "CI: speed, runners and what gates main".
+
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
 app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
 select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
@@ -982,9 +994,8 @@ connector's Install button on a machine the dashboard drives.
   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
-  doesn't rest on the order main's CI runs go in (first attempts share
-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, unless main's head has since
+  doesn't rest on the order main's CI runs go in (each push has a group of its
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
   changed the app (main's own selector, under the lock, says so; main's later run publishes
   both, where publishing this first could leave that one's lower version refused), and
   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
@@ -1127,10 +1138,13 @@ A second way to publish, apart from merging: `.github/workflows/release-train.ym
 (and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
 Merging never waits for it and it never blocks a merge.
 
-**Why.** Each push to `main` cancels the run waiting before it (group `ci-main`, above), and a
+**Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
 superseded run that went green still publishes nothing when `main`'s head has since changed the
 app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since.
+15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
+(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
+`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
+starvation lasts until the train lands.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
