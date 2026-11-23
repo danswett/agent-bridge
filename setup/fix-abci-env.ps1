@@ -41,6 +41,34 @@ $wanted = @(
     'C:\Windows\System32', 'C:\Windows', 'C:\Windows\System32\WindowsPowerShell\v1.0')
 $path = @($wanted | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
 foreach ($gone in @($wanted | Where-Object { $_ -notin $path })) { Write-Warning "Not on this VM, left out of PATH: $gone" }
+
+# #1294 P1: a PATH folder a non-admin can write (or redirect) lets that account plant a program every job then runs.
+# Every folder must be owned by an admin principal, grant no write to anyone else, be no reparse point (nor sit under
+# one), and not be per-user. Anything else refuses the whole run before a file is touched.
+$adminSids = @('S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464') # Administrators, SYSTEM, TrustedInstaller
+$ignoredSids = @('S-1-3-0') # CREATOR OWNER: inherit-only, applies to what an allowed writer creates
+# Write, append, create, delete, change permissions or owner; and the generic write/all bits.
+$writeBits = 0x2 -bor 0x4 -bor 0x40 -bor 0x10000 -bor 0x40000 -bor 0x80000 -bor 0x40000000 -bor 0x10000000
+function Get-PathProblems([string]$Dir) {
+    $problems = @()
+    if ($Dir -match '^(?i)C:\\Users\\') { $problems += 'is per-user (under C:\Users)' }
+    for ($p = $Dir; $p; $p = Split-Path -Parent $p) {
+        if ((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { $problems += "has a reparse point at $p" }
+    }
+    $acl = Get-Acl -LiteralPath $Dir
+    $owner = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -notin $adminSids) { $problems += "is owned by $($acl.Owner), not an admin principal" }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -ne 'Allow' -or $rule.IdentityReference.Value -in $adminSids + $ignoredSids) { continue }
+        if (([int64]$rule.FileSystemRights -band $writeBits) -ne 0) {
+            $who = try { $rule.IdentityReference.Translate([Security.Principal.NTAccount]).Value } catch { $rule.IdentityReference.Value }
+            $problems += "lets $who write ($($rule.FileSystemRights))"
+        }
+    }
+    $problems
+}
+$unsafe = @(foreach ($dir in $path) { foreach ($why in @(Get-PathProblems $dir)) { "$dir $why" } })
+if ($unsafe) { throw "Refusing, nothing changed: PATH folders the runner account could write or redirect:`n  $($unsafe -join "`n  ")" }
 if ('C:\Program Files\Python312' -notin $path) { Write-Warning 'No machine-wide Python 3.12 here: jobs that need python will still fail.' }
 $managed = '^(PATH|DOTNET_INSTALL_DIR|AGENT_BRIDGE_NUGET_SOURCE|DOTNET_CLI_TELEMETRY_OPTOUT)='
 
