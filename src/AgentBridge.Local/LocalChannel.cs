@@ -38,6 +38,8 @@ public sealed class LocalChannel : IClientChannel
     public bool IsOpen => !closed.Task.IsCompleted;
     public Task Closed => closed.Task;
     public Exception? CloseReason => closeReason;
+    // Where a reply that could not be sent is said (the server's log); null on a client's own end.
+    internal Action<string>? Log { get; set; }
     public ChannelReader<ChannelEvent> Events => events.Reader;
 
     internal LocalChannel(Stream stream, string peerId, string peerName, string peerKind,
@@ -186,12 +188,13 @@ public sealed class LocalChannel : IClientChannel
     {
         byte[] reply;
         Func<IProtocolChannel, Task>? then = null;
+        var runsIfUnsent = false;
         var served = new ServedRequest(id, Serialize, b => SendAsync(b, default));
         ServedRequest.Enter(served);
         try
         {
             var result = await handler!(this, op, data);
-            if (result is ChannelReply r) { (result, then) = (r.Result, r.Then); }
+            if (result is ChannelReply r) { (result, then, runsIfUnsent) = (r.Result, r.Then, r.RunsIfUnsent); }
             reply = Serialize(result is null ? new { re = id, ok = false, error = $"unknown op {op}" } : new { re = id, ok = true, result });
             if (reply.Length > Frames.MaxMessageBytes)
             {
@@ -213,7 +216,13 @@ public sealed class LocalChannel : IClientChannel
             await SendAsync(reply, default);
             sent = true;
         }
-        catch (Exception e) when (e is IOException or MessageTooLargeException or ObjectDisposedException) { return; }
+        catch (Exception e) when (e is IOException or MessageTooLargeException or ObjectDisposedException)
+        {
+            // The client did not get its answer (it hung up first, or its pipe broke). What it asked for was accepted, though: an action (a Stop, a
+            // Restart, a Leave) still runs, and the failure is said (#4134). Any other follow-up needs its response on the wire first.
+            Log?.Invoke($"local pipe: the reply to {op} could not be sent ({e.GetType().Name}); {(then is not null && runsIfUnsent ? "its action runs anyway" : "nothing follows it")}");
+            if (!runsIfUnsent) { then = null; }
+        }
         finally { served.Responded(sent); }
         if (then is null) { return; }
         try { await then(this); }
