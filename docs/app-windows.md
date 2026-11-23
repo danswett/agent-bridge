@@ -1180,6 +1180,11 @@ starvation lasts until the train lands.
   the `alert` job then fails the run with a named error (commit and CI run); a red train run is the alert, and no
   other notification channel is wired here. A missing artifact fails that leg's download, so the train fails
   closed.
+  **Arm64 never gates the train** (owner; Quality's ruling): both packages are still required, so the Arm64
+  package's presence, hash and manifest are hard checks, but the Arm64 installed-app self-test is only
+  recorded (in the run summary, with a warning) and does not hold the release, unless the repository
+  variable `TRAIN_ARM64_SELFTEST_GATES` is set to `true`, which makes a red Arm64 self-test hold it. Unset is
+  the default: not blocking. x64's self-test stays required.
 * **CDN refresh after publishing** (workflow patch, #3870 option A, #3880). A `purge` job runs after `publish`
   in the `release-purge` environment (main only; the secret `CF_PURGE_TOKEN`, Cache Purge on the zone and nothing
   else, and the variable `CF_ZONE_ID`). It purges the relay's `per_page=10` and `per_page=100` list URLs by URL,
