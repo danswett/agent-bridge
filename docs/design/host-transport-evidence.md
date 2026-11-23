@@ -55,6 +55,19 @@ Quality sets these floors:
 1. **N = 50 consecutive compared launches**: 50 launches, each issued on the Host path and compared with the same
    inputs on the HA transport, with no hidden retry and no gaps. Fewer than 50 compared launches is
    **INCONCLUSIVE**, not a pass, and the run is repeated.
+   The run holds at least **100 compared requests** in all, each with an HA twin; the 50 consecutive count is
+   inside that total, never in place of it.
+
+**Coverage floors**, each also INCONCLUSIVE if missed:
+
+- **Refusal cases (Host only, no HA twin)**: 5 of each case in the table above, and 3 for the warm-up case.
+- **Lost response**: 3 cases, each resolved with `launches status`.
+- **Concurrent bursts**: 3, with launches issued at the same time; the double-launch and counter checks cover them.
+- **Long prompts**: 5, including one near 60 KB.
+- **Hosts**: at least 3 disposable hosts, with 3 source-target pairs, each pair run in both directions.
+- **Window**: at least 6 h across at least 4 distinct hours, including one induced host restart and one relay
+  reconnect. Each induced event needs the owner's approval **at run time**; this document grants none.
+- **Late second session**: after each launch, wait 5 minutes and confirm no second session appeared for that request id.
 2. **0 double launches**: for each request id, at most one session exists on the target.
 3. **0 HA fallbacks**: zero HA presses made as a fallback on any Host-path request (the HA fallback counter stays at zero for
    Host-path requests).
