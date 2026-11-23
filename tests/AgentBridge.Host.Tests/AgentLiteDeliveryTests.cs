@@ -628,6 +628,37 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
         Assert.Empty(command.Typed);
     }
+    // Slice C: with the flag on, a Claude box must be positively empty or show exactly the known hint; else composerNotEmpty, no keys.
+    [Theory]
+    [InlineData("> half a thought")]
+    [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
+    public async Task With_the_flag_on_a_claude_box_holding_a_draft_or_an_unknown_suggestion_is_refused_composerNotEmpty_with_no_keys(string row)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], row, .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(f));
+        Assert.Empty(f.Typed);
+    }
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("> Press up to edit queued messages")]
+    public async Task With_the_flag_on_an_empty_claude_box_or_the_exact_queued_hint_is_typed_and_the_replier_must_see_an_empty_box(string row)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], row, .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f)).Typed);
+        Assert.True(Assert.Single(f.Typed).RequireEmptyBox);
+    }
+    [Fact]
+    public async Task With_the_flag_off_a_claude_box_with_text_is_typed_as_before_and_the_replier_is_not_told_to_require_an_empty_box()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> Try \"fix lint errors\"", .. ClaudeBox.Skip(2)] }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f)).Typed);
+        Assert.False(Assert.Single(f.Typed).RequireEmptyBox);
+    }
     // Option 2 (owner decision on #3866, #3828 design "Busy sends to Claude"): with laneDelivery on, a Claude target keeps the legacy
     // busy-queue typing path while claudeBusyQueue is on; Copilot stays on the lane; nothing changes with the flag off.
     [Fact]

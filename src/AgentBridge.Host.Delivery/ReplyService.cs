@@ -280,7 +280,7 @@ public sealed partial class ReplyService : ISessionReplier
                 }
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing, request.RequireEmptyBox);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
@@ -697,7 +697,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null, bool requireEmptyBox = false)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -766,6 +766,8 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt in an empty box, which a screen read cannot tell from typed words, so its
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
+            // claudeBusyQueue (#3828, slice C): Claude's suggestion cannot be told from typed words, so the box must be positively empty or show exactly the known hint.
+            if (agent == AgentKind.Claude && requireEmptyBox && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine, or it shows words that cannot be told from a draft; send or clear it there first") with { Refusal = ReplyRefusal.Occupied }); }
             if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
             // A box whose words start with / or ! holds a command waiting for Enter, and a reply
             // typed after it would send it, with whatever the reply adds. Claude Code drops
