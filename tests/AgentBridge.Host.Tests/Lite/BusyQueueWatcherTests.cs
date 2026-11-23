@@ -96,4 +96,18 @@ public sealed class BusyQueueWatcherTests
         await Drive(new BusyQueueWatcher(s2, clock) { Taken = (_, _, _) => throw new IOException("nope") }.WatchAsync(r2), TimeSpan.FromSeconds(130));
         Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded"), (s2.Get(r2)!.State, s2.Get(r2)!.Reason));
     }
-}
+
+    // #3926 review P2: a watch carries the peer of its send, so two peers that hold the same request id never touch each other's record.
+    [Fact]
+    public async Task A_watch_with_the_peer_settles_that_peers_record_even_when_another_peer_holds_the_same_request_id()
+    {
+        var s = new BusyQueueStore(clock); var r = Req();
+        s.TryBegin(r, "agent:m/a", "sess1"); s.Track(r, "/t/a.jsonl", 7, principal: "agent:m/a"); s.KeysWent(r, "agent:m/a");
+        s.Settle(r, BusyQueueStore.Queued, null, held: true, "agent:m/a");
+        s.TryBegin(r, "agent:m/b", "sess2");
+        var w = new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => true };
+        await Drive(w.WatchAsync(r, principal: "agent:m/a"), TimeSpan.FromSeconds(10));
+        Assert.Equal(BusyQueueStore.Delivered, s.Get(r, "agent:m/a")!.State);
+        Assert.Equal(BusyQueueStore.InFlight, s.Get(r, "agent:m/b")!.State);
+        Assert.False(s.SlotHeld("sess1")); Assert.True(s.SlotHeld("sess2"));
+    }}
