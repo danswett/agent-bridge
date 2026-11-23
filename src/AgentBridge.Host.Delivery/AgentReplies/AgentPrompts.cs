@@ -120,7 +120,7 @@ public static class ClaudePrompts
 
     // The words of a person's prompt: content as a string, or its text blocks. An entry
     // carrying a tool_result is a tool's answer, not the person's.
-    static string? Text(JsonElement entry)
+    internal static string? Text(JsonElement entry)
     {
         if (!entry.TryGetProperty("message", out var m) || m.ValueKind != JsonValueKind.Object) { return null; }
         if (!m.TryGetProperty("content", out var c)) { return null; }

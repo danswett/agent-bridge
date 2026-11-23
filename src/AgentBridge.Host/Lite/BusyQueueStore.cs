@@ -69,6 +69,10 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { return records.TryGetValue(request, out var r) ? r : null; }
     }
 
+    public sealed record Holding(string Request, string? Transcript, long Offset);
+    public void Track(string request, string? transcript, long offset) { }
+    public Holding? Holder(string session) => null;
+
     public bool SlotHeld(string session)
     {
         lock (gate) { return slots.ContainsKey(session); }

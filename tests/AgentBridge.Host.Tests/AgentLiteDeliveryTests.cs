@@ -50,6 +50,8 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        public string? Transcript;
+        public SessionFiles? Files(string id) => Transcript is null ? null : new SessionFiles(Agent, Transcript, null);
         BusyQueueStore? busyStore;
         public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
@@ -796,7 +798,44 @@ public sealed class AgentLiteDeliveryTests
         Assert.True((await SendNew(l2)).Typed); Assert.True((await SendNew(l2)).Typed);
         Assert.Empty(off.Store.Records());
     }
-[Fact]
+    // D2b-2b1 (#3856): a prompt Claude takes later frees the held slot. At admission, a held slot is checked against the transcript first.
+    static string TakenRow(string framed) => System.Text.Json.JsonSerializer.Serialize(new { type = "user", promptSource = "queued", message = new { role = "user", content = framed } });
+    [Fact]
+    public async Task A_prompt_claude_takes_later_frees_the_held_slot_for_the_next_send_and_the_record_becomes_delivered()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-held-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var f = BusyClaude(ReplyStage.Queued); f.Transcript = path; var lite = f.Build();
+            Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+            var firstText = Assert.Single(f.Typed).Text!;
+            Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));     // nothing taken yet: still held
+            File.AppendAllText(path, TakenRow(firstText) + "\n");                          // Claude takes it, later
+            Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);                  // the slot freed: the next send is admitted
+            Assert.Equal(2, f.Typed.Count);
+            Assert.Contains(f.Store.Records(), r => r.State == BusyQueueStore.Delivered && !r.Held);
+        }
+        finally { File.Delete(path); }
+    }
+    [Fact]
+    public async Task A_held_slot_stays_held_without_a_known_transcript_or_a_matching_taken_entry()
+    {
+        var none = BusyClaude(ReplyStage.Queued); var l1 = none.Build();           // transcript unknown: nothing to check
+        Assert.Equal(LiteKind.Queued, (await SendNew(l1)).Outcome);
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(l1));
+        var path = Path.Combine(Path.GetTempPath(), "lite-held-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var f = BusyClaude(ReplyStage.Queued); f.Transcript = path; var l2 = f.Build();
+            Assert.Equal(LiteKind.Queued, (await SendNew(l2)).Outcome);
+            var framed = Assert.Single(f.Typed).Text!;
+            File.AppendAllText(path, System.Text.Json.JsonSerializer.Serialize(new { type = "queue-operation", operation = "enqueue", content = framed }) + "\n");
+            File.AppendAllText(path, TakenRow(framed.Replace("request ", "request 0")) + "\n");   // another request's entry
+            Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(l2));
+            Assert.Single(f.Typed);
+        }
+        finally { File.Delete(path); }
+    }    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
         var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working }; busy.Launch(LaunchProtocol.Ask);
