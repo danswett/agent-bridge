@@ -131,3 +131,30 @@ test('a device that lies about its id or sign-in time shows a placeholder or "ju
   assert.equal(ApproveTexts.ago(60 * 60_000), '1 h ago');
   assert.equal(vm.idShown, '3f9a 2c71 b0de 4a5f');
 });
+
+test('nothing outside the model can set its state, status or name, or change the device it describes', () => {
+  const p = pending();
+  const vm = new ApproveViewModel(approver(), p, spyProof('key'), () => true, () => NOW);
+  for (const key of ['state', 'statusText', 'name', 'pending']) assert.throws(() => { vm[key] = 'x'; }, TypeError, key);
+  assert.throws(() => { vm.pending.name = 'x'; }, TypeError);
+  assert.equal(vm.approve(), 'not-ready');
+  const banner = vm.banner;
+  p.name = 'Changed later';
+  p.id = 'ffffffffffffffff';
+  assert.equal(vm.banner, banner);
+  assert.equal(vm.name, 'Kitchen laptop');
+});
+
+test('the device\'s own name is cleaned before it is shown or signed: no controls, no direction or hidden characters, at most 64', () => {
+  const name = (value) => new ApproveViewModel(approver(), pending({ name: value }), spyProof('key'), () => true, () => NOW);
+  const dirty = name('Evil‮exe.txt\u0007​⁦ PC\n<b>');
+  assert.equal(dirty.name, 'Evilexe.txt PC<b>');
+  assert.match(dirty.banner, /^A new device wants to join: Evilexe\.txt PC<b>, says/);
+  assert.equal(name('x'.repeat(100)).name, 'x'.repeat(64));
+  assert.equal(name('‮\u0007  ').name, 'unnamed device');
+  for (const bad of [undefined, null, {}]) assert.equal(name(bad).name, 'unnamed device');
+  const vm = name('ok');
+  assert.equal(vm.setName('a‮b'), false);
+  assert.equal(vm.setName('a​b'), false);
+  assert.equal(vm.name, 'ok');
+});
