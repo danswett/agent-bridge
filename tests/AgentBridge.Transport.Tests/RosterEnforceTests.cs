@@ -80,19 +80,62 @@ public class RosterEnforceTests
         Assert.Equal(4030, CloseCodes.Removed);
     }
 
-    [Fact]
-    public async Task A_store_that_cannot_be_read_leaves_a_device_open_because_the_relay_is_never_the_gate()
+    // A store that can be told to fail: every read, or every read after the next write.
+    sealed class FlakyStore(IRosterStore inner) : IRosterStore
     {
-        var w = Scenario();
-        var roster = Make(w, new BrokenStore());
-        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("G")));
+        public volatile bool Broken;
+        public volatile bool BreakAfterWrite;
+        public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => Broken ? throw new IOException("down") : inner.ReadAsync(name, ct);
+        public async Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct)
+        {
+            var r = await inner.WriteAsync(name, body, etag, ct);
+            if (BreakAfterWrite) { Broken = true; }
+            return r;
+        }
+        public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => inner.DeleteAsync(name, etag, ct);
     }
 
-    sealed class BrokenStore : IRosterStore
+    // Enforce does not fail open: when the store cannot say, an account that was last seen in enforce, or never seen, is Unavailable
+    // (the device is told to try again), never Open. Only an account last seen in observe stays Open, which is what it was.
+    [Fact]
+    public async Task A_store_that_cannot_be_read_never_opens_an_account_that_is_or_may_be_in_enforce()
     {
-        public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => throw new IOException("down");
-        public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) => throw new IOException("down");
-        public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => throw new IOException("down");
+        var w = Scenario();
+        var store = new FlakyStore(new MemoryRosterStore());
+        var roster = Make(w, store);
+        await roster.AppendAsync(Account, [Wire(w, "G")]);
+
+        // Cold: nothing known of the account yet, and the store is down.
+        store.Broken = true;
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync("cold", w.Id("X")));
+        store.Broken = false;
+
+        // Seen in observe: it stays as it was through an outage.
+        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("X")));
+        store.Broken = true;
+        Assert.Equal(DeviceRoster.Admission.Open, await roster.AdmissionAsync(Account, w.Id("X")));
+        store.Broken = false;
+
+        // Seen in enforce: an outage never turns a stranger back into an open device.
+        Assert.True(await roster.EnforceAsync(Account, w.Id("G")));
+        Assert.Equal(DeviceRoster.Admission.Pending, await roster.AdmissionAsync(Account, w.Id("X")));
+        store.Broken = true;
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("X")));
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("G")));
+    }
+
+    [Fact]
+    public async Task A_garbled_stored_roster_is_unavailable_not_open()
+    {
+        var w = Scenario();
+        var inner = new MemoryRosterStore();
+        var roster = Make(w, inner);
+        await roster.AppendAsync(Account, [Wire(w, "G")]);
+        Assert.True(await roster.EnforceAsync(Account, w.Id("G")));
+        var name = inner.Names.Single();
+        var current = await inner.ReadAsync(name, CancellationToken.None);
+        Assert.NotNull(await inner.WriteAsync(name, "not json"u8.ToArray(), current!.ETag, CancellationToken.None));
+        Assert.Equal(DeviceRoster.Admission.Unavailable, await roster.AdmissionAsync(Account, w.Id("X")));
     }
 
     // In enforce a connected stranger (a key the roster does not hold) is pending: it sees nothing of the account, its control
@@ -220,5 +263,31 @@ public class RosterEnforceTests
         Assert.Equal(CloseCodes.Removed, (int?)other.Relay.CloseStatus);
         var refused = await Assert.ThrowsAsync<RelayRefusedException>(() => relay.ConnectAsync(token, "app-b", "app", KeyOf("B")));
         Assert.Equal(CloseCodes.Removed, refused.Code);
+    }
+
+    // One failed read after a roster change must not un-pend the devices that are connected, and a device that connects while the
+    // store is down is turned away to try again, not served.
+    [Fact]
+    public async Task A_store_error_after_an_append_leaves_pending_devices_pending_and_turns_new_connections_away()
+    {
+        var w = Scenario();
+        var store = new FlakyStore(new MemoryRosterStore());
+        await using var relay = await TestRelay.StartAsync(o => { o.Roster.DevicesStore = store; o.TokenKey = Convert.ToBase64String(new byte[32]); });
+        var devices = relay.App.Services.GetRequiredService<DeviceRoster>();
+        await devices.AppendAsync(Account, [Wire(w, "G")]);
+        var token = relay.TokenFor(1, "octo");
+        var phone = await relay.ConnectAsync(token, "phone-g", "phone", KeyOf("G"));
+        Assert.True(await phone.Relay.EnforceRosterAsync());
+        var stranger = await relay.ConnectAsync(token, "app-x", "app");
+        await Task.Delay(500);
+        Assert.Empty(stranger.Relay.Presence);
+
+        store.BreakAfterWrite = true;
+        await AppendOverSocketAsync(phone, Wire(w, "addB"));   // writes, then every read fails
+        await Task.Delay(1000);
+
+        Assert.Empty(stranger.Relay.Presence);                 // still pending: the failed re-tag changed nothing
+        var refused = await Assert.ThrowsAsync<RelayRefusedException>(() => relay.ConnectAsync(token, "app-y", "app"));
+        Assert.Equal(CloseCodes.Restarting, refused.Code);
     }
 }

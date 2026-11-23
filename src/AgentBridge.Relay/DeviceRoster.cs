@@ -20,7 +20,13 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
 {
     public const string Observe = "observe";
     public const string Enforce = "enforce";
-    public enum Admission { Open, Approved, Pending, Removed }
+    // Unavailable: the store could not say (an error, a timeout, a body that does not read) for an account that is, or may be, in
+    // enforce. It is never Open: enforce does not fail open.
+    public enum Admission { Open, Approved, Pending, Removed, Unavailable }
+    // The last mode read for each account, kept only to know what an outage may be hiding: Observe stays as it was, anything else is
+    // not assumed open. Enforce, once seen, is never overwritten by Observe (the mode only moves one way).
+    readonly ConcurrentDictionary<string, string> seen = new();
+    void See(string accountId, string mode) => seen.AddOrUpdate(accountId, mode, (_, old) => old == Enforce ? Enforce : mode);
     // One append carries a few entries (an add, its confirmation), never a whole history.
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
@@ -260,7 +266,8 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         try
         {
             using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
-            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s) { return Admission.Open; }
+            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s) { See(accountId, Observe); return Admission.Open; }
+            See(accountId, Enforce);
             var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
             verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
             if (verifier.State.Active.ContainsKey(deviceId)) { return Admission.Approved; }
@@ -274,7 +281,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         {
             metrics.Roster("devices-admission", "error");
             log.LogWarning(e, "device roster admission read failed");
-            return Admission.Open;
+            return seen.TryGetValue(accountId, out var last) && last == Observe ? Admission.Open : Admission.Unavailable;
         }
     }
 
