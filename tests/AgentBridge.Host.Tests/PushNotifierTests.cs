@@ -2374,6 +2374,30 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_filtering_device_has_the_question_it_was_shown_withdrawn_even_when_a_later_one_was_held_back_and_answered()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(pins: ["other"]));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question"], Received().Select(r => Kind(r.Notification)));
+        // The relay goes down: the second question's notice is held, and it is answered and the turn finishes.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        sender.Connected = true;
+        await notifier.PumpAsync();
+        // What it still shows (the first question) is withdrawn; the held second question never goes.
+        var kinds = Received().Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("question", out var q) ? q.GetString() : null)).ToList();
+        Assert.Equal([("question", "q1"), ("resolved", "q1")], kinds);
+    }
+
+    [Fact]
     public async Task A_question_still_waiting_to_go_never_goes_to_a_device_that_filters_the_finished_turn_that_follows_it()
     {
         Start();

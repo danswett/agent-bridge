@@ -1282,9 +1282,12 @@ public class MergeRuleTests
     // completed failure, and the status names it.
     static readonly DateTimeOffset MainNow = new(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
 
-    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable)
+    // The pause before an old unreadable run is read once more costs nothing here.
+    static MergeRuleTests() => MergeRuleCommand.UnreadableRetryAfter = TimeSpan.Zero;
+
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null)
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable);
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times);
         var config = WriteConfig();
         try
         {
@@ -1379,6 +1382,80 @@ public class MergeRuleTests
         var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [9] = "404", [8] = "500" });
 
         Assert.Contains("skipped unreadable run 9, 8", posted, StringComparison.Ordinal);
+    }
+
+    // #3894, from the Sonnet FULL read of #3888. P2-1: only a run that is not completed, or ended in a conclusion GitHub documents as not a
+    // failure, may be passed over; an unknown conclusion, a completed run with none, or one with no status fails closed.
+    [Theory]
+    [InlineData("completed", "mystery")]
+    [InlineData("completed", null)]
+    [InlineData("completed", "failure")]
+    [InlineData("completed", "timed_out")]
+    [InlineData("completed", "startup_failure")]
+    [InlineData(null, null)]
+    [InlineData(null, "success")]
+    public void A_run_with_an_unknown_missing_or_failed_state_is_never_skipped_so_the_unexpected_fails_closed(string? status, string? conclusion)
+    {
+        var runs = MainRunsRaw(MainNow, 7, status, conclusion, 600, 6, "completed", "success");
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("in_progress", null)]
+    [InlineData("queued", null)]
+    [InlineData("completed", "cancelled")]
+    [InlineData("completed", "success")]
+    [InlineData("completed", "neutral")]
+    [InlineData("completed", "skipped")]
+    [InlineData("completed", "stale")]
+    [InlineData("completed", "action_required")]
+    public void A_run_that_is_not_completed_or_ended_in_a_documented_non_failure_may_be_skipped_after_the_grace(string status, string? conclusion)
+    {
+        var runs = MainRunsRaw(MainNow, 7, status, conclusion, 600, 6, "completed", "success");
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // P2-2: a run older than the grace is skipped on its first failed read, and main runs take 26 to 35 minutes, so one transient 404 or 5xx
+    // skipped a cancelled run that had a failed job and the judge read the older green. It is read once more before it is passed over.
+    [Fact]
+    public void One_unreadable_answer_is_not_enough_to_skip_a_run_it_is_read_once_more()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "success", 1, 40), (6, "completed", "failure", 1, 80));
+
+        var (posted, output) = JudgeMain(runs, new Dictionary<long, string> { [7] = "500" }, new Dictionary<long, int> { [7] = 1 });
+
+        Assert.DoesNotContain("skipped", posted, StringComparison.Ordinal);
+        Assert.Contains("Main: ci.yml run 7 (attempt 1) on c700000", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_unreadable_on_both_reads_is_skipped_as_before()
+    {
+        var runs = MainRunsAged(MainNow, (7, "completed", "success", 1, 40), (6, "completed", "success", 1, 80));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" }, new Dictionary<long, int> { [7] = 2 });
+
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // P3-2: nothing readable is a failure that still names what was skipped.
+    [Fact]
+    public void When_no_run_is_readable_the_failure_still_names_the_skipped_ones()
+    {
+        var runs = MainRunsAged(MainNow, (7, "in_progress", null, 1, 90));
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string> { [7] = "404" });
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2707,6 +2784,20 @@ public class MergeRuleTests
             }),
         });
 
+    // A run with a status and conclusion as given (or none), for the values GitHub does not document.
+    static string MainRunsRaw(DateTimeOffset now, long id, string? status, string? conclusion, int ageMinutes, long olderId, string olderStatus, string? olderConclusion) =>
+        JsonSerializer.Serialize(new
+        {
+            total_count = 2,
+            workflow_runs = new object[]
+            {
+                status is null
+                    ? new { id, head_sha = $"c{id}".PadRight(40, '0'), conclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) }
+                    : (object)new { id, head_sha = $"c{id}".PadRight(40, '0'), status, conclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) },
+                new { id = olderId, head_sha = $"c{olderId}".PadRight(40, '0'), status = olderStatus, conclusion = olderConclusion, run_attempt = 1, created_at = now.AddMinutes(-ageMinutes - 60).ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture) },
+            },
+        });
+
     static string MainRuns(params (long Id, string Status, string? Conclusion, int Attempt)[] runs) =>
         JsonSerializer.Serialize(new
         {
@@ -2787,11 +2878,22 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
         public List<string> RestPaths { get; } = [];
+
+        readonly Dictionary<long, int> unreadableSeen = [];
+
+        // Whether this read of an unreadable run fails: always, or only the first few times (a blip).
+        bool Fails(long id)
+        {
+            if (unreadableTimes is null || !unreadableTimes.TryGetValue(id, out var times)) { return true; }
+            var seen = unreadableSeen.GetValueOrDefault(id);
+            unreadableSeen[id] = seen + 1;
+            return seen < times;
+        }
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
@@ -2843,7 +2945,8 @@ public class MergeRuleTests
                 // A run whose jobs gh can't give: a 404 or another non-2xx (gh exits 1 and says so), or a body that is empty or cut short.
                 if (unreadableRuns is not null)
                     foreach (var (id, kind) in unreadableRuns)
-                        if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal))
+                        if (path.Contains($"/actions/runs/{id}/jobs?", StringComparison.Ordinal)
+                            && Fails(id))
                             throw kind switch
                             {
                                 "404" => new InvalidOperationException($"gh api repos/danswett/agent-bridge/actions/runs/{id}/jobs failed (1): gh: Not Found (HTTP 404)"),
