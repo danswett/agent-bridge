@@ -41,6 +41,7 @@ public sealed record AgentMessagingSettings
     public bool AllowAllTargets { get; init; }
     public bool AllowAllLaunchedTargets { get; init; }
     public bool LaneDelivery { get; init; }
+    public bool ClaudeBusyQueue { get; init; }
     public IReadOnlyList<string> AllowAllTargetSessions { get; init; } = [];
 
     public bool RemoteEnabled => Remote == OwnAccount;

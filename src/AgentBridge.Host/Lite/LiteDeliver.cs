@@ -32,6 +32,8 @@ public sealed class LiteDeliver(
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> recent = new(StringComparer.Ordinal);
     internal DeliveryLaneScheduler? Lane { get; init; }
+    // claudeBusyQueue (docs/message-delivery.md, #3828): read afresh per send; null or throwing means off.
+    internal Func<bool>? ClaudeBusyQueue { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
