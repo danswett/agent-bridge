@@ -2357,7 +2357,7 @@ both are sent.
 | Field | Type | Notes |
 |---|---|---|
 | `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message, at any depth. One between runs (a `subagents` entry `idle`) is not counted |
-| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
+| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background. A shell counts from its latest start or "still running" mark, from the session's current process only, and stops counting once that mark is 4 hours old. Copilot refreshes a mark each time it says the command is "still running"; **Claude Code writes no such mark, so a Claude command is never refreshed and stops counting 4 hours after its start, running or not** (`Limits.BackgroundShellStale`): one whose end the transcript never shows would otherwise keep a finished session out of `idle` for ever, and a stuck reader still clears the same day (#1108, #1396). The host drops it only when both clocks agree: the wall clock against the mark, and the host's own monotonic clock against when it first saw that mark, so a clock step (a resumed VM, a time sync) can never end a running shell and a host that starts late counts it until it has watched the limit pass itself; nothing is written to the transcript. **Risk, accepted:** a command that runs silently for more than 4 hours, with no new start or "still running" mark, stops counting and its session reads `idle`. The host adds no process check (a transcript holds no shell process id), and an agent's End still needs the launcher's or Quality's attestation; what a person's End then stops is the person's decision. **What stays unaged:** the shown, relayed and busy-checked `background` is aged, but an AGENT's End (`StopService`, the `person-required` rule) still reads the host-only, never-sent `Session.BackgroundUnaged` and refuses a session holding a shell that merely aged out, so a command that still runs is never ended by an agent as idle |
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
 `background` says why it is not finished. A client shows a session that is `idle` with
@@ -2578,7 +2578,7 @@ that added `background`).
   quoted text (a command printing a transcript, say) and are ignored. Detached shells
   (`started in detached background`) are services meant to outlive the session and are
   not counted. A subagent's shells are its own work, covered by its agent, and do not
-  report their ends to the session.
+  report their ends to the session. A shell whose latest start or "still running" mark is `Limits.BackgroundShellStale` (4 h) old stops counting in what is shown (see `background` above); an agent's End still sees it.
 * **Nothing outlives its CLI process.** `session.shutdown` ends everything, and work
   that began before the session's current process started is dropped: a CLI that was
   replaced can never report back what it started.
@@ -2638,7 +2638,7 @@ command); the shapes are in `tests/fixtures/claude`.
   its `description` and `prompt`, `model` its `resolvedModel`. 2.1.316 launches every
   `Agent` call that way; a result of any other shape lists nothing.
 * **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
-  `run_in_background`) starts one, counted in `background.shells`.
+  `run_in_background`) starts one, counted in `background.shells`. Claude writes no "still running" mark, so it is never refreshed: it stops counting 4 h (`Limits.BackgroundShellStale`) after its start, and a command that runs longer shows as idle there. An agent's End still refuses a session holding it (host-only `Session.BackgroundUnaged`, never sent).
 * **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
   Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
   (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's

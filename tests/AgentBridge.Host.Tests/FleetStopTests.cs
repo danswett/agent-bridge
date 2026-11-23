@@ -89,6 +89,18 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(0, control.Terminations);
     }
     [Fact]
+    public async Task An_agent_End_is_refused_while_a_shell_that_only_aged_out_of_the_shown_background_may_still_run()
+    {
+        Own();
+        // Shown as idle with nothing in the background, but the host still holds an aged-out shell: its command may still run.
+        source.Sessions[0] = source.Sessions[0] with { Status = SessionStatus.Idle, BackgroundUnaged = new Background { Shells = 1 } };
+        var refused = await End();
+        Assert.Equal(("refused", "person-required", 0), (refused.Outcome, refused.Reason, injector.Calls));
+        // The same session with nothing held at all ends on the agent's one press, as before.
+        source.Sessions[0] = source.Sessions[0] with { BackgroundUnaged = null };
+        Assert.Equal("ended", (await End()).Outcome);
+    }
+    [Fact]
     public async Task Recycled_processes_and_revoked_grants_are_refused_without_typing()
     {
         Own();
