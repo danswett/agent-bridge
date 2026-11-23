@@ -5,6 +5,7 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 | Operation | Scope | What it does |
 | --- | --- | --- |
 | `agent.send` | read+reply | Sends text to one session; see [local-pipe.md](local-pipe.md#agentsend-ap5-lite). |
+| `agent.receipt` | read+reply | Asks what the first attempt of one of the agent's own unconfirmed `agent.send` calls became on the target; see [local-pipe.md](local-pipe.md#agentreceipt-receipt-lookup). Scripts are refused, so a script's unconfirmed send gets no lookup. |
 | `fleet.list` | read | Lists the sessions and online/offline machines of the agent's own account, with optional machine display names. |
 | `fleet.find` | read | Finds one live session of the agent's own account by session ID; unsigned matches answer `unverified` except for messaging-only `trust: "own-account"` below. |
 

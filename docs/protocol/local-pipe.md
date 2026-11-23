@@ -401,6 +401,28 @@ delivery cannot be established. If that terminal append fails, `auditUnwritable`
 takes precedence over the sender error.
 See [the audit log](../host-config.md#the-agent-audit-log).
 
+### `agent.receipt` (receipt lookup)
+
+Same caller rules as `agent.send`: Windows only, pipe only, a connection that has passed `agent.hello` (otherwise `refused: agent.receipt is for
+an agent connection that has passed agent.hello`; a host without agent credentials or a sender answers `refused: agent.receipt isn't
+available on this host`). A script credential is refused: its only allowed ops are `fleet.list`, `fleet.find` and `agent.send`, so a script that sends (the pump and the messenger tools run as scripts) gets no receipt lookup: its unconfirmed sends stay uncertain, as they are today. Every call
+appends an audit entry, like `agent.send` (`attempted`, then the outcome); if the audit log cannot be written nothing is asked.
+
+```json
+{ "id": 3, "op": "agent.receipt", "data": { "request": "<the request id agent.send returned>" } }
+```
+
+`request` must be the lower-case id of an `agent.send` that ended `unconfirmed` on this connection's credential within the last 120 s
+(the host keeps at most 64 such records per credential, in memory); anything else is refused locally, sent nowhere: `badRequest` for a
+malformed id, `unknownRequest` for one with no record. The host sends the target a signed probe that never types (docs/protocol/agent-lite.md
+"Receipt lookup") and answers `{ "outcome", "code", "request" }`:
+
+| `outcome` | Meaning |
+|---|---|
+| `delivered`, `pending`, `queued`, `unconfirmed`, `in-flight` | the target's recorded outcome of the first attempt, as it acknowledged it (`code` may add detail, e.g. `deliveryFailed`) |
+| `refused` | the first attempt was refused, with `code`; **only an answered receipt can say this**, and only then was nothing typed |
+| `unknown` | the target has no record, or the lookup itself failed (`code` then starts `lookup:`, e.g. `lookup: timeout`, `lookup: offline`, `lookup: refused:rate`); the send stays uncertain and must not be resent |
+
 ### The MCP server (`mcp/`)
 
 An agent reaches this pipe through `mcp/src/server.mjs`, an MCP server it starts as a stdio child
