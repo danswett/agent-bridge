@@ -1,0 +1,436 @@
+diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
+index 193d6e20..54e6c877 100644
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -46,7 +46,7 @@ on:
+     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+   status:
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, PWA WebKit, Relay deploy, Weekly quality report, Workflow lint]
++    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, PWA WebKit, Relay deploy, Release train, Weekly quality report, Workflow lint]
+     types: [in_progress, completed]
+   check_suite:
+     types: [completed] # the only type Actions accepts here
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+new file mode 100644
+index 00000000..7f4dc13a
+--- /dev/null
++++ b/.github/workflows/release-train.yml
+@@ -0,0 +1,269 @@
++name: Release train
++
++# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
++# (docs/app-windows.md, "The release train"). Merges never block it, and it never publishes an
++# unverified commit or one older than the latest release: build/select-release-commit.ps1 picks,
++# build/publish-prerelease.ps1 still refuses a duplicate or older version, in the same
++# concurrency group as ci.yml's publish job. Nothing new is a no-op.
++on:
++  schedule:
++    - cron: '17 * * * *'
++  workflow_dispatch:
++    inputs:
++      dry_run:
++        description: 'Dry run: pick and verify only, with no publish, Beta manifest or CDN purge'
++        type: boolean
++        default: false
++
++concurrency:
++  group: release-train
++  cancel-in-progress: false
++
++permissions:
++  contents: read
++
++env:
++  # Unset today, so the train publishes unsigned like ci.yml; once true it refuses (no sign step yet).
++  APP_SIGNING: ${{ vars.APP_SIGNING }}
++
++jobs:
++  pick:
++    name: Pick the newest verified commit
++    # Reads only: it lists runs and releases and writes nothing.
++    if: github.repository == 'danswett/agent-bridge' && github.ref == 'refs/heads/main'
++    runs-on: windows-latest
++    timeout-minutes: 15
++    permissions:
++      contents: read
++      actions: read # list main's CI runs, jobs and artifacts
++    outputs:
++      sha: ${{ steps.pick.outputs.sha }}
++      version: ${{ steps.pick.outputs.version }}
++      run: ${{ steps.pick.outputs.run }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++      - name: Pick the commit
++        id: pick
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++        run: |
++          . ./build/select-release-commit.ps1
++          Assert-TrainMayPublish $env:APP_SIGNING
++          $repo = $env:REPOSITORY
++          $latest = Invoke-ReleaseGh api "repos/$repo/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | .tag_name' |
++            Where-Object { $_ -cmatch '^v\d+\.\d+\.\d+$' } | Sort-Object { [semver]$_.Substring(1) } -Descending | Select-Object -First 1
++          $release = if ($latest) { [pscustomobject]@{ Tag = $latest; Commit = (Invoke-ReleaseGh api "repos/$repo/git/ref/tags/$latest" --jq '.object.sha') } }
++          $pick = Select-ReleaseCommit -Runs (Get-ReleaseRuns $repo) -Latest $release -IsDescendant { param($sha, $base) (Invoke-ReleaseGh api "repos/$repo/compare/$base...$sha" --jq '.status') -in 'ahead' }
++          if (-not $pick) { Write-Host 'nothing new to publish'; exit 0 }
++          "sha=$($pick.Sha)", "version=$($pick.Version)", "run=$($pick.Id)" | Add-Content $env:GITHUB_OUTPUT
++
++  verify:
++    name: Install and self-test the exact CI bytes (${{ matrix.runtime }})
++    # The train publishes what CI built, never a rebuild; before it does, each architecture's package is
++    # installed per user and the installed app self-tested, as CI's app-installer job does. Any failure
++    # here means publish is skipped (it needs this job) and the alert job below fails the run.
++    needs: [pick]
++    if: needs.pick.outputs.sha != ''
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - runtime: win-x64
++            runner: windows-latest
++            out: out/app
++            artifact: agent-bridge-windows
++          - runtime: win-arm64
++            runner: windows-11-arm
++            out: out/app-arm64
++            artifact: agent-bridge-windows-arm64
++    runs-on: ${{ matrix.runner }}
++    timeout-minutes: 40
++    permissions:
++      contents: read
++      actions: read # download the picked run's artifacts
++    env:
++      APP_VERSION: ${{ needs.pick.outputs.version }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          persist-credentials: false
++      - uses: ./.github/actions/arm64-foreground
++        if: matrix.runtime == 'win-arm64'
++      - name: The picked run's release files, byte for byte
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-${{ needs.pick.outputs.version }}
++          path: ${{ matrix.out }}/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: The picked run's installer input
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-installer-input-${{ needs.pick.outputs.version }}
++          path: ${{ runner.temp }}/installer-input
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: Refuse missing, foreign or altered installer input before running it
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++          SHA: ${{ needs.pick.outputs.sha }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++        run: |
++          . ./build/app-installer-input.ps1
++          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases "$env:OUT/releases" -Version $env:APP_VERSION -Runtime $env:RUNTIME -Commit $env:SHA -RunId $env:RUN_ID | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
++      - name: The package installs per user into its own channel and the manifest is its channel's
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++        run: |
++          . ./build/app-channels.ps1
++          $target = Get-AppChannel $env:RUNTIME
++          $setup = Join-Path "$env:OUT/releases" (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          New-Item -ItemType Directory -Force $logs | Out-Null
++          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
++          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
++          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $manifest = Get-Content "$root/current/sq.version" -Raw
++          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
++      # The installed app's self-test. x64's is required. Arm64's only records (owner and Quality: Arm64 jobs
++      # never gate the train, though the Arm64 package, its hash and its manifest above stay required) unless
++      # the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true, which makes a red Arm64 self-test
++      # hold the release. Unset is the default: not blocking.
++      - name: The installed app self-tests
++        id: selftest
++        continue-on-error: ${{ matrix.runtime == 'win-arm64' && vars.TRAIN_ARM64_SELFTEST_GATES != 'true' }}
++        shell: pwsh
++        run: |
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
++          exit $LASTEXITCODE
++      - name: Record the self-test result
++        if: always() && steps.selftest.outcome != 'skipped'
++        shell: bash
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUTCOME: ${{ steps.selftest.outcome }}
++          GATES: ${{ vars.TRAIN_ARM64_SELFTEST_GATES }}
++        run: |
++          gating="required"
++          if [ "$RUNTIME" = "win-arm64" ]; then
++            if [ "${GATES,,}" = "true" ]; then gating="gating (TRAIN_ARM64_SELFTEST_GATES is true)"; else gating="recorded, not gating (TRAIN_ARM64_SELFTEST_GATES is not true)"; fi
++          fi
++          echo "### Release train: $RUNTIME installed-app self-test: $OUTCOME; $gating" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$OUTCOME" = "failure" ] && [ "$RUNTIME" = "win-arm64" ] && [ "${GATES,,}" != "true" ]; then
++            echo "::warning title=release train::the Arm64 installed-app self-test failed; it is recorded and does not hold the release"
++          fi
++
++  webkit:
++    name: The PWA in WebKit at the picked commit
++    # While PWA_WEBKIT_OFF_PUSH is on, CI's main pushes leave WebKit to pwa-webkit.yml (#2454 item B), so the train
++    # runs it on the exact commit it would publish, and publish waits for it. Off (the default), this is skipped:
++    # every main push already ran WebKit.
++    needs: [pick]
++    if: needs.pick.outputs.sha != '' && vars.PWA_WEBKIT_OFF_PUSH == 'true'
++    permissions:
++      contents: read
++    uses: ./.github/workflows/pwa-webkit.yml
++    with:
++      ref: ${{ needs.pick.outputs.sha }}
++
++  alert:
++    name: Alert when verification fails
++    # Verification (or WebKit at the pick) failing means nothing was published: this job fails the run with a
++    # named error so a red train run is the alert (no other channel is wired here).
++    needs: [pick, verify, webkit]
++    if: always() && (needs.verify.result == 'failure' || needs.webkit.result == 'failure')
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: Nothing was published
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++        run: |
++          echo "::error title=release train::verification or WebKit of CI run $RUN_ID (commit $SHA) failed; nothing was published"
++          echo "### Release train: verification failed, nothing published ($SHA, CI run $RUN_ID)" >> "$GITHUB_STEP_SUMMARY"
++          exit 1
++
++  publish:
++    name: Publish the picked commit
++    # contents: write is here only, and only for a verified pick. APP_SIGNING true never gets here: the
++    # pick job fails first. A failed verification skips this job (it needs verify to succeed).
++    needs: [pick, verify, webkit]
++    # A dry run (workflow_dispatch input) stops after verify: nothing is published, no manifest, no purge.
++    # Explicit results, not the implicit success(): webkit is skipped while PWA_WEBKIT_OFF_PUSH is off, and a
++    # skipped need would otherwise skip publish. verify must still succeed, and webkit pass when it ran.
++    if: >-
++      !cancelled() && needs.pick.outputs.sha != '' && !inputs.dry_run && needs.verify.result == 'success'
++      && (needs.webkit.result == 'success' || needs.webkit.result == 'skipped')
++    runs-on: windows-latest
++    timeout-minutes: 30
++    permissions:
++      contents: write # create the release and its tag (the only job that writes)
++      actions: read # download the picked run's artifacts
++    concurrency:
++      group: publish-prerelease
++      cancel-in-progress: false
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - run: dotnet tool install -g vpk --version 1.2.161
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-${{ needs.pick.outputs.version }}
++          path: out/app/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-arm64-${{ needs.pick.outputs.version }}
++          path: out/app-arm64/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: Publish the pre-release
++        id: publish
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          SHA: ${{ needs.pick.outputs.sha }}
++        run: |
++          # -MainHead is the chosen commit and this checkout is a clone at it. The train publishes
++          # the newest passed commit, so ci.yml publish's stand-aside for a later app change does
++          # not apply (publish-prerelease.ps1 skips it when MainHead is the commit, and then reads
++          # nothing from -MainRepo); a duplicate, an older version or a commit behind the latest
++          # release is still refused.
++          ./build/publish-prerelease.ps1 -Version $env:VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository $env:REPOSITORY -Commit $env:SHA -MainHead $env:SHA -MainRepo .
++      - name: Publish the static Beta download manifest
++        # Ported from ci.yml's publish job (owner decision A): the manifest names the release this run published.
++        if: steps.publish.outputs.manifest-tag != ''
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          MANIFEST_TAG: ${{ steps.publish.outputs.manifest-tag }}
++        run: |
++          $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
++          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
++          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
++          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index cbe87c75..a6811a1d 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -1205,11 +1205,23 @@ starvation lasts until the train lands.
+   `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
+   (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+   change is the next verified commit's to publish.
++* **Verify before it publishes (owner option A).** The `verify` job runs once per architecture, on a runner of that architecture (`windows-latest`,
++  `windows-11-arm`), and only then does `publish` start. It downloads that run's package and its installer input, byte for byte, and refuses input that is
++  missing, foreign or altered (`Assert-AppInstallerInput`); it installs the package per user into its own channel and checks the installed manifest is that
++  channel's; then it self-tests the installed app (`build/app-self-test.ps1`). Package presence, hash, install and manifest are required on **both**
++  architectures, and so is the x64 self-test. **The Arm64 self-test only records** (a summary line and a warning naming the failure): Arm64 never gates the
++  train (owner, Nov 22), and a red Arm64 self-test still publishes (owner, Nov 23). The repository variable `TRAIN_ARM64_SELFTEST_GATES`, exactly `true`,
++  is the opt-in that makes a red Arm64 self-test hold the release; unset is the default. A failed verify publishes nothing, and the `alert` job fails the run
++  with a named error so a red train run is the alert. A run by hand with `dry_run` stops after verify: nothing is published.
++* **WebKit before it publishes, when WebKit is off the push path (#2454, item B).** With the repository variable `PWA_WEBKIT_OFF_PUSH` exactly `true`,
++  `ci.yml`'s push runs leave the PWA's WebKit legs out and `pwa-webkit.yml` runs them hourly on main's head; the train then calls it at the commit it picked
++  (the `webkit` job) and `publish` needs it to have succeeded. With the variable unset (the default) the job is skipped and the train behaves as without it.
++  The hourly run's failures feed main-red as their own stream (`quality/main-red.ps1`).
+ * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
+   unsigned, until it gains the sign step.
+-* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+-  so a train release carries neither until they are added.
++* **Not covered yet:** `attest` belongs to `ci.yml`'s `publish` job, so a train release carries
++  no attestation until it is added. The static Beta download manifest is published by the train, as by `ci.yml`.
+ 
+ ### Signing
+ 
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index a025f1e4..efc94e57 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -891,9 +891,9 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui; pwa-webkit.yml webkit
++    where: ci.yml pwa-ui; pwa-webkit.yml webkit; release-train.yml webkit
+     # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
+-    # runs it hourly instead of on every main push (#2454).
++    # runs it hourly and before a release instead of on every main push (#2454).
+     tier: post-merge
+     tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
+     baseline: { files: 25 }
+@@ -988,6 +988,22 @@ suites:
+     where: halts-upload.yml upload
+     status: exists
+ 
++  - id: release-train
++    validation_plan: native
++    kind: packaging
++    ring: 4
++    select: affected
++    # The release train (#2225): hourly and by hand it picks the newest main commit whose CI passed
++    # and publishes that run's exact packages (never a rebuild), after installing and self-testing them
++    # on both architectures. Its selector is tested offline by
++    # build/test-select-release-commit.ps1.
++    platforms: [win-x64, win-arm64]
++    runner: hosted
++    triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
++    command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
++    where: release-train.yml pick, verify, alert, publish
++    status: exists
++
+   - id: pwa-iphone
+     validation_plan: native
+     kind: e2e
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+new file mode 100644
+index 00000000..5c9d6377
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -0,0 +1,73 @@
++using AgentBridge.Quality;
++using Xunit;
++
++// The release train's verify job (.github/workflows/release-train.yml): the owner's rule is that Arm64 jobs never
++// gate the train, though both packages are still required; the Arm64 installed-app self-test only records unless
++// the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true. x64's self-test and every package check
++// stay required on both architectures.
++public sealed class ReleaseTrainWorkflowTests
++{
++    const string Switch = "TRAIN_ARM64_SELFTEST_GATES";
++
++    static string Workflow() => File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "release-train.yml"))
++        .ReplaceLineEndings("\n");
++
++    static string Job(string text, string id)
++    {
++        var start = text.IndexOf($"\n  {id}:\n", StringComparison.Ordinal);
++        Assert.True(start >= 0, $"job {id} is missing");
++        var next = System.Text.RegularExpressions.Regex.Match(text[(start + 1)..], "\n  [a-z-]+:\n");
++        return next.Success ? text[start..(start + 1 + next.Index)] : text[start..];
++    }
++    static string Step(string job, string name)
++    {
++        var marker = $"      - name: {name}\n";
++        var start = job.IndexOf(marker, StringComparison.Ordinal);
++        Assert.True(start >= 0, $"step '{name}' is missing");
++        var next = job.IndexOf("\n      - ", start + marker.Length, StringComparison.Ordinal);
++        return next < 0 ? job[start..] : job[start..next];
++    }
++
++    [Fact]
++    public void The_arm64_installed_app_self_test_only_records_unless_the_switch_is_true_and_x64s_is_always_required()
++    {
++        var verify = Job(Workflow(), "verify");
++        var selfTest = Step(verify, "The installed app self-tests");
++
++        Assert.Contains($"continue-on-error: ${{{{ matrix.runtime == 'win-arm64' && vars.{Switch} != 'true' }}}}", selfTest, StringComparison.Ordinal);
++        // The only way to exempt a leg is that expression: it is false for x64 whatever the variable says.
++        Assert.Single(System.Text.RegularExpressions.Regex.Matches(verify, "continue-on-error"));
++    }
++
++    [Theory]
++    [InlineData("The picked run's release files, byte for byte")]
++    [InlineData("The picked run's installer input")]
++    [InlineData("Refuse missing, foreign or altered installer input before running it")]
++    [InlineData("The package installs per user into its own channel and the manifest is its channel's")]
++    public void Both_architectures_keep_the_package_presence_hash_and_manifest_checks_required(string step)
++    {
++        Assert.DoesNotContain("continue-on-error", Step(Job(Workflow(), "verify"), step), StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void A_red_arm64_self_test_is_recorded_in_the_summary_and_a_warning_names_it()
++    {
++        var record = Step(Job(Workflow(), "verify"), "Record the self-test result");
++
++        Assert.Contains("GITHUB_STEP_SUMMARY", record, StringComparison.Ordinal);
++        Assert.Contains("::warning title=release train::", record, StringComparison.Ordinal);
++        Assert.Contains($"vars.{Switch}", record, StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void Publish_still_needs_the_whole_verify_job_so_a_required_check_failing_publishes_nothing()
++    {
++        var publish = Job(Workflow(), "publish");
++
++        Assert.Contains("needs: [pick, verify, webkit]", publish, StringComparison.Ordinal);
++        // Its if is explicit (#2454 item B): the whole verify job must still succeed; webkit must pass when it ran and
++        // is skipped while PWA_WEBKIT_OFF_PUSH is off.
++        Assert.Contains("needs.verify.result == 'success'", publish, StringComparison.Ordinal);
++        Assert.Contains("(needs.webkit.result == 'success' || needs.webkit.result == 'skipped')", publish, StringComparison.Ordinal);
++    }
++}
