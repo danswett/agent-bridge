@@ -1462,6 +1462,35 @@ public class MergeRuleTests
         }
     }
 
+    // Main's older runs are read ahead of an answer. Once the answer is found (run 8, read at once), the
+    // reads behind it (7 and 6, slow) are still in flight: they finish before the run returns, so nothing
+    // is read, counted or recorded after its verdict, and what a caller enumerates is not written under it.
+    [Fact]
+    public void Main_s_reads_ahead_are_all_finished_by_the_time_the_run_returns()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "completed", "success", 1), (7, "completed", "success", 1), (6, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs,
+            restDelayFor: path => path.Contains("/actions/runs/8/jobs?", StringComparison.Ordinal) || !path.Contains("/jobs?", StringComparison.Ordinal) ? 0 : 400);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            var atReturn = github.RestPaths.Count;
+            Thread.Sleep(900);
+
+            Assert.Equal(atReturn, github.RestPaths.Count);
+            // What the run says it spent is every read it made.
+            Assert.Contains($"REST {atReturn} call(s)", shown.ToString(), StringComparison.Ordinal);
+            // The runs behind the answer were read (ahead), and are in the count.
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     [Fact]
     public void Main_s_newest_run_is_read_alone_when_it_answers()
     {
@@ -3126,16 +3155,24 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
-        public List<string> RestPaths { get; } = [];
+        // What was recorded, as a copy: a read still in flight may add to it while a test looks, and a list
+        // enumerated while it is written throws.
+        public List<string> RestPaths { get { lock (this) return [.. restPaths]; } }
+
+        readonly List<string> restPaths = [];
 
         /// <summary>Every GraphQL query's text, and the pull request numbers asked for one at a time.</summary>
-        public List<string> Queries { get; } = [];
+        public List<string> Queries { get { lock (this) return [.. queries]; } }
 
-        public List<int> NumbersRead { get; } = [];
+        public List<int> NumbersRead { get { lock (this) return [.. numbersRead]; } }
+
+        readonly List<string> queries = [];
+
+        readonly List<int> numbersRead = [];
 
         readonly Dictionary<long, int> unreadableSeen = [];
 
@@ -3161,12 +3198,12 @@ public class MergeRuleTests
 
         JsonDocument GraphQLCore(string query, IReadOnlyDictionary<string, object> variables)
         {
-            Queries.Add(query);
+            queries.Add(query);
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
             {
-                NumbersRead.Add((int)number);
+                numbersRead.Add((int)number);
                 return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
             }
             if (listFailsAfterFirstPage && variables.ContainsKey("cursor"))
@@ -3187,8 +3224,9 @@ public class MergeRuleTests
                 MaxConcurrentRest = Math.Max(MaxConcurrentRest, now);
             try
             {
-                if (restDelayMs > 0)
-                    Thread.Sleep(restDelayMs);
+                var delay = restDelayFor?.Invoke(path) ?? restDelayMs;
+                if (delay > 0)
+                    Thread.Sleep(delay);
                 lock (this)
                     return RestCore(path);
             }
@@ -3200,7 +3238,7 @@ public class MergeRuleTests
 
         JsonDocument RestCore(string path)
         {
-            RestPaths.Add(path);
+            restPaths.Add(path);
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
                 if (failMain) throw new InvalidOperationException("gh: HTTP 502");
