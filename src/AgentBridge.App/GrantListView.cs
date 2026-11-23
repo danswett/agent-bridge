@@ -18,6 +18,7 @@ public sealed class GrantListView : UserControl
     Action? newGrantRequested, backRequested;
     Button? parked;
     bool working;
+    string shownStatus = "";
     public event Action? NewGrantRequested {
         add { newGrantRequested += value; DispatcherQueue.TryEnqueue(Draw); } remove { newGrantRequested -= value; DispatcherQueue.TryEnqueue(Draw); }
     }
@@ -55,6 +56,7 @@ public sealed class GrantListView : UserControl
         status.Text = string.Join("\n", new[] { vm?.Error ?? "Grants unavailable: no receiver connected.", vm?.FirstIssueNotice ?? "", busy ? "Waiting for the receiver..." : "" }.Where(s => !string.IsNullOrEmpty(s)));
         AutomationProperties.SetName(status, status.Text); status.Visibility = Ui.Some(status.Text); empty.Visibility = Ui.Show(vm is not null && !busy && vm.Rows.Count == 0 && status.Text.Length == 0);
         ReceiptMarkView.SetAnnouncement(status, status.Text);
+        if (shownStatus != status.Text) { shownStatus = status.Text; DispatcherQueue.TryEnqueue(() => FrameworkElementAutomationPeer.CreatePeerForElement(status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged)); }
         while (cards.Count > (vm?.Rows.Count ?? 0)) {
             var last = cards[^1]; if (last.Head.FocusState != FocusState.Unfocused || last.Revoke.FocusState != FocusState.Unfocused) { parked = null; FocusHeading(heading, FocusState.Programmatic); }
             rows.Children.Remove(last.Panel); cards.RemoveAt(cards.Count - 1);
