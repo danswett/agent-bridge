@@ -723,6 +723,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
      Below 200 points left, a run warns in its log.
+   - Reads are made together where they don't depend on each other: once main's newest CI run has not
+     answered, the runs below it are read four at a time (the newest alone: a read is a point); and a
+     sweep reads four heads' pull requests at a time. The answers are used in order, so the verdicts
+     and what is posted are what reading one after another gave: a sweep of about 110 pull requests
+     took 205 s one call at a time and 70 s this way, for the same points and calls (2026-11-23).
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
