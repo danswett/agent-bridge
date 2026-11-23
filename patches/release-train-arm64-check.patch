@@ -1,0 +1,854 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 99a6ffd2..9078af0c 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1616,11 +1616,13 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
++        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it, and its
++        # push runs leave it to pwa-webkit.yml (hourly and before a release) while the repository
++        # variable PWA_WEBKIT_OFF_PUSH is 'true' (#2454, item B). Unset, nothing changes.
+         include: >-
+           ${{ fromJSON(format('[{0}{1}]',
+           '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+-          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
++          github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
+     runs-on: ubuntu-24.04
+     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+diff --git a/.github/workflows/main-red.yml b/.github/workflows/main-red.yml
+index bee92ec1..bfdc74d0 100644
+--- a/.github/workflows/main-red.yml
++++ b/.github/workflows/main-red.yml
+@@ -2,23 +2,27 @@ name: Main red
+ 
+ on:
+   # Only main's trusted script runs; the triggering run's code is never checked out.
++  # CI's push runs on main, and pwa-webkit.yml's hourly runs on main (PWA_WEBKIT_OFF_PUSH, #2454 item B), each its
++  # own incident: main-red.ps1 -Workflow says which, and gives each its own issue label.
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [CI]
++    workflows: [CI, PWA WebKit]
+     types: [completed]
+     branches: [main]
+ 
+ permissions:
+   contents: read
+ 
++# One group per stream: GitHub keeps one pending run per group, so a WebKit event must never replace a pending CI one.
+ concurrency:
+-  group: main-red
++  group: ${{ github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && 'main-red-webkit' || 'main-red' }}
+   cancel-in-progress: false
+ 
+ jobs:
+   detect:
+     if: >-
+-      github.event.workflow_run.event == 'push' &&
+-      github.event.workflow_run.head_branch == 'main'
++      github.event.workflow_run.head_branch == 'main' && (
++      github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.event == 'push' ||
++      github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && github.event.workflow_run.event == 'schedule')
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     permissions:
+@@ -35,4 +39,5 @@ jobs:
+           GH_TOKEN: ${{ github.token }}
+           RUN_ID: ${{ github.event.workflow_run.id }}
+           REPOSITORY: ${{ github.repository }}
+-        run: pwsh -NoProfile -File quality/main-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
++          WORKFLOW: ${{ github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && 'pwa-webkit.yml' || 'ci.yml' }}
++        run: pwsh -NoProfile -File quality/main-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY -Workflow $env:WORKFLOW
+diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
+index d872ea1e..54e6c877 100644
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -46,7 +46,7 @@ on:
+     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+   status:
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, Relay deploy, Weekly quality report, Workflow lint]
++    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, PWA WebKit, Relay deploy, Release train, Weekly quality report, Workflow lint]
+     types: [in_progress, completed]
+   check_suite:
+     types: [completed] # the only type Actions accepts here
+diff --git a/.github/workflows/pwa-webkit.yml b/.github/workflows/pwa-webkit.yml
+new file mode 100644
+index 00000000..ad1ff3ef
+--- /dev/null
++++ b/.github/workflows/pwa-webkit.yml
+@@ -0,0 +1,91 @@
++name: PWA WebKit
++
++# The PWA's WebKit legs off the push path (#2454, item B; the owner decides whether to turn it on).
++# With the repository variable PWA_WEBKIT_OFF_PUSH set to 'true', ci.yml's main push runs leave WebKit
++# out, and this runs it instead: on main's head every hour, by hand, and, called by the release train,
++# on the commit the train would publish. Unset (the default), every job here is skipped and ci.yml
++# runs WebKit on every main push, as before. WebKit is the post-merge tier (quality/catalog.yml
++# pwa-ui suite, #3209), so it never holds a merge either way. Its steps are pwa-ui's in ci.yml for
++# the WebKit project; keep the two the same.
++on:
++  schedule:
++    - cron: '41 * * * *'
++  workflow_dispatch:
++  workflow_call:
++    inputs:
++      ref:
++        description: The commit to test (the release train's pick)
++        type: string
++        required: true
++
++permissions:
++  contents: read
++
++# An hourly run gives way to the next one; a train's call for a commit is a group of its own.
++concurrency:
++  group: pwa-webkit-${{ inputs.ref || 'main' }}
++  cancel-in-progress: ${{ inputs.ref == '' }}
++
++jobs:
++  webkit:
++    name: webkit ${{ matrix.shard }}
++    # Only while the switch is on, in this repository, and only for main or the train's commit.
++    if: vars.PWA_WEBKIT_OFF_PUSH == 'true' && github.repository == 'danswett/agent-bridge' && (inputs.ref != '' || github.ref == 'refs/heads/main')
++    strategy:
++      fail-fast: false
++      matrix:
++        shard: ['1/3', '2/3', '3/3']
++    runs-on: ubuntu-24.04
++    # As pwa-ui's legs (#689): room for WebKit's 181 system packages on a slow apt mirror.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    env:
++      PWA_SKIP_E2E: '1'
++      PROJECT: webkit
++      SHARD: ${{ matrix.shard }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ inputs.ref || github.sha }}
++          persist-credentials: false
++          fetch-depth: 1
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-webkit
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: webkit
++          working-directory: pwa
++      - run: npx playwright install "$PROJECT"
++      # Only main's own hourly run saves (ci.yml's main pushes no longer do while this is on); never a
++      # train's call or a run by hand.
++      - name: Save Playwright's browsers to main's cache
++        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && inputs.ref == '' && steps.browsers.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.browsers.outputs.cache-primary-key }}
++      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
++      # Every test that failed, then passed on the one WebKit retry (#1692), so a retry never hides a flake.
++      - name: Flaky report
++        if: ${{ !cancelled() }}
++        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-webkit-${{ strategy.job-index }}
++          path: pwa/test-results
++          retention-days: 7
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+new file mode 100644
+index 00000000..4ebe1dce
+--- /dev/null
++++ b/.github/workflows/release-train.yml
+@@ -0,0 +1,348 @@
++name: Release train
++
++# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
++# (docs/app-windows.md, "The release train"). Merges never block it, and it never publishes an
++# unverified commit or one older than the latest release: build/select-release-commit.ps1 picks,
++# build/publish-prerelease.ps1 still refuses a duplicate or older version, in the same
++# concurrency group as ci.yml's publish job. Nothing new is a no-op.
++on:
++  schedule:
++    - cron: '17 * * * *'
++  workflow_dispatch:
++    inputs:
++      dry_run:
++        description: 'Dry run: pick and verify only, with no publish, Beta manifest or CDN purge'
++        type: boolean
++        default: false
++
++concurrency:
++  group: release-train
++  cancel-in-progress: false
++
++permissions:
++  contents: read
++
++env:
++  # Unset today, so the train publishes unsigned like ci.yml; once true it refuses (no sign step yet).
++  APP_SIGNING: ${{ vars.APP_SIGNING }}
++
++jobs:
++  pick:
++    name: Pick the newest verified commit
++    # Reads only: it lists runs and releases and writes nothing.
++    if: github.repository == 'danswett/agent-bridge' && github.ref == 'refs/heads/main'
++    runs-on: windows-latest
++    timeout-minutes: 15
++    permissions:
++      contents: read
++      actions: read # list main's CI runs, jobs and artifacts
++    outputs:
++      sha: ${{ steps.pick.outputs.sha }}
++      version: ${{ steps.pick.outputs.version }}
++      run: ${{ steps.pick.outputs.run }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++      - name: Pick the commit
++        id: pick
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++        run: |
++          . ./build/select-release-commit.ps1
++          Assert-TrainMayPublish $env:APP_SIGNING
++          $repo = $env:REPOSITORY
++          $latest = Invoke-ReleaseGh api "repos/$repo/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | .tag_name' |
++            Where-Object { $_ -cmatch '^v\d+\.\d+\.\d+$' } | Sort-Object { [semver]$_.Substring(1) } -Descending | Select-Object -First 1
++          $release = if ($latest) { [pscustomobject]@{ Tag = $latest; Commit = (Invoke-ReleaseGh api "repos/$repo/git/ref/tags/$latest" --jq '.object.sha') } }
++          $pick = Select-ReleaseCommit -Runs (Get-ReleaseRuns $repo) -Latest $release -IsDescendant { param($sha, $base) (Invoke-ReleaseGh api "repos/$repo/compare/$base...$sha" --jq '.status') -in 'ahead' }
++          if (-not $pick) { Write-Host 'nothing new to publish'; exit 0 }
++          "sha=$($pick.Sha)", "version=$($pick.Version)", "run=$($pick.Id)" | Add-Content $env:GITHUB_OUTPUT
++
++  verify:
++    name: Install and self-test the exact CI bytes (${{ matrix.runtime }})
++    # The train publishes what CI built, never a rebuild; before it does, each architecture's package is
++    # installed per user and the installed app self-tested, as CI's app-installer job does. Any failure
++    # here means publish is skipped (it needs this job) and the alert job below fails the run.
++    needs: [pick]
++    if: needs.pick.outputs.sha != ''
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - runtime: win-x64
++            runner: windows-latest
++            out: out/app
++            artifact: agent-bridge-windows
++          - runtime: win-arm64
++            runner: windows-11-arm
++            out: out/app-arm64
++            artifact: agent-bridge-windows-arm64
++    runs-on: ${{ matrix.runner }}
++    timeout-minutes: 40
++    permissions:
++      contents: read
++      actions: read # download the picked run's artifacts
++    env:
++      APP_VERSION: ${{ needs.pick.outputs.version }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          persist-credentials: false
++      - uses: ./.github/actions/arm64-foreground
++        if: matrix.runtime == 'win-arm64'
++      - name: The picked run's release files, byte for byte
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-${{ needs.pick.outputs.version }}
++          path: ${{ matrix.out }}/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: The picked run's installer input
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-installer-input-${{ needs.pick.outputs.version }}
++          path: ${{ runner.temp }}/installer-input
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: Refuse missing, foreign or altered installer input before running it
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++          SHA: ${{ needs.pick.outputs.sha }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++        run: |
++          . ./build/app-installer-input.ps1
++          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases "$env:OUT/releases" -Version $env:APP_VERSION -Runtime $env:RUNTIME -Commit $env:SHA -RunId $env:RUN_ID | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
++      - name: The package installs per user into its own channel and the manifest is its channel's
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++        run: |
++          . ./build/app-channels.ps1
++          $target = Get-AppChannel $env:RUNTIME
++          $setup = Join-Path "$env:OUT/releases" (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          New-Item -ItemType Directory -Force $logs | Out-Null
++          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
++          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
++          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $manifest = Get-Content "$root/current/sq.version" -Raw
++          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
++      # The installed app's self-test. x64's is required. Arm64's only records (owner and Quality: Arm64 jobs
++      # never gate the train, though the Arm64 package, its hash and its manifest above stay required) unless
++      # the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true, which makes a red Arm64 self-test
++      # hold the release. Unset is the default: not blocking.
++      - name: The installed app self-tests
++        id: selftest
++        continue-on-error: ${{ matrix.runtime == 'win-arm64' && vars.TRAIN_ARM64_SELFTEST_GATES != 'true' }}
++        shell: pwsh
++        run: |
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
++          exit $LASTEXITCODE
++      - name: Record the self-test result
++        if: always() && steps.selftest.outcome != 'skipped'
++        shell: bash
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUTCOME: ${{ steps.selftest.outcome }}
++          GATES: ${{ vars.TRAIN_ARM64_SELFTEST_GATES }}
++        run: |
++          gating="required"
++          if [ "$RUNTIME" = "win-arm64" ]; then
++            if [ "${GATES,,}" = "true" ]; then gating="gating (TRAIN_ARM64_SELFTEST_GATES is true)"; else gating="recorded, not gating (TRAIN_ARM64_SELFTEST_GATES is not true)"; fi
++          fi
++          echo "### Release train: $RUNTIME installed-app self-test: $OUTCOME; $gating" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$OUTCOME" = "failure" ] && [ "$RUNTIME" = "win-arm64" ] && [ "${GATES,,}" != "true" ]; then
++            echo "::warning title=release train::the Arm64 installed-app self-test failed; it is recorded and does not hold the release"
++          fi
++
++  webkit:
++    name: The PWA in WebKit at the picked commit
++    # While PWA_WEBKIT_OFF_PUSH is on, CI's main pushes leave WebKit to pwa-webkit.yml (#2454 item B), so the train
++    # runs it on the exact commit it would publish, and publish waits for it. Off (the default), this is skipped:
++    # every main push already ran WebKit.
++    needs: [pick]
++    if: needs.pick.outputs.sha != '' && vars.PWA_WEBKIT_OFF_PUSH == 'true'
++    permissions:
++      contents: read
++    uses: ./.github/workflows/pwa-webkit.yml
++    with:
++      ref: ${{ needs.pick.outputs.sha }}
++
++  alert:
++    name: Alert when verification fails
++    # Verification (or WebKit at the pick) failing means nothing was published: this job fails the run with a
++    # named error so a red train run is the alert (no other channel is wired here).
++    needs: [pick, verify, webkit]
++    if: always() && (needs.verify.result == 'failure' || needs.webkit.result == 'failure')
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: Nothing was published
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++        run: |
++          echo "::error title=release train::verification or WebKit of CI run $RUN_ID (commit $SHA) failed; nothing was published"
++          echo "### Release train: verification failed, nothing published ($SHA, CI run $RUN_ID)" >> "$GITHUB_STEP_SUMMARY"
++          exit 1
++
++  publish:
++    name: Publish the picked commit
++    # contents: write is here only, and only for a verified pick. APP_SIGNING true never gets here: the
++    # pick job fails first. A failed verification skips this job (it needs verify to succeed).
++    needs: [pick, verify, webkit]
++    # A dry run (workflow_dispatch input) stops after verify: nothing is published, no manifest, no purge.
++    # Explicit results, not the implicit success(): webkit is skipped while PWA_WEBKIT_OFF_PUSH is off, and a
++    # skipped need would otherwise skip publish. verify must still succeed, and webkit pass when it ran.
++    if: >-
++      !cancelled() && needs.pick.outputs.sha != '' && !inputs.dry_run && needs.verify.result == 'success'
++      && (needs.webkit.result == 'success' || needs.webkit.result == 'skipped')
++    runs-on: windows-latest
++    timeout-minutes: 30
++    permissions:
++      contents: write # create the release and its tag (the only job that writes)
++      actions: read # download the picked run's artifacts
++    concurrency:
++      group: publish-prerelease
++      cancel-in-progress: false
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - run: dotnet tool install -g vpk --version 1.2.161
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-${{ needs.pick.outputs.version }}
++          path: out/app/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-arm64-${{ needs.pick.outputs.version }}
++          path: out/app-arm64/releases
++          run-id: ${{ needs.pick.outputs.run }}
++          github-token: ${{ github.token }}
++      - name: Publish the pre-release
++        id: publish
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          SHA: ${{ needs.pick.outputs.sha }}
++        run: |
++          # -MainHead is the chosen commit and this checkout is a clone at it. The train publishes
++          # the newest passed commit, so ci.yml publish's stand-aside for a later app change does
++          # not apply (publish-prerelease.ps1 skips it when MainHead is the commit, and then reads
++          # nothing from -MainRepo); a duplicate, an older version or a commit behind the latest
++          # release is still refused.
++          ./build/publish-prerelease.ps1 -Version $env:VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository $env:REPOSITORY -Commit $env:SHA -MainHead $env:SHA -MainRepo .
++      - name: Publish the static Beta download manifest
++        # Ported from ci.yml's publish job (owner decision A): the manifest names the release this run published.
++        if: steps.publish.outputs.manifest-tag != ''
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          MANIFEST_TAG: ${{ steps.publish.outputs.manifest-tag }}
++        run: |
++          $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
++          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
++          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
++          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
++
++  purge:
++    name: Refresh the release-list CDN
++    # After a release is published, purge the relay's list pages by URL and check the relay serves the new
++    # release (#3870 option A; the Worker's zone-keyed cache key is #3880). Failing loudly here never
++    # unpublishes anything: the release is out, the relay is just not yet showing it.
++    needs: [pick, publish]
++    if: needs.publish.result == 'success'
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    # Main only; holds the secret CF_PURGE_TOKEN (Cloudflare Cache Purge on the slipgates.com zone, nothing
++    # else) and the variable CF_ZONE_ID, set in GitHub settings, never typed in a terminal.
++    environment: release-purge
++    permissions: {}
++    steps:
++      - name: Purge the list pages by URL, then check the relay serves the published release
++        shell: pwsh
++        env:
++          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
++          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
++          TAG: v${{ needs.pick.outputs.version }}
++        run: |
++          $ErrorActionPreference = 'Stop'
++          if (-not $env:CF_PURGE_TOKEN -or -not $env:CF_ZONE_ID) { throw 'CF_PURGE_TOKEN or CF_ZONE_ID is not set in the release-purge environment' }
++          # The public zone URLs the Worker keys its cache on: the page clients read (first ten) and the
++          # larger page older clients still ask for.
++          $base = 'https://releases.slipgates.com/repos/danswett/agent-bridge/releases'
++          $urls = @("${base}?per_page=10&page=1", "${base}?per_page=100&page=1")
++          $headers = @{ Authorization = "Bearer $env:CF_PURGE_TOKEN" }
++          $body = @{ files = $urls } | ConvertTo-Json -Compress
++          $answer = Invoke-RestMethod -Method Post -Uri "https://api.cloudflare.com/client/v4/zones/$env:CF_ZONE_ID/purge_cache" -Headers $headers -ContentType 'application/json' -Body $body
++          if (-not $answer.success) { throw "Cloudflare refused the purge: $(($answer.errors | ForEach-Object { $_.message }) -join '; ')" }
++          Write-Host "purged $($urls.Count) URLs"
++          # Re-fetch until both pages name the published tag with a fresh copy, within a minute.
++          $stale = $null
++          foreach ($attempt in 1..6) {
++            $stale = $null
++            foreach ($url in $urls) {
++              $response = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'application/vnd.github+json' } -SkipHttpErrorCheck
++              $age = [int](@($response.Headers['Age'])[0] ?? -1)
++              $tags = if ($response.StatusCode -eq 200) { @(($response.Content | ConvertFrom-Json) | ForEach-Object { $_.tag_name }) } else { @() }
++              if ($response.StatusCode -ne 200) { $stale = "$url answered $($response.StatusCode)" }
++              elseif ($tags -cnotcontains $env:TAG) { $stale = "$url does not list $env:TAG yet (Age $age)" }
++              elseif ($age -lt 0 -or $age -gt 120) { $stale = "$url lists $env:TAG but its copy is $age seconds old" }
++            }
++            if (-not $stale) { break }
++            Start-Sleep -Seconds 10
++          }
++          if ($stale) {
++            Write-Host "::error title=release train::the relay is still stale after the purge: $stale. The release is published; the CDN list was not refreshed."
++            exit 1
++          }
++          Write-Host "the relay serves $env:TAG"
++
++  dry-run-report:
++    name: Dry run report
++    # Only for a dry run: says what the train would have published and whether verification passed.
++    needs: [pick, verify]
++    if: always() && inputs.dry_run
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: What a real run would do
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          RUN_ID: ${{ needs.pick.outputs.run }}
++          VERIFY: ${{ needs.verify.result }}
++        run: |
++          if [ -z "$SHA" ]; then
++            echo "### Release train dry run: nothing to publish (no new verified commit)" >> "$GITHUB_STEP_SUMMARY"
++            exit 0
++          fi
++          echo "### Release train dry run: would publish v$VERSION (commit $SHA, CI run $RUN_ID); verification: $VERIFY" >> "$GITHUB_STEP_SUMMARY"
++          if [ "$VERIFY" != "success" ]; then
++            echo "::error title=release train dry run::verification would fail: nothing would be published"
++            exit 1
++          fi
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index cbe87c75..2f86349b 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -1205,11 +1205,25 @@ starvation lasts until the train lands.
+   `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
+   (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
+   change is the next verified commit's to publish.
++* **Verify before it publishes (owner option A).** The `verify` job runs once per architecture, on a runner of that architecture (`windows-latest`,
++  `windows-11-arm`), and only then does `publish` start. It downloads that run's package and its installer input, byte for byte, and refuses input that is
++  missing, foreign or altered (`Assert-AppInstallerInput`); it installs the package per user into its own channel and checks the installed manifest is that
++  channel's; then it self-tests the installed app (`build/app-self-test.ps1`). Package presence, hash, install and manifest are required on **both**
++  architectures, and so is the x64 self-test. **The Arm64 self-test only records** (a summary line and a warning naming the failure): Arm64 never gates the
++  train (owner, Nov 22), and a red Arm64 self-test still publishes (owner, Nov 23). The repository variable `TRAIN_ARM64_SELFTEST_GATES`, exactly `true`,
++  is the opt-in that makes a red Arm64 self-test hold the release; unset is the default. A failed verify publishes nothing, and the `alert` job fails the run
++  with a named error so a red train run is the alert. A run by hand with `dry_run` stops after verify: nothing is published.
++* **WebKit before it publishes, when WebKit is off the push path (#2454, item B).** With the repository variable `PWA_WEBKIT_OFF_PUSH` exactly `true`,
++  `ci.yml`'s push runs leave the PWA's WebKit legs out and `pwa-webkit.yml` runs them hourly on main's head; the train then calls it at the commit it picked
++  (the `webkit` job) and `publish` needs it to have succeeded. With the variable unset (the default) the job is skipped and the train behaves as without it.
++  The hourly run's failures feed main-red as their own stream (`quality/main-red.ps1`).
++* **After it publishes.** The `purge` job (environment `release-purge`) purges the relay's list pages by URL and checks the relay serves the new release
++  (#3870). Failing there never unpublishes anything: the release is out, the relay is just not yet showing it.
+ * **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
+   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
+   unsigned, until it gains the sign step.
+-* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+-  so a train release carries neither until they are added.
++* **Not covered yet:** `attest` belongs to `ci.yml`'s `publish` job, so a train release carries
++  no attestation until it is added. The static Beta download manifest is published by the train, as by `ci.yml`.
+ 
+ ### Signing
+ 
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index d291bee7..ad3b3752 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -891,8 +891,9 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui
+-    # WebKit runs after merge (#3208); Chromium blocks.
++    where: ci.yml pwa-ui; pwa-webkit.yml webkit; release-train.yml webkit
++    # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
++    # runs it hourly and before a release instead of on every main push (#2454).
+     tier: post-merge
+     tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
+     baseline: { files: 25 }
+@@ -987,6 +988,22 @@ suites:
+     where: halts-upload.yml upload
+     status: exists
+ 
++  - id: release-train
++    validation_plan: native
++    kind: packaging
++    ring: 4
++    select: affected
++    # The release train (#2225): hourly and by hand it picks the newest main commit whose CI passed
++    # and publishes that run's exact packages (never a rebuild), after installing and self-testing them
++    # on both architectures. Its selector is tested offline by
++    # build/test-select-release-commit.ps1.
++    platforms: [win-x64, win-arm64]
++    runner: hosted
++    triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
++    command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
++    where: release-train.yml pick, verify, alert, publish, purge, dry-run-report
++    status: exists
++
+   - id: pwa-iphone
+     validation_plan: native
+     kind: e2e
+diff --git a/quality/main-red.ps1 b/quality/main-red.ps1
+index aa7db6c7..47ba50e6 100644
+--- a/quality/main-red.ps1
++++ b/quality/main-red.ps1
+@@ -1,6 +1,6 @@
+ #Requires -Version 7
+ [CmdletBinding()]
+-param([long]$RunId, [string]$Repository = $env:GITHUB_REPOSITORY)
++param([long]$RunId, [string]$Repository = $env:GITHUB_REPOSITORY, [string]$Workflow = 'ci.yml')
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version Latest
+ . (Join-Path $PSScriptRoot 'rerun-known-flakes.ps1') -RunId $RunId -Repository $Repository
+@@ -8,6 +8,18 @@ $script:CatalogPath = Join-Path $PSScriptRoot 'catalog.yml'
+ # The S3b generator (PR 3078), called by path only: until it is on main a request is just recorded.
+ $script:QuarantineScript = Join-Path $PSScriptRoot 'quarantine-pr.ps1'
+ 
++# The run streams main-red follows, each its own incident (#2454 item B). CI's push runs on main are the default, as
++# always. pwa-webkit.yml's hourly schedule runs on main carry the WebKit legs while PWA_WEBKIT_OFF_PUSH is on: their
++# own issue label, so a green CI run never closes a WebKit alert or the reverse, and every job is the post-merge tier.
++function Set-MainRedStream([string]$Workflow) {
++    $script:Stream = switch -CaseSensitive ($Workflow) {
++        'ci.yml' { @{ File = 'ci.yml'; Event = 'push'; Label = 'main-red'; Name = 'CI'; AllPostMerge = $false; Title = 'Main red' } }
++        'pwa-webkit.yml' { @{ File = 'pwa-webkit.yml'; Event = 'schedule'; Label = 'main-red-webkit'; Name = 'PWA WebKit'; AllPostMerge = $true; Title = 'Main red, WebKit hourly' } }
++        default { throw "main-red follows ci.yml and pwa-webkit.yml only, not '$Workflow'." }
++    }
++}
++Set-MainRedStream $Workflow
++
+ # Tiered gating (#3210): the post-merge tier is the tier_jobs flow list of each tier: post-merge
+ # suite in catalog.yml. Anything this minimal read misses stays blocking, so a miss only alerts louder.
+ function Get-PostMergeJobs([string]$Path) {
+@@ -55,7 +67,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
+             }
+             if ($readable) { $tests = Get-FailedTests $log }
+             [pscustomobject]@{ Name = $job.name; Tests = $tests; LogReadable = $readable
+-                PostMerge = $null -ne $PostMergeJobs -and $PostMergeJobs.Contains([string]$job.name) }
++                PostMerge = $script:Stream.AllPostMerge -or ($null -ne $PostMergeJobs -and $PostMergeJobs.Contains([string]$job.name)) }
+         }
+     }
+ }
+@@ -63,7 +75,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
+ function Get-MainRedIssue([string]$Repository, [switch]$IncludeClosed) {
+     $state = if ($IncludeClosed) { 'all' } else { 'open' }
+     $fields = if ($IncludeClosed) { 'number,body,author,state,title' } else { 'number,body,author,title' }
+-    Invoke-Gh issue list --repo $Repository --state $state --label main-red --limit 100 --json $fields |
++    Invoke-Gh issue list --repo $Repository --state $state --label $script:Stream.Label --limit 100 --json $fields |
+         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
+         Sort-Object -Stable { if ($IncludeClosed) { $_.state -eq 'CLOSED' } else { $false } } |
+         Select-Object -First 1
+@@ -79,7 +91,7 @@ function Format-MainRedBody($Run, [string]$Repository, $Jobs, [bool]$PostMergeOn
+     }
+     $sha = $Run.head_sha.Substring(0, 8)
+     $lines = @("main-red: run=$($Run.id) attempt=$($Run.run_attempt) sha=$sha",
+-        "CI on main: https://github.com/$Repository/actions/runs/$($Run.id)")
++        "$($script:Stream.Name) on main: https://github.com/$Repository/actions/runs/$($Run.id)")
+     if ($PostMergeOnly) {
+         $lines += "post-merge tier only: an alert; a pull request's merge verdict never counts these jobs."
+     }
+@@ -143,7 +155,7 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
+     if (-not (Test-MainPush $run $Repository)) { return }
+     # Pending detectors replace each other, so every detector applies the newest decisive verdict, whichever
+     # event (stale, delayed or redelivered) started it, and every order converges on the same incident state.
+-    $recent = @((Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" |
++    $recent = @((Invoke-Gh api "repos/$Repository/actions/workflows/$($script:Stream.File)/runs?branch=main&event=$($script:Stream.Event)&per_page=100" |
+             ConvertFrom-Json).workflow_runs | Where-Object { Test-MainPush $_ $Repository })
+     $known = @{}
+     foreach ($r in $recent + @($run)) { $known["$($r.id)/$($r.run_attempt)"] = $r }
+@@ -189,7 +201,7 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
+ }
+ 
+ function Test-MainPush($Run, [string]$Repository) {
+-    $Run.path -eq '.github/workflows/ci.yml' -and $Run.event -eq 'push' -and $Run.head_branch -eq 'main' -and
++    $Run.path -eq ".github/workflows/$($script:Stream.File)" -and $Run.event -eq $script:Stream.Event -and $Run.head_branch -eq 'main' -and
+     $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
+ }
+ 
+@@ -309,7 +321,8 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
+         $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+             [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and -not (Test-QuarantineCompleted $issue $comments $test $Recovery)
+     }
+-    $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
++    $title = if ($script:Stream.AllPostMerge) { "$($script:Stream.Title), post-merge tier only ($sha)" }
++        elseif ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+     if ($issue) {
+         # A blocking failure must not stay filed under a title that says it never blocks.
+         if (-not $postMergeOnly -and $issue.title -clike 'Main red, post-merge tier only (*)') {
+@@ -317,7 +330,7 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
+         }
+         Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null
+     } else {
+-        Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
++        Invoke-Gh label create $script:Stream.Label --repo $Repository --color B60205 --description "$($script:Stream.Name) is red on main" --force | Out-Null
+         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
+     }
+     # The intent is stored first: a failed write must not leave a generator run that no later tick can see.
+diff --git a/quality/test-main-red.ps1 b/quality/test-main-red.ps1
+index d11cf450..524482cf 100644
+--- a/quality/test-main-red.ps1
++++ b/quality/test-main-red.ps1
+@@ -59,7 +59,7 @@ function Fake-Gh {
+             if ($s.ContainsKey('triggerConclusion')) { $run.conclusion = $s.triggerConclusion }
+             $run | ConvertTo-Json; return
+         }
+-        '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
++        '^api repos/o/r/actions/workflows/(ci|pwa-webkit)\.yml/runs\?' {
+             if ($a -notmatch 'per_page=100' -or $a -match 'status=completed') { throw 'Require one bounded page including in-flight retries' }
+             $run.id = $s.newest; $run.run_number = $s.newest
+             $runs = if ($s.ContainsKey('runs')) { @(foreach ($k in $s.runs.Keys) { New-FakeAttempt $k $s.runs[$k].Count }) }
+@@ -89,7 +89,7 @@ function Fake-Gh {
+             ConvertTo-Json -InputObject $found -Depth 5; return
+         }
+         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
+-        '^label create main-red ' { $s.writes += 'label'; return }
++        '^label create main-red(-webkit)? ' { $s.writes += 'label'; return }
+         '^issue create ' {
+             $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
+             $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; $s.comments = @(); return
+@@ -424,7 +424,26 @@ foreach ($case in @(@{ name = 'shares its second with entries on both sides of a
+     try { Detect } catch { $refused = $_.Exception.Message }
+     Assert ($refused -match 'quarantine-completed' -and @(Get-GeneratorCalls).Count -eq 0 -and $s.writes.Count -eq $before) "a completion that $($case.name) refuses that entry before its write or any generator call ($refused)"
+ }
+-Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
++$env:MAIN_RED_QUARANTINE = $null
++# The hourly WebKit stream (#2454 item B): pwa-webkit.yml's schedule runs on main, an issue of their own, every
++# job post-merge. CI's stream reads only CI's push runs, and neither stream ever acts on the other's runs.
++Set-MainRedStream 'pwa-webkit.yml'
++Reset-Scenario; $s.path = '.github/workflows/pwa-webkit.yml'; $s.event = 'schedule'; $s.jobName = 'webkit 1/3'
++$s.log = '  1) [webkit] › test/axe.spec.mjs:12:3 › every page passes axe'; Detect
++$sent = ($s.calls | ForEach-Object { $_ -join ' ' }) -join "`n"
++Assert (($s.writes -join ',') -eq 'label,create' -and $s.title -match 'WebKit' -and $s.body -match 'PWA WebKit on main' -and
++    $s.body -match 'Job \(post-merge-tier\): webkit 1/3' -and $s.body -match 'test/axe\.spec\.mjs:12') 'a failed hourly WebKit run opens its own post-merge alert naming the spec'
++Assert ($sent -match 'workflows/pwa-webkit\.yml/runs\?branch=main&event=schedule' -and $sent -match '--label main-red-webkit' -and
++    $sent -notmatch 'workflows/ci\.yml/runs') 'the WebKit stream reads only its own runs and its own label'
++Reset-Scenario; Detect
++Assert ($s.writes.Count -eq 0) 'the WebKit stream never acts on a CI push run'
++Set-MainRedStream 'ci.yml'
++Reset-Scenario; $s.path = '.github/workflows/pwa-webkit.yml'; $s.event = 'schedule'; Detect
++Assert ($s.writes.Count -eq 0) 'the CI stream never acts on an hourly WebKit run'
++$refused = $null
++try { Set-MainRedStream 'other.yml' } catch { $refused = $_.Exception.Message }
++Assert ($refused -match 'other\.yml') 'an unknown workflow is refused'
++Remove-Item -LiteralPath $genDir -Recurse
+ Remove-Item -LiteralPath $tierPath
+ if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
+ "main-red: $script:checks checks passed"
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a4..8dabfb71 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -443,6 +443,12 @@ public class CiPlanTests
+             "ci.yml job app leaves app (win-x86) to main, but the catalog doesn't make it post-merge" })]
+     [InlineData("github.event_name != 'pull_request' && ',", "github.event_name == 'push' && ',", new[] { "app (win-arm64)", "ha-integration" },
+         new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
++    // The post-merge legs may step off main's pushes behind PWA_WEBKIT_OFF_PUSH (#2454), in exactly that one form.
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',",
++        new[] { "app (win-arm64)", "ha-integration" }, new string[0])]
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || true) && ',",
++        new[] { "app (win-arm64)", "ha-integration" },
++        new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
+     public void Pull_requests_skip_exactly_the_catalog_post_merge_jobs_and_legs(string from, string to, string[] tierJobs, string[] expected)
+     {
+         var catalog = Fixture.Catalog();
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+new file mode 100644
+index 00000000..5c9d6377
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -0,0 +1,73 @@
++using AgentBridge.Quality;
++using Xunit;
++
++// The release train's verify job (.github/workflows/release-train.yml): the owner's rule is that Arm64 jobs never
++// gate the train, though both packages are still required; the Arm64 installed-app self-test only records unless
++// the repository variable TRAIN_ARM64_SELFTEST_GATES is exactly true. x64's self-test and every package check
++// stay required on both architectures.
++public sealed class ReleaseTrainWorkflowTests
++{
++    const string Switch = "TRAIN_ARM64_SELFTEST_GATES";
++
++    static string Workflow() => File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "release-train.yml"))
++        .ReplaceLineEndings("\n");
++
++    static string Job(string text, string id)
++    {
++        var start = text.IndexOf($"\n  {id}:\n", StringComparison.Ordinal);
++        Assert.True(start >= 0, $"job {id} is missing");
++        var next = System.Text.RegularExpressions.Regex.Match(text[(start + 1)..], "\n  [a-z-]+:\n");
++        return next.Success ? text[start..(start + 1 + next.Index)] : text[start..];
++    }
++    static string Step(string job, string name)
++    {
++        var marker = $"      - name: {name}\n";
++        var start = job.IndexOf(marker, StringComparison.Ordinal);
++        Assert.True(start >= 0, $"step '{name}' is missing");
++        var next = job.IndexOf("\n      - ", start + marker.Length, StringComparison.Ordinal);
++        return next < 0 ? job[start..] : job[start..next];
++    }
++
++    [Fact]
++    public void The_arm64_installed_app_self_test_only_records_unless_the_switch_is_true_and_x64s_is_always_required()
++    {
++        var verify = Job(Workflow(), "verify");
++        var selfTest = Step(verify, "The installed app self-tests");
++
++        Assert.Contains($"continue-on-error: ${{{{ matrix.runtime == 'win-arm64' && vars.{Switch} != 'true' }}}}", selfTest, StringComparison.Ordinal);
++        // The only way to exempt a leg is that expression: it is false for x64 whatever the variable says.
++        Assert.Single(System.Text.RegularExpressions.Regex.Matches(verify, "continue-on-error"));
++    }
++
++    [Theory]
++    [InlineData("The picked run's release files, byte for byte")]
++    [InlineData("The picked run's installer input")]
++    [InlineData("Refuse missing, foreign or altered installer input before running it")]
++    [InlineData("The package installs per user into its own channel and the manifest is its channel's")]
++    public void Both_architectures_keep_the_package_presence_hash_and_manifest_checks_required(string step)
++    {
++        Assert.DoesNotContain("continue-on-error", Step(Job(Workflow(), "verify"), step), StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void A_red_arm64_self_test_is_recorded_in_the_summary_and_a_warning_names_it()
++    {
++        var record = Step(Job(Workflow(), "verify"), "Record the self-test result");
++
++        Assert.Contains("GITHUB_STEP_SUMMARY", record, StringComparison.Ordinal);
++        Assert.Contains("::warning title=release train::", record, StringComparison.Ordinal);
++        Assert.Contains($"vars.{Switch}", record, StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void Publish_still_needs_the_whole_verify_job_so_a_required_check_failing_publishes_nothing()
++    {
++        var publish = Job(Workflow(), "publish");
++
++        Assert.Contains("needs: [pick, verify, webkit]", publish, StringComparison.Ordinal);
++        // Its if is explicit (#2454 item B): the whole verify job must still succeed; webkit must pass when it ran and
++        // is skipped while PWA_WEBKIT_OFF_PUSH is off.
++        Assert.Contains("needs.verify.result == 'success'", publish, StringComparison.Ordinal);
++        Assert.Contains("(needs.webkit.result == 'success' || needs.webkit.result == 'skipped')", publish, StringComparison.Ordinal);
++    }
++}
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 8c389b3c..3d2d283a 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -102,7 +102,9 @@ static partial class CiPlan
+     // Tiers (quality/README.md §4.9, #3209): a pull request runs only blocking legs, main both. A
+     // job with some post-merge legs lists them in its matrix include only off pull requests.
+     const string NotPullRequest = "github.event_name != 'pull_request'";
+-    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request' && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
++    // The post-merge legs may also step off main's push runs behind PWA_WEBKIT_OFF_PUSH (pwa-webkit.yml, #2454): that one
++    // conjunct, exactly; pull requests still run the blocking legs alone.
++    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request'(?: && \(github\.event_name != 'push' \|\| vars\.PWA_WEBKIT_OFF_PUSH != 'true'\))? && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
+     private static partial Regex TierInclude();
+     [GeneratedRegex(@"\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}")]
+     private static partial Regex MatrixName();
