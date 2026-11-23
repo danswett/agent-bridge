@@ -688,7 +688,8 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
         Assert.Single(f.Typed);
     }
-        // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
+
+    // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
     // second is refused queueHeld (never busy, which would trigger the HA fallback), and a full store is refused statusFull. Flag off: unused.
     static Task<LiteDelivery> SendNew(LiteDeliver lite, string text = "hi") => lite.DeliverAsync(Envelope(text, Guid.NewGuid().ToString()), text, default);
     Fixture BusyClaude(ReplyStage? stage = null, AnswerOutcome outcome = AnswerOutcome.Delivered)
@@ -799,7 +800,8 @@ public sealed class AgentLiteDeliveryTests
         Assert.False(f.Store.SlotHeld(Target));
         f.InjectorStops = false; f.Outcome = AnswerOutcome.Delivered;
         Assert.True((await SendNew(lite)).Typed);
-    }    [Fact]
+    }
+    [Fact]
     public async Task A_refusal_after_keys_went_is_held_unconfirmed_not_freed()
     {
         var f = BusyClaude(outcome: AnswerOutcome.Refused); var lite = f.Build();
@@ -819,7 +821,7 @@ public sealed class AgentLiteDeliveryTests
         Assert.True((await SendNew(l2)).Typed); Assert.True((await SendNew(l2)).Typed);
         Assert.Empty(off.Store.Records());
     }
-[Fact]
+    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
         var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working }; busy.Launch(LaunchProtocol.Ask);
