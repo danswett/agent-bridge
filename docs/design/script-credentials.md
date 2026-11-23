@@ -153,13 +153,18 @@ tick). They are for the person's app on this machine, or still the host command 
 ships and the CLI is app-gated (P3). An agent, a script, an unclassified caller and any connection that has
 passed `agent.hello` are refused.
 
-* **Bound confirmation.** An app press must carry the host's confirmation for exactly that action. The app
+* **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
   asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. The
-  confirmation is a SHA-256 over this machine, the operation, the script name and the credential state for
-  that name (the live credential ids, their `launch:fleet` flag and expiry). Any mint, revoke, rotation,
-  tick or expiry changes the state, so a used, stale or replayed confirmation, or one made for another
-  action or another script, is refused and changes nothing. This is the grants G8 pattern; the host does
-  not trust the app's say-so alone (the same-user imitation residual stays OPEN, Q7).
+  confirmation is a random value the host holds in memory with what it was issued for: the operation, the script
+  name, the credential state for that name (the live credential ids, their `launch:fleet` flag and expiry) and the
+  connection it was issued to. It is good for **one use and one minute**, at most 32 are outstanding (the oldest goes
+  first), and the first press that presents it uses it up, whether the press then succeeds or not. So a used, expired,
+  replayed or guessed value, one presented on another connection, one made for another action or script, and one
+  whose state has since changed (even if it has since come back, as after a mint and a revoke) is refused and
+  changes nothing. The check, the audit attempt and the change run as one step under the credential store's lock, so
+  two presses at once for the same state (a double click) make one credential: the second finds the state already
+  changed and is refused. A restart forgets every confirmation. This is the grants G8 pattern; the host does not trust the app's
+  say-so alone (the same-user imitation residual stays OPEN, Q7).
 * **The list.** `scripts.list` returns, per script name, the scope, the soonest-lived expiry, how many
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
   a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps

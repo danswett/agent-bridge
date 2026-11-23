@@ -528,8 +528,48 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         }
     }
 
-    internal string ScriptConfirmation(string op, string name) => Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
-        $"script-press/v1|{machine}|{op}|{name}|{ScriptState(name)}")));
+    // A person's press needs a confirmation the host issued for exactly this action, script, state and connection. It is random,
+    // good for one use and one minute, and used up by the first press that presents it, whether or not the press succeeds, so a
+    // state that returns to an earlier one (mint, then revoke) can never revalidate an old value (#3883 receipt 7099362785).
+    public static readonly TimeSpan ScriptConfirmationLife = TimeSpan.FromMinutes(1);
+    public const int MaxScriptConfirmations = 32;
+    readonly Dictionary<string, (string Op, string Name, string State, IProtocolChannel Channel, DateTimeOffset Expires)> confirmations = [];
+
+    internal string IssueScriptConfirmation(string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            foreach (var stale in confirmations.Where(c => c.Value.Expires <= now).Select(c => c.Key).ToList()) { confirmations.Remove(stale); }
+            while (confirmations.Count >= MaxScriptConfirmations)
+            { confirmations.Remove(confirmations.MinBy(c => c.Value.Expires).Key); }
+            var token = BlobFormat.Base64Url(RandomNumberGenerator.GetBytes(24));
+            confirmations[token] = (op, name, ScriptState(name), channel, now + ScriptConfirmationLife);
+            return token;
+        }
+    }
+
+    // The check and the write under one lock: a second press for the same state finds the state already changed and is refused.
+    internal T RunScriptPress<T>(string? token, string op, string name, IProtocolChannel channel, Func<T> act)
+    {
+        lock (gate)
+        {
+            if (!ConsumeScriptConfirmation(token, op, name, channel))
+            { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within a minute on the same connection; ask scripts.confirm again"); }
+            return act();
+        }
+    }
+
+    internal bool ConsumeScriptConfirmation(string? token, string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            // Used up on presentation, right or wrong, so a guess or a wrong-action try burns what it touches.
+            if (token is null || !confirmations.Remove(token, out var held)) { return false; }
+            return held.Op == op && held.Name == name && ReferenceEquals(held.Channel, channel)
+                && held.Expires > time.GetUtcNow() && held.State == ScriptState(name);
+        }
+    }
 
     internal void SetFleetLaunch(string name, bool enabled)
     {
