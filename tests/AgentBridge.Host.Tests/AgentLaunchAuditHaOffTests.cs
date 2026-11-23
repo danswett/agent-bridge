@@ -13,9 +13,11 @@ using Xunit;
 // starts, the started process gets no Home Assistant variable, and the audit log's launch row names the launching agent as the actor, never
 // the owner or a person. Same collection as the Home Assistant launch-environment tests because it changes process environment variables.
 [Collection("Launch HA environment")]
-[Trait("Category", "Network")]
 public sealed class AgentLaunchAuditHaOffTests : LaunchFlowFixture
 {
+    // No relay and no socket: the pipe handler is called in process, so the CI filter that leaves out Network tests runs this one.
+    private protected override bool UsesRelay => false;
+
     const string Principal = "agent:machine/parent";
     static readonly Regex HomeAssistant = new(@"(^|_)HA(_|$)|HOME_?ASSISTANT", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
