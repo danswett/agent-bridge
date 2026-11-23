@@ -564,7 +564,7 @@ A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and 
 
 ## The relay's enforce mode (R2, first part)
 
-Each account's relay mode starts as `observe`, which is what the relay has always done, and is reported as `mode` in `roster`. It moves to `enforce` only when a device that is an active **person** device in the account's roster (not a host) sends `{ "t": "roster-enforce", "id": n }` on its own connection; the relay answers `{ "t": "roster-enforce-result", "id": n, "mode": "enforce" }` or `{ ..., "error": "not-approved" }`. It never moves back (a reset is a later slice). The request needs no presence proof: it only tightens, and the relay is never the gate (device-approval.md §4.5). An account with no roster cannot be switched.
+Each account's relay mode starts as `observe`, which is what the relay has always done, and is reported as `mode` in `roster`. It moves to `enforce` only when a device that is an active **person** device in the account's roster (not a host) sends `{ "t": "roster-enforce", "id": n }` on its own connection; the relay answers `{ "t": "roster-enforce-result", "id": n, "mode": "enforce" }` or `{ ..., "error": "not-approved" }`. (`RelayClient.EnforceRosterAsync`.) It never moves back (a reset is a later slice). The request needs no presence proof: it only tightens, and the relay is never the gate (device-approval.md §4.5). An account with no roster cannot be switched.
 
 In `enforce` the relay tags each connecting key from its own verified copy of the roster:
 

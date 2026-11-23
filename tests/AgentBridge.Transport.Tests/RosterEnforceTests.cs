@@ -133,4 +133,92 @@ public class RosterEnforceTests
         var ch = await app.Hub.OpenAsync(host.Id);
         Assert.True((await ch.RequestAsync("ping")).GetProperty("ok").GetBoolean());
     }
+
+    // A connecting device whose key is the roster fixture's own, so the relay sees the identity the roster holds.
+    static P256KeyPair KeyOf(string device)
+    {
+        var k = World.Keys(device).Dh;
+        var d = k.D.ToByteArray(isUnsigned: true, isBigEndian: true);
+        if (d.Length < 32) { d = [.. new byte[32 - d.Length], .. d]; }
+        return P256KeyPair.FromParameters(d, k.Public[1..33], k.Public[33..65]);
+    }
+
+    static async Task<(TestRelay Relay, DeviceRoster Roster, World W, string Token)> StartAsync()
+    {
+        var w = Scenario();
+        var relay = await TestRelay.StartAsync();
+        var roster = relay.App.Services.GetRequiredService<DeviceRoster>();
+        await roster.AppendAsync(Account, [Wire(w, "G")]);
+        return (relay, roster, w, relay.TokenFor(1, "octo"));
+    }
+
+    // As an approved device does: the append goes over its socket, which is what re-tags the account's connected devices.
+    static Task AppendOverSocketAsync(Device from, string wrapper) => from.Relay.SendRawAsync(
+        System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(new { t = "roster-append", id = 1, entries = new[] { wrapper } })),
+        System.Net.WebSockets.WebSocketMessageType.Text);
+
+    [Fact]
+    public async Task A_rostered_person_device_switches_the_account_and_a_connected_stranger_becomes_pending()
+    {
+        var (relay, roster, w, token) = await StartAsync();
+        await using var lifetime = relay;
+        var phone = await relay.ConnectAsync(token, "phone-g", "phone", KeyOf("G"));
+        var stranger = await relay.ConnectAsync(token, "app-x", "app");
+        await phone.Relay.WaitForPeerAsync(p => p.Id == stranger.Id, TimeSpan.FromSeconds(10));
+        await stranger.Relay.WaitForPeerAsync(p => p.Id == phone.Id, TimeSpan.FromSeconds(10));
+
+        Assert.True(await phone.Relay.EnforceRosterAsync());
+
+        Assert.Equal(DeviceRoster.Enforce, (await roster.GetAsync(Account))!.Mode);
+        await Wait.UntilAsync(() => stranger.Relay.Presence.Count == 0, "the stranger to be told nothing", TimeSpan.FromSeconds(10));
+        Assert.Contains(phone.Relay.Presence, p => p.Id == stranger.Id);  // approvers still see who is there
+    }
+
+    [Fact]
+    public async Task A_stranger_or_a_host_cannot_switch_the_account()
+    {
+        var (relay, roster, w, token) = await StartAsync();
+        await using var lifetime = relay;
+        var stranger = await relay.ConnectAsync(token, "app-x", "app");
+        var host = await relay.ConnectAsync(token, "host-g", "host", KeyOf("G"));  // the roster's key, but not a person's kind
+        Assert.False(await stranger.Relay.EnforceRosterAsync());
+        Assert.False(await host.Relay.EnforceRosterAsync());
+        Assert.Equal(DeviceRoster.Observe, (await roster.GetAsync(Account))!.Mode);
+    }
+
+    [Fact]
+    public async Task A_pending_device_is_approved_the_moment_its_add_is_appended()
+    {
+        var (relay, roster, w, token) = await StartAsync();
+        await using var lifetime = relay;
+        var phone = await relay.ConnectAsync(token, "phone-g", "phone", KeyOf("G"));
+        Assert.True(await phone.Relay.EnforceRosterAsync());
+        var joining = await relay.ConnectAsync(token, "app-b", "app", KeyOf("B"));
+        await Task.Delay(500);
+        Assert.Empty(joining.Relay.Presence);
+
+        await AppendOverSocketAsync(phone, Wire(w, "addB"));
+
+        await joining.Relay.WaitForPeerAsync(p => p.Id == phone.Id, TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task A_device_removed_from_the_roster_is_closed_with_4030_and_refused_when_it_returns()
+    {
+        var (relay, roster, w, token) = await StartAsync();
+        await using var lifetime = relay;
+        await roster.AppendAsync(Account, [Wire(w, "addB")]);
+        var phone = await relay.ConnectAsync(token, "phone-g", "phone", KeyOf("G"));
+        Assert.True(await phone.Relay.EnforceRosterAsync());
+        var other = await relay.ConnectAsync(token, "app-b", "app", KeyOf("B"));
+        await other.Relay.WaitForPeerAsync(p => p.Id == phone.Id, TimeSpan.FromSeconds(10));
+
+        w.Remove("rmB", "G", "addB", "addB");
+        await AppendOverSocketAsync(phone, Wire(w, "rmB"));
+
+        await other.Relay.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(CloseCodes.Removed, (int?)other.Relay.CloseStatus);
+        var refused = await Assert.ThrowsAsync<RelayRefusedException>(() => relay.ConnectAsync(token, "app-b", "app", KeyOf("B")));
+        Assert.Equal(CloseCodes.Removed, refused.Code);
+    }
 }
