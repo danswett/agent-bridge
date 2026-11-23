@@ -186,7 +186,7 @@ public sealed class LiteDeliver(
                     break;
             }
             // Queued and unconfirmed sends stay held: watch for the prompt Claude takes, up to the 120 s watch (D2b-2b2).
-            if (store.Get(body.Request) is { Held: true }) { _ = Watcher?.Start(body.Request); }
+            if (store.Get(body.Request, peer) is { Held: true }) { _ = Watcher?.Start(body.Request, peer); }
         }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }

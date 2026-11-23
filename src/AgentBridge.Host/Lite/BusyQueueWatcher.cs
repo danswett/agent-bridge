@@ -21,19 +21,19 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
 
     public async Task WatchAsync(string request, CancellationToken ct = default, string? principal = null)
     {
-        if (store.Get(request) is not { Held: true } first) { return; }
+        if (store.Get(request, principal) is not { Held: true } first) { return; }
         // A queued send is watched until its Accepted time plus the watch; one that was unconfirmed with no row, for the watch from now.
         var until = first.Until ?? time.GetUtcNow() + BusyQueueStore.Watch;
-        var (transcript, offset) = store.Tracking(request);
+        var (transcript, offset) = store.Tracking(request, principal);
         while (!ct.IsCancellationRequested)
         {
-            var now = store.Get(request);
+            var now = store.Get(request, principal);
             if (now is null || !now.Held || now.State == BusyQueueStore.Delivered) { return; }
-            if (transcript is not null && Read(transcript, offset, request)) { store.Settle(request, BusyQueueStore.Delivered, null, held: false); return; }
+            if (transcript is not null && Read(transcript, offset, request)) { store.Settle(request, BusyQueueStore.Delivered, null, held: false, principal: principal); return; }
             if (time.GetUtcNow() >= until)
             {
                 // An unconfirmed noRow send keeps its reason; a queued one is now reported watchEnded. Either stays held.
-                if (now.State == BusyQueueStore.Queued) { store.Settle(request, BusyQueueStore.Unconfirmed, "watchEnded", held: true); }
+                if (now.State == BusyQueueStore.Queued) { store.Settle(request, BusyQueueStore.Unconfirmed, "watchEnded", held: true, principal: principal); }
                 return;
             }
             try { await Task.Delay(Poll, time, ct); }
