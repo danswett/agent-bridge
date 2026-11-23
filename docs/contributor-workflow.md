@@ -197,6 +197,24 @@ links, and explicitly supersede old authority instructions during a handoff.
 Do not remove the old tracker until all active rows have a verified destination;
 a Project-permission failure is not an empty queue or a completed migration.
 
+## Test waits and load flakes (#2558)
+
+A full Host.Tests or App.Tests run on one CPU starves the thread pool for far longer than a healthy test needs, so a short wait
+bound fails tests that are fine alone, a different one each run. Pick the wait by what drives it:
+
+- **A clock in the code under test drives it** (a poll, a retry, a budget): give the test a fake or stepped clock, so its time moves
+  with the service's waits and not the wall (`PollClock`, `FakeTimeProvider`). Never loosen the bound the test is about.
+- **A plain handoff drives it** (a task completing, a signal, a reply on a channel, a folder deleted at teardown): the bound is only a
+  deadlock guard. Use one named guard constant of about a minute, never a literal of 2 to 30 s, and never assert on elapsed time
+  against it. The pass path is unchanged; a real hang still fails, a minute later. This is not the loosening #2558 forbids.
+- **A teardown that deletes files** retries while Windows still holds an exited program's image, and leaves the folder behind
+  rather than failing a finished test.
+
+The family to cover with shared constants instead of one fix per flake: the per-class `Patience` (10 s, and 90 s in the migration tests)
+in the Host.Tests and App.Tests classes, `SecureChannel.RequestAsync`'s default 15 s timeout, and about 100 `WaitAsync` literals of 2 to
+30 s in tests/AgentBridge.Host.Tests. A flake in one of them is reported on #2558 with the test name and message, and fixed by moving it
+to the matching pattern above.
+
 ## Commands and code for the owner
 
 In any question or message to the owner, put every command or code line in its own
