@@ -98,6 +98,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
     DateTimeOffset? underneath;
 
     // How the lock file is opened; a test stands in for a disk that fails.
+    // How long a background check waits for GitHub's revalidation after the relay answered (owner, Nov 22: it never blocks).
+    internal TimeSpan RevalidateWait { get; set; } = TimeSpan.FromSeconds(5);
     internal Func<string, FileStream> OpenLock { get; set; } =
         path => new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
@@ -215,7 +217,13 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 }
             }
             Answer? rechecked = null;
-            if (cdn && url == GitHubList && channel is not null && (revalidate || press))
+            // Owner, Nov 22 (the full flip): with GitHub's revalidation due and the relay grace still open, a
+            // background check reads the relay first and revalidates with GitHub after its answer, never
+            // blocking it (a newer GitHub answer wins). Past the grace GitHub is asked first, as before.
+            var relayFirst = cdn && url == GitHubList && channel is not null && !press && revalidate && RelayWindow(state, now);
+            var relayedFirst = false;
+            T relayedList = default!;
+            if (cdn && url == GitHubList && channel is not null && (press || revalidate && !relayFirst))
             {
                 log?.Invoke(revalidate
                     ? $"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}"
@@ -244,8 +252,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 var (body, age, refused) = await AskCdnAsync(floor, installed, channel!, prereleases, cancellationToken);
                 now = time.GetUtcNow();
                 // The deadline may have passed while the relay was answering.
-                if ((state.GitHubAnsweredAt is not { } before || before > now || now - before >= GithubRevalidateEvery)
-                    && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)))
+                var recent = state.GitHubAnsweredAt is { } before && before <= now && now - before < GithubRevalidateEvery;
+                if (!recent && !(relayFirst && RelayWindow(state, now)) && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)))
                 {
                     body = null;
                     refused = $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}";
@@ -266,12 +274,25 @@ public sealed partial class ReleaseDiscovery : IDisposable
                     Write(state);
                     log?.Invoke($"update check: the release list came from the CDN, from its copy of {Span(a)} ago");
                     if (holding && state.Problem == Problems.Limited && RelayAnchor(state) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
-                    return relayed;
+                    if (!(relayFirst && !holding)) { return relayed; }
+                    (relayedFirst, relayedList) = (true, relayed);
+                    log?.Invoke("update check: GitHub's revalidation is due; asking it after the CDN answer, without waiting past its short deadline");
                 }
+                else
                 log?.Invoke($"update check: the CDN's release list was not used, as {refused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
             }
             if (holding) { throw Held(state); }
-            var answer = rechecked ?? await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
+            Answer answer;
+            if (relayedFirst)
+            {
+                // GitHub's revalidation after the relay's answer: a short deadline, and any failure of it is
+                // recorded (so GitHub is not asked again until its backoff ends) but never fails this check.
+                using var revalidating = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                revalidating.CancelAfter(RevalidateWait);
+                try { answer = await AskAsync(url, null, revalidating.Token); }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { answer = new Answer(0, Problem: Problems.Unreachable); }
+            }
+            else { answer = rechecked ?? await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken); }
             now = time.GetUtcNow();
             state = ObservedQuota(state, answer);
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
@@ -307,6 +328,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
             }
             state = BackedOff(state, answer, now, url);
             Write(state);
+            if (relayedFirst)
+            {
+                log?.Invoke("update check: GitHub's revalidation did not succeed; the CDN's list stands and GitHub is held until its backoff ends");
+                return relayedList;
+            }
             throw Held(state);
         }
         finally { turn.Release(); }

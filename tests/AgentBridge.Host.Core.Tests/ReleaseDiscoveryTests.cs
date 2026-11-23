@@ -591,13 +591,16 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         {
             Assert.Equal(body, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
         }
-        Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
+        // Owner, Nov 22 (full flip): an overdue revalidation with the grace open reads the relay first, then asks GitHub.
+        var relayFirst = hours > 0;
+        Assert.Equal(relayFirst ? new[] { ReleaseDiscovery.CdnList, Url } : new[] { Url, ReleaseDiscovery.CdnList }, github.Requests.Select(r => r.Url));
         using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName)));
         Assert.Equal(anchor, saved.RootElement.GetProperty("gitHubAnsweredAt").Deserialize<DateTimeOffset?>());
         Assert.Equal(Now.AddMinutes(30), saved.RootElement.GetProperty("notBefore").GetDateTimeOffset());
         Assert.Equal(1, saved.RootElement.GetProperty("failures").GetInt32());
         var ends = (anchor ?? Now).AddHours(24);
-        Assert.Contains(said, line => line.Contains("grace", StringComparison.Ordinal) && line.Contains(ends.ToString("O"), StringComparison.Ordinal));
+        if (relayFirst) { Assert.Contains(said, line => line.Contains("revalidation did not succeed", StringComparison.Ordinal)); }
+        else { Assert.Contains(said, line => line.Contains("grace", StringComparison.Ordinal) && line.Contains(ends.ToString("O"), StringComparison.Ordinal)); }
         using var restarted = new ReleaseDiscovery(folder, github, time, random: () => 0);
         time.Advance(TimeSpan.FromMinutes(10));
         body = RelayList("0.1.999");
@@ -641,7 +644,8 @@ public sealed class ReleaseDiscoveryTests : IDisposable
             using var rolledBack = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now.AddHours(-rollback)), random: () => 0);
             await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => rolledBack.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
         }
-        Assert.All(github.Requests, r => Assert.Equal(Url, r.Url));
+        Assert.True(github.Requests.Count(r => r.Url == ReleaseDiscovery.CdnList) <= (crossing ? 1 : 0));
+        Assert.All(github.Requests.Where(r => r.Url != ReleaseDiscovery.CdnList), r => Assert.Equal(Url, r.Url));
     }
 
     [Fact]
@@ -672,9 +676,80 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Equal(otherList, saved.RootElement.GetProperty("relayExpired").GetBoolean());
     }
 
+    // Owner, Nov 22 (full flip): a background check reads the CDN first; GitHub's 6-hour revalidation runs
+    // after the answer, never blocks it, and a newer GitHub answer wins.
+    [Fact]
+    public async Task A_background_check_with_revalidation_due_reads_the_CDN_first_and_a_newer_GitHub_answer_wins()
+    {
+        await GitHubAnswered();
+        time.Advance(TimeSpan.FromHours(7));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.FromSeconds(60)) : Ok(ListOf("0.1.4"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.4"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+
+        Assert.Equal(new[] { Url, ReleaseDiscovery.CdnList, Url }, github.Requests.Select(r => r.Url));
+        Assert.Equal((ReleaseDiscovery.Sources.GitHub, time.GetUtcNow()), (discovery.Source, discovery.FetchedAt));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task A_failed_GitHub_revalidation_after_the_CDN_answer_never_blocks_it_and_holds_later_GitHub_asks(HttpStatusCode status)
+    {
+        await GitHubAnswered();
+        time.Advance(TimeSpan.FromHours(7));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.Zero)
+            : new(status) { Headers = { RetryAfter = new(TimeSpan.FromHours(2)) } };
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+
+        time.Advance(ReleaseDiscovery.Interval + TimeSpan.FromMinutes(1));
+        var asked = github.Requests.Count(r => r.Url == Url);
+        Assert.Equal(ListOf("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(asked, github.Requests.Count(r => r.Url == Url));
+    }
+
+    [Fact]
+    public async Task A_slow_GitHub_revalidation_does_not_hold_the_CDN_answer_past_its_short_wait()
+    {
+        await GitHubAnswered();
+        time.Advance(TimeSpan.FromHours(7));
+        github.Answer = _ => Cdn("0.1.3", TimeSpan.Zero);
+        github.AnswerAsync = async (request, token) =>
+        {
+            if (request.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList) { return Cdn("0.1.3", TimeSpan.Zero); }
+            await Task.Delay(Timeout.Infinite, token);
+            return new(HttpStatusCode.OK);
+        };
+        using var discovery = Discovery();
+        discovery.RevalidateWait = TimeSpan.FromMilliseconds(50);
+
+        Assert.Equal(ListOf("0.1.3"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+    }
+
+    [Fact]
+    public async Task Past_the_relay_grace_a_background_check_still_asks_GitHub_first()
+    {
+        await GitHubAnswered();
+        time.Advance(ReleaseDiscovery.GithubRelayAtMost + TimeSpan.FromHours(1));
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList ? Cdn("0.1.3", TimeSpan.Zero) : Ok(ListOf("0.1.4"), "\"v2\"");
+        using var discovery = Discovery();
+
+        Assert.Equal(ListOf("0.1.4"), await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+
+        Assert.Equal(new[] { Url, Url }, github.Requests.Select(r => r.Url));
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+    }
+
     sealed class FakeGitHub : HttpMessageHandler
     {
         public Func<HttpRequestMessage, HttpResponseMessage> Answer = _ => new(HttpStatusCode.InternalServerError);
+        public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? AnswerAsync { get; set; }
         public List<(string Url, string? IfNoneMatch)> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -683,7 +758,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
             {
                 Requests.Add((request.RequestUri!.ToString(), request.Headers.TryGetValues("If-None-Match", out var v) ? v.Single() : null));
             }
-            return Task.FromResult(Answer(request));
+            return AnswerAsync is { } answerAsync ? answerAsync(request, cancellationToken) : Task.FromResult(Answer(request));
         }
     }
 }
