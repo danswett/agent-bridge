@@ -70,7 +70,9 @@ This recovery is independent of crash reporting and sends nothing.
 The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
 following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
 nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
-and `app.log` records the first skipped correction of a storm with its count (#3842). They also run once, at low priority,
+and `app.log` records the first skipped correction of a storm with its count (#3842). The guard keeps at most 60 stamps however dense the burst, and a skipped
+pass while a saved reading position still waits schedules one retry after the window, so a finite burst cannot leave
+the restore undone (#3811). They also run once, at low priority,
 after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
 layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
 #3716's anchoring, not yet a proven fix).
