@@ -6,11 +6,11 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: the library (R1a to R1c) and the host's observe side are built. Not built: the gate, relay enforce and any client screen** (the build status of each slice is under §12 of [device-approval.md](../design/device-approval.md)). R1a is the encoding: framing, ids, entries, their strict parsing,
+**Status: the library (R1a to R1c) and the host's observe side are built. Not built: any client screen** (the relay's enforce mode is described below, and the host's channel gate is #1359) (the build status of each slice is under §12 of [device-approval.md](../design/device-approval.md)). R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). The relay stores the roster in `observe` mode, and the host reads and verifies it in
-`off` and `observe` and can enroll over its local pipe; nothing enforces it (slices R2 to R5, R3b).
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). The relay stores the roster and starts every account in `observe`; an account moves to `enforce` (below) and the relay then tags each socket approved, pending or removed. The host reads and verifies the roster in
+`off` and `observe` and can enroll over its local pipe; the host's own gate is slice R3b.
 
 | Implementation | Where |
 |---|---|
@@ -538,7 +538,7 @@ and epoch/sequence ordering before yielding any routable node. No v2 switch chan
 
 ## The relay's copy
 
-The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.
+The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode starts as `observe`: the relay serves every account's log and refuses no connection for want of a roster entry, until a person's device switches the account to `enforce` (see "The relay's enforce mode").
 
 Both messages are text frames from an admitted device of any kind, counted against the frame rate. Entries are the canonical text of §Framing. A device's own `id` (a number) is echoed so a reply can be matched.
 
@@ -572,7 +572,7 @@ In `enforce` the relay tags each connecting key from its own verified copy of th
 * **pending**: any other key. Its presence is `{ "devices": [], "pending": true }`. Its control messages (push, blobs, feedback, roster, forget, registry, `roster-enforce`) are ignored. Its binary frames are routed only to a device that has itself sent to it, and only an approved **person** device may send to a pending one first, so a pending device never opens a channel and two pending devices cannot talk.
 * **removed**: an add of this key was revoked in the roster. The socket is closed at admission with close code `4030` (`removed`), advisory like everything the relay says.
 
-A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). Enforce does not fail open. The relay latches an account in memory once it has seen or set `enforce` (the mode only moves one way). For a latched account, a store that cannot answer (an error, a timeout, a body that does not read, a roster that has gone missing, a mode that has gone back) closes the connecting device with `1012` (`try-later`, a fixed reason that carries no error text) and it reconnects with the usual backoff; a re-tag that cannot read the store keeps every connected device's current tag, so a transient error never un-pends one. An account the relay has never seen in `enforce` is served as before through an outage. The hosts' own gate (`security.roster enforce`) is still the one that counts. Accounts in `observe` are unchanged byte for byte.
+A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). Enforce does not fail open. The relay latches an account in memory once it has seen or set `enforce` (the mode only moves one way). For a latched account, a store that cannot answer (an error, a timeout, a body that does not read, a roster that has gone missing, a mode that has gone back) closes the connecting device with `1012` (`try-later`, a fixed reason that carries no error text) and it reconnects with the usual backoff; a re-tag that cannot read the store keeps every connected device's current tag, so a transient error never un-pends one. The latch is memory only and is lost when the relay restarts: until its first good read after a restart, an account that is in `enforce` is served as `observe` through a store outage. It is not persisted, on purpose: a persisted latch would live in the same store that failed. A stored mode that reads back as anything but `enforce` for a latched account (`observe`, `off`, a value the relay does not know) is refused the same way. An account the relay has never seen in `enforce` is served as before through an outage. The hosts' own gate (`security.roster enforce`) is still the one that counts. Accounts in `observe` are unchanged byte for byte.
 
 Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the pending and attempt limits, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
 
