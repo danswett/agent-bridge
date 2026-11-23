@@ -68,6 +68,9 @@ public sealed class LaunchServiceOptions
     public required string ClaudeHome { get; init; }
     public bool? ClaudeConfigDirExplicit { get; init; }
     public required string CodexHome { get; init; }
+    // Whether this profile's hook setup record for an agent id is absent, so the agent was never set up
+    // here. Null: not known, and nothing is refused. Only Codex is asked (see CodexHooksMissing).
+    public Func<string, bool>? HooksNotSetUp { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
     public bool HomeAssistantEnabled { get; init; }
@@ -1058,6 +1061,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
         }
 
+        // Codex with no hook setup record on this profile (a migrated profile never had one, #3648) would run
+        // but could never report; refuse it by name instead of starting a session that ends unconfirmed (#3644).
+        if (launcher.Kind == AgentKind.Codex && options.HooksNotSetUp?.Invoke(launcher.Id) == true) { return (null, CodexHooksMissing); }
         var agent = o.Agents.First(a => a.Id == launcher.Id);
         var profile = "";
         if (launcher.TakesProfile && agent.Profiles is { } profiles)
@@ -2100,4 +2106,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
 
     static LaunchResult Refused(string reason) => new(LaunchOutcome.Refused, reason);
+
+    // Needs-you text: Set up registers the hook; Codex then asks once for its hooks to be trusted, which
+    // the host cannot read, so that is only a hint here and never a refusal.
+    const string CodexHooksMissing = "codexHooksMissing: Codex has no hook registration on this machine, so a launched session could not report; run Set up for Codex on this machine, then approve Codex's hook trust prompt once";
 }

@@ -167,8 +167,10 @@ public sealed partial class SessionDriver
     // A reply or a press of Send: shown at once, and armed for the prompt it is. With its words,
     // where they are known, in the same step: a refresh between the two would find the arm with
     // nothing to compare against. wordsToCome: they will be known later (Expect).
-    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null, string? words = null, bool wordsToCome = false) =>
-        Apply(by, now, agentPrincipal, null, false, words, wordsToCome, null);
+    // label: what the host's delivery knows of the sender from the verified envelope, shown as the
+    // prompt's sender; without one it is the principal, as for the Home Assistant connector.
+    public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null, string? words = null, bool wordsToCome = false, string? label = null) =>
+        Apply(by, now, agentPrincipal, null, false, words, wordsToCome, null, label);
 
     // The whole launch, opening turn included, before anyone hears of it: a source told first
     // would observe an opening turn already here without spending the arm on it. Its words are
@@ -193,7 +195,7 @@ public sealed partial class SessionDriver
         }
     }
 
-    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt)
+    void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, string? words, bool toCome, long? onlyAt, string? label = null)
     {
         bool changed;
         lock (gate)
@@ -204,7 +206,7 @@ public sealed partial class SessionDriver
             wordsToCome = toCome && expected is null;
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
-            armedLabel = by == SessionDrivers.Agent && pending is not null ? Limits.KeepStart(agentPrincipal, Limits.UserMessageLabel) : null;
+            armedLabel = by == SessionDrivers.Agent && pending is not null ? Limits.KeepStart(label ?? agentPrincipal, Limits.UserMessageLabel) : null;
             pendingAt = pending;
             openingPrompt = opening;
             openingResumed = resumed;

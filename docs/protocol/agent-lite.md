@@ -63,7 +63,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - Every host signed in to the account and present on the relay is trusted; there is no pin, and no per-device approval or
   revocation by the signed roster until the roster lands.
 - Text only, at most 4096 characters. Delivery uses the same typing routine the Home Assistant reply path
-  uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
+  uses, and text goes only into an idle session with its input box on screen (Copilot: empty; Claude: see `notReplyTarget` below, as its suggested prompt reads as words). Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: with explicit `remote: "own-account"`, a session receives only if this host launched it in allow-all mode and either the existing `agentMessaging.allowAllTargets` plus exact `agentMessaging.allowAllTargetSessions` list grants it, or the owner has enabled `agentMessaging.allowAllLaunchedTargets` on this machine. The new boolean switch defaults false, invalid/non-boolean is false, and it is read afresh per message. It is independent of the unchanged list path; display names and wildcards never grant access.
 - Target: the full session id or the node id `agent_bridge_<16 lowercase hex>` the roster and `fleet.find` publish (#3399). A node id is used only when exactly one live session here maps to it and session discovery is not held (a held pass may miss a second one); none, several or a hold is refused as `noSuchSession`, never guessed. A full session id is not affected by a hold. Gates, the allow-all list, rate and typing all use the resolved full id; the log keeps the target as sent.
@@ -76,7 +76,7 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
 - "Delivered" means typed and acknowledged, not read.
 - **Not in the first version; each is required before anyone beyond the owner uses it:** the signed roster, durable duplicate memory, and a full audit log (today delivery outcomes and each evaluated gate's decision and reason are logged without message text).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-   could message his sessions, and any message from a present own host is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
+   could message his sessions, and any message from a present own host is typed into a session there that is idle, has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
 ## Turn it on (a person at each machine, in the agreed order)
 
@@ -122,7 +122,7 @@ Receiver refusals, in the order they are checked:
 | `malformed`, envelope codes | no `signPoint` (the sender's agent signing key); unsigned, bad signature, expired, from the future, another account, not the reply action, lacks the lite markers, or the text is not bound or too long (each has its own code) |
 | `replay` | this request was already seen |
 | `rate` | the pair went over its limit |
-| `notReplyTarget` | the target is not a session this host can type into |
+| `notReplyTarget` | the target is not a session this host can type into. Lite types into Copilot and Claude Code sessions only (**owner-approved CHANGE, ~15:20 PT Nov 22**: Claude was refused before); Codex and unknown agents stay refused, and the lane (`laneDelivery`) still takes Copilot targets only. A Claude session is held to the same gates, idle, rate, signed account and process-incarnation fences as Copilot, and the fence is asked again before the first key and before each Enter pressed again when Claude took the first as part of the paste (a lost grant, kill switch or account stops the keys); its input box is read as the replier reads it (on screen, no `/` or `!` command waiting). Claude shows a suggested prompt in an empty box that a screen read cannot tell from typed words, so only a box that is off screen or holds a command is `composerNotEmpty` for Claude |
 | `busy` | the target is not idle, or the duplicate memory is full |
 | `composerNotEmpty` | someone has typed in the target's input box; nothing was typed |
 | `noSuchSession` | the target session does not exist, or the target is a node id that no live session or more than one maps to, or discovery is held. A fresh Copilot session with no `events.jsonl` yet also fails closed at the typing fence (including a full id); retry after its first transcript event |

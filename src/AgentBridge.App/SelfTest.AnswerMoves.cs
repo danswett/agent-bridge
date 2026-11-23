@@ -142,12 +142,18 @@ static partial class SelfTest
                     window.RootElement.UpdateLayout();
                     return view.QuestionShown is { IsHitTestVisible: true };
                 }, TimeSpan.FromSeconds(10));
-                var focused = box?.Focus(FocusState.Programmatic) == true;
-                var clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
-                await Task.Delay(100);
-                held = view.QuestionShown is { IsHitTestVisible: false };
+                // Setup's late layout on a loaded runner (win-arm64, main's 62c35b0a) can still hold the question as focus comes:
+                // it is waited out before the act, and the look after it stays short (HoldProbe), so only the button's own hold fails.
+                var focused = false;
+                var clearShown = false;
+                var (quiet, armed) = await HoldProbe.AroundAsync(() => view.QuestionShown is { IsHitTestVisible: true }, Until, Task.Delay, async () =>
+                {
+                    focused = box?.Focus(FocusState.Programmatic) == true;
+                    clearShown = await Until(() => Clear() is { Visibility: Visibility.Visible, ActualWidth: > 0 }, TimeSpan.FromSeconds(3));
+                });
+                held = armed;
                 if (box is not null) { box.TextWrapping = TextWrapping.Wrap; }
-                check(settled && setupSettled && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; focused: {focused}; shown: {clearShown}; held: {held})");
+                check(settled && setupSettled && quiet && focused && clearShown && !held, $"holds nothing as the clear button in a text box of the question appears (setupSettled: {setupSettled}; quiet: {quiet}; focused: {focused}; shown: {clearShown}; held: {held})");
 
                 // A press while the person's own act still holds, with their question grown since
                 // the last layout pass: the pass that press brings is read with nothing exempt, so
