@@ -625,6 +625,15 @@ first draft of this note.
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
 | 11 | 24 h dual run against HA, then S8 | n/a | 2a to 9, RC | At most 5 s lag, zero missing sessions, 100% of person-set names resolved |
 
+Slice 11's definitions (live, lag, missing, extra, person-set name), pass bar, exclusions and evidence file are in
+[slipgates-fleet `docs/ha-dual-run.md`](https://github.com/danswett/slipgates-fleet/blob/main/docs/ha-dual-run.md). The sampler and the run each
+need their own approval; the owner decides S7 after Quality attests the evidence.
+
+Stuck-prompt evidence needs no new field here. `fleet.list` already returns `attention`, `openAsks`, `unsentLength`, `unsentHash`,
+`observedAt` and `lastReplyAt` ([agent-operations.md](../protocol/agent-operations.md)); the fleet tools' relay roster projection
+(`Get-FleetRoster`) now carries them, so the stuck-prompt shadow reads them with HA off. The read scope is unchanged and an `approval`
+attention is passed through unmapped, so a reader refuses it rather than guessing.
+
 Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L/M, was one L);
 #1399 grows from S to M; #1412 stays L; the reader core RC is a new issue. The epic's seven-day
 estimate for the host side is unchanged only if `hostSign` (R) is built elsewhere in parallel.
