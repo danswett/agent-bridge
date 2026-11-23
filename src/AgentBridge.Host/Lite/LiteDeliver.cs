@@ -92,10 +92,15 @@ public sealed class LiteDeliver(
         if (session is null) { return Refused(UnresolvedCode(target)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
+        // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
+        var busyQueue = session.Agent == AgentKind.Claude && BusyQueueOn();
         // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
-        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot)
+        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || Lane is not null && session.Agent != AgentKind.Copilot && !busyQueue)
         { return Refused(LiteCodes.NotReplyTarget); }
-        if (Lane is { } lane)
+        // Owner option 2 (#3866): with laneDelivery on, a Claude keeps this legacy busy-queue typing path, with its own legacy text, guards and replier;
+        // only Copilot goes through the lane. Without claudeBusyQueue a Claude stays refused with the lane on, as before.
+        if (Lane is not null && session.Agent == AgentKind.Claude) { safe = Escape(text); }
+        if (Lane is { } lane && session.Agent == AgentKind.Copilot)
         {
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
             if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
@@ -109,8 +114,6 @@ public sealed class LiteDeliver(
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
             return FromLane(lane.Offer(request, id, sender, laneBody, Current, Revoked));
         }
-        // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
-        var busyQueue = session.Agent == AgentKind.Claude && BusyQueueOn();
         if (!Ready(session, busyQueue)) { return Refused(LiteCodes.Busy); }
         if (!await ComposerEmptyAsync(session.Agent, pid, busyQueue, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
