@@ -144,6 +144,7 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
         Name(name);
         var ctx = context is null ? null : file.Context(context);
         var record = Read(json);
+        if (record is null) { throw new InvalidOperationException($"{typeof(T).Name}/{name} read as nothing"); }
         if (check is not null && VectorChecks.Run(check, record, ctx) is { } problem)
         {
             throw new InvalidOperationException($"{typeof(T).Name}/{name} is meant to be valid, but {check} says {problem}");
