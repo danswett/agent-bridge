@@ -63,6 +63,21 @@ function Get-FullRedReason($run) {
     $null
 }
 
+# What was waived, said, never silent (Quality's condition on 4220): the Arm64 self-test, tests and installer may be red, skipped or absent and the release
+# still goes out, so the train's publish summary carries this notice, and full-red's alert names a red Arm64 job too. $null when nothing Arm64 was waived.
+function Format-WaivedNotice($run) {
+    $full = $run.PSObject.Properties['Full']?.Value
+    $jobs = if ($full) { $full.PSObject.Properties['AllJobs']?.Value } else { $null }
+    if ($null -eq $jobs) { return $null }
+    $lines = foreach ($name in $script:ArmJobs) {
+        $result = $jobs[$name]
+        if ($null -eq $result -and $name -cne 'product (windows-11-arm)') { "${name}: not run" }
+        elseif ($null -ne $result -and $result -cne 'success') { "${name}: $result" }
+    }
+    if (-not $lines) { return $null }
+    "Arm64 checks waived for this release, which was published: $($lines -join '; ')"
+}
+
 # The FULL run of a commit is found by the commit's head_sha, never by branch: a branch lookup could name another commit's run.
 function Get-FullRunsPath([string]$Repository, [string]$Sha) { "repos/$Repository/actions/workflows/full.yml/runs?head_sha=$Sha&per_page=1" }
 
@@ -120,7 +135,7 @@ function Select-ReleaseCommit {
         if (-not $run.Full.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): FULL's packages or SBOMs expired or missing"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
-        if ($Explain) { return "selected $($run.Sha)" }
+        if ($Explain) { $waived = Format-WaivedNotice $run; return "selected $($run.Sha)$(if ($waived) { "; $waived" })" }
         return $run
     }
     if ($Explain) { return ($why -join "`n") }

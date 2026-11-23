@@ -58,6 +58,22 @@ Check 'an Arm64 pack that failed is not publishable: only the Arm64 self-test is
 Check 'an Arm64 pack that did not run is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = $null }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 installer that did not run at all is still publishable (waived)' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-installer (win-arm64)' = $null }), (Run 'sha102' 102))) 'sha103'
 Check 'the x64 installer is not waived: failed, it is not publishable' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+# x64 stays strict (Quality's condition on 4220): its self-test, pack, installer and SBOM are each required, and an absent or skipped x64 job is no pass.
+foreach ($job in 'app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)') {
+    Check "an absent $job is not a pass" (Pick @((Run 'sha103' 103 -fullMore @{ $job = $null }), (Run 'sha102' 102))) 'sha102'
+    Check "a skipped $job is not a pass" (Pick @((Run 'sha103' 103 -fullMore @{ $job = 'skipped' }), (Run 'sha102' 102))) 'sha102'
+    Check "a cancelled $job is not a pass" (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ $job = 'cancelled' }), (Run 'sha102' 102))) 'sha102'
+}
+# What is waived is RECORDED, never silent: the train's publish summary carries this notice (and full-red's alert names a red Arm64 job too, while publish continues).
+function Waived($run) { Format-WaivedNotice $run }
+Check 'a red Arm64 installer is waived and the notice names it' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' })) -match 'app-installer \(win-arm64\): failure') $true
+Check 'a red Arm64 self-test is waived and the notice names it' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64)' = 'failure' })) -match 'app-selftest \(win-arm64\): failure') $true
+Check 'an Arm64 installer that did not run is in the notice too' ((Waived (Run 'sha103' 103 -fullMore @{ 'app-installer (win-arm64)' = $null })) -match 'app-installer \(win-arm64\): not run') $true
+Check 'an Arm64 installer that was skipped is in the notice too' ((Waived (Run 'sha103' 103 -fullMore @{ 'app-installer (win-arm64)' = 'skipped' })) -match 'app-installer \(win-arm64\): skipped') $true
+Check 'the notice says publish continued' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' })) -match 'waived') $true
+Check 'all green Arm64 checks have no notice' ((Waived (Run 'sha103' 103)) -eq $null) $true
+Check 'a red x64 installer is not in the notice: it is not waived' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' })) -match 'win-x64') $false
+Check 'the selection says what was waived' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' })) -Latest $out -IsDescendant $follows -Explain) -match 'selected sha103.*waived.*app-installer \(win-arm64\)') $true
 Check 'an Arm64 pack that was skipped is not publishable' (Pick @((Run 'sha103' 103 -fullMore @{ 'app-pack (win-arm64)' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
 Check 'an Arm64 installer that failed is still publishable: it installs and starts the app, the Arm64 self-test the owner waived (#4159)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
 Check 'a FULL run with no aggregate full-gate result is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = $null }), (Run 'sha102' 102))) 'sha102'

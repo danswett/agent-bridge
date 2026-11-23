@@ -1213,7 +1213,9 @@ starvation lasts until the train lands.
     both did. **And FULL**, once `full.yml` exists (S2, #4104; not built yet, see quality/README.md; the selector already requires it): the
     same commit's FULL run, found by its `head_sha`, finished with `full-gate` (the aggregate, which fails when a lane it selected was skipped),
     the x64 self-test, pack and installer, and the **Arm64 pack** succeeded, and no other job red. **What runs the app on Arm64 is waived**: its
-    self-test and tests, and its installer (it installs and starts the app: the Arm64 self-test, #4159). The Arm64 package is never optional, and its SBOM must be there. A commit with no FULL run yet is not publishable; the train
+    self-test and tests, and its installer (it installs and starts the app: the Arm64 self-test, #4159), **recorded, never silent**: the publish summary lists
+    each waived Arm64 result, and a red one also opens the full-red alert (to be written) while publish continues. **x64 is strict**: its self-test, pack, installer and
+    SBOM are all required, and an absent or skipped x64 job is no pass. The Arm64 package is never optional, and its SBOM must be there. A commit with no FULL run yet is not publishable; the train
     is to dispatch one, and a later hourly run picks it up. **Arm64 does not gate** the self-test (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its self-test, tests and installer (the Arm64 `app` self-test, the
     Arm64 `app-installer`, and `product` on Windows on Arm) still run and report, but a run that is red only for those is
     publishable (its Arm64 pack must still have succeeded), but **no other job may have failed or timed out** (nor, in a failed run, been
