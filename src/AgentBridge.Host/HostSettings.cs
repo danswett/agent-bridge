@@ -59,6 +59,10 @@ namespace AgentBridge.Host;
 // What was owed is kept all the same (RestoreKept): the person may have meant it on, and a file broken
 // for a while, or written by a newer host, must not drop the sessions a reboot took.
 //
+// update.startAppToInstall (#2869): whether this host starts the app headless (`AgentBridge.exe --update-only`, docs/protocol/v1-update.md) to
+// install an update when the app is closed. On when absent. A value that is not true or false, or a file that cannot be read, turns it off:
+// nothing is started.
+//
 // permissions.escapedApproval and escapedApprovalDevices (#803): how Approve is given for an
 // approval the host escaped anything in. "confirm" (the default): a two-step confirmation from a
 // person's device approved here, the devices listed, or launch.remoteFolderTrustDevices while the
@@ -147,6 +151,9 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool RemoteManage { get; init; } = true;
 
     public bool RestoreOnStart { get; init; } = true;
+
+    // update.startAppToInstall (#2869): whether this host starts the app headless (`--update-only`) to install an update when the app is closed.
+    public bool StartAppToInstall { get; init; } = true;
     // permissions.phoneSignIn: off unless set true.
     public bool PhoneSignIn { get; init; }
     // permissions.escapedApproval: EscapedApproval.Confirm or .Machine.
@@ -170,7 +177,7 @@ public sealed record HostSettings(bool RemoteApproval)
     static HostSettings Off => Default with
     {
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, FleetShare = false, FleetLaunchRule = "off", LoadEnabled = false, ReadOnly = true,
-        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
+        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true, StartAppToInstall = false,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
         AgentMessaging = AgentMessagingSettings.Closed,
     };
@@ -294,6 +301,22 @@ public sealed record HostSettings(bool RemoteApproval)
                             JsonValueKind.True => true,
                             JsonValueKind.False => false,
                             _ => throw new JsonException("sessions.restoreOnStart is not true or false"),
+                        },
+                    };
+                }
+            }
+            if (root.TryGetProperty("update", out var update) && update.ValueKind != JsonValueKind.Null)
+            {
+                if (update.ValueKind != JsonValueKind.Object) { throw new JsonException("update is not an object"); }
+                if (update.TryGetProperty("startAppToInstall", out var startApp) && startApp.ValueKind != JsonValueKind.Null)
+                {
+                    settings = settings with
+                    {
+                        StartAppToInstall = startApp.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => throw new JsonException("update.startAppToInstall is not true or false"),
                         },
                     };
                 }

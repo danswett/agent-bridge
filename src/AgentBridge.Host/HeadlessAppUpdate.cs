@@ -58,14 +58,18 @@ public sealed class HeadlessAppUpdate(HeadlessAppUpdateOptions options, IAppStar
     DateTimeOffset nextAllowed = DateTimeOffset.MinValue;
     int failures;
 
-    public HeadlessStart TryStart(UpdateRelease? offered)
+    public HeadlessStart TryStart(UpdateRelease? offered) => TryStart(offered, false);
+
+    // held: the caller's own answer for the bad-release policy (it is read asynchronously, so it is decided before this is called): true for a
+    // release the policy halts or whose policy is unknown or stale.
+    public HeadlessStart TryStart(UpdateRelease? offered, bool held)
     {
         if (!options.Windows) { return new(HeadlessStartState.NotWindows); }
         if (!options.Enabled) { return new(HeadlessStartState.Disabled); }
         if (offered is null) { return new(HeadlessStartState.NothingOffered); }
         if (!TryVersion(options.MinimumApp, out var minimum)) { return new(HeadlessStartState.NoMinimumApp); }
         if (!TryVersion(SafeInstalled(), out var installed) || installed < minimum) { return new(HeadlessStartState.AppTooOld, "the installed app may not know --update-only"); }
-        if (options.Held?.Invoke(offered.Version) == true) { return new(HeadlessStartState.Held, offered.Version); }
+        if (held || options.Held?.Invoke(offered.Version) == true) { return new(HeadlessStartState.Held, offered.Version); }
         if (Running()) { return new(HeadlessStartState.AppRunning); }
         if (SafeExe() is not { Length: > 0 } exe) { return new(HeadlessStartState.NoApp); }
         lock (gate)

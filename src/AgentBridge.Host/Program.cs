@@ -759,6 +759,13 @@ async Task<int> ServeAsync(HostHandover handover)
         OfferedReadOnly = OfferedReadOnly,
         Now = composed.UpdateNow(source, identity.Folder),
     };
+    // H2b (#2869): a machine whose app is closed never updates, because the app installs updates. This timer asks the existing update check
+    // (the one Home Assistant's Check uses, in its background mode) every 30 minutes and, for a release it offers while the app is closed,
+    // starts the app headless (`--update-only`). Off by update.startAppToInstall, none without an updater, and dormant until a release
+    // carries the flag (HeadlessUpdateTimer.MinimumApp). It adds no op or endpoint.
+    using var headlessUpdate = HeadlessUpdateTimer.Start(settings.StartAppToInstall, hostUpdates, profile, haltSource.ReadSnapshotAsync, Log);
+    Log(headlessUpdate is null ? "headless update: not started (update.startAppToInstall is off, or this host has no updater)" : $"headless update: checks every {HeadlessUpdateTimer.Every.TotalMinutes:0} minutes for a release to start the app for");
+
     // The content-free journal (#737), one per host, and "Diagnose this machine" (#802,
     // docs/protocol/v1-diagnostics.md): only a device pinned here as a person's reads it, with a
     // closed snapshot of this host's health, through the relay. The journal names only Host.Core's

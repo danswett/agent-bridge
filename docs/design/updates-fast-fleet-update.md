@@ -435,6 +435,27 @@ the installer returns on the old version, and `host-start` when the post-update 
 Departure is not reported by this first part: today's report reply does not confirm subscriber
 sends. Its follow-up must await the last state's actual send before stop, or leave it absent.
 
+## 9a. The host starts the app headless (#2869, headless fleet update PR 2)
+
+A machine whose app is closed never updates: the app installs updates and the host alone cannot (the app is "what installs updates",
+`UpdateService.NoApp`). #3810 gave the app a headless `--update-only` run; this is the host starting it. **Trigger (decided with Engineering,
+Nov 23):** a small INTERNAL host timer (`HeadlessUpdateTimer`, 2 minutes after the host starts and then every 30 minutes, the app's own
+interval) calls the host's existing update check, `IHostUpdates.CheckAsync` in its background mode (never "pressed", the path Home Assistant's
+Check uses), so `ReleaseDiscovery`'s shared budget, backoff and cached list apply and the timer makes no GitHub call of its own inside their
+interval, and the bad-release policy is read through the same shared reader before a release is acted on. There is no new op or endpoint: only
+the timer calls it. `HeadlessAppUpdate` then starts `AgentBridge.exe --update-only --profile <name>` under the rules in
+[v1-update.md](../protocol/v1-update.md#the-update-only-run): the setting `update.startAppToInstall` (on by default), an app that knows the flag
+(`HeadlessUpdateTimer.MinimumApp`, null until a release carries #3810, so the shipped timer is dormant), the app's own single-instance lock
+(`LocalAgentBridgeApp.<profile>`, claimed by the app and by an update-only run) as the one presence check with a process scan only as its
+fallback, an interval and a backoff.
+
+The three questions for a long-running component ([contributor-workflow](../contributor-workflow.md#design-notes-nothing-tied-to-a-machine)):
+1. **Where does it run?** In each host, on its own machine, Windows only, as the host's own user.
+2. **What happens when that node leaves?** Nothing is lost: the timer is stateless between ticks and holds no work for another machine; a machine
+   without a running host is updated when its app is next open, as before.
+3. **Where does its state live?** In memory only (the last start time and the failure count that drive its interval and backoff); it writes no file
+   and never names a machine.
+
 ## 10. Later designs (pointers, not v1)
 
 **10.1 Fleet coordinator (owner-gated, fleet #22).** Product wants a run that outlives the phone, but
