@@ -785,7 +785,8 @@ public sealed class AgentPipeLaunchTests : IDisposable
     }
 
     // G9b2b: Untrusted -> per-peer RateCap -> Verify -> replay -> grant lookup/subject match -> the shared pipeline.
-    sealed record Remote(FleetRemoteLaunch Receiver, LiteChannel Channel, GrantDocument Grant, GrantSubject Subject, ECDsa Sign)
+    sealed record Remote(FleetRemoteLaunch Receiver, LiteChannel Channel, GrantDocument Grant, GrantSubject Subject, ECDsa Sign,
+        Func<FleetRemoteLaunch> Restart)
     {
         public JsonElement Data(FleetLaunchInput? input = null, FleetActionBody? body = null, string? subject = null, string? prompt = null, string? audience = null)
         {
@@ -812,7 +813,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
         return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
-            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256)) { Request = request };
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store)) { Request = request };
     }
 
     [Fact]
@@ -878,6 +879,21 @@ public sealed class AgentPipeLaunchTests : IDisposable
         launcher.BeforeDispatch = () => Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
         Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
         Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task An_envelope_already_accepted_before_a_restart_is_refused_by_the_restarted_receiver()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var data = r.Data();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.Receiver.ReceiveAsync(r.Channel, data)).Result.Outcome);
+        Assert.Equal(1, launcher.Launches);
+        // The restart loses the in-memory replay cache. The same live envelope must still not start a second launch.
+        var restarted = r.Restart();
+        var again = await restarted.ReceiveAsync(r.Channel, data);
+        Assert.Equal((LaunchOutcome.Refused, "policy"), (again.Result.Outcome, again.Reason));
+        Assert.Equal(1, launcher.Launches);
     }
 
     [Fact]
