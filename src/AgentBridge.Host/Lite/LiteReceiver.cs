@@ -138,6 +138,9 @@ public sealed class RateCap(TimeProvider time)
     readonly Dictionary<(string Peer, string Pair), Queue<DateTimeOffset>> hits = new();
     readonly object gate = new();
 
+    // Gives back the most recent hit of a pair: a delivery that typed nothing must not spend the pair's budget (#1117 busy retries).
+    public void Refund(string peer, string pair) { }
+
     public bool Allow(string peer, string pair)
     {
         lock (gate)

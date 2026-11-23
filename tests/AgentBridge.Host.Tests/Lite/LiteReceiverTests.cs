@@ -239,6 +239,66 @@ public class LiteReceiverTests
         r.Time.Advance(TimeSpan.FromSeconds(61));
         Assert.Equal("delivered", (await r.Send(r.Request(id: Id("8")))).Status);
     }
+    // #1117: the budget counts deliveries that may have typed. A refusal that typed nothing (busy, notReplyTarget, composerNotEmpty, ...) gives it back,
+    // so busy retries cannot lock a pair out with `rate`.
+    sealed class Scripted(Func<int, LiteDelivery> next) : ILiteDeliver
+    {
+        public int Calls;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => Task.FromResult(next(Calls++));
+    }
+    sealed class Throwing : ILiteDeliver
+    {
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw new InvalidOperationException("boom");
+    }
+    [Theory]
+    [InlineData("busy")]
+    [InlineData("notReplyTarget")]
+    [InlineData("composerNotEmpty")]
+    [InlineData("queueHeld")]
+    public async Task Refusals_that_typed_nothing_never_spend_the_pairs_rate_budget(string code)
+    {
+        using var r = new Rig(new LiteDelivery(false, code));
+        for (var i = 1; i <= RateCap.PerMinute * 3; i++) { Refused(await r.Send(r.Request(id: Id(i.ToString()))), code); }
+    }
+    [Fact]
+    public async Task Busy_refusals_between_deliveries_leave_the_full_budget_for_the_deliveries()
+    {
+        var deliver = new Scripted(n => n % 2 == 0 ? new LiteDelivery(false, "busy") : new LiteDelivery(true, null));
+        using var r = new Rig(custom: deliver);
+        var delivered = 0;
+        for (var i = 1; i <= RateCap.PerMinute * 2; i++) { var ack = await r.Send(r.Request(id: Id(i.ToString()))); if (ack.Status == "delivered") { delivered++; } else { Refused(ack, "busy"); } }
+        Assert.Equal(RateCap.PerMinute, delivered);
+        Refused(await r.Send(r.Request(id: Id("99"))), "busy"); // the next one is still reached and refused by delivery, not by rate
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("100")))).Status);
+    }
+    [Theory]
+    [InlineData(LiteKind.Unconfirmed)]
+    [InlineData(LiteKind.Queued)]
+    [InlineData(LiteKind.Pending)]
+    public async Task A_delivery_that_may_have_typed_or_was_accepted_keeps_the_budget_spent(LiteKind kind)
+    {
+        using var r = new Rig(new LiteDelivery(false, null) { Outcome = kind });
+        for (var i = 1; i <= RateCap.PerMinute; i++) { Assert.Equal(kind.ToString().ToLowerInvariant(), (await r.Send(r.Request(id: Id(i.ToString())))).Status); }
+        Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
+    }
+    [Fact]
+    public async Task A_delivery_that_throws_may_have_typed_so_it_keeps_the_budget_spent()
+    {
+        using var r = new Rig(custom: new Throwing());
+        for (var i = 1; i <= RateCap.PerMinute; i++) { Refused(await r.Send(r.Request(id: Id(i.ToString()))), LiteReceiver.DeliveryFailed); }
+        Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
+    }
+    [Fact]
+    public void A_refund_gives_back_one_hit_and_never_goes_below_zero()
+    {
+        var cap = new RateCap(new FakeTimeProvider(Start));
+        for (var i = 0; i < RateCap.PerMinute; i++) { Assert.True(cap.Allow("peer", "a")); }
+        Assert.False(cap.Allow("peer", "a"));
+        cap.Refund("peer", "a");
+        Assert.True(cap.Allow("peer", "a")); Assert.False(cap.Allow("peer", "a"));
+        cap.Refund("peer", "never-seen"); cap.Refund("peer", "never-seen");
+        Assert.True(cap.Allow("peer", "never-seen"));
+    }
     [Fact]
     public void The_hourly_cap_holds_and_one_peer_cannot_fill_the_table_or_reset_an_active_pair()
     {
