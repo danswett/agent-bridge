@@ -1445,7 +1445,7 @@ public class MergeRuleTests
     public void Main_s_older_runs_are_read_together_once_the_newest_has_not_answered()
     {
         var runs = MainRuns((9, "in_progress", null, 1), (8, "in_progress", null, 1), (7, "in_progress", null, 1), (6, "in_progress", null, 1), (5, "completed", "success", 1));
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, restDelayMs: 60);
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, overlapOf: 2, overlapOn: path => path.Contains("/jobs?", StringComparison.Ordinal) && !path.Contains("/actions/runs/9/jobs?", StringComparison.Ordinal));
         var config = WriteConfig();
         try
         {
@@ -1516,7 +1516,7 @@ public class MergeRuleTests
     {
         string[] heads = [Head, Older, "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"];
         var prs = heads.Select((h, i) => GraphQLPullRequest(h, number: 40 + i)).ToArray();
-        var github = new FakeGitHub(prs[0], listed: prs, byNumber: prs.Select((p, i) => (n: 40 + i, p)).ToDictionary(x => x.n, x => x.p), restDelayMs: 60);
+        var github = new FakeGitHub(prs[0], listed: prs, byNumber: prs.Select((p, i) => (n: 40 + i, p)).ToDictionary(x => x.n, x => x.p), overlapOf: 2, overlapOn: path => path.Contains("/compare/", StringComparison.Ordinal));
         var config = WriteConfig();
         try
         {
@@ -3155,7 +3155,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -3189,6 +3189,14 @@ public class MergeRuleTests
         public int MaxConcurrentRest { get; private set; }
 
         int inFlight;
+
+        // A rendezvous, not a delay: each read that overlapOn picks (all, when null) waits until overlapOf of them
+        // are in flight at once, then they all go. Reads that really overlap pass at once however slow the machine;
+        // reads made one after another never meet, and the first fails after the safety wait (a failure path only:
+        // a pass never waits on the clock).
+        readonly ManualResetEventSlim overlapped = new(false);
+
+        int meeting;
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
@@ -3224,6 +3232,12 @@ public class MergeRuleTests
                 MaxConcurrentRest = Math.Max(MaxConcurrentRest, now);
             try
             {
+                if (overlapOf > 0 && (overlapOn?.Invoke(path) ?? true))
+                {
+                    if (Interlocked.Increment(ref meeting) >= overlapOf) { overlapped.Set(); }
+                    if (!overlapped.Wait(TimeSpan.FromSeconds(20)))
+                        throw new InvalidOperationException($"reads were never in flight together: {path}");
+                }
                 var delay = restDelayFor?.Invoke(path) ?? restDelayMs;
                 if (delay > 0)
                     Thread.Sleep(delay);
