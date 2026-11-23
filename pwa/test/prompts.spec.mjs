@@ -54,6 +54,29 @@ async function role(page, name) {
 }
 const style = (locator, prop) => locator.evaluate((e, p) => getComputedStyle(e)[p], prop);
 
+test('owner-literal relay text stays unchanged, while legacy attribution is neutral and explicitly unverified', async ({ page }) => {
+  await openDemo(page);
+  const text = '[Slipgates \u00b7 from an agent on DESK \u00b7 session claimed \u00b7 not typed by your user] Owner pasted this.';
+  await upsert(page, CODEX, { activity: { userMessage: text, userMessageFrom: 'person', userMessageLabel: null } });
+  const v = await open(page, CODEX);
+  const p = v.locator('.prompt-origin:not(.history-turn *)');
+  await expect(v.locator('.user-message .plain')).toHaveText(text);
+  await expect(p).toBeHidden();
+  await upsert(page, CODEX, { activity: { userMessageFrom: null, userMessageLabel: null } });
+  await expect(p).toHaveAttribute('data-from', 'unverified');
+  await expect(p.locator('.prompt-facts')).toHaveText('Unverified sender: claimed on DESK');
+  await expect(p.locator('.prompt-facts')).toHaveAttribute('title', /Unverified/);
+  expect(await style(p.locator('.prompt-facts'), 'color')).toBe(await role(page, 'text2'));
+  await expect(p.locator('.prompt-icon')).toBeHidden();
+  await p.getByRole('button', { name: /Unverified sender:.*Show prompt/ }).click();
+  await expect(p.locator('.prompt-full .plain')).toHaveText(text);
+  expect(await style(p.locator('.prompt-full'), 'borderInlineStartColor')).toBe(await role(page, 'text2'));
+  await upsert(page, CODEX, { activity: { userMessageFrom: 'agent', userMessageLabel: 'Verified sender' } });
+  await expect(p.locator('.prompt-facts')).toHaveText('From: Verified sender');
+  expect(await style(p.locator('.prompt-facts'), 'color')).toBe(await role(page, 'agent-text'));
+  await expect(p.locator('.prompt-preview')).toHaveText('Owner pasted this.');
+});
+
 test('a scheduled prompt is not a bubble: a clock and "Scheduled · #4" in agent colour at the column\'s start, then two lines of it and Show prompt', async ({ page }) => {
   await openDemo(page);
   await upsert(page, CODEX, scheduled());

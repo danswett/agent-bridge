@@ -8,7 +8,8 @@ namespace AgentBridge.App.Core;
 // A prompt the person didn't type (#489, ui.md §6.4): a schedule's, another agent's, or one the
 // host knows only as not the person's (activity.userMessageFrom). It is never drawn as the
 // person's bubble, but as a line of its own in agent colour, collapsed; the person's own prompt,
-// and every prompt from a host that doesn't send the field, is unchanged. The PWA's
+// is unchanged. A strict old envelope without provenance is only a neutral, unverified hint.
+// The PWA's
 // pwa/js/prompt-origin.js follows the same rules, case for case.
 //   Schedule: a clock, then the label line's facts ("Scheduled prompt", "#4", "same as last time").
 //   Driven: the driven-badge diamond (an agent's, or other).
@@ -24,6 +25,7 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
     public const int LabelMaxBytes = 64;
 
     public bool Schedule => From == UserMessageFrom.Schedule;
+    public bool Unverified { get; init; }
     public string Label => string.Join(" · ", Facts);
 
     // The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled prompt 4,
@@ -33,15 +35,15 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
 
     // The prompt of a turn in the stored conversation, drawn as the live one is (#1611); the
     // session's driver isn't known of an earlier turn, so no "by".
-    public static PromptOrigin? OfHistory(HistoryPrompt? prompt) => prompt is { Text.Length: > 0 }
-        ? Build(prompt.From ?? UserMessageFrom.Person, prompt.Text, prompt.Label, null, false)
+    public static PromptOrigin? OfHistory(HistoryPrompt? prompt, bool allowLegacy = true) => prompt is { Text.Length: > 0 }
+        ? Build(prompt.From ?? UserMessageFrom.Person, prompt.Text, prompt.Label, null, false, allowLegacy && prompt.From is null && prompt.Label is null)
         : null;
 
     public static PromptOrigin? Of(Session s, bool repeat = false)
     {
         var a = s.Activity;
         var by = s.Driver == DriverKind.Agent ? s.DriverPrincipal : null;
-        return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat);
+        return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat, a.UserMessageFrom is null && a.UserMessageLabel is null && a.Kind is not (TurnKind.Notification or TurnKind.Scheduled));
     }
 
     // The line the host types ahead of another agent's message (LiteDeliver.Frame):
@@ -66,19 +68,18 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
         return (Fact($"{(session.Length == 0 ? "an agent" : session)} on {machine}"), m.Groups[3].Value);
     }
 
-    static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat)
+    static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat, bool legacy)
     {
-        // The relay's envelope is typed into the session, so the host may call the text the
-        // person's: a message that carries one is an agent's, whoever typed it, and its envelope
-        // is not the body.
-        var relay = from is UserMessageFrom.Person or UserMessageFrom.Agent ? Relay(message) : null;
-        if (relay is { } r)
+        var relay = from == UserMessageFrom.Agent || legacy ? Relay(message) : null;
+        if (legacy && relay is { } hint)
         {
-            from = UserMessageFrom.Agent;
-            message = r.Body;
-            if (Fact(label).Length == 0) { label = r.Label; }
+            var original = HiddenText.Reveal(message);
+            var claim = $"Unverified sender: {hint.Label}";
+            return new(UserMessageFrom.Other, [claim], null, DelegateLabel.Aloud(claim), false, original,
+                string.Join(' ', original.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))) { Unverified = true };
         }
         if (from == UserMessageFrom.Person) { return null; }
+        if (relay is { } verified) { message = verified.Body; }
         var text = HiddenText.Reveal(message);
         var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         switch (from)
