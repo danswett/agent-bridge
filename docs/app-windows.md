@@ -1126,9 +1126,10 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
-  - `quality-gate` and both `app` jobs (x64 and Arm64) succeeded; a cancelled or superseded run
-    counts only if those all did, and a failed, timed-out or unfinished run never counts, even with
-    those jobs green (`ci.yml` lets quality-gate pass around a failed Arm64 job);
+  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **Arm64 does not gate** (Engineering order, Nov 22; owner record to be linked): its jobs (`app` win-arm64, `app-installer`, and
+    `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
+    publishable. A timed-out or unfinished run never counts;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
@@ -1137,7 +1138,7 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
-  **Policy (Chief, Nov 22):** the selector is strict: the train never publishes a run with any failed job. The Arm64 waiver is a merge-gate matter only, and an Arm64 installer flake is fixed as a test, not released around.
+  **Policy (Engineering order, Nov 22, replacing Chief's strict-selector ruling of the same evening; owner record to be linked):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
 * **How.** The train downloads that run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still

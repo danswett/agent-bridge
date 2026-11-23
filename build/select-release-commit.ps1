@@ -6,7 +6,7 @@
 #
 # Runs are main's push CI runs, newest first, each as its latest attempt:
 #   Sha, Number (the run number, which is the version's last part), Attempt, Conclusion,
-#   Jobs (job name -> conclusion: quality-gate, app-x64, app-arm64), ArtifactsUnexpired.
+#   Jobs (job name -> conclusion: quality-gate, app-x64, app-arm64), ArtifactsUnexpired (both architectures' packages).
 # A cancelled or superseded run counts only if quality-gate and both app jobs succeeded.
 # Latest is the newest published release: Tag (v0.1.<n>) and Commit; $null when none is out.
 # IsDescendant takes a sha and the latest release's commit.
@@ -21,12 +21,13 @@ function Select-ReleaseCommit {
     $floor = if ($Latest) { [int](($Latest.Tag -replace '^v\d+\.\d+\.', '')) } else { 0 }
     foreach ($run in $Runs) {
         if ($Latest -and $run.Sha -ceq $Latest.Commit) { $why.Add("$($run.Sha) is already released"); break }
-        $failed = @('quality-gate', 'app-x64', 'app-arm64' | Where-Object { $run.Jobs[$_] -cne 'success' })
+        $failed = @('quality-gate', 'app-x64' | Where-Object { $run.Jobs[$_] -cne 'success' })
         if ($failed) { $why.Add("$($run.Sha) run $($run.Number): $($failed -join ', ') did not succeed"); continue }
-        # A failed run is red even when quality-gate and both app jobs passed (ci.yml lets
-        # quality-gate pass around a failed Arm64 job): only success, or a cancelled or superseded
-        # run whose required jobs all succeeded (above), is eligible.
-        if ($run.Conclusion -cnotin 'success', 'cancelled') { $why.Add("$($run.Sha) run $($run.Number): the run's conclusion is '$($run.Conclusion)'"); continue }
+        # Arm64 jobs run and report but do not gate (Engineering order, Nov 22): quality-gate and the x64 app job
+        # must have succeeded, and a run that is red only for Arm64 (conclusion failure, with both of
+        # those green) is publishable, its Arm64 package included (both architectures' artifacts must
+        # exist, below). A timed-out or unfinished run is never eligible.
+        if ($run.Conclusion -cnotin 'success', 'cancelled', 'failure') { $why.Add("$($run.Sha) run $($run.Number): the run's conclusion is '$($run.Conclusion)'"); continue }
         if (-not $run.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
