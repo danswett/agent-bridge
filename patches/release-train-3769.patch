@@ -13,10 +13,10 @@ index 63a6053..e725310 100644
      types: [completed] # the only type Actions accepts here
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
 new file mode 100644
-index 0000000..8afaa53
+index 0000000..b5e0cc5
 --- /dev/null
 +++ b/.github/workflows/release-train.yml
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,272 @@
 +name: Release train
 +
 +# Publishes the newest main commit whose CI passed whole, hourly or by hand, apart from merging
@@ -236,8 +236,61 @@ index 0000000..8afaa53
 +          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
 +          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
 +          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
++
++  purge:
++    name: Refresh the release-list CDN
++    # After a release is published, purge the relay's list pages by URL and check the relay serves the new
++    # release (#3870 option A; the Worker's zone-keyed cache key is #3880). Failing loudly here never
++    # unpublishes anything: the release is out, the relay is just not yet showing it.
++    needs: [pick, publish]
++    if: needs.publish.result == 'success'
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    # Main only; holds the secret CF_PURGE_TOKEN (Cloudflare Cache Purge on the slipgates.com zone, nothing
++    # else) and the variable CF_ZONE_ID, set in GitHub settings, never typed in a terminal.
++    environment: release-purge
++    permissions: {}
++    steps:
++      - name: Purge the list pages by URL, then check the relay serves the published release
++        shell: pwsh
++        env:
++          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
++          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
++          TAG: v${{ needs.pick.outputs.version }}
++        run: |
++          $ErrorActionPreference = 'Stop'
++          if (-not $env:CF_PURGE_TOKEN -or -not $env:CF_ZONE_ID) { throw 'CF_PURGE_TOKEN or CF_ZONE_ID is not set in the release-purge environment' }
++          # The public zone URLs the Worker keys its cache on: the page clients read (first ten) and the
++          # larger page older clients still ask for.
++          $base = 'https://releases.slipgates.com/repos/danswett/agent-bridge/releases'
++          $urls = @("${base}?per_page=10&page=1", "${base}?per_page=100&page=1")
++          $headers = @{ Authorization = "Bearer $env:CF_PURGE_TOKEN" }
++          $body = @{ files = $urls } | ConvertTo-Json -Compress
++          $answer = Invoke-RestMethod -Method Post -Uri "https://api.cloudflare.com/client/v4/zones/$env:CF_ZONE_ID/purge_cache" -Headers $headers -ContentType 'application/json' -Body $body
++          if (-not $answer.success) { throw "Cloudflare refused the purge: $(($answer.errors | ForEach-Object { $_.message }) -join '; ')" }
++          Write-Host "purged $($urls.Count) URLs"
++          # Re-fetch until the relay's first page names the published tag with a fresh copy, within a minute.
++          $stale = $null
++          foreach ($attempt in 1..6) {
++            $stale = $null
++            foreach ($url in $urls[0]) {
++              $response = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'application/vnd.github+json' } -SkipHttpErrorCheck
++              $age = [int](@($response.Headers['Age'])[0] ?? -1)
++              $tags = if ($response.StatusCode -eq 200) { @(($response.Content | ConvertFrom-Json) | ForEach-Object { $_.tag_name }) } else { @() }
++              if ($response.StatusCode -ne 200) { $stale = "$url answered $($response.StatusCode)" }
++              elseif ($tags -cnotcontains $env:TAG) { $stale = "$url does not list $env:TAG yet (Age $age)" }
++              elseif ($age -lt 0 -or $age -gt 120) { $stale = "$url lists $env:TAG but its copy is $age seconds old" }
++            }
++            if (-not $stale) { break }
++            Start-Sleep -Seconds 10
++          }
++          if ($stale) {
++            Write-Host "::error title=release train::the relay is still stale after the purge: $stale. The release is published; the CDN list was not refreshed."
++            exit 1
++          }
++          Write-Host "the relay serves $env:TAG"
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 65f3eac..45f9f8d 100644
+index 65f3eac..d7ea0bd 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -961,6 +961,22 @@ suites:
@@ -257,7 +310,7 @@ index 65f3eac..45f9f8d 100644
 +    runner: hosted
 +    triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
 +    command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
-+    where: release-train.yml pick, verify, alert, publish
++    where: release-train.yml pick, verify, alert, publish, purge
 +    status: exists
 +
    - id: pwa-iphone
