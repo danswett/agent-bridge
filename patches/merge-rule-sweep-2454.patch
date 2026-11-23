@@ -15,18 +15,18 @@ index 5f4466c4..0291072f 100644
          shell: pwsh
 diff --git a/.github/workflows/merge-rule-sweep.yml b/.github/workflows/merge-rule-sweep.yml
 new file mode 100644
-index 00000000..def13419
+index 00000000..43003c46
 --- /dev/null
 +++ b/.github/workflows/merge-rule-sweep.yml
 @@ -0,0 +1,46 @@
 +name: Merge rule sweep
 +
-+# Cancels Merge rule runs stuck past 30 minutes (#2454, merge-rule follow-up b). merge-rule.yml's evaluate job times out
++# Cancels stuck Merge rule runs (#2454, merge-rule follow-up b; Quality's spec). merge-rule.yml's evaluate job times out
 +# at 10 minutes, but only once a runner takes the job: its runs wait in one queue: max group, and a run waiting there
-+# never times out (Nov 23: five, hours past that timeout, held every later run). So quality/merge-rule-sweep.ps1 goes
-+# by run age, whatever the status, and never cancels the newest run per pull request (or head). It cancels (a run past
-+# twice the limit, or one that refuses a plain cancel, is force-cancelled), never deletes, and touches no other
-+# workflow's runs. It runs main's own script: nothing a pull request can change runs here.
++# never times out (Nov 23: five, hours past that timeout, held every later run). So quality/merge-rule-sweep.ps1
++# cancels runs waiting over 30 minutes or running over 15, and never the newest run per pull request (or head). A run
++# past twice its limit, or one that refuses a plain cancel, is force-cancelled. It never deletes a run and touches no
++# other workflow's runs. It runs main's own script: nothing a pull request can change runs here.
 +on:
 +  schedule:
 +    - cron: '7,22,37,52 * * * *'
@@ -57,14 +57,14 @@ index 00000000..def13419
 +          ref: main
 +          persist-credentials: false
 +          sparse-checkout: quality
-+      - name: Cancel Merge rule runs stuck past 30 minutes
++      - name: Cancel Merge rule runs waiting over 30 minutes or running over 15
 +        shell: pwsh
 +        env:
 +          GH_TOKEN: ${{ github.token }}
 +          REPOSITORY: ${{ github.repository }}
 +          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 +        run: |
-+          & ./quality/merge-rule-sweep.ps1 -Repository $env:REPOSITORY -MaxAgeMinutes 30 -DryRun:($env:DRY_RUN -eq 'true')
++          & ./quality/merge-rule-sweep.ps1 -Repository $env:REPOSITORY -WaitingMaxMinutes 30 -RunningMaxMinutes 15 -DryRun:($env:DRY_RUN -eq 'true')
 diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
 index 15fdf7a6..9f49b268 100644
 --- a/.github/workflows/merge-rule.yml
@@ -103,10 +103,10 @@ index 20cf6d13..d291bee7 100644
      kind: unit
 diff --git a/quality/merge-rule-sweep.ps1 b/quality/merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..ecc8ae9a
+index 00000000..4a5e0098
 --- /dev/null
 +++ b/quality/merge-rule-sweep.ps1
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,88 @@
 +#Requires -Version 7
 +<#
 +.SYNOPSIS
@@ -116,23 +116,31 @@ index 00000000..ecc8ae9a
 +  merge-rule.yml's evaluate job times out at 10 minutes and its runs wait in one group with queue: max. When runs pile
 +  up there (Nov 23: five, hours past that timeout, waiting in the group), everything queues behind them. This reads
 +  merge-rule.yml's unfinished runs (queued, in_progress, waiting, pending, requested), one page each, and for every
-+  run older than -MaxAgeMinutes (default 30) by its created time, whatever its status (the 10-minute timeout only starts
-+  once a runner takes the job, so a run waiting in the group is never timed out), asks GitHub to cancel it. The newest
-+  run for each pull request, or for each head when it has none, is never cancelled, however old. Otherwise a run older than twice the limit, or one that
++  run past its limit asks GitHub to cancel it: queued, pending, waiting or requested past -WaitingMaxMinutes (30) since
++  it was created (the judge's 10-minute timeout only starts once a runner takes the job, so a run waiting in the group
++  never times out), in_progress past -RunningMaxMinutes (15) since that attempt started running. The newest
++  run for each pull request, or for each head when it has none, is never cancelled, however old. Otherwise a run past twice its limit, or one that
 +  refuses the plain cancel, is force-cancelled (a run past its own timeout ignores a plain cancel). It cancels, never
 +  deletes, and never touches another workflow's runs. A listing it can't read stops it with an error: unread is never
 +  "nothing to do". -DryRun reports without cancelling.
 +#>
 +[CmdletBinding()]
-+param([string]$Repository = $env:GITHUB_REPOSITORY, [ValidateRange(15, 360)][int]$MaxAgeMinutes = 30, [switch]$DryRun)
++param([string]$Repository = $env:GITHUB_REPOSITORY, [ValidateRange(15, 360)][int]$WaitingMaxMinutes = 30,
++    [ValidateRange(11, 360)][int]$RunningMaxMinutes = 15, [switch]$DryRun)
 +$ErrorActionPreference = 'Stop'
 +Set-StrictMode -Version Latest
 +$script:GhCommand = 'gh'
 +$script:Workflow = '.github/workflows/merge-rule.yml'
 +
++# ConvertFrom-Json already reads an ISO time as a UTC DateTime; re-parsing its text would apply the local offset.
++function ConvertTo-SweepTime($Value) {
++    if ($Value -is [datetime]) { return [DateTimeOffset]::new($Value.ToUniversalTime()) }
++    [DateTimeOffset]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
++}
++
 +function Invoke-SweepGh { $out = & $script:GhCommand @args; [pscustomobject]@{ Ok = $LASTEXITCODE -eq 0; Output = $out } }
 +
-+function Invoke-MergeRuleSweep([string]$Repository, [int]$MaxAgeMinutes, [DateTimeOffset]$Now, [switch]$DryRun) {
++function Invoke-MergeRuleSweep([string]$Repository, [int]$WaitingMaxMinutes, [int]$RunningMaxMinutes, [DateTimeOffset]$Now, [switch]$DryRun) {
 +    if ($Repository -notmatch '^[\w.-]+/[\w.-]+$') { throw 'Give owner/repository.' }
 +    $acted = 0; $failed = 0; $lines = @()
 +    # Every unfinished run first (all of them are read before anything is cancelled), so the newest run per pull
@@ -145,12 +153,14 @@ index 00000000..ecc8ae9a
 +        if ($page.total_count -gt 100) { $lines += "warning: more than 100 $status runs; only the first page is swept this time" }
 +        foreach ($run in @($page.workflow_runs)) {
 +            if ($run.path -cne $script:Workflow) { continue }
-+            # ConvertFrom-Json already reads an ISO time as a UTC DateTime; re-parsing its text would apply the local offset.
-+            $created = if ($run.created_at -is [datetime]) { [DateTimeOffset]::new($run.created_at.ToUniversalTime()) }
-+                else { [DateTimeOffset]::Parse([string]$run.created_at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal) }
++            # Waiting runs by when they were created; a running one by when this attempt started running (the judge's
++            # 10-minute timeout counts from there, never from time spent waiting in the group).
++            $field = if ($status -eq 'in_progress' -and $run.PSObject.Properties['run_started_at'] -and $run.run_started_at) { $run.run_started_at } else { $run.created_at }
++            $since = ConvertTo-SweepTime $field
 +            $prs = @($run.PSObject.Properties['pull_requests'] | ForEach-Object { $_.Value } | Where-Object { $_ } | ForEach-Object { $_.number })
 +            $key = if ($prs.Count) { "pr:$($prs[0])" } else { "head:$($run.head_sha)" }
-+            $all += [pscustomobject]@{ Run = $run; Status = $status; Created = $created; Key = $key }
++            $all += [pscustomobject]@{ Run = $run; Status = $status; Since = $since; Created = (ConvertTo-SweepTime $run.created_at); Key = $key
++                Limit = $(if ($status -eq 'in_progress') { $RunningMaxMinutes } else { $WaitingMaxMinutes }) }
 +        }
 +    }
 +    $newest = @{}
@@ -159,14 +169,14 @@ index 00000000..ecc8ae9a
 +    }
 +    foreach ($entry in $all) {
 +        $run = $entry.Run; $status = $entry.Status
-+        $age = ($Now - $entry.Created).TotalMinutes
-+        if ($age -le $MaxAgeMinutes) { continue }
++        $age = ($Now - $entry.Since).TotalMinutes
++        if ($age -le $entry.Limit) { continue }
 +        if ($newest[$entry.Key] -eq $run.id) { $lines += "kept run $($run.id) ($status, $([int]$age) min): the newest for $($entry.Key)"; continue }
 +        $what = "run $($run.id) ($status, $([int]$age) min, $($entry.Key))"
 +        if ($DryRun) { $lines += "would cancel $what"; continue }
 +        # A run past twice the limit, or one that refuses a plain cancel, is force-cancelled.
 +        $done = $false
-+        if ($age -le 2 * $MaxAgeMinutes) {
++        if ($age -le 2 * $entry.Limit) {
 +            $done = (Invoke-SweepGh api -X POST "repos/$Repository/actions/runs/$($run.id)/cancel").Ok
 +            if ($done) { $lines += "cancelled $what" }
 +        }
@@ -180,17 +190,17 @@ index 00000000..ecc8ae9a
 +}
 +
 +if ($MyInvocation.InvocationName -eq '.') { return }
-+$result = Invoke-MergeRuleSweep -Repository $Repository -MaxAgeMinutes $MaxAgeMinutes -Now ([DateTimeOffset]::UtcNow) -DryRun:$DryRun
-+$summary = @("### Merge rule sweep (limit $MaxAgeMinutes min)") + $(if ($result.Lines) { $result.Lines | ForEach-Object { "- $_" } } else { '- nothing stuck' })
++$result = Invoke-MergeRuleSweep -Repository $Repository -WaitingMaxMinutes $WaitingMaxMinutes -RunningMaxMinutes $RunningMaxMinutes -Now ([DateTimeOffset]::UtcNow) -DryRun:$DryRun
++$summary = @("### Merge rule sweep (waiting over $WaitingMaxMinutes min, running over $RunningMaxMinutes min)") + $(if ($result.Lines) { $result.Lines | ForEach-Object { "- $_" } } else { '- nothing stuck' })
 +$summary | ForEach-Object { Write-Host $_ }
 +if ($env:GITHUB_STEP_SUMMARY) { $summary | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 }
 +if ($result.Failed -gt 0) { Write-Host "::error title=merge-rule sweep::$($result.Failed) stuck Merge rule run(s) could not be stopped"; exit 1 }
 diff --git a/quality/test-merge-rule-sweep.ps1 b/quality/test-merge-rule-sweep.ps1
 new file mode 100644
-index 00000000..08406009
+index 00000000..d5f5ee70
 --- /dev/null
 +++ b/quality/test-merge-rule-sweep.ps1
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,114 @@
 +#Requires -Version 7
 +# Offline only: every GitHub request must match this stand-in.
 +$ErrorActionPreference = 'Stop'
@@ -207,10 +217,13 @@ index 00000000..08406009
 +    # $s.runs: status -> runs; each run's age in minutes. $s.refuse: run ids whose plain cancel answers 409.
 +    $script:s = @{ runs = @{}; refuse = @(); cancelled = @(); forced = @(); calls = @(); listFails = $false; forceFails = @() }
 +}
-+function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '') {
++function Run([long]$Id, [double]$AgeMinutes, [string]$Path = '.github/workflows/merge-rule.yml', [int]$Pr = 1, [string]$Head = '', [double]$RunningMinutes = -1) {
 +    # By default every run is for pull request 1, so a case's young run 99 (Keeper) is the newest one kept and the old
 +    # runs are cancellable; -Head with -Pr 0 makes a run with no pull request, keyed by its head.
++    # run_started_at: when this attempt started running; by default the same as created_at.
++    $started = if ($RunningMinutes -ge 0) { $RunningMinutes } else { $AgeMinutes }
 +    @{ id = $Id; path = $Path; created_at = $now.AddMinutes(-$AgeMinutes).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
++        run_started_at = $now.AddMinutes(-$started).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
 +        head_sha = $(if ($Head) { $Head } else { "head$Id" }); pull_requests = @(if ($Pr) { @{ number = $Pr } })
 +        html_url = "https://github.com/o/r/actions/runs/$Id" }
 +}
@@ -236,13 +249,13 @@ index 00000000..08406009
 +        default { throw "Unexpected fake gh request: $a" }
 +    }
 +}
-+function Sweep([switch]$DryRun) { Invoke-MergeRuleSweep -Repository 'o/r' -MaxAgeMinutes 30 -Now $now -DryRun:$DryRun }
++function Sweep([switch]$DryRun) { Invoke-MergeRuleSweep -Repository 'o/r' -WaitingMaxMinutes 30 -RunningMaxMinutes 15 -Now $now -DryRun:$DryRun }
 +
 +Reset-Scenario
 +$s.runs = @{ in_progress = @((Run 1 40), (Run 2 200)); queued = @((Run 3 5), (Run 4 45)); pending = @((Run 5 31)) }
 +$out = Sweep
-+Assert ((($s.cancelled | Sort-Object) -join ',') -eq '1,4,5') 'a plain cancel for every Merge rule run past 30 minutes, queued and pending too'
-+Assert (($s.forced -join ',') -eq '2') 'a run past twice the limit (a zombie) is force-cancelled at once'
++Assert ((($s.cancelled | Sort-Object) -join ',') -eq '4,5') 'a plain cancel for queued and pending runs past 30 minutes'
++Assert ((($s.forced | Sort-Object) -join ',') -eq '1,2') 'in_progress runs past twice their 15-minute limit (zombies) are force-cancelled at once'
 +Assert ($s.cancelled -notcontains 3 -and $s.forced -notcontains 3) 'a run younger than the limit is left alone'
 +Assert ($out.Failed -eq 0 -and $out.Acted -eq 4) 'the sweep reports what it did'
 +
@@ -259,7 +272,7 @@ index 00000000..08406009
 +Reset-Scenario
 +$s.runs = @{ in_progress = @((Run 9 50), (Run 10 50 '.github/workflows/ci.yml'), (Keeper)) }
 +$null = Sweep
-+Assert (($s.cancelled -join ',') -eq '9') 'a run of any other workflow is never touched, even if the API returned it'
++Assert ((($s.cancelled + $s.forced) -join ',') -eq '9') 'a run of any other workflow is never touched, even if the API returned it'
 +
 +Reset-Scenario
 +$s.runs = @{ in_progress = @((Run 11 300)); queued = @((Run 12 60), (Keeper)) }
@@ -289,6 +302,16 @@ index 00000000..08406009
 +$s.runs = @{ queued = @((Run 24 50 -Pr 0 -Head 'abc'), (Run 25 40 -Pr 0 -Head 'abc'), (Run 26 45 -Pr 0 -Head 'def')) }
 +$null = Sweep
 +Assert ((($s.cancelled | Sort-Object) -join ',') -eq '24') 'with no pull request, the newest run per head is kept'
++
++# Quality's spec: queued/pending past 30 minutes, in_progress past 15 minutes of running (the judge times out at 10).
++Reset-Scenario
++$s.runs = @{ in_progress = @((Run 30 20), (Run 31 40 -RunningMinutes 10), (Keeper)); queued = @((Run 32 20)) }
++$null = Sweep
++Assert ((($s.cancelled + $s.forced | Sort-Object) -join ',') -eq '30') 'in_progress past 15 minutes of running is cancelled; one that waited, then started 10 minutes ago, is not; queued under 30 minutes is not'
++Reset-Scenario
++$s.runs = @{ in_progress = @((Run 33 35), (Keeper)) }
++$null = Sweep
++Assert (($s.forced -join ',') -eq '33') 'an in_progress run past twice its limit (30 minutes running) is force-cancelled'
 +
 +if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
 +"merge-rule-sweep: $script:checks checks passed"
