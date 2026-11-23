@@ -1435,7 +1435,9 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
   "endpoint": "https://web.push.apple.com/QGuQyavXutnMhZ…",
   "keys": { "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV…", "auth": "BTBZMqHH6r4Tts7J_aSIgg" },
   "app": "https://danswett.github.io/agent-bridge/app/",
-  "device": "iPhone · Slipgates"
+  "device": "iPhone · Slipgates",
+  "notify": { "questions": true, "pinned": true, "all": false, "delivery_failures": false,
+              "pinned_sessions": ["3f9c0a52-1d7e-4b8a-9c11-0a5e7d2b6f40"] }
 }
 ```
 
@@ -1444,6 +1446,7 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
 | `endpoint`, `keys` | Exactly what the browser's `PushSubscription.toJSON()` gives, for a subscription made with the relay's VAPID key (`GET /v1/push/key`). `endpoint` is https; `p256dh` is a base64url P-256 point, `auth` 16 base64url bytes |
 | `app` | The client's own URL (https): where a tap on a notification opens it |
 | `device` | Optional. How `push.list` names this device; the channel's peer name otherwise |
+| `notify` | Optional. This device's notification filters (below). Absent means no filtering: question and finished-turn notices as before |
 
 Result: `{ "subscribed": true, "count": 2 }`, `count` being how many devices the host now
 notifies. A host keeps **one subscription per device** (the channel's peer id) and per
@@ -1458,6 +1461,26 @@ relay's account-scoped routing, so the host keeps the account boundary itself: i
 lists the peer among that account's devices, and refuses anything else. It saves
 subscriptions with the account they belong to, and drops them all if the profile signs
 in as another account.
+
+**Notification filters (`notify`).** Decided by the owner (option a, relayed by the Engineering Lead,
+Nov 22 2026, #1396). Four booleans and a set, kept **with this device's subscription**, so the
+**host filters when it sends**; the service worker never drops a push, because a browser requires a
+visible notification for every push it receives. A flag left out takes its default shown here.
+
+| Field | Default | Effect |
+|---|---|---|
+| `questions` | true | `question` notices (a session waiting on an answer). `resolved` follows the question it withdraws and is not filtered separately |
+| `pinned` | true | `finished` notices for the sessions in `pinned_sessions` |
+| `all` | false | `finished` notices for every session; it covers `pinned` |
+| `delivery_failures` | false | A count-only notice, debounced to one per 60 s and always visible, for messages a lane could not deliver. A host that does not send it ignores the flag |
+| `pinned_sessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids. An id the host does not know is ignored |
+
+A client sends `push.subscribe` again, with the whole current `notify`, whenever a flag or a
+pin changes while notifications are on; the host replaces the device's filters. The pinned set
+leaves the device only in this request, only to hosts of the account (the rule above), is
+stored with the subscription and removed with it, and is not returned by `push.list`. Sign-in
+and other notice kinds are not filtered. An older host that does not know `notify` ignores it
+and keeps sending everything. A request with a `notify` of the wrong shape fails as a request.
 
 ### `push.unsubscribe`
 
