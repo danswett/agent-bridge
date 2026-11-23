@@ -93,8 +93,12 @@ those two were misses, and why, is not established here.
 What this option can reach depends on the profile: the judge's GitHub reads are the part to cut (fewer or batched
 reads, skipping heads whose inputs have not changed). A verdict cache keyed by main's sha, the newest CI run's
 state and the head would touch ordering 1 too (a cached verdict is an old read of main), so it needs the same
-re-check as Option 1(a). The capacity multiple is open until the profile lands; the brief's 5 to 10 times (quoted)
-is not derived here.
+re-check as Option 1(a). 205e98bd's profile (quoted from R8b's relay; not re-derived here): the judge step is about 22 seconds, and #4022
+cuts GitHub reads per run from about 12 to about 4 points, which R8b puts at about 250 runs an hour. That is
+the Option 2 capacity figure to use; the brief's earlier 5 to 10 times is not derived here. Against about 650 runs
+an hour arriving (measured), Option 2 alone does not clear the queue, which is why Option 1 stays in the
+recommendation. The runs that sat in progress for hours were runs that never started (jobs queued, no runner),
+as described above.
 
 ## Recommendation
 
