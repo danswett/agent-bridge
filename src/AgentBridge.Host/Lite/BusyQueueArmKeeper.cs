@@ -13,12 +13,18 @@ public sealed class BusyQueueArmKeeper(BusyQueueStore store, TimeProvider time)
         catch (Exception e) when (e is not OutOfMemoryException) { }
     });
 
+    static bool Ended(Func<bool>? ended)
+    {
+        try { return ended?.Invoke() == true; }
+        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
     public async Task KeepAsync(string request, Action keep, CancellationToken ct = default, Func<bool>? ended = null)
     {
         while (!ct.IsCancellationRequested)
         {
             if (store.Get(request) is not { Held: true }) { return; }
-            try { keep(); }
+            // The session ended: no arm is left to keep and no prompt can be taken, so the slot is released (sessionEnded) and the keeper stops.
+            if (Ended(ended)) { store.Settle(request, BusyQueueStore.Unconfirmed, "sessionEnded", held: false); return; }            try { keep(); }
             catch (Exception e) when (e is not OutOfMemoryException) { }
             try { await Task.Delay(Every, time, ct); }
             catch (OperationCanceledException) { return; }
