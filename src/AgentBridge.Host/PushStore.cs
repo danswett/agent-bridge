@@ -9,8 +9,8 @@ namespace AgentBridge.Host;
 public sealed record PushSubscriber(string Device, string Name, string Endpoint, string P256dh, string Auth, string App, DateTimeOffset Since,
     TrustedPeerLease? Grant = null, PushNotify? Notify = null)
 {
-    // A device with no filters is told of everything, as before.
-    public bool Wants(NoticeKind kind, string session) => Notify?.Wants(kind, session) ?? true;
+    // A device with no filters is told of everything, as before, except failures: that kind is off unless it was asked for.
+    public bool Wants(NoticeKind kind, string session) => Notify?.Wants(kind, session) ?? kind != NoticeKind.Failures;
 
     public PushSubscription Subscription => new(Endpoint, P256dh, Auth);
 }

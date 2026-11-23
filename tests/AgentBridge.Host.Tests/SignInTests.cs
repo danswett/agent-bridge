@@ -685,7 +685,9 @@ public sealed class SignInTests(ITestOutputHelper output)
     [Fact]
     public async Task An_inflight_uuid_with_a_newer_auth_failure_is_refused_instead_of_silently_busy()
     {
-        await using var h = await Harness.CreateAsync();
+        // Queued source notifications sweep too, and a sweep that ends the flow first makes Start replay a finished flow
+        // (a deferred reply) instead of refusing the attach. Hold them; the closing SweepAsync is the sweep (#2558).
+        await using var h = await Harness.CreateAsync(manualSourceChanges: true);
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);
