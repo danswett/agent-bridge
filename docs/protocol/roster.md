@@ -155,8 +155,8 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
 * **`registry-put`** (host only): `{ t, id, record }`. The reply is `registry-result` with
   `error` null, or `too-large` (over 16 KiB), `bad-record` or `stale` (a sequence not above the
   one held; a new `epoch` needs a later `at`). The socket stays open on every refusal.
-* **`registry-get`** (any device): `{ t, id }`, at most one per two seconds per socket
-  (`slow-down`). The reply is one `registry` frame per machine holding a record, `{ machine,
+* **`registry-get`** (any device): `{ t, id }`, a token bucket per socket (burst 20, refill
+  10 a second) and one per account (burst 50, refill 50 a second); past either the reply is `slow-down` (#1396). The reply is one `registry` frame per machine holding a record, `{ machine,
   name, online, lastSeen, record, part, of }`, then one `{ known: [{ machine, name, lastSeen, online }] }`
   frame listing every machine of the account, online or not, so a count matches the app's.
   A known-only machine uses this socket `online` flag even before it publishes; a held

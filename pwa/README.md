@@ -538,6 +538,15 @@ browser that renewed it, is caught up. **Turn off notifications** tells a machin
 service (410) at their next push. Signing out unsubscribes too, so an account's machines
 never notify a device signed in as someone else.
 
+Below the button, **filters** choose what this device is told (kept on this device and sent
+to each machine with the subscription, so the machine filters before it sends and the worker
+never has to drop a push): *Questions waiting for my answer* (on), *Every turn in pinned
+sessions* (on), *Every turn in all sessions* (off; it covers pinned) and *Delivery failures*
+(off; a count only, at most one per minute, always visible). Changing a filter or pinning or
+unpinning a session registers again with the machines shown. The pinned set (ids only, no
+order) is the one thing about pins that leaves the device. See
+[`push.subscribe`](../docs/protocol/v1-sessions.md#pushsubscribe).
+
 On an iPhone or iPad, web push exists only for the app added to the Home Screen and
 opened from there; in a Safari tab the panel says how to add it. Where the permission was
 refused, it says to allow it in Settings.

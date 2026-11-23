@@ -280,7 +280,7 @@ public sealed partial class ReplyService : ISessionReplier
                 }
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
@@ -562,7 +562,11 @@ public sealed partial class ReplyService : ISessionReplier
                 keys = keys with { Sends = [keys.Sends[0] with { Text = words }, keys.Sends[1]] };
             }
             timeline.InjectStart();
-            try { result = await injector.InjectAsync(pid, keys); }
+            try
+            {
+                request.KeysGoing?.Invoke();
+                result = await injector.InjectAsync(pid, keys);
+            }
             catch (Exception e)
             {
                 return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"reply delivery to {Short(session.Id)} is uncertain after an injector failure; no background recovery will type further keys", e), null, KeysWent: true);
@@ -693,7 +697,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -777,8 +781,9 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
-            foreach (var send in plan.Sends)
+            for (var next = 0; next < plan.Sends.Count;)
             {
+                var send = plan.Sends[next];
                 if (send.After is { } after)
                 {
                     try { box = await AwaitBoxAsync(agent, pid, after); }
@@ -793,9 +798,15 @@ public sealed partial class ReplyService : ISessionReplier
                         return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
-                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
+                // The sends that follow with no wait for the box (a long Claude reply's chunks) go to the worker as one plan,
+                // each attached, typed and paused in turn, the screen check on the first only: nothing has changed it but its own keys.
+                var group = new List<KeySend> { AgentReply.Key(send, box.Rows) };
+                for (next++; next < plan.Sends.Count && plan.Sends[next].After is null; next++) { group.Add(AgentReply.Key(plan.Sends[next], null)); }
+                var keys = new KeyPlan(group) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
+                // Once, with the typing slot held and every fence passed, just before the first key (the Copilot path's call).
+                if (!sent) { keysGoing?.Invoke(); }
                 try { result = await injector.InjectAsync(pid, keys); }
                 catch (Exception e)
                 {
