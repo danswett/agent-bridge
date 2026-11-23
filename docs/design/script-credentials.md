@@ -154,16 +154,17 @@ ships and the CLI is app-gated (P3). An agent, a script, an unclassified caller 
 passed `agent.hello` are refused.
 
 * **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
-  asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. The
-  confirmation is a random value the host holds in memory with what it was issued for: the operation, the script
-  name, the credential state for that name (the live credential ids, their `launch:fleet` flag and expiry) and the
-  connection it was issued to. It is good for **one use and one minute**, at most 32 are outstanding (the oldest goes
-  first), and the first press that presents it uses it up, whether the press then succeeds or not. So a used, expired,
-  replayed or guessed value, one presented on another connection, one made for another action or script, and one
-  whose state has since changed (even if it has since come back, as after a mint and a revoke) is refused and
-  changes nothing. The check, the audit attempt and the change run as one step under the credential store's lock, so
-  two presses at once for the same state (a double click) make one credential: the second finds the state already
-  changed and is refused. A restart forgets every confirmation. This is the grants G8 pattern; the host does not trust the app's
+  asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
+  name the host keeps a **generation counter**, moved on by every press attempt (right or wrong) and by every mint,
+  revoke, rotation, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
+  generation, the operation and the connection it was issued to. The value is derived from a random per-process
+  salt and a fresh nonce, lives **two minutes**, and is checked and used up under the same lock as the audit
+  attempt and the change it allows. So a used, expired, replayed or guessed value, one presented on another
+  connection, one made for another action or script, and one whose script has since changed (even if it has
+  since come back, as after a mint and a revoke) is refused and changes nothing; two presses at once with one
+  confirmation make one credential, and two confirmations asked at once never make two. A wrong try also uses up
+  what the script had outstanding, so the person is asked again. At most 64 confirmations are held (the oldest
+  goes first), and a restart forgets them all. This is the grants G8 pattern; the host does not trust the app's
   say-so alone (the same-user imitation residual stays OPEN, Q7).
 * **The list.** `scripts.list` returns, per script name, the scope, the soonest-lived expiry, how many
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns

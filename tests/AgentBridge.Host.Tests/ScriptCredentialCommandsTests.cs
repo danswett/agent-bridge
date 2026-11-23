@@ -343,14 +343,32 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         Assert.Empty(credentials.ListScripts());
     }
 
-    // A double click sends two presses, each with its own fresh confirmation for the same state: the check and the write happen
-    // under one lock, so exactly one wins and the other is refused (#3883 2/3, ScriptCredentialCommands.cs 38-44).
+    // A double press with the one confirmation: the check, the audit attempt and the change run under the store's lock, so exactly
+    // one wins (#3883 2/3, ScriptCredentialCommands.cs 38-44). Two confirmations asked at once may cancel each other, but never
+    // make two credentials.
     [Fact]
-    public async Task Two_presses_at_once_for_the_same_state_make_one_credential_not_two()
+    public async Task Two_presses_at_once_with_the_same_confirmation_make_exactly_one_credential()
     {
         for (var i = 0; i < 25; i++)
         {
             var name = "pump-wake-" + i;
+            var c = await Confirm("scripts.add", name);
+            using var start = new ManualResetEventSlim();
+            var first = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(c, name)); });
+            var second = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(c, name)); });
+            start.Set();
+            var results = await Task.WhenAll(Settle(first), Settle(second));
+            Assert.Equal(1, results.Count(r => r));
+            Assert.Equal(1, credentials.ListScripts().Single(s => s.Name == name).Live);
+        }
+    }
+
+    [Fact]
+    public async Task Two_confirmations_asked_at_once_for_the_same_state_never_make_two_credentials()
+    {
+        for (var i = 0; i < 25; i++)
+        {
+            var name = "dispatcher-" + i;
             var a = await Confirm("scripts.add", name);
             var b = await Confirm("scripts.add", name);
             using var start = new ManualResetEventSlim();
@@ -358,8 +376,8 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
             var second = Task.Run(() => { start.Wait(); return Handler(CallerKind.App)(channel, "scripts.add", Press(b, name)); });
             start.Set();
             var results = await Task.WhenAll(Settle(first), Settle(second));
-            Assert.Equal(1, results.Count(r => r));
-            Assert.Equal(1, credentials.ListScripts().Single(s => s.Name == name).Live);
+            Assert.True(results.Count(r => r) <= 1);
+            Assert.True(credentials.ListScripts().SingleOrDefault(s => s.Name == name)?.Live is null or 1);
         }
     }
 
@@ -382,7 +400,7 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_confirmation_expires_after_a_minute()
+    public async Task A_confirmation_expires_after_two_minutes()
     {
         var clock = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
         var timed = new AgentCredentials(fixture.Root, "machine1", clock, logs.Add);
@@ -391,11 +409,11 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
         string Ask(object r) => JsonSerializer.SerializeToElement(r, ProtocolJson.Options).GetProperty("confirm").GetString()!;
         var request = JsonSerializer.SerializeToElement(new { op = "scripts.add", name = "pump-wake" });
         var late = Ask((await handler(channel, "scripts.confirm", request))!);
-        clock.Advance(TimeSpan.FromSeconds(61));
+        clock.Advance(TimeSpan.FromSeconds(121));
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, "scripts.add", Press(late)));
         Assert.Equal(0, timed.Count);
         var fresh = Ask((await handler(channel, "scripts.confirm", request))!);
-        clock.Advance(TimeSpan.FromSeconds(30));
+        clock.Advance(TimeSpan.FromSeconds(90));
         await handler(channel, "scripts.add", Press(fresh));
         Assert.Equal(1, timed.Count);
     }
@@ -413,14 +431,36 @@ public sealed class ScriptCredentialCommandsTests : IDisposable
     }
 
     [Fact]
-    public async Task Outstanding_confirmations_are_bounded_and_the_oldest_goes_first()
+    public async Task A_new_confirmation_for_a_script_replaces_the_one_before_it()
     {
         var first = await Confirm("scripts.add");
-        string last = first;
-        for (var i = 0; i < 40; i++) { last = await Confirm("scripts.add"); }
+        var second = await Confirm("scripts.add");
         await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(first)));
-        await Handler(CallerKind.App)(channel, "scripts.add", Press(last));
+        // The refused try was an attempt, so it used up what was outstanding for the script: the person asks again.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(second)));
+        Assert.Equal(0, credentials.Count);
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(await Confirm("scripts.add")));
         Assert.Equal(1, credentials.Count);
+    }
+
+    [Fact]
+    public async Task A_wrong_try_for_a_script_uses_up_its_outstanding_confirmation()
+    {
+        var real = await Confirm("scripts.add");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press("guess")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(real)));
+        Assert.Equal(0, credentials.Count);
+    }
+
+    [Fact]
+    public async Task Outstanding_confirmations_are_bounded_across_scripts_and_the_oldest_goes_first()
+    {
+        var first = await Confirm("scripts.add", "script-0");
+        string last = first;
+        for (var i = 1; i <= 80; i++) { last = await Confirm("scripts.add", "script-" + i); }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Handler(CallerKind.App)(channel, "scripts.add", Press(first, "script-0")));
+        await Handler(CallerKind.App)(channel, "scripts.add", Press(last, "script-80"));
+        Assert.Single(credentials.ListScripts());
     }
 
     [Fact]
