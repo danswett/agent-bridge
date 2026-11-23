@@ -32,6 +32,7 @@ public sealed partial class CiRunnerResolutionTests
     [Theory]
     [InlineData("ubuntu-24.04")]
     [InlineData("windows-11-arm")]
+    [InlineData("windows-2025")]
     [InlineData("macos-15")]
     [InlineData("[ubuntu-latest]")]
     [InlineData("${{ github.event_name == 'push' && 'windows-latest' || 'ubuntu-latest' }}")]
@@ -41,6 +42,9 @@ public sealed partial class CiRunnerResolutionTests
     [Theory]
     [InlineData("my-runner")]
     [InlineData("[windows, x64]")]
+    // An allowlist of hosted forms, not "windows-anything": a self-hosted pool can carry labels like these.
+    [InlineData("windows-x64")]
+    [InlineData("windows-gpu")]
     [InlineData("${{ github.event_name == 'push' && 'my-runner' || 'ubuntu-latest' }}")]
     [InlineData("${{ fromJSON('[\"my-runner\"]') }}")]
     [InlineData("${{ format('{0}-latest', 'ubuntu') }}")]

@@ -31,8 +31,9 @@ static partial class RunnerRouting
     private static partial Regex Label();
     [GeneratedRegex(@"^\s*\$\{\{(.*)\}\}\s*$", RegexOptions.Singleline)]
     private static partial Regex WholeExpression();
-    // GitHub-hosted labels (ubuntu-24.04, windows-latest, windows-11-arm, macos-15): anything else may be self-hosted.
-    [GeneratedRegex(@"^(ubuntu|windows|macos)-[a-z0-9.-]+$")]
+    // An allowlist of GitHub-hosted forms (R8b): ubuntu-*, windows-latest, windows-20xx, windows-11-arm, macos-*.
+    // Anything else, "windows-x64" included, may be a self-hosted pool's label.
+    [GeneratedRegex(@"^(ubuntu-[a-z0-9.-]+|windows-(latest|20\d\d|11-arm)|macos-[a-z0-9.-]+)$")]
     private static partial Regex Hosted();
     // What a matrix built by an expression may read and still count as literals: github.event_name, nothing else.
     [GeneratedRegex(@"\b(needs|vars|inputs|steps|env|secrets|matrix|jobs|strategy|runner)\.|github\.(?!event_name\b)")]
