@@ -3861,12 +3861,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var taken = false;
         preflight = () => Volatile.Read(ref taken) ? "an outside fixture (pid 42)" : null;
         host.On(HostOps.UpdateDepart, _ => Committed);
-        host.On(HostOps.Stop, data =>
-        {
-            Volatile.Write(ref taken, true);
-            _ = Task.Run(() => host.StopAsync());
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => Volatile.Write(ref taken, true));
 
         if (departing) { await NowAsync(); }
         else { await auto.RestartToUpdateAsync(_ => Task.FromResult(true)); }
