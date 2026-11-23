@@ -9,7 +9,7 @@ lint, the cache rule, the fork-PR controls, the capacity check) applies unchange
 ## Recommendation
 
 **(B), a nested Hyper-V Linux VM, on VM6 and VM7, one per host**, if SRE's read-only check confirms nested
-virtualisation on both (it is **unverified** for them; see the next section):
+virtualisation on both (VM7 was read; VM6 is **unverified**; see the next section):
 - each with fixed caps of 12 vCPU and 24 GB, and 3 runners;
 - routing only `pwa-ui`'s Chromium legs (after item B, the only browser legs left on main's push runs);
 - turned on only once a busy-hour capacity check passes on both the hosts and the new pool.
@@ -34,8 +34,12 @@ Why B over A:
 - **One reading looks contradictory but isn't.** `Win32_Processor` reports `VirtualizationFirmwareEnabled=False` and
   no SLAT. That is expected once a hypervisor runs: Windows hides those flags from the root partition, so they say
   nothing either way.
-- **VM6 and VM7: UNVERIFIED.** I could not read them, so I don't know their Azure size, and nothing here shows nested
-  virtualisation is enabled or supported on them. The reading above is the builder VM's only. SRE confirms each,
+- **VM7: read (Nov 23, read-only, no elevation).** The builder VM above is VM7 (as R8b identified it). Read there:
+  - `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent` = `True`;
+  - `Get-Service vmms` (Hyper-V's management service) = Running, start type Automatic;
+  - the size from Azure's metadata service (IMDS) = `Standard_D32s_v5`.
+- **VM6: UNVERIFIED.** I could not read it, so I don't know its Azure size, and nothing here shows nested
+  virtualisation is enabled or supported on it. SRE confirms it (and rechecks VM7 if wanted),
   read-only, before anything else:
   - `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`;
   - `Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All, VirtualMachinePlatform` (elevated);
