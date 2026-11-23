@@ -271,7 +271,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.plan.outputs.product-os) }}
-    runs-on: ${{ matrix.os }}
+    # Windows x64 on the ab-ci pool only for a push or a same-repository pull request with AB_CI_SELF_HOSTED set to 'true';
+    # a fork's pull request, an unset variable and every other leg stay hosted (quality/README.md routing guard, #3824).
+    runs-on: ${{ (matrix.os == 'windows-latest' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
     # (#129); this caps what a hang can cost.
     timeout-minutes: 30
@@ -289,6 +291,15 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
+      # NuGet's folders and MSBuild's nodes for this job alone: on a reused ab-ci machine nothing outlives the job
+      # (the runner empties RUNNER_TEMP for each one), and a hosted runner behaves the same (quality/README.md, warm caches).
+      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
+        shell: pwsh
+        run: |
+          $t = $env:RUNNER_TEMP
+          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
+          # A clean workspace: checkout cleans already; this also clears what a crashed job left.
+          git clean -ffdx
       - name: Choose what to test
         # The whole solution when the whole ring runs (a change to the solution, a workflow or
         # quality/, or main with no passed base), as before. Otherwise a solution filter of the selected test
@@ -317,7 +328,7 @@ jobs:
         id: nuget
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.nuget/packages
+          path: ${{ runner.temp }}/nuget-packages
           key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
@@ -333,7 +344,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.nuget/packages
+          path: ${{ runner.temp }}/nuget-packages
           key: ${{ steps.nuget.outputs.cache-primary-key }}
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is
       # killed without a process dump, and the run fails naming the test in progress.
@@ -495,6 +506,10 @@ jobs:
           path: ${{ runner.temp }}/relay-image.sarif
           if-no-files-found: ignore
           retention-days: 14
+      - name: Stop this job's build servers
+        # MSBuild's and the compiler's servers would otherwise outlive the job on a reused machine.
+        if: always()
+        run: dotnet build-server shutdown
   relay-image-sarif:
     # The relay image's scan to code scanning (the Security tab), from main only. A pull request's
     # results would be compared with main's last upload, so a vulnerability published since then
@@ -705,13 +720,17 @@ jobs:
       - uses: ./.github/actions/arm64-foreground
         if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - name: The published app draws the demo's cards and answers one (win-arm64 retry, #2026)
+        id: selftest-retry
         if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64'
+        # Recorded, not swallowed: "The win-arm64 self-test failed twice" below fails the job after the package, installer input
+        # and SBOM are uploaded. An Arm64 leg may be red but is never unpackaged (publish-gate, app-installer need those).
+        continue-on-error: true
         shell: pwsh
         run: |
           Write-Output "::warning title=app (win-arm64)::the self-test failed once; retrying it once (#2026)"
           ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest-retry/result.json" -TimeoutSeconds 720
       - name: The win-arm64 self-test passed on retry (flake notice, #2026)
-        if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && success()
+        if: steps.selftest.outcome == 'failure' && steps.selftest-retry.outcome == 'success'
         shell: pwsh
         run: Write-Output "::warning title=app (win-arm64) flake::the self-test failed once and passed on retry; flake record https://github.com/danswett/agent-bridge/issues/2026"
       - name: The release would publish (dry run)
@@ -759,6 +778,12 @@ jobs:
           path: ${{ runner.temp }}/sbom
           if-no-files-found: error
           retention-days: 30
+      - name: The win-arm64 self-test failed twice (recorded after the package and SBOM are uploaded)
+        if: steps.selftest-retry.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Output "::error title=app (win-arm64)::the self-test failed on both attempts (#2026); the package, installer input and SBOM above are uploaded"
+          exit 1
       - name: Stage named self-test text, never WER dumps or archives
         if: always()
         id: selftest-text

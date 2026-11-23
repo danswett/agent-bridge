@@ -14,8 +14,6 @@ namespace AgentBridge.Host;
 // an unaudited HA dispatch, so the verdict is FAIL (design/ha-gate-counters.md).
 internal static class HaAnswerAudit
 {
-    internal const string Principal = "ha:connector";
-
     internal static Func<AnswerRequest, CancellationToken, Task<AnswerResult>> Wrap(ISessionAnswerer answers, AgentAuditLog audit)
     {
         ArgumentNullException.ThrowIfNull(audit);
@@ -30,7 +28,7 @@ internal static class HaAnswerAudit
         Action<AnswerOutcome> unaudited = _ => { };
         if (SessionService.AnswerGate(session, question, operation, "ha-component") is not { } gate) { audit.RecordUnauditedHa("answer", session.Id); return unaudited; }
         gate = gate with { Path = "legacy-ha" };
-        var intent = new AgentAuditEntry("local", gate.Operation.ToString(), Principal, [], Ops.SessionAnswer, gate.Incarnation.ToString(), "attempted", Gate: gate);
+        var intent = new AgentAuditEntry("local", gate.Operation.ToString(), HaRunning.Principal, [], Ops.SessionAnswer, gate.Incarnation.ToString(), "attempted", Gate: gate);
         if (!audit.Append(intent)) { audit.RecordUnauditedHa("answer", session.Id); return unaudited; }
         return outcome => audit.Append(intent with
         {

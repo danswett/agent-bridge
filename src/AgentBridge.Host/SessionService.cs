@@ -229,6 +229,7 @@ public sealed class SessionService
         {
             push.Watching = Watching;
             push.Presences = Presences;
+            if (launcher is not null) { push.TrustQuestions = launcher.TrustQuestions; }
         }
     }
 

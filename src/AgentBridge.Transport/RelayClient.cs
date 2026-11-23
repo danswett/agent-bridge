@@ -255,6 +255,22 @@ public sealed class RelayClient : IAsyncDisposable
         finally { rosterReads.TryRemove(id, out _); }
     }
 
+    // Asks the relay to move the account to enforce (devices.md, "The relay's enforce mode"): honoured only for an active person
+    // device, one way. True when it is now in enforce.
+    public async Task<bool> EnforceRosterAsync(CancellationToken ct = default)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rosterReads[id] = tcs;
+        try
+        {
+            await SendTextAsync(new { t = "roster-enforce", id }, ct);
+            var r = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            return !r.TryGetProperty("error", out var e) || e.ValueKind == JsonValueKind.Null;
+        }
+        finally { rosterReads.TryRemove(id, out _); }
+    }
+
     // Ends, never faults, when the connection does; the caller then reconnects.
     public Task Completion => loop;
     public WebSocketCloseStatus? CloseStatus => ws.CloseStatus;
@@ -459,7 +475,7 @@ public sealed class RelayClient : IAsyncDisposable
                         case "feedback-result":
                             if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
                             break;
-                        case "roster":
+                        case "roster" or "roster-enforce-result":
                             if (rosterReads.TryRemove(j.GetProperty("id").GetInt64(), out var rr)) { rr.TrySetResult(j.Clone()); }
                             break;
                         case "forget-result":

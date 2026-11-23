@@ -8,9 +8,11 @@ public class ClientReportedCardTargetPinTests
 {
     static readonly string[] Allowed =
     [
+        "src/AgentBridge.App.Core/Deliveries.cs", // measures the request budget with the card target left out
         "src/AgentBridge.Host/GateAudit.cs",      // the row field and its shape check
         "src/AgentBridge.Host/SessionService.cs", // the one writer: copies the request's value into the answer row
-        "src/AgentBridge.Protocol/Sessions.cs",   // AnswerRequest.CardTarget
+        "src/AgentBridge.Protocol/Answers.cs",    // measures the 16 KiB budget with the card target left out
+        "src/AgentBridge.Protocol/Sessions.cs",   // AnswerRequest.CardTarget and its cap
     ];
 
     [Fact]
@@ -22,6 +24,18 @@ public class ClientReportedCardTargetPinTests
             .Where(path => File.Exists(Path.Combine(root, path)) && File.ReadAllText(Path.Combine(root, path)).Contains("CardTarget", StringComparison.Ordinal))
             .Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(Allowed, named);
+    }
+
+    [Fact]
+    public void The_budget_checks_only_leave_the_card_target_out_and_never_read_its_value()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        foreach (var file in new[] { "src/AgentBridge.Protocol/Answers.cs", "src/AgentBridge.App.Core/Deliveries.cs" })
+        {
+            var lines = File.ReadAllLines(Path.Combine(root, file)).Where(line => line.Contains("CardTarget", StringComparison.Ordinal)).Select(line => line.Trim()).ToArray();
+            Assert.NotEmpty(lines);
+            Assert.All(lines, line => Assert.True(line.Contains("CardTarget = null", StringComparison.Ordinal) || line.StartsWith("//", StringComparison.Ordinal), $"{file} reads the card target: {line}"));
+        }
     }
 
     [Fact]

@@ -116,6 +116,8 @@ public static class Limits
     // Free text in an answer (session.answer's text, or a field's other), and the request.
     public const int AnswerText = 4 * 1024;
     public const int AnswerRequest = 16 * 1024;
+    // The client-reported card target (AnswerRequest.CardTarget): its own cap, outside the AnswerRequest budget above.
+    public const int CardTarget = 64;
     // The text of a session.reply.
     public const int ReplyText = 16 * 1024;
     // A sub-agent's entry (docs/design/subagents.md §5): its label, the start of the prompt
@@ -874,6 +876,9 @@ public sealed record ReplyRequest
     // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
     [JsonIgnore]
     public bool RequireIdle { get; init; }
+    // Host-only, with claudeBusyQueue (#3828, slice C): Claude's box must be positively empty or show exactly the known queued hint; never from a protocol caller.
+    [JsonIgnore]
+    public bool RequireEmptyBox { get; init; }
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
