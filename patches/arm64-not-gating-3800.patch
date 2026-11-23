@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 2ab972d..b56a741 100644
+index 2ab972d..b453cbb 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -953,7 +953,20 @@ jobs:
@@ -23,6 +23,15 @@ index 2ab972d..b56a741 100644
        - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
  
    sign:
+@@ -1374,7 +1387,7 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+         shell: pwsh
+         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
+-      - name: "The waiver covers three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), only before expiry"
++      - name: "The waiver covers exactly three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), with no switch and no expiry"
+         # Fixed needs and jobs JSON: nothing reaches GitHub.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
+         shell: pwsh
 @@ -1796,28 +1809,27 @@ jobs:
        actions: read
        contents: read
