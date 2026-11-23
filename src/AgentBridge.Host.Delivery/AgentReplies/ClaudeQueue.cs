@@ -36,5 +36,8 @@ public static class ClaudeQueue
         }
     }
 
+    // Whether the transcript's tail holds a relay prompt enqueued at or after since and not taken since: the slot a host restart forgot.
+    public static bool Unconsumed(string path, DateTimeOffset since) => false;
+
     static bool Flag(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
 }

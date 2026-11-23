@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
@@ -232,6 +232,9 @@ public sealed partial class SessionDriver
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
     public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null, bool WordsToCome = false, string? Label = null);
+
+    // Keeps a waiting arm waiting (docs/message-delivery.md, #3856): moves only its time.
+    public bool KeepArm(DateTimeOffset now, long onlyAt) => false;
 
     public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected, wordsToCome, armedLabel); } }
 

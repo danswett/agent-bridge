@@ -863,6 +863,45 @@ public sealed class AgentLiteDeliveryTests
             Assert.True(silent.Store.SlotHeld(Target));
         }
         finally { File.Delete(path); }
+    }    // D2b-2c (#3856): the slot survives a host restart (derived from the transcript), a Claude restart frees it, and a held send keeps its arm.
+    static string FramedEarlier(string request) => $"[Slipgates · from an agent on SENDER · session sess-9 · request {request} · not typed by your user] earlier message";
+    static string EnqueueRowAt(string framed, string at) => System.Text.Json.JsonSerializer.Serialize(new { type = "queue-operation", operation = "enqueue", timestamp = at, content = framed });
+    [Fact]
+    public async Task After_a_host_restart_an_unconsumed_relay_prompt_in_the_transcript_still_holds_the_slot_and_rows_older_than_the_claude_process_do_not()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-derived-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        File.WriteAllText(path, EnqueueRowAt(FramedEarlier("55555555-5555-5555-5555-555555555555"), "2026-11-23T10:05:00.000Z") + "\n");
+        try
+        {
+            var restarted = BusyClaude(ReplyStage.Queued); restarted.Transcript = path; restarted.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z");
+            Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(restarted.Build()));   // the store is empty, the transcript is not
+            Assert.Empty(restarted.Typed);
+            Assert.Empty(restarted.Store.Records());                                                   // no record is left behind
+            var newer = BusyClaude(ReplyStage.Queued); newer.Transcript = path; newer.ProcessAt = DateTimeOffset.Parse("2026-11-23T11:00:00Z");
+            Assert.Equal(LiteKind.Queued, (await SendNew(newer.Build())).Outcome);                     // Claude restarted since: that queue is gone
+        }
+        finally { File.Delete(path); }
+    }
+    [Fact]
+    public async Task A_claude_restart_frees_a_held_slot_and_the_old_record_is_unconfirmed_with_that_reason()
+    {
+        var f = BusyClaude(ReplyStage.Queued); f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:00:00Z"); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));                       // same process: still held
+        f.ProcessAt = DateTimeOffset.Parse("2026-11-23T10:30:00Z");                                    // Claude restarted
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        var old = f.Store.Records().Single(r => r.Reason == "claudeRestart");
+        Assert.Equal((BusyQueueStore.Unconfirmed, false), (old.State, old.Held));
+    }
+    [Fact]
+    public async Task A_held_unconfirmed_send_keeps_its_arm_so_a_prompt_taken_later_still_shows_as_the_agents()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Unconfirmed); f.Drivers = new SessionDrivers(); f.Launch(LaunchProtocol.Ask);
+        var d = f.Drivers.For(Target);
+        d.Observe(Shown(1, SessionStatus.Working, "first"), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
+        Assert.Equal(LiteKind.Unconfirmed, (await SendNew(f.Build())).Outcome);
+        d.Observe(Shown(2, SessionStatus.Working, Assert.Single(f.Typed).Text), DateTimeOffset.UnixEpoch.AddSeconds(30), f.Drivers.Arm);
+        Assert.True(d.PromptIsAgents);
     }    [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {

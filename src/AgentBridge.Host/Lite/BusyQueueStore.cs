@@ -70,9 +70,9 @@ public sealed class BusyQueueStore(TimeProvider time)
         lock (gate) { return records.TryGetValue(request, out var r) ? r : null; }
     }
 
-    public sealed record Holding(string Request, string? Transcript, long Offset);
+    public sealed record Holding(string Request, string? Transcript, long Offset, DateTimeOffset? ProcessStart = null);
     // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
-    public void Track(string request, string? transcript, long offset)
+    public void Track(string request, string? transcript, long offset, DateTimeOffset? processStart = null)
     {
         lock (gate) { if (records.ContainsKey(request)) { tracked[request] = (transcript, offset); } }
     }
