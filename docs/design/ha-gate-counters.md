@@ -327,7 +327,7 @@ send log; without it the answer is INCOMPLETE (`missing-message-evidence`), neve
 and a negative, malformed or incomplete file is refused. `--json` prints a closed schema-1 reading
 for the fleet combiner, which takes one `<host>.json` per pinned host, applies the floors to the
 fleet sums and names a host with no file INCOMPLETE: `schema`, `host` (the `--host` label, which
-`--json` requires; the command never reads an identity), `since` (UTC), `kind` (`pass`, `fail`, `incomplete`),
+`--json` requires; the command never reads an identity), `since` (UTC), `readAt` (UTC, the window end: when it was read; a start after it is refused, and the combiner compares every host's span), `kind` (`pass`, `fail`, `incomplete`),
 `reasons` (closed codes only: `invalidated-window`, `ha-fallback`, `coverage-break`,
 `retention-trimmed-into-window`, `unresolved-intent`, `audit-incomplete`, `sequence-break`,
 `missing-window-evidence`, `missing-message-evidence`, `below-floor:<launch|approval|stop|message>`),
