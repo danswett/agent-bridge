@@ -1155,6 +1155,11 @@ starvation lasts until the train lands.
     publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
     reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
