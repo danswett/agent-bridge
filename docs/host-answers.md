@@ -130,7 +130,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   * multi: Up × (N−1) to the top row first, then one walk down the checkbox list, Space
     only on rows whose state must change (the default opens some ticked), each toggle its
     own send 350 ms apart; just the walk to the top and Enter when the defaults are the
-    answer. An empty answer only where `minItems` allows it. That Up stops at the first
+    answer. An empty answer only where the field is not required and `minItems` allows it: a
+    required multi needs at least one choice, for every agent (owner decision, Nov 23), and
+    `Answers.Check` refuses an empty list for one before any key is planned. That Up stops at the first
     row of a checkbox list, as it does in a single-choice list, is assumed rather than
     seen live: check it on the test VM.
   * text and number: the words (a number as plain decimal, below), then, only once the session's

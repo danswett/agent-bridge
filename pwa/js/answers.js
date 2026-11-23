@@ -124,6 +124,8 @@ export function checkAnswer(question, answer) {
     // Empty text is typed as nothing, which a form records as no answer at all, and text of only
     // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
     // (Answers.Check, FieldConstraints.BlankOnceTyped).
+    // A required multi-select needs at least one choice, for every agent (owner decision, Nov 23).
+    if (field.required === true && field.type === 'multi' && Array.isArray(value) && value.length === 0) { return `"${label(field)}" needs an answer`; }
     if (field.required === true && field.type === 'text' && typeof value === 'string' && value.replace(/\p{Cc}/gu, ' ').trim() === '') { return `"${label(field)}" needs an answer`; }
     const problem = valueProblem(field, value);
     if (problem) { return `"${label(field)}": ${problem}`; }

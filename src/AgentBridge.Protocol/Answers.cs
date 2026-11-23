@@ -49,6 +49,12 @@ public static class Answers
             {
                 return $"\"{Label(field)}\" needs an answer";
             }
+            // A required multi-select needs at least one choice, for every agent (owner decision, Nov 23): an empty list
+            // answers nothing. An optional one may be empty, where a Copilot list's minItems allows it.
+            if (field.Required == true && field.Type == FieldType.Multi && value.ValueKind == JsonValueKind.Array && value.GetArrayLength() == 0)
+            {
+                return $"\"{Label(field)}\" needs an answer";
+            }
             if ((ValueProblem(field, value) ?? field.Constraints?.Problem(field.Type, value, patterns)) is { } problem) { return $"\"{Label(field)}\": {problem}"; }
         }
         return given.Count == 0 ? "the answer is empty" : null;

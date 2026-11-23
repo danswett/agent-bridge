@@ -264,14 +264,15 @@ test('a default that is not an option becomes Other text where Other is allowed'
   assert.deepEqual(buildAnswer(q, st).answer.fields, { c: { other: 'something else' }, m: ['a', { other: 'and b' }] });
 });
 
-test('a multi choice with nothing ticked is answered with an empty list, which any number allows', () => {
+test('a multi choice with nothing ticked is built as an empty list: a required one is then refused by the check, an optional one allowed', () => {
   const q = form({ name: 'm', title: 'Areas', type: 'multi', required: true, options: [{ value: 'a' }, { value: 'b' }], default: ['a'] });
   const st = initialState(q);
   st.m.selected = [];
   const { answer } = buildAnswer(q, st);
   assert.deepEqual(answer.fields, { m: [] });
-  assert.equal(checkAnswer(q, answer), null);
-  // Required with nothing ticked and no default: [], since any number is allowed.
+  // A required multi needs at least one choice, for every agent (owner decision, Nov 23): the check names it.
+  assert.equal(checkAnswer(q, answer), '"Areas" needs an answer');
+  // Required with nothing ticked and no default: [] is built, and refused by the same check.
   const req = form({ name: 'm', type: 'multi', required: true, options: [{ value: 'a' }] });
   assert.deepEqual(buildAnswer(req, initialState(req)).answer.fields, { m: [] });
   // Optional: left alone it is unanswered; cleared after ticking it is [].

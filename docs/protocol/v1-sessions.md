@@ -700,6 +700,8 @@ An empty or blank value for a `required` `text` field is `refused` as needing an
 or text that is empty once its control characters (Cc) are made spaces, as a host types them,
 and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
 nothing records no answer, and blank text might be recorded trimmed to nothing.
+An empty array for a `required` `multi` is `refused` as needing an answer: a required multi-select needs at least one
+choice, for every agent (owner decision, Nov 23). An optional `multi` may be empty, where its `minItems` allows it.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
