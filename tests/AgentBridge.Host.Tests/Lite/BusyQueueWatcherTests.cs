@@ -106,7 +106,7 @@ public sealed class BusyQueueWatcherTests
         s.Settle(r, BusyQueueStore.Queued, null, held: true, "agent:m/a");
         s.TryBegin(r, "agent:m/b", "sess2");
         var w = new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => true };
-        await Drive(w.WatchAsync(r, default, "agent:m/a"), TimeSpan.FromSeconds(10));
+        await Drive(w.WatchAsync(r, principal: "agent:m/a"), TimeSpan.FromSeconds(10));
         Assert.Equal(BusyQueueStore.Delivered, s.Get(r, "agent:m/a")!.State);
         Assert.Equal(BusyQueueStore.InFlight, s.Get(r, "agent:m/b")!.State);
         Assert.False(s.SlotHeld("sess1")); Assert.True(s.SlotHeld("sess2"));
