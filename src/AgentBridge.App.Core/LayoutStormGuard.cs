@@ -1,8 +1,10 @@
 namespace AgentBridge.App.Core;
 
 // MITIGATION for #3782: corrections that follow a layout pass (restored reading position, anchor, pinned end)
-// can feed each other until XAML throws LayoutCycleException. More than Limit passes within Window is a storm:
-// those passes skip their corrections, and the first one is logged with its count.
+// can feed each other until XAML throws LayoutCycleException. Only a correction that actually ran can feed the
+// next pass, so Limit counts correction RUNS within Window, not raw LayoutUpdated passes: ordinary streaming
+// raises many passes that correct nothing (#3842). At Limit runs, further corrections are skipped and the first
+// skip of a storm is logged with its count.
 public sealed class LayoutStormGuard(TimeProvider? time = null)
 {
     public const int Limit = 60;
@@ -10,18 +12,36 @@ public sealed class LayoutStormGuard(TimeProvider? time = null)
 
     readonly TimeProvider clock = time ?? TimeProvider.System;
     // Monotonic stamps: a wall-clock step (sync, DST, manual) must not end or extend a storm.
-    readonly Queue<long> passes = [];
+    readonly Queue<long> runs = [];
+    bool announced;
 
-    // True when this pass may run its corrections; count is the passes in the window, this one included.
-    public bool Pass(out int count)
+    // True when a correction may run; count is the runs in the window. first is true once per storm, for the log.
+    public bool Allowed(out int count, out bool first)
     {
-        lock (passes)
+        lock (runs)
+        {
+            Prune(clock.GetTimestamp());
+            count = runs.Count;
+            var allowed = count < Limit;
+            first = !allowed && !announced;
+            announced = !allowed;
+            return allowed;
+        }
+    }
+
+    // A correction ran: it moved the view, so it may cause another layout pass.
+    public void Run()
+    {
+        lock (runs)
         {
             var now = clock.GetTimestamp();
-            while (passes.Count > 0 && clock.GetElapsedTime(passes.Peek(), now) >= Window) { passes.Dequeue(); }
-            passes.Enqueue(now);
-            count = passes.Count;
-            return count <= Limit;
+            Prune(now);
+            runs.Enqueue(now);
         }
+    }
+
+    void Prune(long now)
+    {
+        while (runs.Count > 0 && clock.GetElapsedTime(runs.Peek(), now) >= Window) { runs.Dequeue(); }
     }
 }

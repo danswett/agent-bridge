@@ -439,14 +439,12 @@ public sealed partial class SessionView
     // After any layout under a still view: a block above the anchor realised, or an estimated height
     // corrected, put the anchor back where it was, so what is read never moves (ui.md §6.4). Not while
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
-    readonly LayoutStormGuard layoutStorm = new(TimeProvider.System);
-
     void OnConversationLaidOut(object? sender, object e)
     {
-        // MITIGATION (#3782): corrections that feed each other end in a LayoutCycleException; in a storm, skip them.
-        if (!layoutStorm.Pass(out var passes))
+        // MITIGATION (#3782, #3842): corrections that feed each other end in a LayoutCycleException; in a storm, skip them.
+        if (!layoutStorm.Allowed(out var runs, out var first))
         {
-            if (passes == LayoutStormGuard.Limit + 1) { AppLog.Write($"layout storm: {passes} conversation layout passes within {LayoutStormGuard.Window.TotalSeconds:0} s; corrections skipped"); }
+            if (first) { AppLog.Write($"layout storm: {runs} layout corrections within {LayoutStormGuard.Window.TotalSeconds:0} s; corrections skipped"); }
             return;
         }
         if (RestoreReading()) { return; }
