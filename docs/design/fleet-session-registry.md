@@ -768,9 +768,8 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 **Status: a proposal for the owner. Nothing here is built, enabled or decided.** It changes what the host captures and what agents with
 read scope can see in `fleet.list`, so it needs the owner's choice between the options below. Part of #1396; found by row 28 of the HA
 parity list. Reviewed from the shadow side by Pump-Wake (the stuck-prompt shadow's owner). Its options note, slipgates-fleet
-[#1191](https://github.com/danswett/slipgates-fleet/pull/1191), has one "host publishes the evidence" choice (its A1, which lists unsent
-input and last reply too) against retiring the tap (its A2). This note splits that A1 in two for the owner: **Option A here is A1** (fields
-from existing state) and **Option B here is A1b** (adds the composer read, the HMAC key and `lastReplyAt`). #1191's A2 is the alternative to both.
+[#1191](https://github.com/danswett/slipgates-fleet/pull/1191), uses the same letters: its A1 is Option A here, its A1b is Option B here (and its A2,
+retiring the tap, is the alternative to both).
 
 **The gap.** The relay allow-list and `fleet.list` already accept the optional evidence members (`SessionEvidence`: `stale`,
 `attention`, `openAsks`, `unsentLength`, `unsentHash`, `observedAt`, `lastReplyAt`, `provenance`, `senderVerified`, `owner`, `pr`,
