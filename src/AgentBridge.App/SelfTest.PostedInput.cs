@@ -154,12 +154,9 @@ static partial class SelfTest
         return focus;
     }
 
-    // aim: where the message goes given the focus window (a real wheel is hit-tested to the window under the pointer, not the focus; #3982);
-    // null posts to the focus window, as the keys do.
-    static bool PostNativeInput(nint window, uint message, nint wParam, nint lParam, Func<nint, nint>? aim = null)
+    static bool PostNativeInput(nint window, uint message, nint wParam, nint lParam)
     {
         var target = PrepareNativeInput(window);
-        if (aim is not null) { target = aim(target); }
         var posted = PostMessageW(target, message, wParam, lParam);
         if (!posted) { AppLog.Write($"self-test: message {message:X} not posted (target: {target:X}; {ForegroundOwner()})"); }
         return posted;
