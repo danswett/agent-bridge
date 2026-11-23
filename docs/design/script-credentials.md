@@ -112,25 +112,19 @@ says. The base script credential never carries it.
 ## 5. Who mints and who revokes
 
 **Only a person's press in the Slipgates app mints, revokes or rotates**, on the machine's own
-host and from a presence-proven device. Never an agent, never a script, never a remote device
-without that presence, and no terminal or PowerShell step. This follows guard #67 (host management
+host. Never an agent, never a script, **never a remote device** (no remote mint, revoke or rotate at
+all, per the owner), and no terminal or PowerShell step. This follows guard #67 (host management
 is refused from inside an agent session) and agent-token-rotation.md §4 (a new token is accepted
 only from a person's device). The owner chose this over a host command line (as relayed by the Chief on #1414).
 
-**How the host tells a person's press from same-user code imitating the app.** The press must reach
-the host as a **person-device presence-signed command**, the same kind the owner's other person-only
-actions use (#3305; agent-principals.md §4.2 and the signed-command memory in §4.4): a designated-verifier
-MAC from the person's device key (`CommandMac`, a TPM or Secure Enclave key), made with presence, that
-names the operation (mint, revoke or rotate), the script name, the machine, a nonce and an expiry.
-The host checks the MAC, the machine and the expiry, and refuses a nonce it has seen in the **durable**
-replay store (#391 R6, agent-principals.md §4.4); the in-memory store forgets across a restart, so it
-is not enough. A remote device mints or revokes only with presence, as the Nov 19 decision says (role
-assignments need a person signature made with presence, never an unattended capSign). A bare local
-pipe call from the app process is **not** a person press: the app's process identity is a safety rail,
-not a boundary. **OPEN (#1414 design):** whether the local app on the same machine can obtain a
-presence-signed command from the person's device without a phone or second device, and what the
-fallback is on a machine with no presence-capable key. Until that is settled, nothing here removes the
-terminal CLI (the Option 1 build order stands).
+**What makes the press a person's (presence-proven).** The local WinUI Settings press on the machine
+follows the approved grants pattern (fleet-grants.md G4, G7b and G8): the host adapter accepts it
+only from the exact installed app image, after the caller guard (guard 67) has read the whole
+ancestry and found no agent session, and only with a confirmation bound to the account, profile,
+script name, action and credential generation (G8). A bare pipe call without that confirmation is
+refused. That local press is what "presence-proven" means here; no further owner step is needed
+(ruling relayed by the Chief). A remote device cannot mint, revoke or rotate: there is no remote
+press, no phone issuance and no signed remote envelope for these actions.
 
 * **Mint.** In app Settings the person presses "Add script credential" and picks a script name.
   The host writes the token straight into an owner-only file for that script (§7) and the app shows
@@ -197,9 +191,9 @@ terminal CLI (the Option 1 build order stands).
    call with the script principal.
 
 **Honest residual.** Same-user code that imitates the app is the agent-principals.md §1.3 residual
-(§3.4): it can drive the same pipe and UI as the person. The presence-signed press above is what stops
-it from minting, revoking or rotating a credential on its own, but it cannot stop code that already
-holds the same-user key material. Replay is closed by the nonce and expiry, not by the app's identity.
+(§3.4): it can drive the same pipe and UI as the person. The caller guard, the exact-image check and
+the bound confirmation are safety rails against an agent that has not spoofed its way past them, not a
+boundary against same-user code, so this residual stays **OPEN** (Q7).
 
 Rule 3 is a safety rail, not a boundary (agent-principals.md §3.4,
 "This check is a safety rail"). A script credential sits in an owner-only file, which any
@@ -224,8 +218,8 @@ revocable at the machine in one app press.
   an environment variable is inherited by every child process, which is how the HA token ended
   up in every session.
 * **Rollout, one machine at a time.** The owner presses "Add script credential" in the app for
-  each script on each of the four machines; no command is run. A mint for another machine from one
-  device needs a person-approved remote press, which stays out of scope (Q3).
+  each script on each of the four machines; no command is run. Nothing is minted for another machine
+  from one device: there is no remote mint (Q3).
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.
@@ -276,7 +270,7 @@ these script credentials grant no roster verification or additional actions.
 |---|---|
 | `kind` and `name` on the record; mint without a session; check that skips the process binding | about 90 |
 | Caller rule: ancestry in full, no agent session in it, else refuse | about 60 |
-| Host mint, revoke and rotate ops behind the app presses (presence-proven), owner-only file write, last-four display | about 100 |
+| Host mint, revoke and rotate ops behind the local app presses (grants G4/G7b/G8 pattern), owner-only file write, last-four display | about 100 |
 | Script principal in the audit and the UI label; op allow-list for `kind: "script"` | about 50 |
 | Tests (kind confusion, refusal from inside a session, expiry, revoke, canary) | about 90 |
 | **Total** | **about 390** |
@@ -293,16 +287,17 @@ Engineering and the owner's security review agree to this note before any code i
 2. **Q2: one credential per script, or one shared by all five.** Recommended: one per script,
    so a leak of the pump wake's does not open the messenger's ops, and the audit says which
    script acted. Cost: five mints per machine.
-3. **Q3: remote mint.** Answered for the local case: the app press replaces the terminal command
-   (owner decision, option 1, #1414). Still open: a person-approved press for another machine.
+3. **Q3: remote mint.** Closed: the local app press replaces the terminal command (owner decision,
+   option 1, #1414), and there is no remote mint at all (the owner said never a remote device).
 4. **Q4: the ops per script** in §9 are inferred, not read from the scripts (§9 preamble).
 5. **Q5: macOS and Linux.** Out of scope now; confirm the owner is content that the script
    credential waits for peer identification there, as the session credential does.
 6. **Q6: the HA token's removal.** Fleet #107 removes it. Recommended gate: a script's HA
    fallback is deleted only after one machine runs it for a full run with zero HA calls
    (the epic's retirement gate counts this), not on a date.
-7. **Q7: the local press.** Which presence-signed path the app uses for a local press (see §5),
-   and the fallback on a machine without a presence-capable device key.
+7. **Q7: same-user imitation of the app (agent-principals.md §1.3).** OPEN. The local press rests on
+   the caller guard, the exact app image and the bound confirmation; same-user code that imitates the
+   app is the accepted §1.3 residual until the owner says otherwise.
 
 ## 11. What is not in this note
 
