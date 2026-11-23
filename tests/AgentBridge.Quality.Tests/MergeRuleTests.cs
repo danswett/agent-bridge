@@ -1256,6 +1256,114 @@ public class MergeRuleTests
             File.Delete(config);
         }
     }
+    // A scoped run (a status, a check suite, a workflow run, a pull request's own event) reads the
+    // open list only to find the pull requests on its head, so it asks for the light list: a number
+    // and a head per pull request, a hundred to a page, and reads in full only those on the head.
+    // The sweep and a red main judge every open pull request, so they read each in full.
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_while_main_is_green_asks_for_the_light_open_list_and_reads_only_its_own_head(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+            var lists = github.Queries.Where(q => q.Contains("pullRequests(", StringComparison.Ordinal)).ToList();
+            Assert.NotEmpty(lists);
+            Assert.All(lists, q =>
+            {
+                Assert.Contains("headRefOid", q, StringComparison.Ordinal);
+                Assert.Contains("first: 100", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("reviews(", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("labels(", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("status {", q, StringComparison.Ordinal);
+            });
+            Assert.DoesNotContain(7, github.NumbersRead);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_reads_each_other_open_pull_request_on_its_head_and_posts_the_worst_verdict(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var held = GraphQLPullRequest(Head, labels: ["hold"], number: 7);
+        var elsewhere = GraphQLPullRequest(Older, number: 9);
+        var github = new FakeGitHub(a, listed: [held, a, elsewhere], byNumber: new Dictionary<int, string> { [42] = a, [7] = held, [9] = elsewhere });
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Equal([$"{Head} failure merge-rule #7: Held by the label 'hold' "], github.Posted);
+            Assert.Contains(7, github.NumbersRead);
+            Assert.DoesNotContain(9, github.NumbersRead);
+            Assert.Contains("2 pull requests share", shown.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_scoped_run_for_a_head_no_open_pull_request_has_says_so_and_reads_none_in_full()
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var github = new FakeGitHub(a, listed: [a]);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--sha", Older, "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Empty(github.Posted);
+            Assert.Contains($"No open pull request into main has head {Older}", shown.ToString(), StringComparison.Ordinal);
+            Assert.Empty(github.NumbersRead);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("--all")]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void The_sweep_and_any_run_while_main_is_red_still_read_every_open_pull_request_in_full(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b },
+            mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            string[] scoped = scope == "--all" ? ["--all"] : [scope, scope == "--sha" ? Head : "42"];
+            MergeRuleCommand.Run([.. scoped, "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Contains(github.Queries, q => q.Contains("pullRequests(", StringComparison.Ordinal) && q.Contains("reviews(", StringComparison.Ordinal));
+            Assert.Equal(2, github.Posted.Count);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // latest push's named jobs, at each job's latest attempt.
     [Fact]
@@ -2884,6 +2992,11 @@ public class MergeRuleTests
 
         public List<string> RestPaths { get; } = [];
 
+        /// <summary>Every GraphQL query's text, and the pull request numbers asked for one at a time.</summary>
+        public List<string> Queries { get; } = [];
+
+        public List<int> NumbersRead { get; } = [];
+
         readonly Dictionary<long, int> unreadableSeen = [];
 
         // Whether this read of an unreadable run fails: always, or only the first few times (a blip).
@@ -2897,10 +3010,14 @@ public class MergeRuleTests
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
+            Queries.Add(query);
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
+            {
+                NumbersRead.Add((int)number);
                 return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
+            }
             if (listFailsAfterFirstPage && variables.ContainsKey("cursor"))
                 throw new InvalidOperationException("gh: HTTP 502");
             var nodes = (listed ?? [one]).Select(json =>
