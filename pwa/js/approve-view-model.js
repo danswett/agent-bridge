@@ -27,7 +27,7 @@ export class ApproveViewModel {
   // waiting-for-code-1 | code-2-shown | ready-to-approve | cannot-approve | approved | ended | locked. Only the model moves these.
   #state = 'waiting-for-code-1';
   #statusText = '';
-  #name; #pending;
+  #name; #pending; #signing = false;
   #approver; #proof; #sign; #now;
 
   // pending is what the device said about itself: { name, kind, platform, id, signedInAt (ms) }; shown as given, never as a trusted name.
@@ -77,12 +77,17 @@ export class ApproveViewModel {
     if (this.#state === 'code-2-shown') this.#state = 'ready-to-approve';
   }
 
-  approve() {
+  // `sign` may answer at once or later; only a true counts, and a refusal or a throw is a failure that can be tried again.
+  async approve() {
     if (!this.canApprove) { this.#state = 'cannot-approve'; this.#statusText = ApproveTexts.CANNOT_APPROVE; return 'cannot-approve'; }
     if (this.#state !== 'ready-to-approve') return 'not-ready';
     const transcript = this.#approver.transcriptToSign;
     if (!transcript) { this.#state = 'ended'; this.#statusText = EnrollmentTexts.ENDED; return 'failed'; }
-    if (!this.#sign({ transcript, name: this.#name, proof: this.#proof })) { this.#statusText = EnrollmentTexts.GENERIC; return 'failed'; }
+    if (this.#signing) return 'not-ready';
+    this.#signing = true;
+    let signed = false;
+    try { signed = (await this.#sign({ transcript, name: this.#name, proof: this.#proof })) === true; } catch { signed = false; } finally { this.#signing = false; }
+    if (!signed) { this.#statusText = EnrollmentTexts.GENERIC; return 'failed'; }
     this.#state = 'approved';
     this.#statusText = '';
     return 'approved';
