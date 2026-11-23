@@ -15,7 +15,8 @@ name: Merge rule
 #    labelled or unlabelled.
 #  - status: a receipt or any other status posted on a head. The App's own merge-rule posts do
 #    start a run (only GITHUB_TOKEN's events don't), so the job skips status events for the
-#    merge-rule context: they'd only re-judge what was just judged.
+#    merge-rule context: they'd only re-judge what was just judged. The sweep marker the evaluator
+#    posts on main's head (merge-rule-sweep) is skipped the same way: it starts no run and takes no slot.
 #  - workflow_run: any other workflow started (in_progress) or finished on a pull request.
 #    New runs and re-runs trigger re-judgement at start; completion picks up a late red.
 #    GitHub documents: "The requested activity type does not occur when a workflow is re-run."
@@ -69,7 +70,7 @@ concurrency:
       ((github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
-      && (github.event_name != 'status' || github.event.context != 'merge-rule'))
+      && (github.event_name != 'status' || (github.event.context != 'merge-rule' && github.event.context != 'merge-rule-sweep')))
       && (github.event_name == 'schedule' && 'backstop'
       || github.event_name == 'workflow_dispatch' && 'dispatch'
       || vars.FLEET_MERGERULE == 'off' && 'sweep'
@@ -125,7 +126,7 @@ jobs:
       && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
       || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
-      && (github.event_name != 'status' || github.event.context != 'merge-rule')
+      && (github.event_name != 'status' || (github.event.context != 'merge-rule' && github.event.context != 'merge-rule-sweep'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The merge-rule App's key lives in this environment, which only main may deploy from

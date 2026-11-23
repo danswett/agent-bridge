@@ -1813,6 +1813,16 @@ public class MergeRuleTests
         }
     }
 
+    // The sweep marker is a commit status on main's head, and `status` fires on every context: the marker's context must be
+    // skipped like merge-rule's own, in the job's `if:` AND in the admission group, or each marker post would start a run.
+    [Fact]
+    public void The_sweep_marker_context_is_skipped_in_both_the_job_if_and_the_admission_group()
+    {
+        var text = File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"));
+
+        Assert.Equal(2, Regex.Matches(text, "github.event.context != 'merge-rule-sweep'").Count);
+    }
+
     // CI finishing on main must re-judge every pull request, so their verdicts follow main to red
     // and back; main's other runs still start nothing.
     [Theory]
@@ -1825,6 +1835,7 @@ public class MergeRuleTests
     [InlineData("workflow_run", "requested", "CI", "quality/x", "pull_request", "danswett/agent-bridge", null, true)]
     [InlineData("workflow_run", "requested", "CI", "main", "pull_request", "someone/fork", null, true)]
     [InlineData("status", null, null, null, null, null, "merge-rule", false)]
+    [InlineData("status", null, null, null, null, null, "merge-rule-sweep", false)]
     [InlineData("status", null, null, null, null, null, "independent-review", true)]
     [InlineData("schedule", null, null, null, null, null, null, true)]
     [InlineData("workflow_dispatch", null, null, null, null, null, null, true)]
