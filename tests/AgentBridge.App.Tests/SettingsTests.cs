@@ -1149,6 +1149,17 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(canRemove, row.CanRemove);
     }
 
+    // Hooks migration re-pointed have no owned record of this profile's, so the host's removal
+    // refuses them (and still asks for a restart): no button that can't work.
+    [Fact]
+    public void Remove_is_not_offered_for_hooks_migration_re_pointed()
+    {
+        var row = new AgentReadinessRow(FromWire("unknown", RecordIntakeOn, "completed") with { HookMigrated = true }, canManage: true);
+
+        Assert.False(row.ShowRemove);
+        Assert.False(row.CanRemove);
+    }
+
     [Fact]
     public void A_setup_that_did_not_finish_stays_repair_after_a_fresh_check_without_its_failure()
     {

@@ -105,17 +105,23 @@ public sealed class AgentReadinessTests : IDisposable
         Assert.DoesNotContain("token-like", agent.VersionCheck.Detail);
     }
 
+    string HomeOf(string agent) => agent switch { "claude" => f.ClaudeHome, "codex" => f.CodexHome, _ => f.CopilotHome };
+
+    // One re-pointed hooks file per agent, inside that agent's home, as migration records it.
     void MigratedProfile(string state, params string[] agents)
     {
         new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
-        var file = new AgentBridge.Host.Migration.MigrationRecord.FileRecord
+        var record = new AgentBridge.Host.Migration.MigrationRecord { InstallationId = "i", BridgeHome = Path.Combine(f.Root, "old"), State = state };
+        foreach (var a in agents)
         {
-            Role = "hooks", Path = Path.Combine(f.Root, "hooks.json"), Existed = true, Backup = "b", Before = "x",
-            Changes = [.. agents.Select(a => new AgentBridge.Host.Migration.EntryChange(a, "SessionStart", System.Text.Json.Nodes.JsonValue.Create("old")!, System.Text.Json.Nodes.JsonValue.Create("new")!))],
-        };
-        new AgentBridge.Host.Migration.MigrationRecord { InstallationId = "i", BridgeHome = Path.Combine(f.Root, "old"), State = state, Files = { file } }.Save(Profile);
+            record.Files.Add(new AgentBridge.Host.Migration.MigrationRecord.FileRecord
+            {
+                Role = a, Path = Path.Combine(HomeOf(a), "hooks.json"), Existed = true, Backup = "b", Before = "x",
+                Changes = [new AgentBridge.Host.Migration.EntryChange(a, "SessionStart", System.Text.Json.Nodes.JsonValue.Create("old")!, System.Text.Json.Nodes.JsonValue.Create("new")!)],
+            });
+        }
+        record.Save(Profile);
     }
-
     [Fact]
     public async Task A_migrated_profile_reports_Completed_for_the_agents_migration_re_pointed_and_never_offers_Set_up()
     {
@@ -129,7 +135,23 @@ public sealed class AgentReadinessTests : IDisposable
             Assert.Equal(HookSetupState.Completed, Agent(report, id).HookSetup);
             Assert.Contains("migrat", Agent(report, id).Hooks.Detail, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(ReadinessState.Unknown, Agent(report, id).Hooks.State);
+            Assert.True(Agent(report, id).HookMigrated);
         }
+        Assert.False(Agent(report, "codex").HookMigrated);
+    }
+
+    [Fact]
+    public async Task A_migrated_agent_reads_Completed_only_for_the_home_migration_re_pointed_in()
+    {
+        MigratedProfile("migrated", "claude", "codex");
+        var elsewhere = new IntakeState.AgentHomes(f.CopilotHome, Path.Combine(f.Root, "fresh-claude-home"), Path.Combine(f.Root, "fresh-codex-home"));
+        await using var service = new AgentReadinessService(Profile, elsewhere, LaunchConfig.Default, locator, commands, () => readOnly, null, f.Time);
+
+        var report = await service.RefreshAsync();
+
+        Assert.Equal(HookSetupState.NotSetUp, Agent(report, "claude").HookSetup);
+        Assert.Equal(HookSetupState.NotSetUp, Agent(report, "codex").HookSetup);
+        Assert.False(Agent(report, "claude").HookMigrated);
     }
 
     [Fact]
