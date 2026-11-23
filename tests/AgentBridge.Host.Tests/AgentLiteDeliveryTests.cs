@@ -625,8 +625,8 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
         var lite = f.Build();
-        for (var i = 0; i < LiteDeliver.MaxPerMinute; i++) { Assert.True((await lite.DeliverAsync(Envelope("hi"), "hi", default)).Typed); }
-        Assert.Equal(new LiteDelivery(false, "busy"), await lite.DeliverAsync(Envelope("hi"), "hi", default));
+        for (var i = 0; i < LiteDeliver.MaxPerMinute; i++) { Assert.True((await SendNew(lite)).Typed); }
+        Assert.Equal(new LiteDelivery(false, "busy"), await SendNew(lite));
         var command = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; command.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
         Assert.Empty(command.Typed);

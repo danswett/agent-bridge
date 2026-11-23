@@ -119,6 +119,17 @@ public sealed class LiteDeliver(
         if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
         if (!Ready(now, busyQueue)) { return Refused(LiteCodes.Busy); }
         if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+        // Busy-Claude queue (#3856): one relay message per session at a time. A held slot or a full store refuses before any key, with its own code
+        // (never busy, which would allow the one HA fallback and so bypass the cap).
+        var store = busyQueue ? BusyStore : null;
+        if (store is not null)
+        {
+            switch (store.TryBegin(body.Request, Principal(body.Principal), id))
+            {
+                case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
+                case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
+            }
+        }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
@@ -129,19 +140,39 @@ public sealed class LiteDeliver(
         // stays theirs; one not confirmed puts back an arm still waiting, for the same reason.
         var driver = Drivers?.For(id);
         DriverArm? armed = null;
+        var keysWent = false;
         var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = !busyQueue, RequireEmptyBox = busyQueue,
             StillCurrent = byNode || stillAllowed is not null || account is not null
                 ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
-            KeysGoing = driver is null ? null : () =>
+            KeysGoing = () =>
             {
+                keysWent = true;
+                store?.KeysWent(body.Request);
+                if (driver is null) { return; }
                 var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
                 armed = new DriverArm(saved, generation);
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
+        // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
+        // send frees the slot; a send that typed nothing frees it and leaves no record; keys that went with no clear result stay held.
+        void Record(ReplyResult? r)
+        {
+            if (store is null) { return; }
+            switch (r)
+            {
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); break;
+                default:
+                    if (keysWent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true); } else { store.Release(body.Request); }
+                    break;
+            }
+        }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { Unarm(); throw; }
+        catch { Unarm(); Record(null); throw; }
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
+        Record(result);
         return result.Outcome switch
         {
             // With the flag on, a reply only the agent's own queue holds is accepted, not delivered: acked queued, and the arm stays for the prompt it will record.
