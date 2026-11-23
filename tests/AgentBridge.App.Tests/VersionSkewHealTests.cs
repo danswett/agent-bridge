@@ -155,4 +155,42 @@ public sealed class VersionSkewHealTests
         // Past the backoff, one more is let through.
         Assert.Equal(SkewHealKind.Heal, Decide("0.1.7684", "0.1.7522", "0.1.7684", VersionSkewHeal.FailureBound, last, last + UpdateBackoff.After(VersionSkewHeal.FailureBound)).Kind);
     }
+
+    // "Unknown never heals" on every side: the app, the host and the cached package alike. Leading zeros are not a canonical run number, and an N
+    // too big for a long (19 digits, over long.MaxValue) or too long is not one either (ReleaseVersions.TryRun).
+    [Theory]
+    [InlineData("0.1.07")]
+    [InlineData("0.1.007684")]
+    [InlineData("0.1.9223372036854775808")]
+    [InlineData("0.1.99999999999999999999")]
+    [InlineData("0.1.")]
+    [InlineData("0.1.-5")]
+    [InlineData("0.1.+5")]
+    [InlineData("0.2.5")]
+    [InlineData("1.1.5")]
+    public void An_unreadable_run_number_is_unknown_on_the_app_the_host_and_the_cached_package_and_never_heals(string odd)
+    {
+        var app = Decide(odd, "0.1.7522", "0.1.9000");
+        var host = Decide("0.1.7522", odd, "0.1.9000");
+        var cached = Decide("0.1.7684", "0.1.7522", odd);
+        foreach (var d in new[] { app, host, cached })
+        {
+            Assert.Equal(SkewHealKind.Hold, d.Kind);
+            Assert.Null(d.Target);
+        }
+        Assert.Equal("version-unknown", app.Reason);
+        Assert.Equal("version-unknown", host.Reason);
+        Assert.Equal("no-verified-package", cached.Reason);
+    }
+
+    // GitHub marks every v0.1.N release a "prerelease" (a flag on the release, not part of its version). Nothing here reads that flag: the versions
+    // are plain 0.1.N text, tag-prefixed or not, and they order and heal as releases.
+    [Theory]
+    [InlineData("v0.1.7684", "v0.1.7522", "v0.1.7684")]
+    [InlineData("0.1.7684", "v0.1.7522", "0.1.7684")]
+    public void A_v_tagged_release_is_an_ordinary_release_whatever_GitHub_calls_it(string app, string host, string cached)
+    {
+        var d = Decide(app, host, cached);
+        Assert.Equal((SkewHealKind.Heal, "0.1.7684"), (d.Kind, d.Target));
+    }
 }
