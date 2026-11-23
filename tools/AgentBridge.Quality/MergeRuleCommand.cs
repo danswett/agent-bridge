@@ -487,16 +487,49 @@ static class MergeRuleCommand
         try
         {
             var skipped = new List<long>();
+            string? relied = null;
             using var evidence = CompletedMain(session, skipped).GetEnumerator();
             var found = false;
+            var waiting = new List<string>();
             while (!found && evidence.MoveNext())
-                found = evidence.Current.Usable;
+            {
+                if (!evidence.Current.Usable) { continue; }
+                // A run that relied on a parent still running is not green yet: the judge reads on to an older run, as for a run still going.
+                var (state, why) = CheckReliance(session, evidence.Current.Jobs);
+                if (state == Reliance.Pending) { waiting.Add($"run {evidence.Current.Run.GetProperty("id").GetInt64()} {why}"); continue; }
+                found = true;
+                relied = state == Reliance.Red ? why : null;
+            }
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
                 return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one"
                     + (skipped.Count == 0 ? "" : $" (skipped unreadable run {string.Join(", ", skipped)})"));
             }
+            if (relied is not null)
+            {
+                // The run passed, but what it relied on to test only its own change did not: its pass doesn't stand for that change.
+                var reliedRun = evidence.Current.Run;
+                log = $"Main: {config.MainGreen.Workflow} run {reliedRun.GetProperty("id").GetInt64()}: {relied}.";
+                return new("failure", MergeRule.Printable($"{config.Base} is red (CI {MergeRule.Short(reliedRun.GetProperty("head_sha").GetString() ?? "")}): {relied}"));
+            }
+            var fact = Judge(session, evidence, skipped, out log);
+            if (waiting.Count > 0) { log += $"\nMain: passed over for an older run, waiting on a relied-on parent: {string.Join("; ", waiting)}."; }
+            return fact;
+        }
+        catch (Exception e) when (IsReadFailure(e))
+        {
+            log = $"Main: couldn't read {config.MainGreen.Workflow}'s runs on {config.Base}: {e.Message}";
+            return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
+        }
+    }
+
+    // The verdict on the run the enumerator stands at: its named jobs, the older runs for a job with no real result, its alerts. It reads what
+    // ReadMain reads, so a relied-on parent is judged by the same rule as main itself. (Its body keeps the indent it had inside ReadMain's try.)
+    static MainFact Judge(Session session, IEnumerator<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> evidence, List<long> skipped, out string log)
+    {
+        var config = session.Config;
+        {
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
             if (!IsCommitSha(sha))
@@ -625,11 +658,73 @@ static class MergeRuleCommand
             // First, ahead of any infra alert: the description shows the first alert and counts the rest, and cuts at 140 characters.
             return fact with { Alerts = skipped.Count == 0 ? alerts : [$"skipped unreadable run {string.Join(", ", skipped)}", .. alerts] };
         }
-        catch (Exception e) when (IsReadFailure(e))
+    }
+
+    /// <summary>A relied-on parent still running after this long is a zombie: it counts as failed, never as passed and never as skipped.</summary>
+    internal static readonly TimeSpan ReliedParentCap = TimeSpan.FromHours(2);
+
+    const int MaxRelianceDepth = 20;
+
+    enum Reliance { Covered, Pending, Red }
+
+    static readonly Regex PlanBase = new(@"^base=[0-9a-f]{40} relied-parent=(?<parent>none|[0-9a-f]{40})$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+
+    // The parent run a main run relied on (item A, #2454): its plan job's "plan-base" notice annotation. Null when it relied on none, or recorded
+    // nothing (a run from before the record, which diffed from a passed base). A record that is not in the shape is an error, not a guess.
+    static string? ReliedParent(Session session, Dictionary<string, JsonElement> jobs)
+    {
+        if (!jobs.TryGetValue("plan", out var plan)) { return null; }
+        using var notes = session.Rest($"repos/{session.Slug}/check-runs/{plan.GetProperty("id").GetInt64()}/annotations?per_page=100");
+        foreach (var note in notes.RootElement.EnumerateArray())
         {
-            log = $"Main: couldn't read {config.MainGreen.Workflow}'s runs on {config.Base}: {e.Message}";
-            return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
+            if (!note.TryGetProperty("title", out var title) || title.GetString() != "plan-base") { continue; }
+            var text = note.TryGetProperty("message", out var message) ? message.GetString() ?? "" : "";
+            var match = PlanBase.Match(text);
+            if (!match.Success) { throw new InvalidOperationException($"unreadable plan-base record '{text}'"); }
+            return match.Groups["parent"].Value == "none" ? null : match.Groups["parent"].Value;
         }
+        return null;
+    }
+
+    /// <summary>
+    /// A run counts green only if every in-flight parent it relied on, back to a run that relied on none, is green by the same rule: a parent that
+    /// failed, was cancelled or ran past the cap keeps main red even though the child passed, until a later run whose base covers that change passes.
+    /// A parent still running within the cap is no verdict yet (the run is passed over).
+    /// </summary>
+    static (Reliance State, string Why) CheckReliance(Session session, Dictionary<string, JsonElement> jobs)
+    {
+        var config = session.Config;
+        var parent = ReliedParent(session, jobs);
+        for (var depth = 0; parent is not null; depth++)
+        {
+            var name = $"relied on parent {MergeRule.Short(parent)}";
+            if (depth >= MaxRelianceDepth) { return (Reliance.Red, $"{name}: its chain of reliance is deeper than {MaxRelianceDepth}"); }
+            using var listed = session.Rest($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&head_sha={parent}");
+            var runs = listed.RootElement.GetProperty("workflow_runs").EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()).ToList();
+            if (runs.Count == 0) { return (Reliance.Red, $"{name}, which has no CI run"); }
+            var parentRun = runs[0];
+            var id = parentRun.GetProperty("id").GetInt64();
+            name += $" (run {id})";
+            if (parentRun.GetProperty("status").GetString() != "completed")
+            {
+                var started = parentRun.TryGetProperty("created_at", out var created) && created.ValueKind == JsonValueKind.String
+                    && DateTimeOffset.TryParse(created.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at) ? at : (DateTimeOffset?)null;
+                return started is { } s && session.Now() - s <= ReliedParentCap
+                    ? (Reliance.Pending, $"{name} is still running")
+                    : (Reliance.Red, $"{name} is still running after 2 hours: treated as failed");
+            }
+            if (parentRun.GetProperty("conclusion").GetString() == "cancelled") { return (Reliance.Red, $"{name} was cancelled: its change is not covered"); }
+            // Judged by the rule main itself is, so that "green" means the same for it.
+            using var history = CompletedMain(session).GetEnumerator();
+            var found = false;
+            while (!found && history.MoveNext())
+                found = history.Current.Run.GetProperty("id").GetInt64() == id;
+            if (!found) { return (Reliance.Red, $"{name} is not in main's recent runs"); }
+            var parentJobs = history.Current.Jobs;
+            if (!history.Current.Usable || Judge(session, history, [], out _).State != "success") { return (Reliance.Red, $"{name} is not green"); }
+            parent = ReliedParent(session, parentJobs);
+        }
+        return (Reliance.Covered, "");
     }
 
     /// <summary>

@@ -1285,9 +1285,9 @@ public class MergeRuleTests
     // The pause before an old unreadable run is read once more costs nothing here.
     static MergeRuleTests() => MergeRuleCommand.UnreadableRetryAfter = TimeSpan.Zero;
 
-    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null)
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null, IReadOnlyDictionary<long, string>? plans = null)
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times);
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times, planRecords: plans);
         var config = WriteConfig();
         try
         {
@@ -1456,6 +1456,124 @@ public class MergeRuleTests
 
         Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
         Assert.Contains("skipped unreadable run 7", posted, StringComparison.Ordinal);
+    }
+
+    // Item A (#2454): a main run that relied on its in-flight parent to test only its own change is green only if that parent is green too, back
+    // to a run that relied on none. A parent that fails after the child passed keeps main red until a later run that covers its diff passes.
+    static (string Posted, string Output) Relied(string runs, params (long Run, string Record)[] plans) =>
+        JudgeMain(runs, new Dictionary<long, string>(), null, plans.ToDictionary(p => p.Run, p => p.Record));
+
+    [Fact]
+    public void A_run_that_relied_on_a_parent_that_is_green_is_green()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_parent_that_fails_after_the_child_passed_keeps_main_red()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("relied on", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(7)[..7], posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_failure_further_back_the_chain_keeps_main_red()
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 30), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (9, Relies(8)), (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(7)[..7], posted, StringComparison.Ordinal);
+    }
+
+    // The clearing path: a later run whose base covers the failed diff (it relies on nothing, or on a green run) passes, and main is green again.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_later_run_that_covers_the_failed_parent_clears_main(bool laterReliesOnAGreenRun)
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 5), (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (9, laterReliesOnAGreenRun ? Relies(8) : RelyNone), (8, laterReliesOnAGreenRun ? RelyNone : Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // A parent still running is no verdict: the child is not green yet, so the judge reads on to the older run, and main is not red because of it.
+    [Fact]
+    public void A_parent_still_running_within_the_cap_passes_the_child_over_for_an_older_run()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+
+        var (posted, output) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("run 6", output, StringComparison.Ordinal);
+        Assert.Contains("still running", output, StringComparison.Ordinal);
+    }
+
+    // The cap: a parent still "running" after 2 hours is a zombie. It never turns into a pass, and it is not passed over silently: it is red.
+    [Fact]
+    public void A_parent_still_running_after_two_hours_is_treated_as_failed()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 180), (6, "completed", "success", 1, 240));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("2 hours", posted, StringComparison.Ordinal);
+    }
+
+    // A cancelled parent never tested its change: the child's pass does not stand for it, so main is red until a run that covers the diff passes.
+    [Fact]
+    public void A_cancelled_parent_is_not_covered_by_the_child()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "cancelled", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("cancelled", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_skipped_parent_is_never_green()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "skipped", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_parent_with_no_run_at_all_fails_closed()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+
+        var (posted, _) = Relied(runs, (8, Relies(5)));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_run_with_no_plan_record_relied_on_nothing()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs);
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2418,12 +2536,13 @@ public class MergeRuleTests
                     ? new[] { new { name = "Setup", status = "completed", conclusion = "failure" } } : [],
             }).ToArray();
         var github = new FakeGitHub(GraphQLPullRequest(Head),
-            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }), annotations: "unreadable annotations");
+            mainJobs: JsonSerializer.Serialize(new { total_count = jobs.Length, jobs }));
         try
         {
             MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
             Assert.Contains($" {state} merge-rule ", Assert.Single(github.Posted), StringComparison.Ordinal);
-            Assert.DoesNotContain(github.RestPaths, p => p.Contains("/annotations", StringComparison.Ordinal));
+            // Only the plan job's (id 0) annotation is read, for the run's plan-base record: never a post-merge or other job's.
+            Assert.All(github.RestPaths.Where(p => p.Contains("/annotations", StringComparison.Ordinal)), p => Assert.Contains("/check-runs/0/annotations", p, StringComparison.Ordinal));
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
@@ -2878,7 +2997,17 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
+    // A run's plan job has the id PlanJobBase + the run's id, so a test can say what that run's plan job annotated.
+    const long PlanJobBase = 1_000_000;
+
+    static string Sha(long run) => $"c{run}".PadRight(40, '0');
+
+    // The plan-base record of a run that diffed from its own base and relied on no parent, or on the in-flight parent run given.
+    static string Relies(long parentRun) => $"base={Sha(1)} relied-parent={Sha(parentRun)}";
+
+    static readonly string RelyNone = $"base={Sha(1)} relied-parent=none";
+
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, IReadOnlyDictionary<long, string>? planRecords = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -2970,13 +3099,18 @@ public class MergeRuleTests
                 return JsonDocument.Parse(JsonSerializer.Serialize(new { total_count = 5, jobs =
                     new[] { "light", "app (win-x64)", "app (win-arm64)", "product (ubuntu-latest)", "plan" }.Select((name, id) => new
                     {
-                        id, name, status = name == "plan" ? "completed" : run.GetProperty("status").GetString(),
+                        id = name == "plan" ? PlanJobBase + run.GetProperty("id").GetInt64() : id, name, status = name == "plan" ? "completed" : run.GetProperty("status").GetString(),
                         conclusion = name == "plan" ? "success" : run.GetProperty("conclusion").GetString(), run_attempt = run.GetProperty("run_attempt").GetInt32(),
                     }),
                 }));
             }
             if (path.Contains("/check-runs/", StringComparison.Ordinal) && path.Contains("/annotations", StringComparison.Ordinal))
+            {
+                var checkRun = long.Parse(path[(path.IndexOf("/check-runs/", StringComparison.Ordinal) + "/check-runs/".Length)..path.IndexOf("/annotations", StringComparison.Ordinal)], System.Globalization.CultureInfo.InvariantCulture);
+                if (checkRun >= PlanJobBase && planRecords is not null && planRecords.TryGetValue(checkRun - PlanJobBase, out var record))
+                    return JsonDocument.Parse(JsonSerializer.Serialize(new[] { new { title = "plan-base", message = record, annotation_level = "notice" } }));
                 return JsonDocument.Parse(annotations);
+            }
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)
