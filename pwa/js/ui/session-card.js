@@ -1218,9 +1218,10 @@ export class SessionCard {
     e.user.hidden = true;
     e.userText.textContent = '';
     e.prompt.dataset.from = origin.from;
+    e.promptFacts.title = origin.from === 'unverified' ? origin.spoken : '';
     e.prompt.toggleAttribute('data-repeat', origin.repeat);
     if (this.#changed('promptLabel', [origin.icon, origin.facts, origin.by])) {
-      e.promptIcon.replaceChildren(origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge());
+      e.promptIcon.replaceChildren(...(origin.icon ? [origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()] : []));
       setFacts(e.promptFacts, origin.facts);
       e.promptBy.textContent = origin.by ?? '';
       e.promptBy.hidden = !origin.by;

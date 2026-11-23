@@ -21,6 +21,7 @@ sealed class MergeRuleConfig
     public List<string> IgnoreWorkflows { get; set; } = [];
     public MainGreenConfig MainGreen { get; set; } = new();
     public Arm64WaiverConfig? Arm64Waiver { get; set; }
+    public CodexWaiverConfig? CodexWaiver { get; set; }
     public CopilotWaiverConfig CopilotWaiver { get; set; } = new();
     public List<string> SensitivePaths { get; set; } = [];
 
@@ -76,6 +77,8 @@ sealed class MergeRuleConfig
         if (config.Arm64Waiver is { } arm64 && (arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
             throw new FormatException("arm64_waiver needs exactly the three arm64 jobs.");
+        if (config.CodexWaiver is { } codex && (codex.Switch != "CODEX_WAIVER" || string.IsNullOrEmpty(codex.Description) || codex.Description != codex.Description.Trim()))
+            throw new FormatException("codex_waiver needs CODEX_WAIVER and a description with no surrounding spaces.");
         return config;
     }
 
@@ -122,6 +125,17 @@ sealed class Arm64WaiverConfig
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
         && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
         && Jobs is not null && Jobs.Contains(name, StringComparer.Ordinal);
+}
+
+/// <summary>
+/// Owner decision (#2454, Nov 22): while Codex is down, a second receipt (independent-review-2) whose description is exactly
+/// <see cref="Description"/> stands in for the second model family, next to a clean first receipt that names one, and only while the
+/// repository variable <see cref="Switch"/> is exactly "on" (unset: off). It never stands in for the first receipt. Revert when Codex returns.
+/// </summary>
+sealed class CodexWaiverConfig
+{
+    public string Switch { get; set; } = "";
+    public string Description { get; set; } = "";
 }
 
 /// <summary>
@@ -198,6 +212,9 @@ sealed record PullRequestFacts(
 
     /// <summary>False when the pull request has more labels than were read: a hold could be among the rest.</summary>
     public bool LabelsComplete { get; init; } = true;
+
+    /// <summary>Whether the CODEX_WAIVER variable is "on" (codex_waiver): off unless set.</summary>
+    public bool CodexWaiverOn { get; init; }
 }
 
 /// <summary>The `merge-rule` status to post: success, pending, failure or error, and why.</summary>
@@ -300,7 +317,13 @@ static class MergeRule
         // A reviewer's failure in the second context blocks below whatever else is on the head
         // (sr-962b).
         var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
-        var families = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
+        var realFamilies = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
+        // The owner waiver (codex_waiver): the whole, case-sensitive description of a successful second receipt from an allowed poster, next to a
+        // successful first receipt that names a model family; it never stands in for the first. Off unless the switch is on.
+        var ownerWaived = needsSecond && pr.CodexWaiverOn && config.CodexWaiver is { } owner && !realFamilies
+            && receipt is { State: "success" } && ModelFamily.IsMatch(receipt.Description ?? "")
+            && second is { State: "success" } && string.Equals(second.Description, owner.Description, StringComparison.Ordinal);
+        var families = realFamilies || ownerWaived;
         // Copilot never replaces the first receipt; it only stands in for the second.
         var waived = receipt?.State == "success"
             && (!needsSecond || copilot || (second?.State == "success" && families));
@@ -367,7 +390,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
+            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? (ownerWaived ? $"One model family's review and the owner waiver ({config.CodexWaiver!.Description})" : "Two model families' reviews on file") : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
         // Blocking reasons first: alerts are informational, and the 140-character cut must never
         // drop a hold. The detailed log names every alert.

@@ -532,7 +532,7 @@ export class HistoryStore {
       if (!e.atLatest) { return changed; }
       turns.push({
         id: latest, at: null, provisional: true, parts: [], partsMore: 0, truncated: false, unreadable: false, ...(a.kind ? { kind: a.kind } : {}),
-        prompt: a.userMessage ? { text: a.userMessage, truncated: false, from: a.userMessageFrom ?? 'person', label: a.userMessageLabel ?? null } : null,
+        prompt: a.userMessage ? { text: a.userMessage, truncated: false, from: a.userMessageFrom ?? null, label: a.userMessageLabel ?? null } : null,
       });
       i = turns.length - 1;
       changed = true;
