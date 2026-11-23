@@ -1,0 +1,366 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 99a6ffd2..9078af0c 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1616,11 +1616,13 @@ jobs:
+     strategy:
+       fail-fast: false
+       matrix:
+-        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
++        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it, and its
++        # push runs leave it to pwa-webkit.yml (hourly and before a release) while the repository
++        # variable PWA_WEBKIT_OFF_PUSH is 'true' (#2454, item B). Unset, nothing changes.
+         include: >-
+           ${{ fromJSON(format('[{0}{1}]',
+           '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+-          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
++          github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
+     runs-on: ubuntu-24.04
+     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+diff --git a/.github/workflows/main-red.yml b/.github/workflows/main-red.yml
+index bee92ec1..bfdc74d0 100644
+--- a/.github/workflows/main-red.yml
++++ b/.github/workflows/main-red.yml
+@@ -2,23 +2,27 @@ name: Main red
+ 
+ on:
+   # Only main's trusted script runs; the triggering run's code is never checked out.
++  # CI's push runs on main, and pwa-webkit.yml's hourly runs on main (PWA_WEBKIT_OFF_PUSH, #2454 item B), each its
++  # own incident: main-red.ps1 -Workflow says which, and gives each its own issue label.
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [CI]
++    workflows: [CI, PWA WebKit]
+     types: [completed]
+     branches: [main]
+ 
+ permissions:
+   contents: read
+ 
++# One group per stream: GitHub keeps one pending run per group, so a WebKit event must never replace a pending CI one.
+ concurrency:
+-  group: main-red
++  group: ${{ github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && 'main-red-webkit' || 'main-red' }}
+   cancel-in-progress: false
+ 
+ jobs:
+   detect:
+     if: >-
+-      github.event.workflow_run.event == 'push' &&
+-      github.event.workflow_run.head_branch == 'main'
++      github.event.workflow_run.head_branch == 'main' && (
++      github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.event == 'push' ||
++      github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && github.event.workflow_run.event == 'schedule')
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+     permissions:
+@@ -35,4 +39,5 @@ jobs:
+           GH_TOKEN: ${{ github.token }}
+           RUN_ID: ${{ github.event.workflow_run.id }}
+           REPOSITORY: ${{ github.repository }}
+-        run: pwsh -NoProfile -File quality/main-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
++          WORKFLOW: ${{ github.event.workflow_run.path == '.github/workflows/pwa-webkit.yml' && 'pwa-webkit.yml' || 'ci.yml' }}
++        run: pwsh -NoProfile -File quality/main-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY -Workflow $env:WORKFLOW
+diff --git a/.github/workflows/merge-rule.yml b/.github/workflows/merge-rule.yml
+index d872ea1e..193d6e20 100644
+--- a/.github/workflows/merge-rule.yml
++++ b/.github/workflows/merge-rule.yml
+@@ -46,7 +46,7 @@ on:
+     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+   status:
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, Relay deploy, Weekly quality report, Workflow lint]
++    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, PWA WebKit, Relay deploy, Weekly quality report, Workflow lint]
+     types: [in_progress, completed]
+   check_suite:
+     types: [completed] # the only type Actions accepts here
+diff --git a/.github/workflows/pwa-webkit.yml b/.github/workflows/pwa-webkit.yml
+new file mode 100644
+index 00000000..ad1ff3ef
+--- /dev/null
++++ b/.github/workflows/pwa-webkit.yml
+@@ -0,0 +1,91 @@
++name: PWA WebKit
++
++# The PWA's WebKit legs off the push path (#2454, item B; the owner decides whether to turn it on).
++# With the repository variable PWA_WEBKIT_OFF_PUSH set to 'true', ci.yml's main push runs leave WebKit
++# out, and this runs it instead: on main's head every hour, by hand, and, called by the release train,
++# on the commit the train would publish. Unset (the default), every job here is skipped and ci.yml
++# runs WebKit on every main push, as before. WebKit is the post-merge tier (quality/catalog.yml
++# pwa-ui suite, #3209), so it never holds a merge either way. Its steps are pwa-ui's in ci.yml for
++# the WebKit project; keep the two the same.
++on:
++  schedule:
++    - cron: '41 * * * *'
++  workflow_dispatch:
++  workflow_call:
++    inputs:
++      ref:
++        description: The commit to test (the release train's pick)
++        type: string
++        required: true
++
++permissions:
++  contents: read
++
++# An hourly run gives way to the next one; a train's call for a commit is a group of its own.
++concurrency:
++  group: pwa-webkit-${{ inputs.ref || 'main' }}
++  cancel-in-progress: ${{ inputs.ref == '' }}
++
++jobs:
++  webkit:
++    name: webkit ${{ matrix.shard }}
++    # Only while the switch is on, in this repository, and only for main or the train's commit.
++    if: vars.PWA_WEBKIT_OFF_PUSH == 'true' && github.repository == 'danswett/agent-bridge' && (inputs.ref != '' || github.ref == 'refs/heads/main')
++    strategy:
++      fail-fast: false
++      matrix:
++        shard: ['1/3', '2/3', '3/3']
++    runs-on: ubuntu-24.04
++    # As pwa-ui's legs (#689): room for WebKit's 181 system packages on a slow apt mirror.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    env:
++      PWA_SKIP_E2E: '1'
++      PROJECT: webkit
++      SHARD: ${{ matrix.shard }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ inputs.ref || github.sha }}
++          persist-credentials: false
++          fetch-depth: 1
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-webkit
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: webkit
++          working-directory: pwa
++      - run: npx playwright install "$PROJECT"
++      # Only main's own hourly run saves (ci.yml's main pushes no longer do while this is on); never a
++      # train's call or a run by hand.
++      - name: Save Playwright's browsers to main's cache
++        if: github.event_name == 'schedule' && github.ref == 'refs/heads/main' && inputs.ref == '' && steps.browsers.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.browsers.outputs.cache-primary-key }}
++      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
++      # Every test that failed, then passed on the one WebKit retry (#1692), so a retry never hides a flake.
++      - name: Flaky report
++        if: ${{ !cancelled() }}
++        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-webkit-${{ strategy.job-index }}
++          path: pwa/test-results
++          retention-days: 7
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index d291bee7..a025f1e4 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -891,8 +891,9 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui
+-    # WebKit runs after merge (#3208); Chromium blocks.
++    where: ci.yml pwa-ui; pwa-webkit.yml webkit
++    # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
++    # runs it hourly instead of on every main push (#2454).
+     tier: post-merge
+     tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
+     baseline: { files: 25 }
+diff --git a/quality/main-red.ps1 b/quality/main-red.ps1
+index aa7db6c7..47ba50e6 100644
+--- a/quality/main-red.ps1
++++ b/quality/main-red.ps1
+@@ -1,6 +1,6 @@
+ #Requires -Version 7
+ [CmdletBinding()]
+-param([long]$RunId, [string]$Repository = $env:GITHUB_REPOSITORY)
++param([long]$RunId, [string]$Repository = $env:GITHUB_REPOSITORY, [string]$Workflow = 'ci.yml')
+ $ErrorActionPreference = 'Stop'
+ Set-StrictMode -Version Latest
+ . (Join-Path $PSScriptRoot 'rerun-known-flakes.ps1') -RunId $RunId -Repository $Repository
+@@ -8,6 +8,18 @@ $script:CatalogPath = Join-Path $PSScriptRoot 'catalog.yml'
+ # The S3b generator (PR 3078), called by path only: until it is on main a request is just recorded.
+ $script:QuarantineScript = Join-Path $PSScriptRoot 'quarantine-pr.ps1'
+ 
++# The run streams main-red follows, each its own incident (#2454 item B). CI's push runs on main are the default, as
++# always. pwa-webkit.yml's hourly schedule runs on main carry the WebKit legs while PWA_WEBKIT_OFF_PUSH is on: their
++# own issue label, so a green CI run never closes a WebKit alert or the reverse, and every job is the post-merge tier.
++function Set-MainRedStream([string]$Workflow) {
++    $script:Stream = switch -CaseSensitive ($Workflow) {
++        'ci.yml' { @{ File = 'ci.yml'; Event = 'push'; Label = 'main-red'; Name = 'CI'; AllPostMerge = $false; Title = 'Main red' } }
++        'pwa-webkit.yml' { @{ File = 'pwa-webkit.yml'; Event = 'schedule'; Label = 'main-red-webkit'; Name = 'PWA WebKit'; AllPostMerge = $true; Title = 'Main red, WebKit hourly' } }
++        default { throw "main-red follows ci.yml and pwa-webkit.yml only, not '$Workflow'." }
++    }
++}
++Set-MainRedStream $Workflow
++
+ # Tiered gating (#3210): the post-merge tier is the tier_jobs flow list of each tier: post-merge
+ # suite in catalog.yml. Anything this minimal read misses stays blocking, so a miss only alerts louder.
+ function Get-PostMergeJobs([string]$Path) {
+@@ -55,7 +67,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
+             }
+             if ($readable) { $tests = Get-FailedTests $log }
+             [pscustomobject]@{ Name = $job.name; Tests = $tests; LogReadable = $readable
+-                PostMerge = $null -ne $PostMergeJobs -and $PostMergeJobs.Contains([string]$job.name) }
++                PostMerge = $script:Stream.AllPostMerge -or ($null -ne $PostMergeJobs -and $PostMergeJobs.Contains([string]$job.name)) }
+         }
+     }
+ }
+@@ -63,7 +75,7 @@ function Get-FailedJobs([long]$RunId, [string]$Repository, [Collections.Generic.
+ function Get-MainRedIssue([string]$Repository, [switch]$IncludeClosed) {
+     $state = if ($IncludeClosed) { 'all' } else { 'open' }
+     $fields = if ($IncludeClosed) { 'number,body,author,state,title' } else { 'number,body,author,title' }
+-    Invoke-Gh issue list --repo $Repository --state $state --label main-red --limit 100 --json $fields |
++    Invoke-Gh issue list --repo $Repository --state $state --label $script:Stream.Label --limit 100 --json $fields |
+         ConvertFrom-Json | Where-Object { $_.author.login -in @('github-actions[bot]', 'app/github-actions', 'github-actions') } |
+         Sort-Object -Stable { if ($IncludeClosed) { $_.state -eq 'CLOSED' } else { $false } } |
+         Select-Object -First 1
+@@ -79,7 +91,7 @@ function Format-MainRedBody($Run, [string]$Repository, $Jobs, [bool]$PostMergeOn
+     }
+     $sha = $Run.head_sha.Substring(0, 8)
+     $lines = @("main-red: run=$($Run.id) attempt=$($Run.run_attempt) sha=$sha",
+-        "CI on main: https://github.com/$Repository/actions/runs/$($Run.id)")
++        "$($script:Stream.Name) on main: https://github.com/$Repository/actions/runs/$($Run.id)")
+     if ($PostMergeOnly) {
+         $lines += "post-merge tier only: an alert; a pull request's merge verdict never counts these jobs."
+     }
+@@ -143,7 +155,7 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
+     if (-not (Test-MainPush $run $Repository)) { return }
+     # Pending detectors replace each other, so every detector applies the newest decisive verdict, whichever
+     # event (stale, delayed or redelivered) started it, and every order converges on the same incident state.
+-    $recent = @((Invoke-Gh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" |
++    $recent = @((Invoke-Gh api "repos/$Repository/actions/workflows/$($script:Stream.File)/runs?branch=main&event=$($script:Stream.Event)&per_page=100" |
+             ConvertFrom-Json).workflow_runs | Where-Object { Test-MainPush $_ $Repository })
+     $known = @{}
+     foreach ($r in $recent + @($run)) { $known["$($r.id)/$($r.run_attempt)"] = $r }
+@@ -189,7 +201,7 @@ function Invoke-MainRed([long]$RunId, [string]$Repository) {
+ }
+ 
+ function Test-MainPush($Run, [string]$Repository) {
+-    $Run.path -eq '.github/workflows/ci.yml' -and $Run.event -eq 'push' -and $Run.head_branch -eq 'main' -and
++    $Run.path -eq ".github/workflows/$($script:Stream.File)" -and $Run.event -eq $script:Stream.Event -and $Run.head_branch -eq 'main' -and
+     $Run.head_repository.full_name -eq $Repository -and $Run.run_attempt -ge 1
+ }
+ 
+@@ -309,7 +321,8 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
+         $generate = $eligible -and [string]::Equals($flag, "quarantine-request: test=$test", [StringComparison]::Ordinal) -and
+             [Array]::IndexOf([string[]]$lines, $completed) -lt 0 -and -not (Test-QuarantineCompleted $issue $comments $test $Recovery)
+     }
+-    $title = if ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
++    $title = if ($script:Stream.AllPostMerge) { "$($script:Stream.Title), post-merge tier only ($sha)" }
++        elseif ($postMergeOnly) { "Main red, post-merge tier only ($sha)" } else { "Main red: CI failing on main ($sha)" }
+     if ($issue) {
+         # A blocking failure must not stay filed under a title that says it never blocks.
+         if (-not $postMergeOnly -and $issue.title -clike 'Main red, post-merge tier only (*)') {
+@@ -317,7 +330,7 @@ function Publish-MainRed($run, [string]$Repository, $Recovery) {
+         }
+         Invoke-Gh issue comment $issue.number --repo $Repository --body $body | Out-Null
+     } else {
+-        Invoke-Gh label create main-red --repo $Repository --color B60205 --description 'CI is red on main' --force | Out-Null
++        Invoke-Gh label create $script:Stream.Label --repo $Repository --color B60205 --description "$($script:Stream.Name) is red on main" --force | Out-Null
+         Invoke-Gh issue create --repo $Repository --title $title --label main-red --body $body | Out-Null
+     }
+     # The intent is stored first: a failed write must not leave a generator run that no later tick can see.
+diff --git a/quality/test-main-red.ps1 b/quality/test-main-red.ps1
+index d11cf450..524482cf 100644
+--- a/quality/test-main-red.ps1
++++ b/quality/test-main-red.ps1
+@@ -59,7 +59,7 @@ function Fake-Gh {
+             if ($s.ContainsKey('triggerConclusion')) { $run.conclusion = $s.triggerConclusion }
+             $run | ConvertTo-Json; return
+         }
+-        '^api repos/o/r/actions/workflows/ci.yml/runs\?' {
++        '^api repos/o/r/actions/workflows/(ci|pwa-webkit)\.yml/runs\?' {
+             if ($a -notmatch 'per_page=100' -or $a -match 'status=completed') { throw 'Require one bounded page including in-flight retries' }
+             $run.id = $s.newest; $run.run_number = $s.newest
+             $runs = if ($s.ContainsKey('runs')) { @(foreach ($k in $s.runs.Keys) { New-FakeAttempt $k $s.runs[$k].Count }) }
+@@ -89,7 +89,7 @@ function Fake-Gh {
+             ConvertTo-Json -InputObject $found -Depth 5; return
+         }
+         '^issue view 9 ' { @{ comments = $s.comments } | ConvertTo-Json -Depth 5; return }
+-        '^label create main-red ' { $s.writes += 'label'; return }
++        '^label create main-red(-webkit)? ' { $s.writes += 'label'; return }
+         '^issue create ' {
+             $s.writes += 'create'; $s.open = $true; $s.created = $true; $s.body = $args[([array]::IndexOf($args, '--body') + 1)]
+             $s.title = $args[([array]::IndexOf($args, '--title') + 1)]; $s.comments = @(); return
+@@ -424,7 +424,26 @@ foreach ($case in @(@{ name = 'shares its second with entries on both sides of a
+     try { Detect } catch { $refused = $_.Exception.Message }
+     Assert ($refused -match 'quarantine-completed' -and @(Get-GeneratorCalls).Count -eq 0 -and $s.writes.Count -eq $before) "a completion that $($case.name) refuses that entry before its write or any generator call ($refused)"
+ }
+-Remove-Item -LiteralPath $genDir -Recurse; $env:MAIN_RED_QUARANTINE = $null
++$env:MAIN_RED_QUARANTINE = $null
++# The hourly WebKit stream (#2454 item B): pwa-webkit.yml's schedule runs on main, an issue of their own, every
++# job post-merge. CI's stream reads only CI's push runs, and neither stream ever acts on the other's runs.
++Set-MainRedStream 'pwa-webkit.yml'
++Reset-Scenario; $s.path = '.github/workflows/pwa-webkit.yml'; $s.event = 'schedule'; $s.jobName = 'webkit 1/3'
++$s.log = '  1) [webkit] › test/axe.spec.mjs:12:3 › every page passes axe'; Detect
++$sent = ($s.calls | ForEach-Object { $_ -join ' ' }) -join "`n"
++Assert (($s.writes -join ',') -eq 'label,create' -and $s.title -match 'WebKit' -and $s.body -match 'PWA WebKit on main' -and
++    $s.body -match 'Job \(post-merge-tier\): webkit 1/3' -and $s.body -match 'test/axe\.spec\.mjs:12') 'a failed hourly WebKit run opens its own post-merge alert naming the spec'
++Assert ($sent -match 'workflows/pwa-webkit\.yml/runs\?branch=main&event=schedule' -and $sent -match '--label main-red-webkit' -and
++    $sent -notmatch 'workflows/ci\.yml/runs') 'the WebKit stream reads only its own runs and its own label'
++Reset-Scenario; Detect
++Assert ($s.writes.Count -eq 0) 'the WebKit stream never acts on a CI push run'
++Set-MainRedStream 'ci.yml'
++Reset-Scenario; $s.path = '.github/workflows/pwa-webkit.yml'; $s.event = 'schedule'; Detect
++Assert ($s.writes.Count -eq 0) 'the CI stream never acts on an hourly WebKit run'
++$refused = $null
++try { Set-MainRedStream 'other.yml' } catch { $refused = $_.Exception.Message }
++Assert ($refused -match 'other\.yml') 'an unknown workflow is refused'
++Remove-Item -LiteralPath $genDir -Recurse
+ Remove-Item -LiteralPath $tierPath
+ if ($script:failures) { "$script:failures of $script:checks checks failed"; exit 1 }
+ "main-red: $script:checks checks passed"
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a4..8dabfb71 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -443,6 +443,12 @@ public class CiPlanTests
+             "ci.yml job app leaves app (win-x86) to main, but the catalog doesn't make it post-merge" })]
+     [InlineData("github.event_name != 'pull_request' && ',", "github.event_name == 'push' && ',", new[] { "app (win-arm64)", "ha-integration" },
+         new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
++    // The post-merge legs may step off main's pushes behind PWA_WEBKIT_OFF_PUSH (#2454), in exactly that one form.
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || vars.PWA_WEBKIT_OFF_PUSH != 'true') && ',",
++        new[] { "app (win-arm64)", "ha-integration" }, new string[0])]
++    [InlineData("github.event_name != 'pull_request' && ',", "github.event_name != 'pull_request' && (github.event_name != 'push' || true) && ',",
++        new[] { "app (win-arm64)", "ha-integration" },
++        new[] { "ci.yml job app has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape" })]
+     public void Pull_requests_skip_exactly_the_catalog_post_merge_jobs_and_legs(string from, string to, string[] tierJobs, string[] expected)
+     {
+         var catalog = Fixture.Catalog();
+diff --git a/tools/AgentBridge.Quality/CiPlan.cs b/tools/AgentBridge.Quality/CiPlan.cs
+index 8c389b3c..3d2d283a 100644
+--- a/tools/AgentBridge.Quality/CiPlan.cs
++++ b/tools/AgentBridge.Quality/CiPlan.cs
+@@ -102,7 +102,9 @@ static partial class CiPlan
+     // Tiers (quality/README.md §4.9, #3209): a pull request runs only blocking legs, main both. A
+     // job with some post-merge legs lists them in its matrix include only off pull requests.
+     const string NotPullRequest = "github.event_name != 'pull_request'";
+-    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request' && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
++    // The post-merge legs may also step off main's push runs behind PWA_WEBKIT_OFF_PUSH (pwa-webkit.yml, #2454): that one
++    // conjunct, exactly; pull requests still run the blocking legs alone.
++    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request'(?: && \(github\.event_name != 'push' \|\| vars\.PWA_WEBKIT_OFF_PUSH != 'true'\))? && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
+     private static partial Regex TierInclude();
+     [GeneratedRegex(@"\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}")]
+     private static partial Regex MatrixName();
