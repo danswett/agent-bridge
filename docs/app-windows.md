@@ -1127,9 +1127,11 @@ app. While merges arrive faster than the app's CI finishes, nothing is released:
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
   - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
-    both did. **Arm64 does not gate** (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
+    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
     `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
-    publishable. A timed-out or unfinished run never counts;
+    publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
+    cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
+    reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
   - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.

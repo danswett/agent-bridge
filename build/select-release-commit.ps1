@@ -1,14 +1,17 @@
 # Which main commit the release train publishes (docs/app-windows.md, "The release train"):
-# the newest whose CI passed whole, that follows the latest release's commit, whose run number is
+# the newest whose CI passed, that follows the latest release's commit, whose run number is
 # above every published version and whose package artifacts for both architectures are still
 # there. Nothing at all when that commit is already out, so an hourly run with nothing new does
 # nothing. Pure over its inputs; build/test-select-release-commit.ps1 checks it.
 #
 # Runs are main's push CI runs, newest first, each as its latest attempt:
-#   Sha, Number (the run number, which is the version's last part), Attempt, Conclusion,
-#   Jobs (job name -> conclusion: quality-gate, app-x64, app-arm64), ArtifactsUnexpired (both architectures' packages).
-# A cancelled or superseded run counts only if quality-gate and both app jobs succeeded.
+#   Sha, Number (the run number, which is the version's last part), Conclusion,
+#   Jobs (job name -> conclusion: quality-gate, app-x64, app-arm64: the ones a pick needs),
+#   AllJobs (every job's name -> conclusion, latest attempt), ArtifactsUnexpired (both architectures' packages).
+# quality-gate and the x64 app job must have succeeded. Arm64 jobs (app win-arm64, app-installer
+# win-arm64, product windows-11-arm) may be red; no other job may be: failed, timed out, and for a run
 # Latest is the newest published release: Tag (v0.1.<n>) and Commit; $null when none is out.
+# whose conclusion is failure, cancelled too. A cancelled (superseded) run otherwise counts.
 # IsDescendant takes a sha and the latest release's commit.
 function Select-ReleaseCommit {
     param(
@@ -28,6 +31,15 @@ function Select-ReleaseCommit {
         # those green) is publishable, its Arm64 package included (both architectures' artifacts must
         # exist, below). A timed-out or unfinished run is never eligible.
         if ($run.Conclusion -cnotin 'success', 'cancelled', 'failure') { $why.Add("$($run.Sha) run $($run.Number): the run's conclusion is '$($run.Conclusion)'"); continue }
+        # Only Arm64's own jobs may be red (ci.yml's quality-gate leaves relay-image-sarif, sign and the
+        # publish jobs out, so a failure there could leave quality-gate and the x64 app job green): any
+        # other job that failed or timed out (and, in a failed run, was cancelled), or an unknown set, is
+        # not publishable, whatever the run's conclusion.
+        $allJobs = $run.PSObject.Properties['AllJobs']?.Value
+        if ($null -eq $allJobs) { $why.Add("$($run.Sha) run $($run.Number): the jobs' results are unknown"); continue }
+        $red = @('failure', 'timed_out', 'startup_failure', 'action_required') + @(if ($run.Conclusion -ceq 'failure') { 'cancelled' })
+        $others = @($allJobs.GetEnumerator() | Where-Object { $_.Value -cin $red -and $_.Key -cnotin 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)' } | ForEach-Object { "$($_.Key) ($($_.Value))" })
+        if ($others) { $why.Add("$($run.Sha) run $($run.Number): $($others -join ', ')"); continue }
         if (-not $run.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
@@ -64,15 +76,17 @@ function Get-ReleaseRuns([string]$Repository, [int]$Count = 20) {
     foreach ($row in $list) {
         $id, $sha, $number, $conclusion = $row -split "`t"
         $jobs = @{}
-        foreach ($job in (Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/jobs?filter=latest&per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
+        $allJobs = @{}
+        foreach ($job in (Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/jobs?filter=latest&per_page=100" --paginate --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
             $name, $result = $job -split "`t"
             $key = switch ($name) { 'quality-gate' { 'quality-gate' } 'app (win-x64)' { 'app-x64' } 'app (win-arm64)' { 'app-arm64' } default { $null } }
             if ($key) { $jobs[$key] = $result }
+            $allJobs[$name] = $result
         }
         $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$id/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
         $prefix = ($names | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$number$") { $Matches[1] } } | Select-Object -First 1)
         $both = $prefix -and ($names -contains "agent-bridge-windows-$prefix.$number") -and ($names -contains "agent-bridge-windows-arm64-$prefix.$number")
-        [pscustomobject]@{ Id = $id; Sha = $sha; Number = [int]$number; Conclusion = $conclusion; Jobs = $jobs
+        [pscustomobject]@{ Id = $id; Sha = $sha; Number = [int]$number; Conclusion = $conclusion; Jobs = $jobs; AllJobs = $allJobs
             Version = $(if ($both) { "$prefix.$number" } else { '' }); ArtifactsUnexpired = [bool]$both }
     }
 }
