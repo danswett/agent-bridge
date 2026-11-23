@@ -55,7 +55,7 @@ index 0000000..82bdfb5
 +          $release = if ($latest) { [pscustomobject]@{ Tag = $latest; Commit = (gh api "repos/$repo/git/ref/tags/$latest" --jq '.object.sha') } }
 +          $pick = Select-ReleaseCommit -Runs (Get-ReleaseRuns $repo) -Latest $release -IsDescendant { param($sha, $base) (gh api "repos/$repo/compare/$base...$sha" --jq '.status') -in 'ahead' }
 +          if (-not $pick) { Write-Host 'nothing new to publish'; exit 0 }
-+          "sha=$($pick.Sha)", "version=0.1.$($pick.Number)", "run=$($pick.Id)" | Add-Content $env:GITHUB_OUTPUT
++          "sha=$($pick.Sha)", "version=$($pick.Version)", "run=$($pick.Id)" | Add-Content $env:GITHUB_OUTPUT
 +
 +  publish:
 +    # contents: write is here only, and only for a pick that exists. APP_SIGNING true never gets
