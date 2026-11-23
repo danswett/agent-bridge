@@ -295,6 +295,40 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(2, sender.Sent.Count);
     }
 
+    // Parity row 16: "reconnect never reannounces old work". A relay that drops and comes back, or a new connection, re-reads the
+    // same sessions in the same state; what the phone was already shown is not pushed again.
+    [Fact]
+    public async Task After_a_relay_reconnect_a_question_and_a_finished_turn_already_shown_are_not_pushed_again()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(["finished", "question"], Received().Select(r => Kind(r.Notification)).Order());
+        var shown = sender.Sent.Count;
+
+        // The connection drops and comes back: the same sessions, the same state.
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromMinutes(2));
+        sender.Connected = true;
+        await After(TimeSpan.FromMinutes(2));
+        Assert.Equal(shown, sender.Sent.Count);
+
+        // A new connection to the relay takes over, and the host reads the sessions again.
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromMinutes(5));
+        Assert.Empty(next.Sent);
+        Assert.Equal(shown, sender.Sent.Count);
+    }
+
     [Fact]
     public async Task A_finished_turn_is_notified_with_the_start_of_its_response_after_it_stays_idle()
     {
