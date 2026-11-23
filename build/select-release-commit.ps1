@@ -23,7 +23,7 @@ function Select-ReleaseCommit {
         if ($Latest -and $run.Sha -ceq $Latest.Commit) { $why.Add("$($run.Sha) is already released"); break }
         $failed = @('quality-gate', 'app-x64' | Where-Object { $run.Jobs[$_] -cne 'success' })
         if ($failed) { $why.Add("$($run.Sha) run $($run.Number): $($failed -join ', ') did not succeed"); continue }
-        # Arm64 jobs run and report but do not gate (Engineering order, Nov 22): quality-gate and the x64 app job
+        # Arm64 jobs run and report but do not gate (owner decision, #2454): quality-gate and the x64 app job
         # must have succeeded, and a run that is red only for Arm64 (conclusion failure, with both of
         # those green) is publishable, its Arm64 package included (both architectures' artifacts must
         # exist, below). A timed-out or unfinished run is never eligible.
