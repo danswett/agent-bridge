@@ -46,8 +46,9 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
 
         var found = grants.TryGetUsable(input.Grant);
         if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input); }
-        if (action.Generation != found.Grant!.Generation) { return Refuse("grant-revoked", input); }
-        var subject = found.Grant.Subjects.FirstOrDefault(s => s.Account == action.Account && s.SourceHost == action.SourceDevice
+        // The envelope's generation is diagnostic only. As for a local launch (G5), the generation is the one this host's own
+        // store holds when the launch is prepared, and dispatch rechecks that same generation, so revoke or reissue refuses.
+        var subject = found.Grant!.Subjects.FirstOrDefault(s => s.Account == action.Account && s.SourceHost == action.SourceDevice
             && FleetActionEnvelope.SubjectDigest(s.Account, s.SourceHost, s.Session, s.Credential, s.ProcessInstance.Pid,
                 s.ProcessInstance.StartedAt.UtcTicks) == action.Subject);
         return subject is null ? Refuse("scope", input) : await launch.LaunchGrantedRemoteAsync(subject, input);
