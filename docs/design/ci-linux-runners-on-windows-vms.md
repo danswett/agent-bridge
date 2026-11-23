@@ -8,7 +8,8 @@ lint, the cache rule, the fork-PR controls, the capacity check) applies unchange
 
 ## Recommendation
 
-**(B), a nested Hyper-V Linux VM, on VM6 and VM7, one per host**:
+**(B), a nested Hyper-V Linux VM, on VM6 and VM7, one per host**, if SRE's read-only check confirms nested
+virtualisation on both (it is **unverified** for them; see the next section):
 - each with fixed caps of 12 vCPU and 24 GB, and 3 runners;
 - routing only `pwa-ui`'s Chromium legs (after item B, the only browser legs left on main's push runs);
 - turned on only once a busy-hour capacity check passes on both the hosts and the new pool.
@@ -29,16 +30,18 @@ Why B over A:
   - virtualisation-based security is running;
   - `wsl --status` reports default version 2, with no distribution installed.
 - **What that means:** a Windows guest can run Hyper-V, and so WSL2, only when Azure exposes nested virtualisation.
-  So nested virtualisation is on for this VM and its size.
+  So nested virtualisation is on for this one VM.
 - **One reading looks contradictory but isn't.** `Win32_Processor` reports `VirtualizationFirmwareEnabled=False` and
   no SLAT. That is expected once a hypervisor runs: Windows hides those flags from the root partition, so they say
   nothing either way.
-- **What I could not read: VM6 and VM7.** I have no access to them. SRE confirms each, read-only, before anything else:
+- **VM6 and VM7: UNVERIFIED.** I could not read them, so I don't know their Azure size, and nothing here shows nested
+  virtualisation is enabled or supported on them. The reading above is the builder VM's only. SRE confirms each,
+  read-only, before anything else:
   - `(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`;
   - `Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All, VirtualMachinePlatform` (elevated);
   - the size, from `Invoke-RestMethod -Headers @{Metadata='true'} 'http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01'`.
-  - On a v5 Intel D-series size like the builder's, Azure lists nested virtualisation as supported. If either host
-    is another size family, check that size's page first.
+  - Then check that size's Azure documentation page for nested-virtualisation support. I did not read it, so no
+    support claim for any size is made here.
   - Both options need it: WSL2 is itself a lightweight Hyper-V VM.
 
 ## What would move, and the queue win
