@@ -1,3 +1,4 @@
+using AgentBridge.Relay;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -250,16 +251,65 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
-    public async Task RegistryGetAsync_returns_the_machines_then_a_second_read_inside_two_seconds_is_refused_readably()
+    public async Task RegistryGetAsync_returns_the_machines_then_a_read_past_the_socket_burst_is_refused_readably()
     {
-        await using var relay = await TestRelay.StartAsync();
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
         Assert.Null(await new Wirer(host).PutAsync(host, Record(host.Id)));
         var machines = await host.Relay.RegistryGetAsync(CancellationToken.None);
         Assert.Equal("dev-box", Assert.Single(machines).GetProperty("name").GetString());
+        for (var i = 1; i < RegistryReadLimit.SocketBurst; i++) { await host.Relay.RegistryGetAsync(CancellationToken.None); }
         var e = await Assert.ThrowsAsync<InvalidOperationException>(() => host.Relay.RegistryGetAsync(CancellationToken.None));
         Assert.StartsWith("refused:", e.Message);
+        Assert.Contains("the relay allows one registry read every", e.Message); // the fleet tools match this text
         Assert.Contains("try again in a few seconds", e.Message);
+    }
+
+    // #1396: the socket may burst, then reads at a steady rate; one account's sockets share a ceiling.
+    static async Task<int> ReadsAllowedAsync(Wirer w, Device d, int tries)
+    {
+        var allowed = 0;
+        for (var i = 0; i < tries; i++) { if (!(await w.GetAsync(d)).Any(f => f.TryGetProperty("error", out _))) { allowed++; } }
+        return allowed;
+    }
+
+    [Fact]
+    public async Task A_socket_may_read_its_burst_at_once_and_then_one_token_per_refill_interval()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        var w = new Wirer(host);
+        Assert.Equal(RegistryReadLimit.SocketBurst, await ReadsAllowedAsync(w, host, RegistryReadLimit.SocketBurst + 5));
+        time.Advance(TimeSpan.FromSeconds(1.0 / RegistryReadLimit.SocketRefillPerSecond));
+        Assert.Equal(1, await ReadsAllowedAsync(w, host, 3));
+    }
+
+    [Fact]
+    public async Task An_idle_socket_never_banks_more_than_its_burst()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.Equal(RegistryReadLimit.SocketBurst, await ReadsAllowedAsync(new Wirer(host), host, RegistryReadLimit.SocketBurst + 5));
+    }
+
+    [Fact]
+    public async Task One_accounts_sockets_share_the_account_ceiling_and_another_account_is_untouched()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var relay = await TestRelay.StartAsync(o => o.Roster.Time = time);
+        var perSocket = RegistryReadLimit.SocketBurst;
+        var sockets = new List<Device>();
+        for (var i = 0; i < 4; i++) { sockets.Add(await relay.ConnectAsync(relay.TokenFor(1, "octo"), "box-" + i, "host")); }
+        var total = 0;
+        foreach (var d in sockets) { total += await ReadsAllowedAsync(new Wirer(d), d, perSocket); }
+        Assert.Equal(RegistryReadLimit.AccountBurst, total);
+        await using var other = await relay.ConnectAsync(relay.TokenFor(2, "mona"), "other-box", "host");
+        Assert.Equal(perSocket, await ReadsAllowedAsync(new Wirer(other), other, perSocket));
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(await ReadsAllowedAsync(new Wirer(sockets[3]), sockets[3], perSocket) > 0);
     }
     [Fact]
     public async Task A_machine_that_leaves_is_not_online_and_one_that_goes_quiet_for_a_minute_loses_its_record()

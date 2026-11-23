@@ -88,8 +88,9 @@ $unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).
 # The checks the app itself reported failed (result.json): the whole cause of a normal exit with code 1.
 # An array: one failed check, the arm64 case, would otherwise be a string with no .Count under strict mode.
 $failedChecks = @(if ($wrote) { try { @((Get-Content $Result -Raw | ConvertFrom-Json).failed | Where-Object { $_ }) } catch { @() } })
+. (Join-Path $PSScriptRoot 'app-self-test-trace.ps1')
 $evidence = [ordered]@{
-    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks
+    processId = $p.Id; exitCode = $code; failedChecks = $failedChecks; bounceTrace = $null
     failed = ($null -eq $code -or $code -ne 0 -or -not $wrote -or [bool]$unfinished)
     stderr = ''; events = @(); captureErrors = @()
 }
@@ -157,6 +158,20 @@ catch {
 }
 if ($code -eq 1 -and $failedChecks.Count -gt 0 -and -not $unfinished) { Write-Output "::error::the self-test failed $($failedChecks.Count) check(s), and the app exited normally with code 1 (no crash, so no Windows event): $($failedChecks -join ' | ')" }
 elseif ($evidence.events.Count -eq 0) { Write-Output '::error::no Windows event cause correlated to the app process was captured' }
+# The bottom-bounce trace, when the app wrote one beside the result: which frame and which term made its surface invalid.
+$bounce = Get-BounceTraceSummary -Path ([IO.Path]::ChangeExtension($Result, '.history-bottom-bounce.json'))
+if ($null -ne $bounce) {
+    $evidence.bounceTrace = $bounce
+    Write-Output '--- bottom bounce trace'
+    Write-Output "frames sampled: $($bounce.frames)"
+    if ($null -ne $bounce.firstInvalid) {
+        Write-Output "first invalid surface: $($bounce.firstInvalid | ConvertTo-Json -Compress)"
+        foreach ($why in $bounce.why) { Write-Output "  because: $why" }
+    }
+    else { Write-Output 'no sampled frame had an invalid surface' }
+    Write-Output "head: $($bounce.head | ConvertTo-Json -Compress -Depth 4)"
+    Write-Output "tail: $($bounce.tail | ConvertTo-Json -Compress -Depth 4)"
+}
 $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $evidencePath
 # The crashing thread's stack from the dump, by the runner's own cdb when it has one (the Windows
 # SDK's Debugging Tools), with Microsoft's public symbols. Bounded: a slow symbol server costs at

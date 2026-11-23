@@ -204,7 +204,7 @@ socket (`RelayHub.cs:261-264`). So no frame may ever be built from "all machines
 | One relay frame | 24,576 bytes (24 KiB), always one machine | Under 40% of 65,561 |
 | Machines per account | 32 (`RelayOptions.cs:16`) | At most 32 machine frames plus one `known` frame |
 | `known` frame | 32 entries of about 150 bytes, under 8 KiB | Known-machine metadata with socket liveness, no sessions |
-| `registry-get` | one in 2 s per socket; sooner is refused `slow-down` | A get returns up to 33 frames |
+| `registry-get` | Per socket a token bucket: burst 20, refill 10/s. Per account, across its sockets: burst 50, refill 50/s. Past either, `slow-down` (#1396; named constants in `RegistryReadLimit`) | A get returns up to 33 frames, about 512 KiB worst case, so 50/s is about 25 MB/s per account at the extreme; the old one-in-2-s rule made every send's `fleet.list` collide |
 
 * **One machine per frame.** A `registry-get` is answered with one `registry` frame per machine,
   then one `known` frame, each tagged with the request `id` and `part` and `of`. There is no
@@ -703,7 +703,7 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
    key; protected custody alone is insufficient.
 5. **Transport shape and limits** (Engineering). Recommended: dedicated `registry-*` frames, opt-in
    by `registry-get` or `registry-subscribe`, one machine per frame, 64 sessions, 16 KiB per
-   record, 24 KiB per frame, one get per 2 s. Confirm the numbers.
+   record, 24 KiB per frame, token-bucket gets (#1396: socket 20 burst + 10/s, account 50 burst + 50/s). Owner confirms the numbers.
 6. **Non-person client pairing** (Owner, tracked in S6). Needed before S8, not before slices 1 to 9.
 7. **Name-only lookup** (#2151, fleet #171/#433). Supersedes the first-machine-pin
    recommendation; a unique verified live name may be found within authenticated account scope.
