@@ -741,7 +741,23 @@ public static partial class CommandLine
     // An invocation that cannot open a session and does no session work: it only prints information (version, help) or
     // runs one of the agent's own management commands. Discovery does not hold for it (#3933 option c). Nothing here
     // is guessed: any option, word or shape not listed is false, so an unreadable or unfamiliar command line still holds.
-    public static bool IsNonSessionInvocation(AgentKind agent, string? commandLine) => false;
+    public static bool IsNonSessionInvocation(AgentKind agent, string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        // The program, or a runtime and its script, then exactly one argument: a word after an option is its value, and
+        // a first word followed by more is a prompt (macOS's ps flattens quoting).
+        var program = arguments.Count > 0 && IsRuntime(arguments[0]) ? 2 : 1;
+        if (arguments.Count != program + 1) { return false; }
+        var only = arguments[program];
+        return agent switch
+        {
+            AgentKind.Claude => only is "--version" or "-v" or "--help" or "-h" or "update" or "doctor" or "install",
+            AgentKind.Copilot => only is "--version" or "--help" or "login",
+            AgentKind.Codex => only is "--version" or "-V" or "--help" or "-h" or "login",
+            _ => false,
+        };
+    }
 
     // The `claude auth status` the host asks at most hourly before a probe (#200): the program, or
     // a runtime and its script, then `auth status` and nothing else. Only half the test: a person
