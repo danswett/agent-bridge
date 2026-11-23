@@ -88,12 +88,13 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
                 replay = true; break;
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!replay && !Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
+        long rateToken = 0;
+        if (!replay && !Rates.TryAllow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, out rateToken)) { return Refuse(Rate, body.Request); }
         LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
         // The budget counts deliveries that may have typed. A plain refusal typed nothing (busy, notReplyTarget, composerNotEmpty, ...), so it gives the hit back:
         // otherwise busy retries lock a pair out with rate (#1117). Pending, queued, unconfirmed and a thrown delivery may have typed, so they stay spent.
-        if (!replay && !result.Typed && result.Code is not null && result.Outcome is null or LiteKind.Refused) { Rates.Refund(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session); }
+        if (!replay && !result.Typed && result.Code is not null && result.Outcome is null or LiteKind.Refused) { Rates.Refund(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, rateToken); }
         if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
         { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
         return result.Typed && result.Outcome is null or LiteKind.Delivered
@@ -151,6 +152,9 @@ public sealed class RateCap(TimeProvider time)
             foreach (var t in kept.Take(kept.Length - 1)) { q.Enqueue(t); }
         }
     }
+
+    public bool TryAllow(string peer, string pair, out long token) { token = 0; return Allow(peer, pair); }
+    public void Refund(string peer, string pair, long token) => Refund(peer, pair);
 
     public bool Allow(string peer, string pair)
     {

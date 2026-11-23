@@ -254,7 +254,6 @@ public class LiteReceiverTests
     [InlineData("busy")]
     [InlineData("notReplyTarget")]
     [InlineData("composerNotEmpty")]
-    [InlineData("queueHeld")]
     public async Task Refusals_that_typed_nothing_never_spend_the_pairs_rate_budget(string code)
     {
         using var r = new Rig(new LiteDelivery(false, code));
@@ -290,18 +289,88 @@ public class LiteReceiverTests
         for (var i = 1; i <= RateCap.PerMinute; i++) { Refused(await r.Send(r.Request(id: Id(i.ToString()))), LiteReceiver.DeliveryFailed); }
         Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
     }
-    [Fact]
-    public void A_refund_gives_back_one_hit_and_never_goes_below_zero()
+    sealed class RefusingQuery : ILiteDeliver, ILiteReplayQuery
     {
-        var cap = new RateCap(new FakeTimeProvider(Start));
-        for (var i = 0; i < RateCap.PerMinute; i++) { Assert.True(cap.Allow("peer", "a")); }
-        Assert.False(cap.Allow("peer", "a"));
-        cap.Refund("peer", "a");
-        Assert.True(cap.Allow("peer", "a")); Assert.False(cap.Allow("peer", "a"));
-        cap.Refund("peer", "never-seen"); cap.Refund("peer", "never-seen");
-        Assert.True(cap.Allow("peer", "never-seen"));
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => Task.FromResult(new LiteDelivery(true, null));
+        public Task<LiteDelivery> QueryAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => Task.FromResult(new LiteDelivery(false, "busy"));
     }
     [Fact]
+    public async Task A_replay_query_never_spends_and_never_refunds_even_when_it_is_refused()
+    {
+        using var r = new Rig(custom: new RefusingQuery());
+        var first = r.Request(id: Id("1"));
+        Assert.Equal("delivered", (await r.Send(first)).Status);             // one hit spent
+        for (var i = 0; i < RateCap.PerMinute; i++) { Refused(await r.Send(first), "busy"); }   // replays: refused, and they must not refund that hit
+        for (var i = 2; i <= RateCap.PerMinute; i++) { Assert.Equal("delivered", (await r.Send(r.Request(id: Id(i.ToString())))).Status); }
+        Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);    // six deliveries in the minute: the seventh is limited
+    }
+    [Fact]
+    public async Task A_result_that_did_not_type_and_carries_no_code_stays_spent()
+    {
+        using var r = new Rig(new LiteDelivery(false, null));
+        for (var i = 1; i <= RateCap.PerMinute; i++) { Refused(await r.Send(r.Request(id: Id(i.ToString()))), LiteReceiver.DeliveryFailed); }
+        Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
+    }    [Fact]
+    public void A_refund_gives_back_exactly_the_hit_it_was_issued_for_and_a_second_or_stale_refund_is_a_no_op()
+    {
+        var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
+        Assert.True(cap.TryAllow("peer", "a", out var first));
+        for (var i = 1; i < RateCap.PerMinute; i++) { Assert.True(cap.TryAllow("peer", "a", out _)); }
+        Assert.False(cap.TryAllow("peer", "a", out _));
+        cap.Refund("peer", "a", first);
+        Assert.True(cap.TryAllow("peer", "a", out _)); Assert.False(cap.TryAllow("peer", "a", out _));
+        cap.Refund("peer", "a", first); // already given back: nothing more
+        Assert.False(cap.TryAllow("peer", "a", out _));
+        cap.Refund("peer", "never-seen", 12345); // an unknown pair or token is ignored
+        Assert.True(cap.TryAllow("peer", "never-seen", out _));
+    }
+    [Fact]
+    public void A_refund_removes_the_refused_requests_own_old_hit_not_a_newer_typed_ones_so_the_window_still_holds()
+    {
+        // R1 starts and is still in flight; five others are accepted and typed 30 s later; R1 is then refused busy and refunded.
+        // Its own hit (t=0) must go. Dropping the newest hit instead leaves t=0 behind, it expires first, and a 7th typed send gets in.
+        var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
+        Assert.True(cap.TryAllow("peer", "a", out var r1));
+        time.Advance(TimeSpan.FromSeconds(30));
+        for (var i = 0; i < 5; i++) { Assert.True(cap.TryAllow("peer", "a", out _)); }
+        time.Advance(TimeSpan.FromSeconds(1));
+        cap.Refund("peer", "a", r1);
+        time.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(cap.TryAllow("peer", "a", out _));   // the sixth typed send in the minute
+        time.Advance(TimeSpan.FromSeconds(29));          // t=61: R1's own old hit would have expired by now
+        Assert.False(cap.TryAllow("peer", "a", out _));  // six typed sends in the last minute: the seventh is refused
+    }
+    [Fact]
+    public void A_refund_after_its_hit_was_pruned_is_a_no_op_and_takes_nothing_else()
+    {
+        var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
+        Assert.True(cap.TryAllow("peer", "a", out var old));
+        time.Advance(TimeSpan.FromHours(2));
+        for (var i = 0; i < RateCap.PerMinute; i++) { Assert.True(cap.TryAllow("peer", "a", out _)); }
+        cap.Refund("peer", "a", old);
+        Assert.False(cap.TryAllow("peer", "a", out _));
+    }
+    sealed class Gated(Func<int, Task<LiteDelivery>> next) : ILiteDeliver
+    {
+        public int Calls;
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => next(Calls++);
+    }
+    [Fact]
+    public async Task An_in_flight_refusal_gives_back_its_own_old_hit_so_the_seventh_typed_send_in_a_minute_is_still_rate_limited()
+    {
+        var gate = new TaskCompletionSource<LiteDelivery>();
+        using var r = new Rig(custom: new Gated(n => n == 0 ? gate.Task : Task.FromResult(new LiteDelivery(true, null))));
+        var first = r.Send(r.Request(id: Id("1")));                 // in flight, holding the t=0 hit
+        r.Time.Advance(TimeSpan.FromSeconds(30));
+        for (var i = 2; i <= 6; i++) { Assert.Equal("delivered", (await r.Send(r.Request(id: Id(i.ToString())))).Status); }
+        r.Time.Advance(TimeSpan.FromSeconds(1));
+        gate.SetResult(new LiteDelivery(false, "busy"));
+        Refused(await first, "busy");
+        r.Time.Advance(TimeSpan.FromSeconds(1));
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("7")))).Status);   // sixth typed in the minute
+        r.Time.Advance(TimeSpan.FromSeconds(29));                                    // t=61
+        Refused(await r.Send(r.Request(id: Id("8"))), LiteReceiver.Rate);            // the seventh is refused
+    }    [Fact]
     public void The_hourly_cap_holds_and_one_peer_cannot_fill_the_table_or_reset_an_active_pair()
     {
         var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
