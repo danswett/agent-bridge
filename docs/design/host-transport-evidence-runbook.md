@@ -35,7 +35,7 @@ Home Assistant (the comparison runs on a disposable HA only).
 
 ## Preconditions (SRE checks, records each)
 
-1. The G9 stack is merged on main and every disposable host runs a build that contains it. Record each host's build head.
+1. The G9 stack is merged on main and every disposable host runs a build that contains it, deployed at S-1 (SRE-approved, never the owner). Record each host's build head.
 2. **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3, and 3 source-target pairs, each run in both directions.
    A host with any live session that is not the run's own is not disposable.
 3. A **disposable HA instance** exists for the comparison; the real one is never used.
