@@ -285,9 +285,9 @@ export class DelegateStrip {
 
 // An open delegate that is running is fetched again this often: a host sends no update when only
 // its line changes (v1-sessions.md, Subagent), so its words would otherwise stand still.
-const POLL_MS = 10000;
+export const POLL_MS = 10000;
 // And at most this often when its entry changes.
-const CHANGE_MS = 2000;
+export const CHANGE_MS = 2000;
 
 export class DelegateDetail {
   #id = null;

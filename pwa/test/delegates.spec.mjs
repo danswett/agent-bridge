@@ -6,6 +6,7 @@
 // the strip is a chip row.
 import { test, expect } from '@playwright/test';
 import { open, view } from './nav.mjs';
+import { CHANGE_MS, POLL_MS } from '../js/ui/delegates-view.js';
 
 const SESSION = 'demo-delegates';
 const CODEX = '019a1b2c-codex-example';
@@ -23,6 +24,8 @@ const delegate = (page, id) => card(page).locator(`.delegates-panel .delegate[da
 const pane = (page) => card(page).locator('.delegate-pane');
 const fact = (page, name) => pane(page).locator(`.fact[data-fact="${name}"] dd`);
 const later = () => new Date(Date.now() + 1000).toISOString();
+// What the clock's timers started has finished: their promises settled and a frame drawn, before anything is read.
+const settle = (page) => page.evaluate(() => new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(() => resolve())); }));
 const showList = (page) => card(page).getByRole('tab', { name: 'Delegates' }).click();
 const openRow = (page, id) => delegate(page, id).locator('.delegate-summary').click();
 
@@ -135,6 +138,7 @@ const change = (page, agent, fields) => page.evaluate(({ id, a, fields, at }) =>
 }, { id: SESSION, a: agent, fields, at: later() });
 
 test('a delegate that changes while its words are on their way is fetched again once they are back', async ({ page }) => {
+  await page.clock.install();
   await openDemo(page);
   await showList(page);
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
@@ -143,7 +147,8 @@ test('a delegate that changes while its words are on their way is fetched again 
   await say(page, 'demo-agent-suite', 'Found it: commit 4 of 10.');
   await change(page, 'demo-agent-suite', { line: 'Found it.' });
   // The change's fetch comes due while the first is still held.
-  await page.waitForTimeout(2500);
+  await page.clock.runFor(CHANGE_MS);
+  await settle(page);
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
   await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(2);
   await expect(pane(page).locator('.delegate-latest .md')).toHaveText('Found it: commit 4 of 10.');
@@ -211,6 +216,7 @@ test('a delegate\'s task and line the budget left out of the list are kept, not 
 
 test('nothing is fetched for a delegate nobody can see: its session left, or gone from the list', async ({ page }) => {
   test.slow();
+  await page.clock.install();
   await openDemo(page);
   await showList(page);
   // A delegate opened, then gone from the list while its words are on their way.
@@ -232,7 +238,8 @@ test('nothing is fetched for a delegate nobody can see: its session left, or gon
   await expect(card(page)).toBeHidden();
   await say(page, 'demo-agent-suite', 'Commit 7 of 10 is the first to fail.');
   const before = await fetches(page, 'demo-agent-suite');
-  await page.waitForTimeout(11000);
+  await page.clock.runFor(POLL_MS);
+  await settle(page);
   expect(await fetches(page, 'demo-agent-suite')).toBe(before);
   expect(await fetches(page, 'demo-agent-witness')).toBe(1);
   // Chosen again, it catches up.
@@ -241,6 +248,7 @@ test('nothing is fetched for a delegate nobody can see: its session left, or gon
 });
 
 test('a fetch that brings the same words leaves what is shown alone', async ({ page }) => {
+  await page.clock.install();
   await openDemo(page);
   await showList(page);
   await openRow(page, 'demo-agent-suite');
@@ -249,7 +257,8 @@ test('a fetch that brings the same words leaves what is shown alone', async ({ p
   await latest.locator(':scope > *').first().evaluate((el) => { el.dataset.seen = '1'; });
   await change(page, 'demo-agent-suite', { currentTool: { id: 't9', name: 'powershell', summary: 'git bisect good', status: 'running', startedAt: later() }, line: 'Still bisecting.' });
   await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(2);
-  await page.waitForTimeout(1000);
+  await page.clock.runFor(1000);
+  await settle(page);
   await expect(latest.locator(':scope > [data-seen="1"]')).toHaveCount(1);
 });
 
@@ -858,6 +867,7 @@ test.describe('at three panes', () => {
   });
 
   test('asking the main agent to stop a delegate fills the reply box after the draft, and sends nothing', async ({ page }) => {
+    await page.clock.install();
     await openDemo(page);
     const c = card(page);
     const input = c.locator('.reply-slot textarea');
@@ -866,7 +876,8 @@ test.describe('at three panes', () => {
     await pane(page).getByRole('button', { name: 'Ask main agent to stop it' }).click();
     await expect(input).toHaveValue('Hold on. Please stop your delegate demo-agent-suite.');
     await expect(input).toBeFocused();
-    await page.waitForTimeout(500);
+    await page.clock.runFor(500);
+    await settle(page);
     expect(await page.evaluate(() => window.agentBridgeDemo.host.replyLog.length)).toBe(0);
   });
 
@@ -986,6 +997,7 @@ test.describe('at three panes', () => {
   });
 
   test('the finished fold opens for a finished delegate chosen, and can still be shut over it', async ({ page }) => {
+    await page.clock.install();
     await openDemo(page);
     const c = card(page);
     const fold = c.locator('.strip-fold');
@@ -997,7 +1009,8 @@ test.describe('at three panes', () => {
     await expect(c.locator('.strip-item[data-id="demo-agent-lint"]')).toHaveCount(0);
     // An update to the session leaves it shut.
     await change(page, 'demo-agent-suite', { line: 'Still going.' });
-    await page.waitForTimeout(300);
+    await page.clock.runFor(300);
+    await settle(page);
     await expect(fold).toHaveAttribute('aria-expanded', 'false');
     // The open delegate finishing opens it, once.
     await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
@@ -1038,6 +1051,7 @@ test.describe('at three panes', () => {
   });
 
   test('while a delegate holds the inspector the session\'s Tools are not fetched, and they are once it lets go', async ({ page }) => {
+    await page.clock.install();
     await openDemo(page);
     const c = card(page);
     await expect(c.locator('.tools-panel li.tool').first()).toBeVisible();
@@ -1047,9 +1061,11 @@ test.describe('at three panes', () => {
     await expect(pane(page)).toBeVisible();
     const before = await toolFetches();
     await change(page, 'demo-agent-witness', { line: 'One.' });
-    await page.waitForTimeout(2500);
+    await page.clock.runFor(2500);
+    await settle(page);
     await change(page, 'demo-agent-witness', { line: 'Two.' });
-    await page.waitForTimeout(2500);
+    await page.clock.runFor(2500);
+    await settle(page);
     expect(await toolFetches()).toBe(before);
     await suite.click();
     await expect.poll(toolFetches).toBeGreaterThan(before);
