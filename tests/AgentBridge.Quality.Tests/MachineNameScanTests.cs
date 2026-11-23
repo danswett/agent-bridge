@@ -32,11 +32,10 @@ public class MachineNameScanTests
     }
 
     // Areas a later #2643 slice still has to clean. The list only shrinks: an entry with nothing
-    // left in it fails until it is removed. docs/design/ also names a machine the shapes above
-    // can't catch, so it is cleaned with design/.
+    // left in it fails until it is removed.
     static readonly string[] NotYetCleaned =
     [
-        "design/canvas/Proposal-600-Strip.dc.html", "docs/design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
+        "docs/design/", "pwa/", "tests/AgentBridge.HomeAssistant.Tests/", "tools/ha-contract/",
     ];
 
     [Fact]
