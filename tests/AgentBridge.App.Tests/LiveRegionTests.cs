@@ -26,4 +26,17 @@ public class LiveRegionTests
 
         Assert.Empty(silent);
     }
+
+    // The grant list's status line is announced once, through ReceiptMarkView.SetAnnouncement, whose
+    // announcer gates the first draw, hushed and stale changes. A second path (a direct live setting
+    // or a raised LiveRegionChanged) would say it twice and skip that gating. A source guard: the
+    // WinUI view cannot be built here, so this is not a UIA event count.
+    [Fact]
+    public void Grant_list_status_is_announced_once_through_the_announcer()
+    {
+        var code = File.ReadAllText(Path.Combine(Root, "src", "AgentBridge.App", "GrantListView.cs"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(code, @"ReceiptMarkView\.SetAnnouncement\(status,"));
+        Assert.DoesNotContain("SetLiveSetting(", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("RaiseAutomationEvent(", code, StringComparison.Ordinal);
+    }
 }
