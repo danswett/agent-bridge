@@ -25,6 +25,7 @@
     <Compile Include="..\..\src\AgentBridge.App\SessionView.History.cs" Link="SessionView.History.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SessionView.Recovery.cs" Link="SessionView.Recovery.cs" />
     <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeInputSetup.cs" Link="SelfTest.NativeInputSetup.cs" />
+    <Compile Include="..\..\src\AgentBridge.App\SelfTest.NativeWheelInput.cs" Link="SelfTest.NativeWheelInput.cs" />
     <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
     <None Include="..\..\src\AgentBridge.App\Design\DesignResources.xaml" Link="DesignResources.xaml" CopyToOutputDirectory="PreserveNewest" />
