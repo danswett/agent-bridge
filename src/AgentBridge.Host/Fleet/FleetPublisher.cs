@@ -18,17 +18,18 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
     long sequence;
     long? lastSent;
     string? lastContent;
+    HashSet<string> lastSessionIds = new(StringComparer.Ordinal);
     public int SkippedInvalidIds { get; private set; }
 
     // Called at least every two seconds; force the first snapshot on each new connection.
     // Refusals, timeouts and cancellation propagate to the host's diagnostics owner.
-    public async Task<bool> PublishAsync(Func<JsonElement, CancellationToken, Task> put, bool share = true, bool force = false, CancellationToken ct = default)
+    public async Task<bool> PublishAsync(Func<JsonElement, CancellationToken, Task> put, bool share = true, bool force = false, CancellationToken ct = default,
+        bool relaySupportsSessionId = false)
     {
         await publishing.WaitAsync(ct);
         try
         {
             var elapsed = lastSent is { } sent ? clock.GetElapsedTime(sent) : TimeSpan.MaxValue;
-            if (!force && elapsed < TimeSpan.FromSeconds(2)) { return false; }
             if (share && source.Held is not null) { return false; }
             IReadOnlyList<Session> snapshot = share ? source.Snapshot() : [];
             if (share && source.Held is not null) { return false; }
@@ -36,6 +37,9 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                 entry.Node["agent_bridge_".Length..] is { Length: 16 } id
                 && id.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'))).ToArray();
             SkippedInvalidIds = snapshot.Count - usable.Length;
+            // Ended rows must disappear even when ordinary changes are still being coalesced.
+            var removed = !lastSessionIds.IsSubsetOf(usable.Select(e => e.Node["agent_bridge_".Length..]));
+            if (!force && !removed && elapsed < TimeSpan.FromSeconds(2)) { return false; }
             var sessions = usable.OrderByDescending(e => e.Session.StatusSince).ThenBy(e => e.Session.Id, StringComparer.Ordinal)
                 .Take(64).Select(entry =>
                 {
@@ -45,9 +49,11 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
                     return new
                     {
                         id, node, name = displayName is not null && FleetNames.IsValidName(displayName) ? displayName : null,
+                        sessionId = relaySupportsSessionId ? FleetSessionId.ForNode(s.Id, node) : null,
                         state = s.Status, since = s.StatusSince,
                         startedAt = source.ProcessOf(s.Id) is { Id: > 0, StartedAt: { } started }
                             ? started.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture) : null,
+                        owner = Outcome("owner", s.Owner), pr = Outcome("pr", s.Pr), finished = Outcome("finished", s.Finished),
                     };
                 }).ToList();
             var truncated = usable.Length > 64;
@@ -75,8 +81,19 @@ public sealed class FleetPublisher(ISessionSource source, string machine, Func<s
             await put(record, ct);
             lastSent = started;
             lastContent = content;
+            lastSessionIds = sessions.Select(s => s.id).ToHashSet(StringComparer.Ordinal);
             return true;
         }
         finally { publishing.Release(); }
+    }
+
+    // Unknown is sent as absent, which readers already treat as unknown, so a relay older than
+    // this allow-list (it refuses unknown members) sees nothing new until a value is known.
+    // Malformed own evidence is dropped here rather than having the relay refuse the whole record.
+    static JsonElement? Outcome(string member, object? evidence)
+    {
+        if (evidence is null) { return null; }
+        var value = JsonSerializer.SerializeToElement(evidence, evidence.GetType(), ProtocolJson.Options);
+        return value.TryGetProperty("state", out var state) && state.GetString() != "unknown" && SessionEvidence.Outcome(member, value) ? value : null;
     }
 }

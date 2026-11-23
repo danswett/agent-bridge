@@ -123,6 +123,19 @@ test('a session without an id cannot be filed and reads as null', () => {
   assert.equal(readSession([]), null);
 });
 
+test('host roster facts retain explicit outcomes and a present machine identity must be text', () => {
+  assert.equal(readSession({ id: 'x', machine: 4 }), null);
+  const facts = {
+    machine: 'host-id', owner: { state: 'known', principal: 'fixture-agent' },
+    pr: { state: 'known', number: 42 }, finished: { state: 'known', value: false },
+  };
+  const read = readSession({ id: 'x', ...facts });
+  for (const [field, value] of Object.entries(facts)) { assert.deepEqual(read[field], value); }
+  const unknown = readSession({ id: 'x', owner: { state: 'future' }, pr: { state: 'none' } });
+  assert.deepEqual([unknown.owner, unknown.pr], [{ state: 'unknown' }, { state: 'none' }]);
+  assert.equal('machine' in readSession({ id: 'x' }), false);
+});
+
 test('a truncated question is read as truncated', () => {
   assert.equal(readSession({ id: 'x', question: { id: 'q', message: 'm', fields: [], truncated: true } }).question.truncated, true);
 });

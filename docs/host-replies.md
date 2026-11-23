@@ -18,6 +18,24 @@ one session at once.
 
 ## The keys (Copilot)
 
+**Slice A (#2808).** A draft returns `refusal: "occupied"` without typing.
+Existing working/busy admission stays; no host queue or new-ID deduplication.
+A failed paste gets at most one Ctrl+E, Ctrl+U clear, never Enter, only with native
+count/hash proof that Enter was not written and an identical complete, anchored,
+idle, single-row input outside shell/vim-normal mode. Multiline input is ambiguous
+(hard newline or soft wrap), so cleanup ends without keys. An anchored empty box
+or any transcript advance after the pre-injection boundary ends cleanup permanently,
+including on the final worker check; retyping the same prefix cannot revive it.
+Cleanup takes one observation: shell/vim-normal, non-main, unreadable or otherwise
+unsafe input ends it permanently. Raw row matching preserves leading-space edits,
+excluding only the renderer's glyph and its one padding space.
+Process, transcript, G5 and worker
+screen guards are rechecked inside the original typing admission, bounded by
+submit patience/shutdown. Edited drafts, dialogs or unknown evidence stay untouched;
+no ownership or keys survive its uncertain receipt. Logs never contain reply text.
+The cleanup key sequence has fake-injector regression coverage only; there is no
+live-CLI proof yet.
+
 Ported from agent-ha-bridge (`hooks/decision-inject.ps1`, `Send-CopilotSessionPrompt`):
 the words as one burst, 300 ms, then a submit key of its own. The CLI takes a burst
 as a paste. Enter submits as before; #2468's queue path uses Ctrl+Q while working.
@@ -146,14 +164,39 @@ changed just as the reply was to be typed"). The submit key is a send of its own
 Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
 to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
 any fails (a dialog drawn in the input area's place, Home then '!' while the words were
-typed, Esc), no submit key goes, and the reply is `unconfirmed`, its words left in the box for
-the person to send or clear. A box that grows down the screen with the words (a short
+typed, Esc), no submit key goes, and the reply is `unconfirmed`; the guarded cleanup
+above clears only proven, unchanged host text. A box that grows down the screen with the words (a short
 screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
 full screen moves its first text row, which then leaves the '!' check to the footer's. What
 no check can close is the moment between the worker's read and the CLI taking the key: a
 mode changed at the machine in that moment is not seen. The
 screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
 the captured live screen and the CLI's rendering code, each naming its source.
+
+## Guarded clear foundation ([#804](https://github.com/danswett/agent-bridge/issues/804))
+
+The host-only `ReplyRequest.ClearConfirmation` seam accepts a verifier bound to the
+whole escaped composer digest, rechecked with person intent, process incarnation,
+G5, elevation, launch and transcript guards before clearing and again before replying.
+No wire field supplies it. There is deliberately **no production producer or advertised
+capability yet**: signed relay-only confirmation, default-off policy and PWA/app UI
+remain follow-up slices. The pipe, HA, MCP and agent paths cannot enable it.
+Clearing additionally requires host-only `ClearDraftSource`: lossless original composer
+text, rechecked before keys. Screen rows alone are insufficient because their ASCII
+spaces are normalized. Missing evidence refuses before keys; this source also has no
+production producer. The confirmation digest and returned escrow include every space.
+
+This first cut permits only complete, single-row, non-shell Copilot drafts that can be
+returned whole within 500 escaped characters. Everything else is refused before keys.
+The clear (Ctrl+End, Ctrl+U) is held to the original rows, safe footer and request freshness.
+A request stale before the clear deletes nothing and returns `Stale`, without escrow.
+Within the same typing slot, two consecutive empty reads must arrive within two seconds,
+then the normal guarded reply path runs. Any attempted deletion returns `cleared`
+(`text`, host escape `marks`, `truncated: false`), even if later guards refuse the reply.
+It is never logged. Request memory binds replies to the sender and target; clear replay
+additionally requires the same host verification callbacks and still-current person
+intent. A changed authority generation is refused without escrow or progress.
+No live key validation or production enablement is claimed by this foundation.
 
 ## Attachments (Copilot)
 
@@ -254,6 +297,28 @@ prompt (`promptSource: "queued"`) repeats it and confirms nothing. Codex: an
 `item_completed` `UserMessage` whose text is the line (an older `user_message` event is read
 too). Each record confirms one reply. Anything else is `unconfirmed`.
 
+**Long text (Claude).** Claude takes a long burst of typed keys for a paste: one of 1000 characters
+arrived as about 300 typed and a `[Pasted text]` block, and one of 4514 lost its head (a console input
+the host wrote whole, in one `WriteConsoleInput`). Replies, Lite and relay messages alike are therefore
+typed as chunks of at most 100 UTF-16 units (`AgentReply.ChunkUnits`, never ending inside a surrogate
+pair), 40 ms apart (`ChunkPauseMs`), the Enter only on the last. They go to the worker as one plan
+(`agent-bridge-keys 2`, unchanged: each chunk is a `send` with its pause), the screen check on the first
+send only. 4500 characters took about 3 s and arrived whole in the probe below. Copilot and Codex are
+typed as before, and a reply of 100 units or fewer is one send. Bracketed paste was not used: Claude
+would hold a `[Pasted text]` placeholder, and the recorded prompt could no longer be matched to the
+reply. **Owner-approved CHANGE, Nov 23 (Part of #2568).** The probe is
+`ops/tools/claude-typing-probe.ps1`: synthetic marker text typed into the builder's own session
+without Enter, read back from the screen and cleared; never another person's session. Claude's paste
+detection depends on timing, so a machine that still folds a chunked reply shows it there first.
+
+**Long text (Codex), probed Nov 23 on a fleet machine in an idle Codex session, synthetic text, no Enter, cleared:** it does
+not need chunking. A single burst of 400 characters shows as typed; of 1000, as typed; of 2500 and of 4500, as
+`[Pasted Content 2500 chars]` and `[Pasted Content 4500 chars]` with the whole count, which Codex shows only after
+its own paste buffering, two to four seconds later (nothing at 1.5 s). Chunked 100/40 ended the same. A reader of
+the box a second after typing therefore sees it empty. Codex also ignores a control character sent as a character
+(the injector's Ctrl+U, Backspace): only real key events (virtual-key code set) edit its box, so the probe clears it
+with those.
+
 **Enter again.** Claude takes a long burst as a paste and can swallow the Enter after it
 (the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
 the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
@@ -293,16 +358,24 @@ In order, for every reply:
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
    reply. The process is the live agent process, and not elevated. A session this host
-   launched, resumed or restored whose window has not been seen ready is `refused`: it may
+   launched, resumed or restored without readiness evidence is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
    #780). While following it says what the window shows: the folder-trust question (answered from
    a device where allowed, #947, else on that machine), another startup question (on that machine),
-   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
-   process it handed the session to), until a prompt of the person's is in its transcript after the
-   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
-   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
-   that registers only once ready, it registers. The attachments are staged (below).
+   or only "still starting, send it again in a moment" (#1018). Activity in **its own transcript
+   after launch began** releases the startup hold, even if following ended unready or the launch
+   is `unconfirmed`: any `user.message`, regardless of source, an `assistant.turn_start`,
+   tool execution or subagent activity recorded there counts. An unconfirmed launch no longer
+   pins an active session. `session.resume` alone, old transcript activity, another session's
+   activity or a turn count is not evidence. With no readable transcript or no such activity,
+   an unready launch stays refused; there is no timeout release. A window seen ready, or
+   registration by an agent that registers only once ready, remains readiness evidence.
+   Visible trust/startup questions and open transcript `ask_user`, `permission.requested` or
+   trust questions still refuse replies, even after activity; the checks below still apply.
+   Owner-approved change ([#3634](https://github.com/danswett/agent-bridge/issues/3634)):
+   owner `ask_user` answer "release on any transcript activity", relayed by Chief S10,
+   Nov 21, 2026, ~22:30 PT. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
@@ -438,7 +511,21 @@ reported apart.
 
 ## Messages from other own-agents (AP5-lite, #1353)
 
-`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`, so the sender falls back to HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+**Current addressing (ID-first).** [Message delivery](message-delivery.md#overlap-and-dependencies-named-before-any-code),
+updated by [PR 3606](https://github.com/danswett/agent-bridge/pull/3606), owns the addressing
+contract: sends target a session ID or role ID; names are display only and never route.
+A stale or unknown ID fails loudly and holds, naming the target ID, with no name, substring
+or HA fallback. A role ID requires exactly one verified live holder; none or two refuses.
+Role-ID code, claims and succession remain paused under [role-ids.md](design/role-ids.md);
+this is not a claim of built role routing. [Issue 3607](https://github.com/danswett/agent-bridge/issues/3607)
+tracks legacy lookup reconciliation. The AP5-lite wire target forms and refusal codes remain
+defined by [agent-lite.md](protocol/agent-lite.md#the-plain-limits); that runbook's historical
+HA-fallback wording does not authorize a fallback for ID-first messaging.
+
+`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on and the exact target session id is listed in `agentMessaging.allowAllTargetSessions`; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty`, `noSuchSession` or `notSameAccount` (the host's current account is no longer the one the envelope was signed for, checked on admission, after the typing slot is taken and just before typing starts). The target is the full session id or, as the roster and `fleet.find` publish it, the node id `agent_bridge_<16 lowercase hex>` (#3399); a node id is used only when exactly one live session maps to it and discovery is not held (`ISessionSource.Held`, read before and after the scan, and the node id re-resolved after the typing slot is taken and once more just before typing starts), and every later check (gates, allow-all list, rate, typing) uses that session's full id. Zero or several matches are refused as `noSuchSession`. Its host-only `RequireIdle` condition makes `ReplyService` re-check idle after taking the typing slot; a session that became busy while waiting is refused as `busy`; the refusal stays a failure, not permission to retry over HA. A person's reply can still reach a working session. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.
+
+Each evaluated gate also logs its name, decision and refusal reason with the target and request id,
+never message text. An allowed gate ends evaluation; otherwise every refusal is recorded.
 
 That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 path.
 #2468's Q35 supersession does not remove `RequireIdle` or add queueing to Lite.

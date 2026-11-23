@@ -42,8 +42,10 @@ sealed class MergeRuleConfig
         config.Codeql ??= new();
         config.MainGreen ??= new();
         config.MainGreen.ExemptLabels ??= [];
+        config.MainGreen.ExemptPaths ??= [];
         config.MainGreen.Jobs ??= [];
         config.MainGreen.LegFamilies ??= [];
+        config.MainGreen.InfraSteps ??= [];
         config.CopilotWaiver ??= new();
         config.CopilotWaiver.Labels ??= [];
         config.CopilotWaiver.OneReviewPaths ??= [];
@@ -61,6 +63,9 @@ sealed class MergeRuleConfig
         if (config.MainGreen.LegFamilies.Any(f => f is null || f.Count == 0 || f.Any(string.IsNullOrWhiteSpace)
             || f.Distinct(StringComparer.Ordinal).Count() != f.Count))
             missing.Add("valid main_green.leg_families");
+        if (config.MainGreen.InfraSteps.Any(p => string.IsNullOrWhiteSpace(p.Key)
+            || p.Value is null || p.Value.Count == 0 || p.Value.Any(string.IsNullOrWhiteSpace)))
+            missing.Add("valid main_green.infra_steps");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -68,10 +73,9 @@ sealed class MergeRuleConfig
             missing.Add("copilot_waiver.second_review");
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
-        if (config.Arm64Waiver is { } arm64 && (arm64.Switch != "ARM64_WAIVER" || arm64.Until == default
-            || arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
+        if (config.Arm64Waiver is { } arm64 && (arm64.Jobs is null || arm64.Jobs.Count != 3 || arm64.Jobs.Distinct(StringComparer.Ordinal).Count() != 3
             || !arm64.Jobs.All(name => arm64.Allows(name, "failure"))))
-            throw new FormatException("arm64_waiver needs ARM64_WAIVER, an expiry and exactly the three arm64 jobs.");
+            throw new FormatException("arm64_waiver needs exactly the three arm64 jobs.");
         return config;
     }
 
@@ -101,17 +105,19 @@ sealed class MainGreenConfig
     /// <summary>The workflow whose latest push run on the base commit supplies the named jobs.</summary>
     public string Workflow { get; set; } = "";
     public List<string> ExemptLabels { get; set; } = [];
+    /// <summary>The exempt label lifts a red main only when every changed file matches one of these.</summary>
+    public List<string> ExemptPaths { get; set; } = [];
     public List<string> Jobs { get; set; } = [];
     public List<List<string>> LegFamilies { get; set; } = [];
+    public Dictionary<string, List<string>> InfraSteps { get; set; } = [];
 }
 
 sealed class Arm64WaiverConfig
 {
     public List<string> Jobs { get; set; } = [];
-    public DateTimeOffset Until { get; set; }
-    public string Switch { get; set; } = "";
 
-    public bool Active(DateTimeOffset now, string? value) => Switch == "ARM64_WAIVER" && value == "on" && now < Until;
+    // Permanent (owner, Nov 22, #2454): Arm64 jobs run and report but never gate. Exact names only.
+    public bool Active() => true;
 
     public bool Allows(string name, string? conclusion) => conclusion == "failure"
         && (name is "app (win-arm64)" or "app-installer (win-arm64)" or "product (windows-11-arm)")
@@ -142,7 +148,10 @@ sealed class CopilotWaiverConfig
 /// run) or error (couldn't be read), and the reason, which a blocked pull request's description
 /// starts with.
 /// </summary>
-sealed record MainFact(string State, string Reason);
+sealed record MainFact(string State, string Reason)
+{
+    public IReadOnlyList<string> Alerts { get; init; } = [];
+}
 
 /// <summary>A commit status on the head: GitHub keeps every one posted, newest last by time.</summary>
 sealed record StatusFact(string Context, string State, string? Description, string? Creator, DateTimeOffset CreatedAt);
@@ -156,8 +165,11 @@ sealed record ReviewFact(string Author, bool IsBot, string State, string? Commit
 /// <summary>A workflow run's or check run's progress, in GraphQL's words (COMPLETED, SUCCESS...).</summary>
 sealed record RunFact(string Status, string? Conclusion);
 
-/// <summary>A check run or status on the head: success, pending or failure, and GitHub's word for it.</summary>
-sealed record CheckFact(string Name, string State, string? Detail, long? WaivedRunId = null);
+/// <summary>
+/// A check run or status on the head: success, pending or failure, and GitHub's word for it.
+/// <c>PostMerge</c>: a post-merge tier job that hasn't passed, counted as success but shown.
+/// </summary>
+sealed record CheckFact(string Name, string State, string? Detail, long? WaivedRunId = null, bool PostMerge = false);
 
 sealed record PullRequestFacts(
     int Number,
@@ -240,6 +252,10 @@ static class MergeRule
         // request with an exempt label, which only someone with triage rights can add. It skips
         // this check alone.
         var exemptBy = pr.Labels.FirstOrDefault(l => config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        // Tests-only: an unread or cut-short file list fails closed, since it could hide a source change.
+        var exemptGlobs = config.MainGreen.ExemptPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
+        if (exemptBy is not null && !(pr.FullyRead && pr.FilesComplete && pr.Files.Count > 0 && pr.Files.All(f => exemptGlobs.Any(g => g.IsMatch(f)))))
+            exemptBy = null;
         var mainBlocks = main.State != "success" && exemptBy is null;
         if (mainBlocks)
             failures.Add(main.Reason);
@@ -351,8 +367,17 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
+            ? $"{(copilot ? $"Copilot reviewed {sha}" : needsSecond ? "Two model families' reviews on file" : "Independent review on file")}; every check passed{(copilot ? "; independent review on file" : "")}{(main.State != "success" ? $"; fixes-main tests-only bypass used" : "")}"
             : Capitalize(string.Join("; ", reasons));
+        // Blocking reasons first: alerts are informational, and the 140-character cut must never
+        // drop a hold. The detailed log names every alert.
+        if (main.Alerts.Count > 0)
+            description += $"; {main.Alerts[0]}{More(main.Alerts.Count)}";
+        reasons.AddRange(main.Alerts);
+        var later = pr.Checks.Where(c => c.PostMerge).Select(c => $"post-merge, not counted: {c.Name} {c.Detail ?? "pending"}").ToList();
+        if (later.Count > 0)
+            description += $"; {later[0]}{More(later.Count)}";
+        reasons.AddRange(later);
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }
 

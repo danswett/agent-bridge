@@ -514,6 +514,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     {
         screens.Rows = CopilotAsks();
         ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        // The 500 ms budget is about the typed-but-unconfirmed step below. Run from the start, a loaded machine lets it run out
+        // before the host's first look at the window, so the launch never carries its trust question (#421).
+        clock.Freeze();
         var ch = await OpenAsync();
         var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
 
@@ -524,6 +527,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 
         // Typed, but the question stays: said so, and left for the machine.
         screens.Fails = null;
+        clock.Run();
         var request = Guid.NewGuid().ToString();
         var stuck = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request));
         Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question is still in Copilot's window.", null), stuck);

@@ -24,6 +24,7 @@ public sealed partial class SessionView
     // What the list was last made from, so a card's every change doesn't parse its response again.
     SessionCardViewModel? blocksOf;
     string? blocksFrom;
+    int responseAnchors;
 
     ScrollViewer? ConversationScroll { get; set; }
     ScrollAnchor? anchor;
@@ -61,16 +62,35 @@ public sealed partial class SessionView
         blocksOf = card;
         blocksFrom = from;
         IReadOnlyList<MdBlock> next = from is null ? [] : MarkdownModel.Parse(from);
-        if (reset || !ConversationBlocks.Update(blocks, next))
+        var atEnd = !reset && HistoryAtEnd();
+        var offset = ConversationScroll?.VerticalOffset ?? 0;
+        var reading = reset || atEnd ? null : ReadingHistory();
+        var leading = blocks.FirstOrDefault();
+        if (atEnd) { SetEndPin(true); }
+        var retained = false;
+        if (reset)
         {
             blocks = new ConversationItems(next.Select(b => new ConversationBlock(b)));
             ConversationList.ItemsSource = blocks;
         }
+        else if (!(retained = ConversationBlocks.Update(blocks, next)))
+        {
+            // Replacing ItemsSource also resets the history header's viewport and realised rows.
+            var common = Math.Min(blocks.Count, next.Count);
+            for (var i = 0; i < common; i++) { blocks[i] = new ConversationBlock(next[i]); }
+            while (blocks.Count > next.Count) { blocks.RemoveAt(blocks.Count - 1); }
+            for (var i = common; i < next.Count; i++) { blocks.Add(new ConversationBlock(next[i])); }
+            ConversationList.ItemsSource = blocks;
+        }
         // Indexes have moved: the anchor taken again once the list has laid them out.
+        if (!reset && retained && !ReferenceEquals(leading, blocks.FirstOrDefault()) && !atEnd && !pinEnd && reading is null) { responseAnchors++; }
         anchor = null;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, TakeAnchor);
         // A reply arriving or growing under a view still at the end (#1646); a view a key or focus moved away is left.
-        if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
+        // Retained blocks keep the list's own item anchoring when no stored turn is in view: restoring the
+        // pre-trim offset would move the reader on in the response, even if queued before this update (#3576).
+        if (!reset && (atEnd || pinEnd || reading is not null || !retained)) { KeepPlace(atEnd, offset, reading); }
+        else if (pinEnd && follow.AtEnd) { KeepPlace(true, 0); }
         // The response's empty view held 8 under its label, as its first block does.
         FooterLead.Height = card is { HasVoice: true } && blocks.Count == 0 ? 8 : 0;
     }
@@ -86,22 +106,20 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
+            PinViewChanged(scroll);
             scrolling = e.IsIntermediate;
-            if (!e.IsIntermediate) { anchoring = null; keyTarget = null; }
+            if (!e.IsIntermediate)
+            {
+                anchoring = null; keyTarget = null; CompleteNavigation();
+                if (pinEnd) { DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowPinnedEnd); }
+            }
             HistoryScrolled(e.IsIntermediate);
+            if (!e.IsIntermediate) { SaveReading(); }
+            SyncConversationAnchoring();
         };
         scroll.DirectManipulationStarted += (_, _) => { keyTarget = null; panning = true; follow.PanStarted(); ReleasePin(); };
         scroll.DirectManipulationCompleted += (_, _) => { panning = false; follow.PanEnded(); };
-        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => ReleasePin()), true);
-        // Take the view only when focus actually asks to scroll out of it, not on every Tab.
-        ConversationHeader.BringIntoViewRequested += FocusScroll;
-        ConversationFooter.BringIntoViewRequested += FocusScroll;
-        void FocusScroll(UIElement sender, BringIntoViewRequestedEventArgs e)
-        {
-            if (!Under(FocusManager.GetFocusedElement(ConversationList.XamlRoot) as DependencyObject, e.TargetElement)) { return; }
-            var top = e.TargetElement.TransformToVisual(scroll).TransformPoint(new Point(e.TargetRect.X, e.TargetRect.Y)).Y;
-            if (!ConversationKeyboard.WhollyInView(top, e.TargetRect.Height, scroll.ViewportHeight)) { ReleasePin(); }
-        }
+        HookConversationInput(scroll);
         ConversationList.LayoutUpdated += OnConversationLaidOut;
         // Tunnelling, so the keys reach this before anything inside the list can take them: the list
         // would move between its items, a child might handle a key first (ui.md §6.4). What has focus
@@ -123,7 +141,7 @@ public sealed partial class SessionView
         // From where the last key is taking it, so a key pressed while that scroll still moves adds to it.
         var from = keyTarget ?? scroll.VerticalOffset;
         var to = ConversationKeyboard.Offset(key, from, scroll.ViewportHeight, scroll.ScrollableHeight);
-        if (Math.Abs(to - from) >= 0.5 && scroll.ChangeView(null, to, null, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
+        if (Math.Abs(to - from) >= 0.5 && ChangeConversationView(scroll, to, disableAnimation: !Motion.Scrolls)) { keyTarget = to; ReleasePin(); }
     }
 
     // What had focus when a key reached the conversation, from it up to the list: a text input, a
@@ -352,7 +370,7 @@ public sealed partial class SessionView
     void Land(UIElement container, DependencyObject stop)
     {
         var hold = stop is FrameworkElement e && ConversationScroll is { } s
-            ? ConversationKeyboard.HoldsFocusScroll(Landing, Top(e, s), e.ActualHeight, s.ViewportHeight)
+            ? ConversationKeyboard.HoldsFocusScroll(Landing, Top(e, s), e.ActualHeight, s.ViewportHeight, Top(container, s))
             : Landing == TabLanding.BlockStart;
         var source = stop as UIElement ?? (stop as TextElement)?.ContentStart?.VisualParent;
         // Focus already there moves nothing, so asks for no scroll to hold.
@@ -421,19 +439,32 @@ public sealed partial class SessionView
     // After any layout under a still view: a block above the anchor realised, or an estimated height
     // corrected, put the anchor back where it was, so what is read never moves (ui.md §6.4). Not while
     // the person pans or a scroll is under way, nor while a correction of ours is on its way.
+    readonly DeferredPass laidOut = new();
+    internal int ConversationLayoutPeak => layoutStorm.Peak;
+    internal int ConversationLayoutStorms => layoutStorm.Storms;
+
     void OnConversationLaidOut(object? sender, object e)
     {
-        if (pinEnd) { return; }
+        // MITIGATION (#3782, #3842): corrections that feed each other end in a LayoutCycleException; in a storm, skip them.
+        if (!layoutStorm.Allowed(out var runs, out var first))
+        {
+            if (first) { AppLog.Write($"layout storm: {runs} layout corrections within {LayoutStormGuard.Window.TotalSeconds:0} s; corrections skipped"); }
+            return;
+        }
+        // The corrections set layout properties (the panel's scroll mode, the scroll offset): inside LayoutUpdated each
+        // starts the next layout pass, and they can feed each other (#3782). They run once, at low priority, after it.
+        laidOut.Request(work => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => work()), CorrectAfterLayout);
+    }
+
+    void CorrectAfterLayout()
+    {
+        // It runs a turn after the layout that asked for it: the view may have gone, or the window be closing, by then.
+        if (!attached || !ConversationList.IsLoaded) { return; }
+        if (RestoreReading()) { return; }
+        if (pinEnd) { FollowPinnedEnd(); return; }
         if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
-    }
-
-    void Anchoring(ScrollViewer scroll, double to)
-    {
-        anchoring = to;
-        anchorAt = to;
-        scroll.ChangeView(null, to, null, disableAnimation: true);
     }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;

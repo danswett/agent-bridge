@@ -13,6 +13,7 @@ public sealed partial class FleetListTests : IDisposable
     readonly AgentCredentials store;
     readonly Roster roster = new();
     readonly List<string> audited = [];
+    const string Device = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", OtherDevice = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Node = "agent_bridge_1234567890abcdef";
 
     public FleetListTests()
     {
@@ -81,6 +82,8 @@ public sealed partial class FleetListTests : IDisposable
         return RelayFleetRoster.Parse([JsonSerializer.SerializeToElement(frame)]);
     }
 
+    static IReadOnlyList<FleetMachine> RoutingFrames(object? name) => Frames(name).Select(m => m with { Id = Device, Sessions = m.Sessions.Select(s => s with { Node = Node }).ToList() }).ToList();
+
     [Theory]
     [InlineData("build-box", "build-box")]
     [InlineData("  build box  ", "build box")]
@@ -110,13 +113,13 @@ public sealed partial class FleetListTests : IDisposable
             {"machine":"m2","name":"{{{escaped}}}","online":true,
              "record":{"sessions":[{"id":"s1","node":"n1","name":"my project","state":"working","since":"2026-11-07T12:00:00Z"}]}}
             """);
-        roster.Machines = RelayFleetRoster.Parse([frame]);
+        roster.Machines = RelayFleetRoster.Parse([frame]).Select(m => m with { Id = Device, Sessions = m.Sessions.Select(s => s with { Node = Node }).ToList() }).ToList();
         var machine = JsonSerializer.SerializeToElement(Assert.Single(roster.Machines), Web);
         Assert.Equal(expected, machine.GetProperty("name").GetString());
         if (!OperatingSystem.IsWindows()) { return; }
         var chan = Hello(AgentProtocol.ScopeRead);
         var listed = JsonSerializer.SerializeToElement(await Op().HandleAsync(chan, Body("{}")), Web).GetProperty("sessions")[0];
-        var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body("""{"name":"my project","machine":"m2"}""")), Web).GetProperty("machines")[0];
+        var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node, machine = Device }))), Web).GetProperty("machines")[0];
         foreach (var projection in new[] { listed, found })
         {
             if (expected is null) { Assert.False(projection.TryGetProperty("machineName", out _)); }
@@ -156,54 +159,51 @@ public sealed partial class FleetListTests : IDisposable
     public async Task Finding_carries_the_machine_display_name_without_changing_verification_or_optional_machine_filtering()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        roster.Machines = Frames("build-box");
+        roster.Machines = RoutingFrames("build-box");
         var chan = Hello(AgentProtocol.ScopeRead);
         async Task<JsonElement> Find(string? machine) => JsonSerializer.SerializeToElement(
-            await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { name = "my project", machine }))), Web);
-        var unsigned = await Find("m2");
+            await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node, machine }))), Web);
+        var unsigned = await Find(Device);
         Assert.Equal("unverified", unsigned.GetProperty("result").GetString());
         Assert.Equal("build-box", unsigned.GetProperty("machines")[0].GetProperty("machineName").GetString());
         Assert.DoesNotContain("node", unsigned.GetRawText());
         roster.Machines = roster.Machines.Select(m => m with { Verified = true }).ToList();
-        var verified = await Find("m2");
+        var verified = await Find(Device);
         Assert.Equal("found", verified.GetProperty("result").GetString());
         Assert.Equal("build-box", verified.GetProperty("session").GetProperty("machineName").GetString());
-        Assert.Equal("notFound", (await Find("build-box")).GetProperty("result").GetString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Find("build-box"));
         var named = await Find(null);
         Assert.Equal("found", named.GetProperty("result").GetString());
         Assert.Equal("build-box", named.GetProperty("session").GetProperty("machineName").GetString());
         var machine = roster.Machines[0];
-        roster.Machines = [machine, machine with { Id = "m3" }];
+        roster.Machines = [machine, machine with { Id = OtherDevice }];
         var ambiguous = await Find(null);
         Assert.Equal("ambiguous", ambiguous.GetProperty("result").GetString());
         Assert.All(ambiguous.GetProperty("candidates").EnumerateArray(), c => Assert.Equal("build-box", c.GetProperty("machineName").GetString()));
         roster.Machines = [machine with { Online = false }];
-        var offline = await Find("m2");
-        Assert.Equal("offline", offline.GetProperty("result").GetString());
-        Assert.Equal("build-box", offline.GetProperty("machines")[0].GetProperty("machineName").GetString());
-        roster.Machines = Frames(null);
-        Assert.False((await Find("m2")).GetProperty("machines")[0].TryGetProperty("machineName", out _));
+        Assert.Contains(Node, (await Assert.ThrowsAsync<InvalidOperationException>(() => Find(Device))).Message);
+        roster.Machines = RoutingFrames(null);
+        Assert.False((await Find(Device)).GetProperty("machines")[0].TryGetProperty("machineName", out _));
     }
 
     [Fact]
     public async Task Duplicate_machine_display_names_do_not_merge_machines_or_change_find_pins_or_match_session_names()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var first = Frames("build-box")[0] with { Verified = true };
-        roster.Machines = [first, first with { Id = "m3", Sessions = [new FleetSession("n2", "my project", "working", Started)] }];
+        var first = RoutingFrames("build-box")[0] with { Verified = true };
+        roster.Machines = [first, first with { Id = OtherDevice, Sessions = [new FleetSession("agent_bridge_fedcba0987654321", "my project", "working", Started)] }];
         var chan = Hello(AgentProtocol.ScopeRead);
         var listed = JsonSerializer.SerializeToElement(await Op().HandleAsync(chan, Body("{}")), Web).GetProperty("sessions").EnumerateArray().ToList();
-        Assert.Equal(["m2", "m3"], listed.Select(s => s.GetProperty("machine").GetString()));
+        Assert.Equal([Device, OtherDevice], listed.Select(s => s.GetProperty("machine").GetString()));
         Assert.All(listed, s => Assert.Equal("build-box", s.GetProperty("machineName").GetString()));
-        foreach (var (pin, node) in new[] { ("m2", "n1"), ("m3", "n2") })
+        foreach (var (pin, node) in new[] { (Device, Node), (OtherDevice, "agent_bridge_fedcba0987654321") })
         {
-            var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { name = "my project", machine = pin }))), Web);
+            var found = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = node, machine = pin }))), Web);
             Assert.Equal("found", found.GetProperty("result").GetString());
             Assert.Equal(pin, found.GetProperty("session").GetProperty("machine").GetString());
             Assert.Equal(node, found.GetProperty("session").GetProperty("node").GetString());
         }
-        var noMatch = JsonSerializer.SerializeToElement(await Op().FindAsync(chan, Body("""{"name":"build-box","machine":"m2"}""")), Web);
-        Assert.Equal("notFound", noMatch.GetProperty("result").GetString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Op().FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = "build-box", machine = Device }))));
     }
 
     [Fact]
@@ -398,17 +398,15 @@ public sealed partial class FleetListTests : IDisposable
     public async Task Listing_a_machine_without_last_seen_never_invents_a_time_or_changes_find_results()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        roster.Machines = Frames("build-box");
+        roster.Machines = RoutingFrames("build-box");
         var chan = Hello(AgentProtocol.ScopeRead);
         var op = Op();
-        var before = JsonSerializer.Serialize(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
+        var before = JsonSerializer.Serialize(await op.FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node }))), Web);
         var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
         Assert.False(Assert.Single(reply.GetProperty("machines").EnumerateArray()).TryGetProperty("lastSeen", out _));
-        Assert.Equal(before, JsonSerializer.Serialize(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web));
+        Assert.Equal(before, JsonSerializer.Serialize(await op.FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node }))), Web));
         roster.Machines = ExpiredFrames();
-        var absent = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"missing"}""")), Web);
-        Assert.Equal("notFound", absent.GetProperty("result").GetString());
-        Assert.False(absent.TryGetProperty("machines", out _));
+        Assert.Contains(Node, (await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node }))))).Message);
     }
 
     [Theory]
@@ -434,17 +432,18 @@ public sealed partial class FleetListTests : IDisposable
         {
             JsonSerializer.SerializeToElement(new
             {
-                machine = "m2", online,
-                record = new { sessions = new[] { new { node = "n1", name = "my project", state = "working", since = Started } } },
+                machine = Device, online,
+                record = new { sessions = new[] { new { node = Node, name = "my project", state = "working", since = Started } } },
             }),
-            Body("""{"known":[{"machine":"m2","name":"old-name","lastSeen":"2026-11-07T11:00:00Z"}]}"""),
+            Body(JsonSerializer.Serialize(new { known = new[] { new { machine = Device, name = "old-name", lastSeen = Started.AddHours(-1) } } })),
         });
         var chan = Hello(AgentProtocol.ScopeRead);
         var op = Op();
         var reply = JsonSerializer.SerializeToElement(await op.HandleAsync(chan, Body("{}")), Web);
-        var legacy = $$"""[{"machine":"m2","node":"n1","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}}]""";
+        var legacy = $$"""[{"machine":"{{Device}}","node":"{{Node}}","state":"working","since":"2026-11-07T12:00:00+00:00","secondsInState":90,"machineOnline":{{online.ToString().ToLowerInvariant()}}{{(online ? "" : ",\"stale\":true")}}}]""";
         Assert.Equal(legacy, reply.GetProperty("sessions").GetRawText());
-        var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body("""{"name":"my project"}""")), Web);
+        if (!online) { Assert.DoesNotContain("old-name", (await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node }))))).Message); return; }
+        var found = JsonSerializer.SerializeToElement(await op.FindAsync(chan, Body(JsonSerializer.Serialize(new { sessionId = Node }))), Web);
         Assert.Equal(result, found.GetProperty("result").GetString());
         Assert.False(found.GetProperty("machines")[0].TryGetProperty("machineName", out _));
     }

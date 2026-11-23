@@ -6,11 +6,196 @@ import { DemoHost } from '../../js/demo.js';
 import { HostClient } from '../../js/host-client.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
+import { currentReply, shownParts } from '../../js/ui/history-view.js';
+import { HISTORY, readHistoryResult } from '../../js/history.js';
 
 const ID = 's1';
 const turn = (n) => `${ID}-turn-${n}`;
 const nums = (snapshot) => snapshot.turns.map((t) => Number(t.id.split('-').at(-1)));
 const prompts = (snapshot) => snapshot.turns.map((t) => t.prompt?.text);
+
+test('successive assistant messages keep both replies in order and a third appends without duplicating updates', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  const say = (responseId, response) => store.live('h', readSession({
+    id: ID, agent: 'copilot', activity: { turn: turn(6), responseTurn: turn(6), responseId, response, userMessage: 'Question' },
+  }));
+  const replies = () => shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.text);
+  say('answer', 'Original answer.');
+  say('pulse', 'Scheduled pulse.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse.']);
+  say('pulse', 'Scheduled pulse, complete.');
+  say('completion', 'Background task completed.');
+  say('completion', 'Background task completed.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse, complete.', 'Background task completed.']);
+  const current = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), responseId: 'completion', response: 'Background task completed.' } });
+  assert.equal(currentReply(store.get('h', ID), current), 'Original answer.\n\nScheduled pulse, complete.\n\nBackground task completed.');
+});
+
+test('an old hosts missing reply identity keeps the legacy single streaming slot', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  let session;
+  for (const response of ['Partial', 'Complete answer']) {
+    session = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), response } });
+    store.live('h', session);
+  }
+  const snapshot = store.get('h', ID);
+  assert.equal(currentReply(snapshot, session), 'Complete answer');
+  assert.deepEqual(shownParts(snapshot.turns.at(-1)).map((p) => p.text), ['Complete answer']);
+});
+
+test('finished history parts replace live slots by identity without duplicating equal replies', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const session = (responseId) => readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId, response: 'Same answer' } });
+  store.live('h', session('first'));
+  store.live('h', session('second'));
+  page = [{ id: 'owner', at: '2026-11-21T22:00:00Z', parts: ['first', 'second'].map((id) => ({
+    id, kind: 'response', text: 'Same answer', at: '2026-11-21T22:00:01Z',
+  })) }];
+  await store.open('h', ID);
+  store.live('h', session('second'));
+  const snapshot = store.get('h', ID);
+  assert.deepEqual(snapshot.turns[0].parts.map((p) => p.id), ['first', 'second']);
+  assert.equal(currentReply(snapshot, session('second')), 'Same answer\n\nSame answer');
+  assert.ok(snapshot.turns[0].parts.every((p) => p.at === '2026-11-21T22:00:01Z'));
+  const stale = session('second');
+  store.live('h', { ...stale, activity: { ...stale.activity, response: 'Stale partial', responseTruncated: true } });
+  assert.equal(currentReply(store.get('h', ID), stale), 'Same answer\n\nSame answer');
+  page = [{ ...page[0], parts: [page[0].parts[0]] }];
+  await store.open('h', ID);
+  assert.equal(currentReply(store.get('h', ID), session('second')), 'Same answer\n\nSame answer');
+});
+
+test('Codex live revisions after history replace the same part without accepting stale snapshots', async () => {
+  let page = [];
+  let pending = null;
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
+  } }) });
+  await store.open('h', ID);
+  const session = (response, seconds, responseTruncated = false) => readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated } });
+  store.live('h', session('Partial answer', 0));
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Partial answer', at: '2026-11-22T11:00:00Z' }] }];
+  await store.open('h', ID);
+  store.live('h', session('Complete answer', 2));
+  assert.equal(currentReply(store.get('h', ID), session('Complete answer', 2)), 'Complete answer');
+  store.live('h', session('Partial answer', 1));
+  assert.equal(currentReply(store.get('h', ID), session('Partial answer', 1)), 'Complete answer');
+  store.live('h', session('Cut', 3, true));
+  assert.equal(currentReply(store.get('h', ID), session('Cut', 3, true)), 'Complete answer');
+  assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['answer']);
+  let release;
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  store.live('h', session('Complete revised answer', 4));
+  release();
+  await loading;
+  assert.equal(currentReply(store.get('h', ID), session('Complete revised answer', 4)), 'Complete revised answer');
+});
+
+for (const [reviseSecond, budget] of [[false, false], [true, false], [false, true], [true, true]]) {
+  test(`Codex delayed pages preserve each revised item: second revised ${reviseSecond}, budget ${budget}`, async () => {
+    let pending = null;
+    const page = { id: 'owner', at: '2026-11-22T11:00:00Z', parts: ['first', 'second'].map((id) => ({
+      id, kind: 'response', at: '2026-11-22T11:00:00Z', text: id === 'first' ? 'First old' : 'Second old',
+    })) };
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [
+        budget && pending ? { ...page, parts: [page.parts[1]], truncated: true, partsMore: 1 } : page,
+      ] }); },
+    } }) });
+    await store.open('h', ID);
+    const say = (responseId, response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+      updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner', responseId, response } }));
+    say('first', 'First old', 0);
+    say('second', 'Second old', 1);
+    let release;
+    pending = new Promise((resolve) => { release = resolve; });
+    const loading = store.open('h', ID);
+    await new Promise(setImmediate);
+    say('first', 'First new', 2);
+    say('second', reviseSecond ? 'Second new' : 'Second old', 3);
+    release();
+    await loading;
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.text), ['First new', reviseSecond ? 'Second new' : 'Second old']);
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['first', 'second']);
+  });
+}
+
+for (const stale of [false, true]) {
+  test(`a rejected Codex reply still updates reasoning and tools: stale ${stale}`, async (t) => {
+    const { store } = await setup(t);
+    await store.open('h', ID);
+    const session = readSession({ id: ID, agent: 'codex', updatedAt: '2026-11-22T11:00:02Z',
+      activity: { turn: turn(6), responseTurn: turn(6), responseId: 'answer', response: 'Full answer', reasoning: 'Before' } });
+    store.live('h', session);
+    store.live('h', { ...session, updatedAt: stale ? '2026-11-22T11:00:01Z' : '2026-11-22T11:00:03Z',
+      activity: { ...session.activity, response: 'Cut', responseTruncated: !stale,
+        reasoning: 'After', currentTool: { id: 'tool', name: 'shell', status: 'running' } } });
+    const held = store.get('h', ID).turns.at(-1);
+    assert.equal(held.parts[0].text, 'Full answer');
+    assert.equal(held.live.reasoning, 'After');
+    assert.equal(held.live.currentTool.name, 'shell');
+  });
+}
+
+test('an accepted truncated Codex revision survives an older full page', async () => {
+  let release;
+  let pending = null;
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
+  } }) });
+  await store.open('h', ID);
+  const say = (response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated: true } }));
+  say('Partial old', 1);
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Older full answer', at: '2026-11-22T11:00:00Z' }] }];
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  say('Partial new', 2);
+  release();
+  await loading;
+  assert.equal(store.get('h', ID).turns[0].parts[0].text, 'Partial new');
+  assert.equal(store.get('h', ID).turns[0].parts[0].truncated, true);
+});
+
+for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
+  test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
+    const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,
+      parts: [{ id: 'answer', kind: 'response', text: 'Original answer', at: '2026-11-21T22:00:01Z' }] };
+    let release;
+    let pending = null;
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [page] }); },
+    } }) });
+    await store.open('h', ID);
+    pending = new Promise((resolve) => { release = resolve; });
+    const fetch = store.open('h', ID);
+    await new Promise(setImmediate);
+    const session = readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId: 'pulse', response: 'Scheduled pulse' } });
+    store.live('h', session);
+    release();
+    await fetch;
+    assert.equal(currentReply(store.get('h', ID), session), 'Original answer\n\nScheduled pulse');
+    store.live('h', readSession({ id: ID, activity: { turn: 'next', userMessage: 'Next question' } }));
+    assert.deepEqual(shownParts(store.get('h', ID).turns[0]).filter((p) => p.kind === 'response').map((p) => p.text),
+      ['Original answer', 'Scheduled pulse']);
+  });
+}
 
 async function setup(t, { count = 5, ...options } = {}) {
   const host = new DemoHost({ sessions: [{ id: ID, agent: 'copilot', status: 'idle', updatedAt: new Date().toISOString(), activity: { turnCount: count } }] }, { answerDelayMs: 0, history: true });

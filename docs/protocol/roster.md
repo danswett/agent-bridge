@@ -155,8 +155,8 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
 * **`registry-put`** (host only): `{ t, id, record }`. The reply is `registry-result` with
   `error` null, or `too-large` (over 16 KiB), `bad-record` or `stale` (a sequence not above the
   one held; a new `epoch` needs a later `at`). The socket stays open on every refusal.
-* **`registry-get`** (any device): `{ t, id }`, at most one per two seconds per socket
-  (`slow-down`). The reply is one `registry` frame per machine holding a record, `{ machine,
+* **`registry-get`** (any device): `{ t, id }`, a token bucket per socket (burst 20, refill
+  10 a second) and one per account (burst 50, refill 50 a second); past either the reply is `slow-down` (#1396). The reply is one `registry` frame per machine holding a record, `{ machine,
   name, online, lastSeen, record, part, of }`, then one `{ known: [{ machine, name, lastSeen, online }] }`
   frame listing every machine of the account, online or not, so a count matches the app's.
   A known-only machine uses this socket `online` flag even before it publishes; a held
@@ -166,14 +166,34 @@ A host also tells the relay its sessions so one read gives an agent the whole ac
   name at most 64 printable ASCII characters; at most 64 sessions). Any other member, such as
   a prompt, a question, a path or a token, refuses the whole record. Time in state is now minus
   `since`.
+  Optional `sessionId` carries the full lowercase hyphenated 36-character session UUID.
+  Older publishers omit it; hosts publish it only when it binds to `node` and verify that
+  binding again before returning `fleet.find`'s `found.session.sessionId`
+  ([agent-operations.md](agent-operations.md#fleetfind)). An older relay that lacks this
+  allow-list entry refuses the whole record, so a host sends `sessionId` only on a connection
+  whose relay's `ready` lists `"rosterSessionId"` in its optional `capabilities` string array.
+  The host reads that on each connection and forgets it on reconnect; a missing, malformed or
+  unknown capability means omit. Relay and host may therefore deploy in either order.
   Optional session evidence is `stale, attention, openAsks, unsentLength, unsentHash,
-  observedAt, lastReplyAt, provenance, senderVerified`, with the bounded types and
+  observedAt, lastReplyAt, provenance, senderVerified, owner, pr, finished`, with the bounded types and
   rejection rules in [agent-operations.md](agent-operations.md#fleetlist).
 * **Same account only; memory only.** Records are never logged, never in the roster blob, and
   are dropped when the host's socket closes. `online` is false, and `record` null, when the host
   is gone or has sent nothing for 60 seconds.
 
-Not yet: `registry-subscribe` / `changed`, a later slice of the design.
+* **`registry-subscribe`** (any device, no reply): from then until the socket closes, the relay sends that
+  socket one `registry-changed` frame per change, for its own account only. A client that wants the
+  current state sends `registry-get` after it: the reply proves the subscription is already in place.
+  * `{ t, machine, online: true, record }` for each accepted `registry-put`; refused puts send nothing.
+  * `{ t, machine, online: false, record: null }` when the host's socket closes, or when a held record
+    has had no new snapshot for 60 seconds (checked every second, so within about a minute).
+  * `{ t, machine, removed: true }` when a person's device forgets the machine.
+  A device that never subscribes is never sent one. Frames are sent in order, one at a time, with the same
+  10-second send limit as every other control frame. A subscriber that stops reading is bounded: at most
+  32 queued frames or 256 KiB, after which the relay closes that socket with 1013 (try again later) and the
+  subscription ends; it resyncs with `registry-get` after reconnecting. A `registry-get` reply and
+  `registry-changed` frames are not ordered against each other, so a reader applies the epoch, `seq` and
+  `at` order rule to both.
 
 The host normally publishes immediately on each authenticated connection, then polls every two seconds
 with a 20-second heartbeat. Pending failed-put backoff is retained across reconnects before that

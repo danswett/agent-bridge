@@ -52,6 +52,12 @@ static partial class CiPlan
     [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
     private static partial Regex AppBuilt();
     const string AppResult = "${{ needs.app.result }}";
+    // The waiver-adjusted form (#2454): the same result, read after the gate's waiver step, so a red Arm64 leg does not read as an unbuilt app.
+    const string AppStepResult = "${{ steps.app.outputs.result }}";
+    const string AppStepNeeds = "${{ steps.waiver.outputs.needs || toJSON(needs) }}";
+    // The step's whole command, compared exactly: a shell comment or another command in the script that
+    // merely mentions the expression is not it (YAML comments never reach the parsed scalar).
+    const string AppStepRun = "echo \"result=$(echo \"$NEEDS\" | jq -r '.app.result')\" >> \"$GITHUB_OUTPUT\"";
     const string ConcurrencyGroup =
         "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
@@ -82,14 +88,26 @@ static partial class CiPlan
     const string WholeRingBypass = "env.WHOLE_RING == 'true'";
     // App and installer use their own plan outputs, on main too (#1910); manual whole-ring
     // plans still select both. Other jobs keep the selector-independent whole-ring bypass.
-    static string GatedJobIf(string id)
+    // A job whose every leg the catalog makes post-merge skips pull requests (#3209).
+    static string GatedJobIf(string id, bool postMerge)
     {
         var selected = id is "app" or "app-installer"
             ? $"needs.plan.outputs.{id} == 'true'"
             : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
         // A selected installer must fail on unavailable input, not inherit app's implicit skip.
-        return id == "app-installer" ? $"!cancelled() && ({selected})" : selected;
+        var guards = (id == "app-installer" ? "!cancelled() && " : "") + (postMerge ? NotPullRequest + " && " : "");
+        return guards.Length == 0 ? selected : $"{guards}({selected})";
     }
+
+    // Tiers (quality/README.md §4.9, #3209): a pull request runs only blocking legs, main both. A
+    // job with some post-merge legs lists them in its matrix include only off pull requests.
+    const string NotPullRequest = "github.event_name != 'pull_request'";
+    [GeneratedRegex(@"^\$\{\{ fromJSON\(format\('\[\{0\}\{1\}\]', '(?<blocking>[^']*)', github\.event_name != 'pull_request' && ',(?<post>[^']*)' \|\| ''\)\) \}\}$")]
+    private static partial Regex TierInclude();
+    [GeneratedRegex(@"\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}")]
+    private static partial Regex MatrixName();
+    static string PullRequestOff(IEnumerable<string> jobs) =>
+        $"${{{{ github.event_name == 'pull_request' && '{string.Join(" ", jobs)}' || '' }}}}";
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {
@@ -126,6 +144,33 @@ static partial class CiPlan
             if (id != "publish" && Child(job, "concurrency") is YamlMappingNode jobConcurrency && Child(jobConcurrency, "queue") is not null)
                 Add($"ci.yml job {id}'s concurrency sets queue, but only publish's may");
 
+        // Post-merge legs, by the job that runs them: a pull request mustn't run one, and main
+        // must not be left a blocking one. A job of only post-merge legs skips pull requests whole.
+        var postMerge = catalog.PostMergeJobs();
+        var pullRequestOff = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var group in postMerge.GroupBy(leg => leg.Split(" (")[0], StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+        {
+            if (!jobs.TryGetValue(group.Key, out var job))
+                Add($"the catalog makes {string.Join(", ", group.Order(StringComparer.Ordinal))} post-merge, but ci.yml has no job {group.Key}");
+            else if (Legs(group.Key, job) is not (var all, var onPullRequests))
+                Add($"ci.yml job {group.Key} has post-merge legs in the catalog, but which legs pull requests run can't be told: give its matrix include the tier shape");
+            else
+            {
+                foreach (var leg in group.Where(l => !all.Contains(l)).Order(StringComparer.Ordinal))
+                    Add($"the catalog makes {leg} post-merge, but ci.yml job {group.Key} has no such leg");
+                if (all.All(postMerge.Contains))
+                    pullRequestOff.Add(group.Key);
+                else
+                    foreach (var leg in onPullRequests.Where(postMerge.Contains))
+                        Add($"ci.yml job {group.Key} runs post-merge leg {leg} on pull requests");
+            }
+        }
+        // product's Arm64 leg went to main before tiers did, pinned with its runners below (#1249).
+        foreach (var (id, job) in jobs.Where(j => j.Key != "product" && !pullRequestOff.Contains(j.Key)))
+            if (Legs(id, job) is (var all, var onPullRequests))
+                foreach (var leg in all.Except(onPullRequests).Where(l => !postMerge.Contains(l)))
+                    Add($"ci.yml job {id} leaves {leg} to main, but the catalog doesn't make it post-merge");
+
         // Jobs gated on the plan: an if: that reads the plan's true or false for a job. Exactly one
         // shape, so the whole ring runs it whatever the plan says, and quality-gate can tell from
         // the job's own output whether it had to run.
@@ -136,9 +181,12 @@ static partial class CiPlan
             if (!ReadsPlan().IsMatch(condition))
                 continue;
             gated.Add(id);
-            if (condition != GatedJobIf(id))
-                Add($"ci.yml job {id} is gated on the plan, but its if: isn't exactly: {GatedJobIf(id)}");
+            var expected = GatedJobIf(id, pullRequestOff.Contains(id));
+            if (condition != expected)
+                Add($"ci.yml job {id} is gated on the plan, but its if: isn't exactly: {expected}");
         }
+        foreach (var id in pullRequestOff.Where(o => !gated.Contains(o)))
+            Add($"ci.yml job {id} is post-merge in the catalog, but isn't gated on the plan, so pull requests would still run it");
 
         // The list the plan step gives a true or false to, and the plan job's outputs for each,
         // bound to the step that computes them: a typo in a binding exports an empty value, which
@@ -215,8 +263,19 @@ static partial class CiPlan
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
             // What publish-gate reads to tell the app was built and checked in this run.
             var gateOutputs = Child(gate, "outputs") as YamlMappingNode;
-            if (Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "") != AppResult)
-                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult}, so {PublishGate} can't tell this run built the app");
+            var appOutput = Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "");
+            // The step form is accepted only when its step reads the app's own result from the waiver-adjusted needs.
+            var appStep = Steps(gate).FirstOrDefault(s => Scalar(s, "id") == "app");
+            var stepReadsApp = appStep is not null && Child(appStep, "env") is YamlMappingNode appEnv && Normalize(Scalar(appEnv, "NEEDS") ?? "") == AppStepNeeds
+                && Normalize(Scalar(appStep, "run") ?? "") == AppStepRun;
+            if (appOutput != AppResult && !(appOutput == AppStepResult && stepReadsApp))
+                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult} (or {AppStepResult} with a step id app), so {PublishGate} can't tell this run built the app");
+            // The jobs a pull request skips aren't selected there, or the gate would wait on them.
+            var offs = Steps(gate).Select(s => Child(s, "env") as YamlMappingNode).OfType<YamlMappingNode>()
+                .Select(e => Scalar(e, "PR_OFF")).OfType<string>().ToList();
+            var off = PullRequestOff(pullRequestOff);
+            if ((pullRequestOff.Count > 0 || offs.Count > 0) && (offs.Count != 1 || Normalize(offs[0]) != off))
+                Add($"ci.yml {Gate} needs exactly one step env PR_OFF: {off}, so it doesn't wait on the post-merge jobs pull requests skip");
         }
 
         // publish-gate stands on quality-gate rather than a second copy of its needs (#512), and
@@ -404,8 +463,8 @@ static partial class CiPlan
                 case YamlScalarNode:
                     return null;
             }
-            if (Child(matrix, "include") is YamlSequenceNode include)
-                labels.AddRange(include.Children.OfType<YamlMappingNode>().Select(i => Scalar(i, key)).OfType<string>());
+            if (IncludeLegs(matrix) is (var legs, _))
+                labels.AddRange(legs.Select(l => l.GetValueOrDefault(key)).OfType<string>());
         }
         if (labels.Count == 0)
             return null;
@@ -420,6 +479,62 @@ static partial class CiPlan
             oses.Add(os);
         }
         return oses;
+    }
+
+    /// <summary>
+    /// A job's display names on main and on a pull request: its name, or one per matrix include
+    /// leg with its matrix values filled in. Null when they can't be told.
+    /// </summary>
+    internal static (List<string> All, List<string> OnPullRequests)? Legs(string id, YamlMappingNode job)
+    {
+        if (id == "product")
+        {
+            var runners = ProductRunners.Select(r => $"product ({r})").ToList();
+            return (runners, runners.Where(r => r != "product (windows-11-arm)").ToList());
+        }
+        var name = Scalar(job, "name") ?? id;
+        var matrix = Child(job, "strategy") is YamlMappingNode strategy ? Child(strategy, "matrix") : null;
+        if (matrix is null)
+            return IsTemplate(name) ? null : ([name], [name]);
+        if (matrix is not YamlMappingNode { Children.Count: 1 } includeOnly || IncludeLegs(includeOnly) is not (var all, var onPullRequests)
+            || !MatrixName().IsMatch(name))
+            return null;
+        string Render(Dictionary<string, string> leg) =>
+            MatrixName().Replace(name, m => leg.TryGetValue(m.Groups[1].Value, out var value) ? value : m.Value);
+        return (all.Select(Render).ToList(), onPullRequests.Select(Render).ToList());
+    }
+
+    /// <summary>A matrix's include legs on main and on a pull request, as a list or in the tier shape.</summary>
+    static (List<Dictionary<string, string>> All, List<Dictionary<string, string>> OnPullRequests)? IncludeLegs(YamlMappingNode matrix)
+    {
+        switch (Child(matrix, "include"))
+        {
+            case YamlSequenceNode include:
+                var legs = include.Children.OfType<YamlMappingNode>().Select(i => i.Children
+                    .Where(c => c.Key is YamlScalarNode { Value: not null } && c.Value is YamlScalarNode)
+                    .ToDictionary(c => ((YamlScalarNode)c.Key).Value!, c => ((YamlScalarNode)c.Value).Value ?? "", StringComparer.Ordinal)).ToList();
+                return (legs, legs);
+            case YamlScalarNode { Value: { } text } when TierInclude().Match(Normalize(text)) is { Success: true } tier:
+                var blocking = JsonLegs(tier.Groups["blocking"].Value);
+                var post = JsonLegs(tier.Groups["post"].Value);
+                return blocking is null || post is null ? null : ([.. blocking, .. post], blocking);
+            default:
+                return null;
+        }
+    }
+
+    static List<Dictionary<string, string>>? JsonLegs(string objects)
+    {
+        try
+        {
+            using var legs = System.Text.Json.JsonDocument.Parse($"[{objects}]");
+            return legs.RootElement.EnumerateArray().Select(leg => leg.EnumerateObject().ToDictionary(p => p.Name,
+                p => p.Value.ValueKind == System.Text.Json.JsonValueKind.String ? p.Value.GetString()! : p.Value.GetRawText(), StringComparer.Ordinal)).ToList();
+        }
+        catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

@@ -1,11 +1,13 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Fleet;
 using AgentBridge.Roster;
 using AgentBridge.Transport;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 public sealed class HostRosterPinTests : IDisposable
@@ -46,6 +48,25 @@ public sealed class HostRosterPinTests : IDisposable
     }
 
     [Fact]
+    public void A_pin_written_while_serving_is_used_by_the_next_verify_without_a_restart()
+    {
+        var path = HostRosterPinWriter.PinPath(folder);
+        try
+        {
+            var reader = new HostRosterReader(path, () => w.Now);
+            Assert.Contains("unpinned", reader.Update(null, RosterFixture.Account).Reasons);
+            Assert.Null(reader.Pinned(RosterFixture.Account));
+            var typed = PersonGenesis.FromFingerprint(HostRosterPinWriter.Fingerprint(w.Entry("G").Hash));
+            // The fixture genesis is v1; stand in K1's v3 (capSign) predicate as the writer's own tests do.
+            Assert.Equal("pinned", HostRosterPinWriter.Write(path, typed, Relay("G", "B"), RosterFixture.Account, () => w.Now, _ => true));
+            Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+            Assert.NotNull(reader.Verified);
+            Assert.Same(reader.Verified, reader.Pinned(RosterFixture.Account));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
+
+    [Fact]
     public async Task A_pinned_roster_with_the_switch_off_neither_signs_nor_supplies_registry_authority()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -66,6 +87,35 @@ public sealed class HostRosterPinTests : IDisposable
             Assert.False(reader.Verified!.AcceptHostSign);
         }
         finally { Directory.Delete(Path.Combine(folder, "host-sign"), recursive: true); }
+    }
+
+    [Fact]
+    public void Fleet_membership_comes_from_the_pinned_roster_whatever_the_host_sign_switch_says()
+    {
+        Assert.Null(new FleetTrust(new HostRosterReader(PathName, () => w.Now), folder, () => RosterFixture.Account).Membership());
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        Assert.False(reader.Verified!.AcceptHostSign);
+        Assert.Same(reader.Verified, new FleetTrust(reader, folder, () => RosterFixture.Account).Membership());
+    }
+
+    [Fact]
+    public void A_pin_that_cannot_supply_verified_membership_refuses_fleet_reads_instead_of_passing_every_host()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var before = new FleetTrust(reader, folder, () => RosterFixture.Account);
+        Assert.Contains("refused", Assert.Throws<InvalidOperationException>(() => before.Membership()).Message);
+        Assert.Equal("verified", reader.Update(Relay("G", "B"), RosterFixture.Account).Outcome);
+        Assert.Same(reader.Verified, before.Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => "another-account").Membership());
+        Assert.Throws<InvalidOperationException>(() => new FleetTrust(reader, folder, () => null).Membership());
+
+        File.Delete(PathName);
+        Write("{broken");
+        var unreadable = new FleetTrust(new HostRosterReader(PathName, () => w.Now), folder, () => RosterFixture.Account);
+        Assert.Throws<InvalidOperationException>(() => unreadable.Membership());
     }
 
     [Fact]
@@ -111,6 +161,305 @@ public sealed class HostRosterPinTests : IDisposable
         Assert.Equal("pin-mismatch", reader.Update(Relay("G", "B"), "another-account").Outcome);
         Assert.Same(verified, reader.Verified);
         Assert.True(reader.Verified!.Serving.ContainsKey(w.Id("B")));
+    }
+
+    // security.roster on connect (#3450, brief 181); a completed `closed` stops after the first pass.
+    async Task<List<string>> Connect(HostRosterReader reader, string mode, Func<RelayRoster?> relay, List<string>? log = null)
+    {
+        log ??= [];
+        await new HostRosterObserve(reader, () => mode, () => w.Now, log.Add)
+            .ConnectedAsync(_ => Task.FromResult(relay()), RosterFixture.Account, Task.CompletedTask, default);
+        return log;
+    }
+
+    [Fact]
+    public async Task Off_never_feeds_the_pinned_reader_and_logs_todays_report()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "off", () => Relay("G", "B"));
+        Assert.Null(reader.Verified);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster off): " + HostRoster.Verify(Relay("G", "B"), RosterFixture.Account, () => w.Now).Summary, Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_feeds_a_matching_pinned_chain_so_pinned_lists_the_serving_host_and_the_pin_is_unchanged()
+    {
+        Pin();
+        var before = File.ReadAllBytes(PathName);
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.True(reader.Pinned(RosterFixture.Account)!.Serving.ContainsKey(w.Id("B")));
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.Equal(before, File.ReadAllBytes(PathName));
+    }
+
+    [Fact]
+    public async Task Observe_without_a_pin_keeps_the_unpinned_answer_and_creates_no_pin()
+    {
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => Relay("G", "B"));
+        Assert.Null(reader.Pinned(RosterFixture.Account));
+        Assert.Null(reader.Verified);
+        Assert.False(File.Exists(PathName));
+        Assert.Equal("device roster (security.roster observe): unpinned", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_refuses_an_unverifiable_snapshot_or_a_failed_fetch()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", w.GenerationId, ["not an entry"]));
+        await Connect(reader, "observe", () => throw new IOException("relay connection ended"), log);
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal(["device roster (security.roster observe): pin-mismatch", "device roster (security.roster observe): unavailable"], log);
+    }
+
+    [Fact]
+    public async Task Observe_refuses_a_relay_serving_another_accounts_roster()
+    {
+        Pin();
+        var other = new World { AccountId = "someone-else@example" };
+        other.Genesis();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = await Connect(reader, "observe", () => new RelayRoster("observe", other.GenerationId, [other.Entry("G").Canonical()]));
+        Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+        Assert.Equal("device roster (security.roster observe): pin-mismatch", Assert.Single(log));
+    }
+
+    [Fact]
+    public async Task Observe_logs_one_line_per_state_change_and_no_roster_contents()
+    {
+        Pin();
+        var reader = new HostRosterReader(PathName, () => w.Now);
+        var log = new List<string>();
+        var observe = new HostRosterObserve(reader, () => "observe", () => w.Now, log.Add);
+        foreach (var _ in Enumerable.Range(0, 3))
+        {
+            await observe.ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")), RosterFixture.Account, Task.CompletedTask, default);
+        }
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+        Assert.DoesNotContain(log, l => l.Contains(Convert.ToHexString(w.Entry("B").Hash)[..12], StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(0, 0.5, 5.0)]
+    [InlineData(0, 0.0, 4.0)]
+    [InlineData(0, 1.0, 6.0)]
+    [InlineData(1, 0.5, 10.0)]
+    [InlineData(9, 0.5, 40.0)]
+    public void Observe_refetches_about_every_five_minutes_with_jitter_and_backs_off_on_failure(int failures, double random, double minutes) =>
+        Assert.Equal(TimeSpan.FromMinutes(minutes), HostRosterObserve.Next(failures, random));
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(int.MaxValue)]
+    public void Observe_caps_positive_jitter_at_forty_minutes_and_keeps_the_floor(int failures)
+    {
+        Assert.InRange(HostRosterObserve.Next(failures, 0.99), TimeSpan.FromMinutes(32), TimeSpan.FromMinutes(40));
+        Assert.Equal(TimeSpan.FromMinutes(32), HostRosterObserve.Next(failures, 0));
+        Assert.Equal(TimeSpan.FromMinutes(4), HostRosterObserve.Next(0, 0));
+    }
+
+    sealed class ObserveClock : FakeTimeProvider
+    {
+        readonly Channel<TimeSpan> waits = Channel.CreateUnbounded<TimeSpan>();
+        int active;
+        public int Active => Volatile.Read(ref active);
+        public Task<TimeSpan> Waiting() => waits.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Interlocked.Increment(ref active);
+            waits.Writer.TryWrite(dueTime);
+            return new Tracked(timer, () => Interlocked.Decrement(ref active));
+        }
+        sealed class Tracked(ITimer timer, Action disposed) : ITimer
+        {
+            int done;
+            public bool Change(TimeSpan dueTime, TimeSpan period) => timer.Change(dueTime, period);
+            public void Dispose()
+            {
+                timer.Dispose();
+                if (Interlocked.Exchange(ref done, 1) == 0) { disposed(); }
+            }
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
+    HostRosterObserve Observer(HostRosterReader reader, ObserveClock time, List<string>? log = null) =>
+        new(reader, () => "observe", () => time.GetElapsedTime(0), (log ?? []).Add, time, () => 0.5);
+
+    [Fact]
+    public async Task Observe_unpinned_passes_keep_the_base_delay()
+    {
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var reader = new HostRosterReader(PathName, () => time.GetElapsedTime(0));
+        var running = Observer(reader, time).ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")),
+            RosterFixture.Account, new TaskCompletionSource().Task, cancel.Token);
+        try
+        {
+            for (var pass = 0; pass < 5; pass++)
+            {
+                var wait = await time.Waiting();
+                Assert.Equal(TimeSpan.FromMinutes(5), wait);
+                Assert.Null(reader.Pinned(RosterFixture.Account));
+                time.Advance(wait);
+            }
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task Observe_a_pin_appearing_after_unpinned_passes_verifies_within_the_base_delay()
+    {
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var reader = new HostRosterReader(PathName, () => time.GetElapsedTime(0));
+        var running = Observer(reader, time).ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")),
+            RosterFixture.Account, new TaskCompletionSource().Task, cancel.Token);
+        try
+        {
+            for (var pass = 0; pass < 4; pass++) { time.Advance(await time.Waiting()); }
+            var wait = await time.Waiting();
+            Pin();
+            Assert.Throws<InvalidOperationException>(() => reader.Pinned(RosterFixture.Account));
+            Assert.Equal(TimeSpan.FromMinutes(5), wait);
+            time.Advance(wait);
+            await time.Waiting();
+            Assert.NotNull(reader.Pinned(RosterFixture.Account));
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task Observe_second_fetch_waits_for_the_delay_and_updates_membership()
+    {
+        Pin();
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var reader = new HostRosterReader(PathName, () => time.GetElapsedTime(0));
+        var fetches = 0;
+        var running = Observer(reader, time).ConnectedAsync(_ =>
+        {
+            fetches++;
+            return Task.FromResult<RelayRoster?>(fetches == 1 ? Relay("G", "B") : Relay("G", "B", "C"));
+        }, RosterFixture.Account, new TaskCompletionSource().Task, cancel.Token);
+        try
+        {
+            var wait = await time.Waiting();
+            w.Add("C", "G", "C", "B");
+            time.Advance(wait - TimeSpan.FromTicks(1));
+            Assert.Equal(1, fetches);
+            Assert.False(reader.Verified!.Serving.ContainsKey(w.Id("C")));
+            time.Advance(TimeSpan.FromTicks(1));
+            Assert.Equal(TimeSpan.FromMinutes(5), await time.Waiting());
+            Assert.Equal(2, fetches);
+            Assert.True(reader.Verified.Serving.ContainsKey(w.Id("C")));
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task Observe_real_fetch_failures_grow_backoff_and_success_resets_it()
+    {
+        Pin();
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var fetches = 0;
+        var running = Observer(new HostRosterReader(PathName, () => time.GetElapsedTime(0)), time).ConnectedAsync(_ =>
+            ++fetches < 3 ? Task.FromException<RelayRoster?>(new IOException("fetch failed")) : Task.FromResult<RelayRoster?>(Relay("G", "B")),
+            RosterFixture.Account, new TaskCompletionSource().Task, cancel.Token);
+        try
+        {
+            Assert.Equal(TimeSpan.FromMinutes(10), await time.Waiting());
+            time.Advance(TimeSpan.FromMinutes(10));
+            Assert.Equal(TimeSpan.FromMinutes(20), await time.Waiting());
+            time.Advance(TimeSpan.FromMinutes(20));
+            Assert.Equal(TimeSpan.FromMinutes(5), await time.Waiting());
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task Observe_close_stops_fetching_and_cancels_the_pending_delay() => await StopsObserve(close: true);
+
+    [Fact]
+    public async Task Observe_cancel_stops_fetching_and_cancels_the_pending_delay() => await StopsObserve(close: false);
+
+    async Task StopsObserve(bool close)
+    {
+        Pin();
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var closed = new TaskCompletionSource();
+        var fetches = 0;
+        var running = Observer(new HostRosterReader(PathName, () => time.GetElapsedTime(0)), time).ConnectedAsync(_ =>
+        {
+            fetches++;
+            return Task.FromResult<RelayRoster?>(Relay("G", "B"));
+        }, RosterFixture.Account, closed.Task, cancel.Token);
+        try
+        {
+            await time.Waiting();
+            if (close) { closed.SetResult(); } else { cancel.Cancel(); }
+            await running.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(0, time.Active);
+            time.Advance(TimeSpan.FromHours(1));
+            Assert.Equal(1, fetches);
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
+    }
+
+    [Fact]
+    public async Task Observe_disconnect_during_fetch_does_not_log_unavailable_or_poison_reconnect_state()
+    {
+        Pin();
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var closed = new TaskCompletionSource();
+        var fetched = new TaskCompletionSource<RelayRoster?>();
+        var log = new List<string>();
+        var reader = new HostRosterReader(PathName, () => time.GetElapsedTime(0));
+        var observe = Observer(reader, time, log);
+        var running = observe.ConnectedAsync(_ => fetched.Task, RosterFixture.Account, closed.Task, cancel.Token);
+        closed.SetResult();
+        await observe.ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")), RosterFixture.Account, Task.CompletedTask, default);
+        fetched.SetException(new IOException("connection ended"));
+        await running.WaitAsync(TimeSpan.FromSeconds(10));
+        await observe.ConnectedAsync(_ => Task.FromResult<RelayRoster?>(Relay("G", "B")), RosterFixture.Account, Task.CompletedTask, default);
+        Assert.Equal("device roster (security.roster observe): verified", Assert.Single(log));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Observe_close_or_cancel_stops_an_inflight_fetch_without_an_unavailable_log(bool close)
+    {
+        var time = new ObserveClock();
+        using var cancel = new CancellationTokenSource();
+        var closed = new TaskCompletionSource();
+        var started = new TaskCompletionSource();
+        var log = new List<string>();
+        var running = Observer(new HostRosterReader(PathName, () => time.GetElapsedTime(0)), time, log)
+            .ConnectedAsync(async ct =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return null;
+            }, RosterFixture.Account, closed.Task, cancel.Token);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (close) { closed.SetResult(); } else { cancel.Cancel(); }
+            await running.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Empty(log);
+            Assert.Equal(0, time.Active);
+        }
+        finally { cancel.Cancel(); await running.WaitAsync(TimeSpan.FromSeconds(10)); }
     }
 
     [Fact]

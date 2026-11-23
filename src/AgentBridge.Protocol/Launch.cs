@@ -53,7 +53,7 @@ public static partial class LaunchProtocol
         // they look like what an agent names its own: never a space, a quote or a leading dash.
         foreach (var (name, value) in new[] { ("model", launch.Model), ("effort", launch.Effort), ("context", launch.Context) })
         {
-            if (value is { Length: > 0 } && !Tuning().IsMatch(value)) { return $"'{Cut(value)}' is not a {name} any agent offers"; }
+            if (value is { Length: > 0 } && !IsTuning(value)) { return $"'{Cut(value)}' is not a {name} any agent offers"; }
         }
         // A role is matched exactly against launch.workerMcp and names MCP servers to start, so
         // only a plain name is taken.
@@ -104,6 +104,8 @@ public static partial class LaunchProtocol
     }
 
     static string Cut(string value) => Limits.KeepStart(value, 64)!;
+
+    public static bool IsTuning(string? value) => value is not null && !value.Any(char.IsControl) && Tuning().IsMatch(value);
 
     [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,127}$")]
     private static partial Regex Tuning();

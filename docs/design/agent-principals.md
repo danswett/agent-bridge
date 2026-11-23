@@ -10,6 +10,16 @@ made. It builds on the signed device roster proposed for #55 in PR #391,
 (revision 2, head `ed9ca862`, not yet merged). In this note, "#391 §n" means a section of that
 note, and a bare "§n" means a section of this one.
 
+**Current addressing (ID-first).** [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code),
+updated by [PR 3606](https://github.com/danswett/agent-bridge/pull/3606), owns the addressing
+contract: sends target a session ID or role ID; names are display only and never route.
+A stale or unknown ID fails loudly and holds, naming the target ID, with no name, substring
+or HA fallback. A role ID requires exactly one verified live holder; none or two refuses.
+Role-ID code, claims and succession remain paused under [role-ids.md](role-ids.md);
+this design note claims no implemented role routing. Legacy lookup reconciliation is tracked
+in [issue 3607](https://github.com/danswett/agent-bridge/issues/3607). Protocol fields and
+authorization, account, kill-switch and final-effect fences are unchanged by this clarification.
+
 §8 covers the owner-requested overlap with connectors: Home Assistant as the first client of the
 third-party connector API, and #388's headless identity. That section is the one place where
 the three principal kinds (agents, connectors and cross-account peers) are set against each
@@ -739,7 +749,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
 | `links` | `[]` | Federation (§7). Must be empty in v1 |
-| `agentMessaging.remote`, `agentMessaging.allowAllTargets` | `"off"` \| `"own-account"`; `false` \| `true` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"off"` and `false`**; an unknown value is off. `allowAllTargets` counts only while `remote` is `"own-account"`; `false` sends allow-all targets to Home Assistant. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
+| `agentMessaging.remote`, `agentMessaging.allowAllTargets`, `agentMessaging.allowAllTargetSessions` | `"off"` \| `"own-account"`; `false` \| `true`; `[]` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"own-account"` (owner decision 2026-11-19; acts only for a signed-in host with a present same-account peer, and an explicit `"off"` or any kill keeps it off), `false` and `[]`**; an unknown value is off. `allowAllTargets` is only a master switch: an allow-all session also needs its exact id in `allowAllTargetSessions`. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,
@@ -1732,9 +1742,11 @@ Nothing is built before #55 and AP5 (AP11, §11.2).
 * **Attribution (M6).** A message delivered under the grant sets the additive
   `driverFrom.grant: "group:<id>@<gen>"` (§6.1), only from the verified grant, and is audited per
   message (§5.6). After a restart the driver shows as unknown or agent, never as the person.
-* **The HA route (M7).** Once a member's machine runs the grant, members aren't driven over HA.
-  Product sets the order HA is retired per machine. The HA route stays as the fallback until the
-  grant ships, and gains no authority from this.
+* **The HA route (M7), historical.** Product sets the order HA is retired per machine.
+  This historical retirement sequence does not authorize HA fallback for ID-first messaging.
+  [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code)
+  owns current addressing and refusal behavior; a missing target never becomes a name lookup
+  or a retry over HA. The grant gains no authority from a transport.
 * **Expiry.** 8 hours by default, 4 or 24 hours otherwise, and 24 hours at most (owner decision
   (a)). Renewal is in the app only, never pushed (c): the expiry item and **Approve again** are
   never pushed and never ride the hourly aggregate.
@@ -2072,6 +2084,23 @@ unchanged. Only the principal and its source change.
 * The receiving host sets `driver`, `driverFrom` and `userMessageFrom` from the **verified
   principal** (step 5) and its **own roster** (machine name). The envelope's free text and the
   reply's words can't set them.
+* **Relay delivery arms the prompt (AP6, #3732, #3740).** `LiteDeliver` arms the session's driver
+  with the exact framed words it types and a `userMessageLabel` of `"<session> on <machine>"` (or
+  `"script <id>"`), built only from the verified envelope principal (the machine as its envelope
+  names it, until a roster name is wired in), cleaned of brackets, `·` and hidden characters and cut
+  to 64 bytes. The arm is made only once the typing slot is held and the keys are about to go
+  (`ReplyRequest.KeysGoing`), so a delivery that is refused, busy, stale or answered without typing
+  (a signed resend of a request already delivered) never arms, and owner text typed while the slot
+  is awaited is not marked. The prompt is marked `userMessageFrom=agent` (live `activity` and
+  `session.history` `prompt.from`/`label`) only when the transcript's prompt is those exact words
+  inside the arm window. An arm still waiting when the delivery ends other than Delivered (including
+  Unconfirmed or an exception) is put back, but only while it is still the arm that delivery made (a
+  generation check under the driver lock), so an owner who types the same words later is still the
+  owner and a newer arm is never overwritten. Lane deliveries (the queueable lane) are not armed:
+  their prompts show as typed. Nothing in the text sets or clears the mark, and the prompt's text is
+  kept as typed, header included. Missing provenance means no field, and clients show the owner's
+  text as typed. The mark is held in memory with the session's turns, as for Home Assistant replies:
+  after a host restart, earlier relayed prompts carry no mark and show as typed.
 * **Which display fields are trusted.** Only names from a verified source are shown as identity:
   * the machine name from the receiving host's own roster;
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the

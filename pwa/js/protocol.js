@@ -276,6 +276,7 @@ export function readActivity(raw) {
     turn: str(a.turn),
     // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
     responseTurn: str(a.responseTurn),
+    responseId: str(a.responseId),
     ...(a.kind === undefined || a.kind === null ? {} : { kind: readTurnKind(a.kind) }),
     notice: readNotice(a.notice),
     turnCount: num(a.turnCount),
@@ -288,12 +289,24 @@ export function readActivity(raw) {
   };
 }
 
+function readSessionEvidence(raw, field, read) {
+  const e = obj(raw);
+  if (!e) { return null; }
+  const state = e.state === 'known' || e.state === 'none' ? e.state : 'unknown';
+  const value = read(e[field]);
+  return { state, ...(value === null ? {} : { [field]: value }) };
+}
+
 // A Session as the views use it, or null if it has no id to file it under.
 export function readSession(raw) {
   const s = obj(raw);
-  if (!s || !str(s.id)) { return null; }
+  if (!s || !str(s.id) || (s.machine != null && typeof s.machine !== 'string')) { return null; }
   return {
     id: s.id,
+    ...(s.machine == null ? {} : { machine: s.machine }),
+    ...(s.owner == null ? {} : { owner: readSessionEvidence(s.owner, 'principal', str) }),
+    ...(s.pr == null ? {} : { pr: readSessionEvidence(s.pr, 'number', num) }),
+    ...(s.finished == null ? {} : { finished: readSessionEvidence(s.finished, 'value', (v) => typeof v === 'boolean' ? v : null) }),
     agent: readAgent(s.agent),
     title: str(s.title),
     cwd: str(s.cwd),

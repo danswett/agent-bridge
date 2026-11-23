@@ -41,7 +41,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         Assert.Equal(AgentProtocol.ScopeReadReply, hello.Scope);
         var result = await Handler()(channel, op, Body(new
         {
-            name = "worker",
+            sessionId = "agent_bridge_1234567890abcdef",
             scope = AgentProtocol.ScopeReadReplyLaunch,
             principal = "person:local",
         }));
@@ -133,7 +133,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
 
         var result = Assert.IsType<LiteSendReply>(await handler(channel, LiteAgentSend.Op, Body(new
         {
-            machine = "target",
+            machine = "33333333333333333333333333333333",
             session = "agent_bridge_1111111111111111",
             text = "please read this",
             scope = AgentProtocol.ScopeReadReplyLaunch,
@@ -144,7 +144,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         Assert.Equal("delivered", result.Outcome);
         var sent = Assert.Single(sender.Calls);
         Assert.Equal(issued, sent.Caller);
-        Assert.Equal(new LiteSendInput("target", "agent_bridge_1111111111111111", "please read this"), sent.Input);
+        Assert.Equal(new LiteSendInput("33333333333333333333333333333333", "agent_bridge_1111111111111111", "please read this"), sent.Input);
         Assert.Equal(issued, credentials.Of(channel));
         Assert.False(credentials.Of(channel)!.FleetLaunch);
         var audit = Directory.GetFiles(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "*.jsonl")
@@ -167,7 +167,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Other, "fixture")),
             credentials: credentials, lite: sender);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LiteAgentSend.Op,
-            Body(new { machine = "target", session = "agent_bridge_1111111111111111", text = "hello" })));
+            Body(new { machine = "33333333333333333333333333333333", session = "agent_bridge_1111111111111111", text = "hello" })));
         Assert.Contains("auditUnwritable", error.Message);
         Assert.Empty(sender.Calls);
     }
@@ -185,9 +185,9 @@ public sealed class ScriptCredentialScopeTests : IDisposable
     sealed class Roster : IScopedFleetRoster
     {
         public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<FleetMachine>>([]);
-        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) =>
-            Task.FromResult(new FleetRosterSnapshot("account-a", []));
+            Task.FromResult<IReadOnlyList<FleetMachine>>([new("fixture", true, [new("agent_bridge_1234567890abcdef", "worker", "idle", DateTimeOffset.UtcNow)], Verified: true)]);
+        public async Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) =>
+            new("account-a", await ReadAsync(ct));
     }
 
     sealed class Channel : IProtocolChannel

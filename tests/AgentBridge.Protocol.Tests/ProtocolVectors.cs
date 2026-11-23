@@ -133,8 +133,23 @@ public static class ProtocolVectors
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
+        DeliveryRecords(catalog.File("delivery.json", "../message-delivery.md", "Local delivery envelope helpers, not channel requests or sender authority."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
+    }
+
+    static void DeliveryRecords(VectorFileBuilder f)
+    {
+        var sender = new DeliverySender("ha-person", "Person", true);
+        var (header, body) = DeliveryEnvelope.Prepare(new(sender.From, Request, "q1", T0, "normal", 0), "hello");
+        f.Record<DeliverySender>("local")
+            .Valid("authenticated-principal", sender)
+            .Valid("unknown-agent", new("unknown"));
+        f.Record<DeliveryHeader>("local").Valid("prepared-handoff", header);
+        f.Record<DeliveryEntry>("local")
+            .Valid("verified-delivery", new(body, header))
+            .Valid("unverified-console", new("console"))
+            .Valid("length-mismatch", new("console", LengthMismatch: true));
     }
 
     static void MachineLoadRecords(VectorFileBuilder f)
@@ -414,6 +429,7 @@ public static class ProtocolVectors
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("host-roster-with-unknown-outcomes", MinimalSession with { Machine = MachineId, Owner = new(), Pr = new(), Finished = new(), StartedAt = null })
             .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
             .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
@@ -627,6 +643,11 @@ public static class ProtocolVectors
             Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
         };
         f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
+        // A guarded clear's escrow (#804): the whole draft escaped as the host shows it, spaces kept.
+        var hidden = ShownText.RevealMarked("rerun the build\u202E gol", rightToLeft: true);
+        f.Record<ClearedComposer>(Host)
+            .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
+            .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
@@ -1170,6 +1191,8 @@ public static class ProtocolVectors
             .Valid("revoked", new AgentRevokeResult("session-1", true));
         f.Record<AgentCredentialResult>(Host)
             .Valid("a-credential", new AgentCredentialResult(AgentProtocol.TokenPrefix + Repeat('A', 43), "agent:machine1/session-1", AgentProtocol.ScopeRead, T0));
+        f.Record<SamePcPinRequest>(Client).Valid("roster-root", new SamePcPinRequest("owner@example", MachineId, Sha, [Sha], MachineId));
+        f.Record<SamePcPinResult>(Host).Valid("pinned", new SamePcPinResult(SamePcPinProtocol.Pinned));
     }
 
     // ---- diagnostics ----

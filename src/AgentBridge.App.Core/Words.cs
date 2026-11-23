@@ -34,6 +34,8 @@ public static class Words
 
     public static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
 
+    public static string? Compactions(int? n) => n is > 0 ? (n == 1 ? "compacted once" : $"compacted {n} times") : null;
+
     // How long a tool call took, as a stopwatch reads (ui.md §6.3, the inspector's Tools, in
     // tabular figures): "0:42", "4:02", "1:02:03".
     public static string Clock(TimeSpan took)

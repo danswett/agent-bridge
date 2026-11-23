@@ -47,6 +47,12 @@ public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, stri
 public sealed partial class SessionCardViewModel : Observable
 {
     static readonly Dictionary<AgentKind, string> AgentNames = new() { [AgentKind.Copilot] = "Copilot", [AgentKind.Claude] = "Claude", [AgentKind.Codex] = "Codex", [AgentKind.Unknown] = "Agent" };
+    // Keep the original card's list and per-session selection in step with the PWA.
+    static readonly string[] SpinnerVerbs = [
+        "Thinking", "Pondering", "Slithering", "Brewing", "Conjuring", "Noodling", "Percolating",
+        "Mulling", "Cogitating", "Simmering", "Ruminating", "Tinkering", "Churning", "Musing",
+        "Crafting", "Forging", "Marinating", "Synthesizing", "Deliberating", "Puttering",
+    ];
 
     readonly CardContext ctx;
     Session session;
@@ -90,6 +96,7 @@ public sealed partial class SessionCardViewModel : Observable
     {
         if (ctx.Host is not { } host) { return null; }
         var result = new SessionHistory(host, session.Id);
+        result.Observe(session);
         result.Changed += OnStoredChanged;
         return result;
     }
@@ -126,6 +133,25 @@ public sealed partial class SessionCardViewModel : Observable
 
     public string View => Line.View;
     public string StatusText => Line.Text;
+    public string HeaderStatusText
+    {
+        get
+        {
+            var line = Line;
+            var facts = line.Facts.ToList();
+            if (line.Rule == 3)
+            {
+                var index = 0;
+                foreach (var c in session.Id) { index = (index + c) % SpinnerVerbs.Length; }
+                facts[0] = SpinnerVerbs[index];
+            }
+            if (Words.Compactions(session.Activity.Compactions) is { } compactions)
+            {
+                facts.Add(compactions);
+            }
+            return string.Join(StatusLine.Separator, facts);
+        }
+    }
     public StatusGlyph Glyph => Line.Glyph;
     public StatusTone StatusTone => Line.Tone;
     // The glyph's accessible name, as a row reads (ui.md §9).
@@ -166,7 +192,9 @@ public sealed partial class SessionCardViewModel : Observable
     public bool Attributed => Voice.Attributed;
     public string Speaker => Attributed ? "Main agent" : AgentName;
     HistoryPart? HeldReply => stored?.ReplyFor(session.Activity.ResponseTurn ?? session.Activity.Turn);
-    public string Response => Voice.Response ?? HeldReply?.Text ?? "";
+    public string Response => !string.IsNullOrEmpty(session.Activity.ResponseId) && stored is not null
+        ? (stored.RepliesFor(session.Activity.ResponseTurn ?? session.Activity.Turn) is { Length: > 0 } replies ? replies : Voice.Response ?? "")
+        : Voice.Response ?? HeldReply?.Text ?? "";
     public bool HasResponse => Response.Length > 0;
     public bool ResponseTruncated => Voice.Response is null ? HeldReply?.Truncated == true : Voice.ResponseTruncated;
     // The main agent had a response, but the session budget left it out to make room for its
@@ -249,7 +277,6 @@ public sealed partial class SessionCardViewModel : Observable
             if (b?.Agents > 0) { facts.Add(Words.Plural(b.Agents, "background agent", "background agents")); }
             if (b?.Shells > 0) { facts.Add(Words.Plural(b.Shells, "background command", "background commands")); }
             if (session.Activity.TurnCount is { } t) { facts.Add($"{t} turns"); }
-            if (session.Activity.Compactions is > 0 and var c) { facts.Add($"{c} compaction{(c == 1 ? "" : "s")}"); }
             if (session.ProcessId is { } pid) { facts.Add($"pid {pid}"); }
             if (session.Cwd is { Length: > 0 } cwd) { facts.Add(cwd); }
             return string.Join(" · ", facts);
@@ -574,7 +601,7 @@ public sealed partial class SessionCardViewModel : Observable
         Delegates.RefreshTimes(now);
     }
 
-    static readonly string[] StatusProperties = [nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel)];
+    static readonly string[] StatusProperties = [nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(HeaderStatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel)];
 
     void RaiseStatus()
     {

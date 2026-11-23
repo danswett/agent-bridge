@@ -55,7 +55,7 @@ public sealed class StopOptions
     // How long a first press waits for the second. agent-ha-bridge: StopConfirmSeconds.
     public TimeSpan ConfirmWindow { get; init; } = TimeSpan.FromSeconds(Stops.ConfirmSeconds);
 
-    // How long the agent is given to exit on /exit before it is terminated.
+    // The total graceful budget, including waiting to type and injecting /exit.
     // agent-ha-bridge: Stop-BridgeCopilotSession's GraceSeconds.
     public TimeSpan Grace { get; init; } = TimeSpan.FromSeconds(12);
 
@@ -102,6 +102,7 @@ public sealed class StopService : ISessionStopper
     // First presses waiting for their second, by session. Several can be waiting at once (two
     // devices pressed), and any one of them confirms.
     readonly Dictionary<string, List<Arm>> arms = new(StringComparer.Ordinal);
+    readonly System.Collections.Concurrent.ConcurrentDictionary<IHeldProcess, byte> uncertainProcesses = new();
 
     sealed record Arm(string Token, int ProcessId, DateTimeOffset StartedAt, DateTimeOffset At);
 
@@ -121,7 +122,7 @@ public sealed class StopService : ISessionStopper
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
-        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy);
+        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy, allowExclusion: true);
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
@@ -137,10 +138,11 @@ public sealed class StopService : ISessionStopper
 
     public Task<StopResult> StopAuditedAsync(StopRequest request, Func<int, DateTimeOffset, bool>? beforeDispatch,
         CancellationToken cancellationToken = default, string? principal = null, Action? onConflict = null,
-        Action? onReplay = null)
+        Action? onReplay = null, bool personConfirmation = true)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key)) { return Task.FromResult(Refused("request must be a UUID")); }
-        return requests.Once(key, () => EndAsync(request, key, beforeDispatch), result =>
+        if (!personConfirmation && request.Confirm is not null) { return Task.FromResult(Refused("person-required")); }
+        return requests.Once(key, () => EndAsync(request, key, beforeDispatch, personConfirmation), result =>
             log($"end {key.ToString()[..8]} for {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Forced == true ? " (terminated)" : "")}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
             owner: (principal, request.Id), foreign: () =>
             {
@@ -149,7 +151,7 @@ public sealed class StopService : ISessionStopper
             }, repeated: onReplay is null ? null : result => { onReplay(); return result; });
     }
 
-    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch)
+    async Task<StopResult> EndAsync(StopRequest request, Guid key, Func<int, DateTimeOffset, bool>? beforeDispatch, bool personConfirmation)
     {
         Session session;
         int processId;
@@ -187,6 +189,7 @@ public sealed class StopService : ISessionStopper
 
             if (ConfirmationHint(session) is { } doing)
             {
+                if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                 if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
                 {
                     if (beforeDispatch?.Invoke(processId, startedAt) == false) { return AuditRefused(); }
@@ -194,7 +197,7 @@ public sealed class StopService : ISessionStopper
                 }
                 confirmed = true;
             }
-            Disarm(session.Id);
+            if (personConfirmation) { Disarm(session.Id); }
         }
         catch (Exception e)
         {
@@ -202,11 +205,11 @@ public sealed class StopService : ISessionStopper
             return Refused("the machine couldn't end the session");
         }
 
-        if (!gate.TryClaim(session.Id, key)) { return Busy(); }
+        if (!gate.TryClaim(session.Id, key, allowExclusion: true)) { return Busy(); }
         StopResult result;
         try
         {
-            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch); }
+            try { result = await EndProcessAsync(session, processId, startedAt, confirmed, beforeDispatch, personConfirmation); }
             catch (Exception e)
             {
                 log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
@@ -243,16 +246,42 @@ public sealed class StopService : ISessionStopper
     // that was idle when it arrived is checked again once the typing turn is taken, which can
     // be a while if another session is being typed into: a session that has started working
     // or asking meanwhile needs a second press like any other.
-    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch)
+    async Task<StopResult> EndProcessAsync(Session session, int pid, DateTimeOffset startedAt, bool confirmed, Func<int, DateTimeOffset, bool>? beforeDispatch, bool personConfirmation)
     {
+        StopResult? CheckAgent()
+        {
+            if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+            if (probe.Active() is { } changed) { return Refused(changed); }
+            if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
+            { return new(StopOutcome.Confirm, "person-required"); }
+            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
+            if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
+                || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
+            { return Stale("the session's process has changed"); }
+            return null;
+        }
         var opened = control.Open(pid, startedAt);
         if (opened.Refusal is { } refusal) { return Refused(refusal); }
         // Gone between the press and now: what the press asked for has happened.
-        if (opened.Process is not { } held) { return Ended(false); }
-        using (held)
+        if (opened.Process is not { } held)
+        {
+            if (!personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+            return Ended(false);
+        }
+        Task? pendingWorker = null;
+        // Whether the handle outlives this stop, until every failed worker is proven gone.
+        var hold = false;
+        var began = Environment.TickCount64;
+        using var deadline = new CancellationTokenSource(options.Grace);
+        try
         {
             var typed = false;
-            await gate.WaitToTypeAsync();
+            var ownsTyping = false;
+            try { await gate.WaitToTypeAsync(deadline.Token); ownsTyping = true; }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            { log($"end of {Short(session.Id)} exhausted its typing budget; continuing without typing"); }
+            catch (InvalidOperationException e)
+            { log($"end of {Short(session.Id)} cannot type; continuing to termination: {e.Message}"); }
             try
             {
                 if (probe.Active() is { } active) { return Refused(active); }
@@ -264,29 +293,45 @@ public sealed class StopService : ISessionStopper
                 var asking = MayBeAsking(now, out var notReady);
                 if (!confirmed && ConfirmationHint(now, asking) is { } doing)
                 {
+                    if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                     if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                     return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle");
                 }
-                if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
+                if (personConfirmation && beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
                 await SetEndingAsync(session.Id, true);
-                if (!asking)
+                if (!personConfirmation && CheckAgent() is { } agentRefusal) { return agentRefusal; }
+                if (ownsTyping && !asking)
                 {
                     InjectionResult typing;
-                    try { typing = await injector.InjectAsync(pid, ExitKeys); }
-                    catch (Exception e) { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
-                    typed = typing.Status != InjectionStatus.NothingTyped;
+                    StopResult? fenceRefusal = null;
+                    string? Proceed() { fenceRefusal = CheckAgent(); return fenceRefusal is null ? null : "agent-stop-refused"; }
+                    // Screen reads share the injector's slot, so the earlier check can be stale.
+                    var plan = personConfirmation ? ExitKeys : ExitKeys with { Proceed = Proceed };
+                    try { typing = await injector.InjectAsync(pid, plan, deadline.Token); }
+                    catch (InjectorWorkerException e) when (e.Exited.IsCompletedSuccessfully)
+                    { typing = new InjectionResult(InjectionStatus.Interrupted, e.Message); }
+                    catch (Exception e)
+                    {
+                        pendingWorker = e is InjectorWorkerException worker ? worker.Exited : Task.FromException(e);
+                        hold = true;
+                        log($"end of {Short(session.Id)} retains its injector fence and PID handle: {e.Message}");
+                        typing = new InjectionResult(InjectionStatus.Interrupted, e.Message);
+                    }
+                    if (typing.Status == InjectionStatus.NothingTyped && fenceRefusal is not null) { return fenceRefusal; }
+                    typed = pendingWorker is null && typing.Status != InjectionStatus.NothingTyped;
                     log($"typed /exit into {Short(session.Id)} (pid {pid}) -> {typing.Status} {typing.Detail}");
                 }
-                else
+                else if (ownsTyping)
                 {
                     log(notReady is not null
                         ? $"{Short(session.Id)} (pid {pid}) has not been seen ready since it was started here, so /exit is not typed"
                         : $"{Short(session.Id)} (pid {pid}) is asking a question, so /exit is not typed");
                 }
             }
-            finally { gate.DoneTyping(); }
+            finally { if (ownsTyping && pendingWorker is null) { gate.DoneTyping(); } }
 
-            if (typed && await held.WaitForExitAsync(options.Grace))
+            var remaining = options.Grace - TimeSpan.FromMilliseconds(Environment.TickCount64 - began);
+            if (typed && await held.WaitForExitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))
             {
                 log($"ended {Short(session.Id)}: exited cleanly (pid {pid})");
                 return Ended(false);
@@ -295,6 +340,15 @@ public sealed class StopService : ISessionStopper
             {
                 return Failed($"{started}, so the host stopped short of terminating the session; check at the machine");
             }
+            // A failed injector worker, this stop's or an earlier delivery's, may still be typing:
+            // terminating would let the id pass to another process it could type into.
+            if (pendingWorker is not null || gate.WorkerProof() is not null)
+            {
+                hold = true;
+                log($"end of {Short(session.Id)} (pid {pid}) not terminated: an injector worker is not proven gone");
+                return Failed("a typing attempt may still be running, so the host kept the session's process held and did not end it; check at the machine");
+            }
+            if (!personConfirmation) { return Failed("still-running"); }
             var refused = held.Terminate();
             if (refused is not null) { log($"end of {Short(session.Id)} (pid {pid}) could not terminate: {refused}"); }
             if (await held.WaitForExitAsync(options.TerminateWait))
@@ -306,6 +360,34 @@ public sealed class StopService : ISessionStopper
                 ? "the machine couldn't end the session"
                 : "the session's process was terminated but has not exited; check at the machine");
         }
+        finally
+        {
+            // On every path, a refusal included: the id must not pass on while any worker is unproven.
+            if (!hold && gate.WorkerProof() is null) { held.Dispose(); }
+            else
+            {
+                uncertainProcesses.TryAdd(held, 0);
+                _ = ReleaseWhenQuietAsync(held, pendingWorker);
+            }
+        }
+    }
+
+    // own: this stop's failed worker, whose typing slot it still holds.
+    async Task ReleaseWhenQuietAsync(IHeldProcess held, Task? own)
+    {
+        try
+        {
+            if (own is not null) { await own; }
+            while (gate.WorkerProof() is { } others) { await others; }
+        }
+        catch (Exception e)
+        {
+            log($"injector quiescence remains unknown for pid {held.Id}; retaining its handle{(own is null ? "" : " and typing fence")}: {e.Message}");
+            return;
+        }
+        held.Dispose();
+        uncertainProcesses.TryRemove(held, out _);
+        if (own is not null) { gate.DoneTyping(); }
     }
 
     // A Copilot question, a subagent's included, written since the session source last read

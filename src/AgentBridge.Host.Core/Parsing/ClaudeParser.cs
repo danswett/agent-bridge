@@ -50,7 +50,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // A nested agent's start and parent are written only beside it (ClaudeSubagents, Nested).
 // What any sub-agent says is in its own transcript, never in the session's response.
 // Sign-in and turn-ending errors (session.attention): TODO(#800), once a real redacted sample of
-// Claude Code's is captured (AgentErrors). None was on VM1, and no string is guessed meanwhile.
+// Claude Code's is captured (AgentErrors). None was in #800's sample, and no string is guessed meanwhile.
 internal sealed class ClaudeParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
@@ -74,6 +74,13 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
+    bool _responseContiguous;
+    bool _replyIdentityKnown = true;
+    readonly HashSet<string> _replyRecords = new(StringComparer.Ordinal);
+    const int MaxReplyRecords = 4096;
+    // The tool calls and questions of the turn, as history counts their parts.
+    readonly HashSet<string> _replyTools = new(StringComparer.Ordinal);
+    readonly HashSet<string> _replyQuestions = new(StringComparer.Ordinal);
     // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
     // The queue carries no mark of who wrote to it, and a prompt the person types while the agent
     // works is queued the same way, so a queued notice is not an end until its delivery is (see
@@ -94,6 +101,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     {
         base.Reset();
         _responseMessage = null;
+        ResetReplyIdentity(known: true);
         _queued.Clear();
         _wokenAt.Clear();
         _unclaimed.Clear();
@@ -105,12 +113,43 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // window, a delegate by its notice; until then it is listed with no outcome.
     public override void Skipped()
     {
+        ResetReplyIdentity(known: false);
+        S.ResponseId = null;
         S.Background.ForgetShells();
         S.Background.ForgetRuns();
         // A queued notice may have been delivered, and an agent woken and stopped again, in the
         // bytes never read. An end not claimed yet keeps its outcome.
         _queued.Clear();
         _wokenAt.Clear();
+    }
+
+    // A window that opens inside a turn (the skim saw its prompt, not the records after it). A part id
+    // is the record's hash and its index in that record, so unread earlier records cannot change it,
+    // except through a message that may have begun before it, and through tool calls an unread record
+    // repeated, which history dedupes. Both stay without identity. History skips a repeated call without
+    // a part, so a tool-only record does not end the doubt: it stays open, and every message seen in it,
+    // until a record that certainly adds a part (text or thinking).
+    bool _replyGap;
+    bool _edgeOpen;
+    readonly HashSet<string> _edgeMessages = new(StringComparer.Ordinal);
+
+    void ResetReplyIdentity(bool known, bool gap = false)
+    {
+        _replyGap = gap;
+        _edgeOpen = gap;
+        _edgeMessages.Clear();
+        _replyIdentityKnown = known;
+        _responseContiguous = false;
+        _replyRecords.Clear();
+        _replyTools.Clear();
+        _replyQuestions.Clear();
+    }
+
+    protected override void Unreadable(ReadOnlySpan<byte> line)
+    {
+        base.Unreadable(line);
+        _replyIdentityKnown = false;
+        _responseContiguous = false;
     }
 
     protected override void Count(JsonElement e)
@@ -128,8 +167,19 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
                 TurnStarts();
+                ResetReplyIdentity(known: true, gap: true);
                 S.Prompt(Json.Time(e, "timestamp"));
 
+                S.UncountedTurn = false;
+                break;
+            // The person's message sent while the agent worked: not a user entry (below), a prompt all the same.
+            case "attachment" when QueuedPrompt(e) is { } queuedText:
+                S.StartedAt ??= Json.Time(e, "timestamp");
+                S.FirstUserMessage ??= queuedText;
+                S.UserMessage = queuedText;
+                TurnStarts();
+                ResetReplyIdentity(known: true, gap: true);
+                S.Prompt(Json.Time(e, "timestamp"));
                 S.UncountedTurn = false;
                 break;
             case "system" when Json.Str(e, "subtype") == "compact_boundary":
@@ -152,6 +202,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var before = S.Background.Version;
         Delegation(e, at);
         var delegates = S.Background.Version != before;
+        if (delegates) { _responseContiguous = false; }
         if (type is "user" or "assistant")
         {
             S.Cwd = Json.Str(e, "cwd") ?? S.Cwd;
@@ -165,6 +216,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 return true;
             case "assistant":
                 Assistant(e, at);
+                return true;
+            case "attachment" when QueuedPrompt(e) is { } queuedText:
+                ResetReplyIdentity(known: true);
+                UserPrompt(queuedText, at);
                 return true;
             case "system":
                 switch (Json.Str(e, "subtype"))
@@ -399,6 +454,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (Prompt(e) is not { } text) { return; }
         if (IsNotice(e, text))
         {
+            _responseContiguous = false;
             // A turn of the main agent's, about a delegate or a command that stopped: neither
             // the person's message nor a prompt counted, and the text in it is the delegate's.
             S.UncountedTurn = true;
@@ -413,6 +469,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             S.Activity(at);
             return;
         }
+        ResetReplyIdentity(known: true);
         UserPrompt(text, at);
     }
 
@@ -423,28 +480,66 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         // nothing about which model the session runs.
         if (Text.NonBlank(Json.Str(message, "model")) is { } model && !model.StartsWith('<')) { S.Model = model; }
         var askedForTools = false;
+        var record = RecordId;
+        if (record is null || _replyRecords.Count >= MaxReplyRecords || !_replyRecords.Add(record))
+        {
+            _replyIdentityKnown = false;
+            S.ResponseId = null;
+        }
+        var part = 0;
         // Without an id, the entry itself is the message.
-        var key = Json.Str(message, "id") ?? Guid.NewGuid().ToString("N");
+        var messageId = Json.Str(message, "id");
+        var key = messageId ?? Guid.NewGuid().ToString("N");
+        if (_edgeOpen)
+        {
+            if (messageId is not null) { _edgeMessages.Add(messageId); }
+            if (_edgeMessages.Count >= MaxReplyRecords) { _replyIdentityKnown = false; S.ResponseId = null; }
+            if (Blocks(message).Any(b => (Json.Str(b, "type") == "text" && Text.NonBlank(Json.Str(b, "text")) is not null)
+                || (Json.Str(b, "type") == "thinking" && Text.NonBlank(Json.Str(b, "thinking")) is not null))) { _edgeOpen = false; }
+        }
+        var toolBeforeText = false;
         foreach (var block in Blocks(message))
         {
             switch (Json.Str(block, "type"))
             {
                 case "thinking" when Text.NonBlank(Json.Str(block, "thinking")) is { } thinking:
                     S.Reasoning = thinking;
+                    part++;
+                    _responseContiguous = false;
                     break;
                 case "text" when Text.NonBlank(Json.Str(block, "text")) is { } text:
                     // One reply can hold several text blocks, in one entry or (as Claude
                     // streams them) in several entries sharing the message id: they are
                     // one response, not each other's replacements.
-                    S.Response = key == _responseMessage && S.Response is { } sofar ? sofar + "\n\n" + text : text;
+                    var append = key == _responseMessage && S.Response is not null;
+                    var extendsPart = append && messageId is not null && _responseContiguous && S.ResponseTurn == S.TurnId;
+                    if (!extendsPart)
+                    {
+                        // Legacy text can span several history parts. Never give that
+                        // composite a single part id, or guess through an unread window.
+                        S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
+                            && (messageId is null || !_edgeMessages.Contains(messageId))
+                            ? Conversation.TurnIds.Part(record, part) : null;
+                        part++;
+                    }
+                    S.Response = append ? S.Response + "\n\n" + text : text;
                     S.ResponseTurn = S.TurnId;
                     _responseMessage = key;
+                    _responseContiguous = messageId is not null;
                     break;
                 case "tool_use":
                     {
                         var id = Json.Str(block, "id");
                         var name = Json.Str(block, "name");
                         if (id is null || name is null) { break; }
+                        // History adds a part for a call, and one for its question, once per
+                        // id in the turn. The turn was read whole (identity is known), so the
+                        // ids seen say exactly how many parts precede the text after this tool.
+                        if (_replyTools.Count >= MaxReplyRecords) { _replyIdentityKnown = false; S.ResponseId = null; }
+                        if (_replyGap) { toolBeforeText = true; }
+                        if (_replyTools.Add(id)) { part++; }
+                        if (name == "AskUserQuestion" && Json.Get(block, "input") is not null && _replyQuestions.Add(id)) { part++; }
+                        _responseContiguous = false;
                         askedForTools = true;
                         var input = Json.Get(block, "input");
                         S.Tools.Start(id, name, ToolSummary.From(input), Now(at));
@@ -468,9 +563,22 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     // entries Count and User take as the person's prompt, so history's turn ids are activity.turn's.
     internal static string? TurnStart(JsonElement e)
     {
+        if (QueuedPrompt(e) is { } queued) { return queued; }
         if (Json.Str(e, "type") != "user" || Json.Bool(e, "isSidechain") == true || Json.Bool(e, "isMeta") == true || Json.Bool(e, "isCompactSummary") == true) { return null; }
         if (Prompt(e) is not { } text || IsInterrupt(text) || IsNotice(e, text)) { return null; }
         return text;
+    }
+
+    // The person's message sent while the agent was working (2.1.317, seen live): Claude writes it as an
+    // attachment (type "queued_command", origin.kind "human", commandMode "prompt") after the queue's
+    // enqueue and remove, and no user entry. A notice (origin task-notification) is not one; the
+    // attachment's own prompt is the text, as the person typed it.
+    internal static string? QueuedPrompt(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "attachment" || Json.Bool(e, "isSidechain") == true || Json.Obj(e, "attachment") is not { } a
+            || Json.Str(a, "type") != "queued_command" || Json.Str(a, "commandMode") != "prompt"
+            || Json.Obj(a, "origin") is not { } origin || Json.Str(origin, "kind") != "human") { return null; }
+        return Text.NonBlank(Json.Str(a, "prompt")) is { } text && !IsInterrupt(text) && !text.StartsWith("<command-", StringComparison.Ordinal) ? text : null;
     }
 
     // The text of a prompt, or null for an entry that is not one: tool results, and the
