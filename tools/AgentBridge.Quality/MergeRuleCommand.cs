@@ -157,6 +157,8 @@ static class MergeRuleCommand
     /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
     sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver)
     {
+        /// <summary>The CODEX_WAIVER variable is "on" (codex_waiver); unset is off.</summary>
+        public bool CodexWaiver { get; init; }
         public IGitHub GitHub { get; } = github;
         public MergeRuleConfig Config { get; } = config;
         public string Slug { get; } = slug;
@@ -249,6 +251,7 @@ static class MergeRuleCommand
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var session = new Session(github, config, slug, config.Arm64Waiver?.Active() == true)
         {
+            CodexWaiver = config.CodexWaiver is { } codexWaiver && codexWaiver.Switch == "CODEX_WAIVER" && (variable ?? Environment.GetEnvironmentVariable)(codexWaiver.Switch) == "on",
             PostMerge = PostMergeJobs(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "catalog.yml"), output),
         };
         var problems = 0;
@@ -762,7 +765,7 @@ static class MergeRuleCommand
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
-        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge);
+        var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge) with { CodexWaiverOn = session.CodexWaiver };
         return history ? WithReceiptHistory(session, facts) : facts;
     }
 
