@@ -28,6 +28,10 @@ which id is which client. That is the only thing missing for the per-client spli
 * **Open check for the code PR:** devices.md signs `kind` in the member record; confirm that `platform` is covered by the signed,
   hash-chained entry too. If it is not, write `ClientKind` only and say so.
 
+## Caveat: no roster on the host yet
+
+The host does not have a person-device roster today. `Program.cs` wires `NoPersonRoster` ("None until Trust's roster lands"), so `IPersonDeviceRoster.Find` returns nothing and **real rows omit these fields until Trust's #55 roster (slice A, with #972 slice 2) lands** and `personRoster` is replaced. The code ([#4062](https://github.com/danswett/agent-bridge/pull/4062)) is the writer, the validation and the lookup, tested against a fake roster; it changes no row written today. Until then the per-client split cannot be read from real logs, and every row is unattributed.
+
 ## Compatibility
 
 Following G6b3 ([#4027](https://github.com/danswett/agent-bridge/pull/4027)): the fields are omitted when absent, so every row written
