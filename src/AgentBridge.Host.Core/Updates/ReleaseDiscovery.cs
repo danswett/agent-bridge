@@ -53,6 +53,10 @@ public sealed partial class ReleaseDiscovery : IDisposable
     const string AssetApiPrefix = "https://api.github.com/repos/danswett/agent-bridge/releases/assets/";
     // A relay copy older than this is not used: GitHub is asked, or its backoff says when it will be.
     public static readonly TimeSpan CdnOldest = TimeSpan.FromHours(1);
+    // A relay copy older than this can still OFFER a newer release (an offer meets the halt and digest checks as any does) but can never say there
+    // is nothing newer: it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed). That is "unknown": the check
+    // fails with words and tries again, as for any refused answer. The length of the check interval: a copy kept for it is never older than twice this.
+    public static readonly TimeSpan CdnFreshFor = TimeSpan.FromMinutes(10);
     // GitHub is asked at least this often, whatever the relay says.
     public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
     public static readonly TimeSpan GithubRelayAtMost = TimeSpan.FromHours(24);
@@ -197,9 +201,10 @@ public sealed partial class ReleaseDiscovery : IDisposable
             Answer? rechecked = null;
             if (cdn && url == GitHubList && channel is not null && (revalidate || press))
             {
+                // GitHub first; the CDN is the fallback if it refuses (it is asked below once GitHub has).
                 log?.Invoke(revalidate
-                    ? $"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}"
-                    : "update check: the CDN was not asked, as a person asked for this check; asking GitHub");
+                    ? $"update check: GitHub is asked first, as it has not answered here in the last {Span(GithubRevalidateEvery)}, and the CDN is the fallback if it refuses; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}"
+                    : "update check: GitHub is asked first, as a person asked for this check, and the CDN is the fallback if it refuses; asking GitHub");
                 if (!holding)
                 {
                     rechecked = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
@@ -298,7 +303,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
         return channel is null ? "this check's channel isn't known"
             : revalidate && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)) ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
             : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
-            : CdnProblem(state.Body!, channel, prereleases, floor, installed);
+            : CdnProblem(state.Body!, channel, prereleases, floor, installed, now - copied);
     }
 
     bool RelayWindow(State state, DateTimeOffset now)
@@ -393,7 +398,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 bytes.Write(buffer, 0, read);
             }
             var body = System.Text.Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length);
-            return CdnProblem(body, channel, prereleases, floor, installed) is { } problem ? (null, age, problem) : (body, age, null);
+            return CdnProblem(body, channel, prereleases, floor, installed, age) is { } problem ? (null, age, problem) : (body, age, null);
         }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -411,7 +416,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // offered it (floor), nor than what is installed. Judged by that, not by the newest tag
     // anywhere in the list: a forged newer release carrying only another channel's feed would
     // otherwise pass while Velopack took an older one (review 6711939053).
-    internal static string? CdnProblem(string body, string channel, bool prereleases, string? floor, string? installed)
+    internal static string? CdnProblem(string body, string channel, bool prereleases, string? floor, string? installed, TimeSpan? age = null)
     {
         if (!IsList(body)) { return "its list could not be read"; }
         using var doc = JsonDocument.Parse(body);
@@ -438,6 +443,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
         if (Selected(doc.RootElement, channel, prereleases) is not { } selected) { return "its list had nothing to install on this machine"; }
         if (floor is not null && Version.TryParse(floor, out var before) && selected < before) { return "its list was older than GitHub's last list here"; }
         if (installed is not null && Version.TryParse(installed, out var current) && selected < current) { return "its list was older than the version installed here"; }
+        // Older than CdnFreshFor, the copy is only an offer: it names a release newer than what is installed, or it says nothing about whether one exists.
+        if (age is { } old && old > CdnFreshFor && !(installed is not null && Version.TryParse(installed, out var running) && selected > running))
+        {
+            return $"its copy was {Span(old)} old and names nothing newer than what is installed, so it could predate a publish";
+        }
         return null;
     }
 

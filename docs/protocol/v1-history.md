@@ -331,7 +331,8 @@ and render all replies in the current turn, not just the latest live text. A liv
 `responseId` is one streaming slot; a page replaces it by the same part id, without a
 second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
-single-live-reply fallback is unchanged; older hosts omit it.
+single-live-reply fallback is unchanged; older hosts omit it. A client applies it to an id-less last part only: a reply with no
+id that follows an identified one starts a new part and never rewrites that one (#3649).
 Older clients ignore the optional field and continue reading `response`/`own.response`.
 Codex can revise the same identified slot after a full history page: a part's time
 and non-truncated text are not completion markers. Clients accept newer live
