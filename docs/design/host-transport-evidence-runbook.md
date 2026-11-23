@@ -27,7 +27,7 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
-| Drop a disposable host's relay connection, then restore it (S5, S8) | SRE, running exactly these two commands on that host and only after the owner approves that event. Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
+| **PENDING OWNER (who runs the elevated commands: the owner, or an owner-approved elevated session; not SRE until the owner says).** Drop a disposable host's relay connection, then restore it (S5, S8) | The commands need elevation. Exactly these two commands, run only after the owner approves that event, by whoever the owner names (see the first column). Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
 | Cut the response read to the disposable HA (S5) | SRE, the same two commands with the disposable HA's address, on the disposable HA's side | SRE; the disposable HA belongs to the run, so no fleet host changes |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
@@ -38,11 +38,11 @@ Home Assistant (the comparison runs on a disposable HA only).
 ## Preconditions (SRE checks, records each)
 
 1. The G9 stack is merged on main and every disposable host runs a build that contains it, deployed at S-1 (SRE-approved, never the owner). Record each host's build head.
-2. **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3 from the fleet's existing idle VMs, and 3 source-target pairs,
+2. **PENDING OWNER (where the 3 hosts come from, and any draining or new VM).** **A disposable host is a fleet VM with no live sessions.** SRE picks at least 3 from the fleet's existing idle VMs, and 3 source-target pairs,
    each run in both directions. If fewer than 3 are idle, **the run waits**: draining another lead's sessions, or creating a new VM, needs the
    owner's explicit approval first, and the lead who owns a host's sessions ends them (by list) before it counts as disposable. SRE verifies each
    host shows no live session that is not the run's own. A host with any other live session is not disposable.
-3. A **disposable HA instance** exists for the comparison, provisioned by **SRE** from an existing disposable HA (or its existing image), with **no
+3. **PENDING OWNER (whether a disposable HA exists).** A **disposable HA instance** exists for the comparison, provisioned by **SRE** from an existing disposable HA (or its existing image), with **no
    new account and no new credential**. If none exists, the run waits and the owner is asked; nothing is improvised. The real one is never used.
 4. The launch grant is person-issued at S1; no script or builder creates, widens or reuses one.
 5. **The run plan is frozen before request 1** and attached to the receipt: N = 50 consecutive compared launches inside at least 100 pairs,
