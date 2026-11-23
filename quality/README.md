@@ -807,11 +807,18 @@ request and a main push **green in about 5 to 6 minutes**. The numbers below are
 | Job-minutes per run | 32 on average (58 at most) | 101 on average (160 at most) |
 | Runs cancelled | 3 of 10 pull-request runs (a newer push to the same PR: by design) | **3 of 10 main runs**: a merge replaces the queued run in the one `ci-main` group |
 
-**What gates main (owner decision, Nov 23).** Main is green on **build and test only**. The app installer and `publish`
-leave `ci.yml` for the release train (#3769), which builds, verifies the installer and publishes after the merge: a bad
-installer blocks the release, never a merge. `ci.yml` keeps `plan`, `product`, the `app` job's build and its self-test
-(no `vpk pack`), the PWA, Home Assistant and light jobs, and `quality-gate`. Until #3769 lands, the text of
-"Releases and updates" in docs/app-windows.md describes what runs.
+**Status.** *Decided* (owner, relayed by Chief and Eng R8, Nov 22 and 23): the 5 to 6 minute target; main green on build and
+test only; per-commit main concurrency; the `ab-ci` labels behind `AB_CI_SELF_HOSTED` with the fork guard; Linux, Arm64 and
+the app UI self-test jobs hosted. *Proposed* (not yet recorded as decisions, marked below): the cache policy, the shards, the
+path-filter extension, the reused-machine rules, the cost figures and the order of work.
+
+**What gates main (decided, Nov 23; Eng R8b's ruling).** Main is green on **build and test only**: the required jobs are
+`plan`, `product`, the `app` job's build and UI self-test, the PWA, Home Assistant and light jobs, and `quality-gate`.
+`ci.yml` **keeps** packing, the installer check, `sign`, `attest` and `vpk` as **non-required jobs**: they run beside the
+gate, upload the bytes they built, and hold neither main nor a merge. The release train (#3769) **never rebuilds**: it
+installs and self-tests those exact bytes before it publishes, and when that fails it publishes nothing and raises an alert,
+so a bad installer blocks the release, never a merge. `publish` is the train's, not `ci.yml`'s. Until that lands, the text
+of "Releases and updates" in docs/app-windows.md describes what runs.
 
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
@@ -834,20 +841,22 @@ Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Wind
   `tests/AgentBridge.Quality.Tests/CiRunnerRoutingTests.cs` fails a workflow whose self-hosted job lacks the guard,
   or that has any self-hosted job and a `pull_request_target` trigger.
 * **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
-  `clean: true`, then `git clean -ffdx`), keeps nothing between jobs except caches named below, writes only under
+  `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
   `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
   (those machines also run fleet sessions: a runner uses its own account with none of theirs, and a job that needs a secret gets
   it from the workflow, as now). Tests that bind a fixed port, a named pipe or a machine-wide mutex name must take a
   per-job name: a clash there is a bug this move exposes, not one to retry.
 
-**Warm caches.** Only content-addressed, immutable inputs persist on a runner: the NuGet global-packages folder and the
-.NET SDK. `obj/` and `bin/` never do (a stale build output is cross-job state); incremental build speed comes from the
-packages being there, and from `actions/cache` keyed on the lock files where a hosted runner is used. Behind a firewall
+**Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
+(`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on
+the lock files and the SDK version, and **only a push to `main` saves a cache**: a pull request restores, never saves, so
+it cannot plant an entry a later job trusts. The `app` and `publish`-side jobs (what ships) restore from the package feeds
+only, never from a cache. `obj/` and `bin/` are never cached (a stale build output is cross-job state). Behind a firewall
 that blocks `api.nuget.org`, restore through the internal feed: `dotnet restore --source
 https://packagefeedproxy.microsoft.io/nuget/v3/index.json`, with `-p:NuGetAudit=false` on a local command only (CI keeps
 the audit and `nuget.config`).
 
-**Shards.** *The app self-test first:* it is one process running 46 `Check...` sections in a row (7.5 min), and is the
+**Shards (proposed).** *The app self-test first:* it is one process running 46 `Check...` sections in a row (7.5 min), and is the
 critical path. Add `--self-test-sections <names>`, default all, so a shard runs the shared setup and only its sections; a
 matrix of three covers a fixed partition by section (balanced by their timings in `result.json`), each writing its own
 result file, and a final step merges them, failing if a section ran twice or not at all. A section that depends on state an
@@ -855,7 +864,7 @@ earlier one left must be fixed or kept with that one: a "each section alone" job
 *Product tests* shard by test project into three groups of about equal time (`dotnet test` per project, the build done once
 per runner). Every shard is still a full assertion run: none is skipped or loosened to save time.
 
-**Path filters.** The catalog's selector already skips what a change cannot affect (`no_test_paths`, `triggers`): a
+**Path filters (proposed extension).** The catalog's selector already skips what a change cannot affect (`no_test_paths`, `triggers`): a
 docs-only PR runs nothing .NET (0.9 min). Extend it so a PWA-only change runs `pwa-ui` and `pwa-e2e` only (about 6 min
 against 12), and a relay-only one the relay and its image.
 
@@ -865,21 +874,22 @@ against 12), and a relay-only one the relay and its image.
 |---|---|---|
 | Today | 8 to 14 | about 14 (p90 22), then 12 to 20 more for installer and publish |
 | Per-SHA main concurrency | none | none; no merge cancelled |
-| Installer and publish to the release train | none | the gate no longer waits for 3 + 9 + 3 min |
+| Pack, installer, sign, attest non-required; `publish` the train's | none | the gate no longer waits for 3 + 9 + 3 min |
 | Warm caches on `ab-ci` | -1.5 to -2 (build 130 s to about 50 s; no queue) | the same |
 | Test shards (app self-test x3, product x3) | app 12 to about 5, product windows 6.4 to about 4.5 | the same |
 | Path filters | docs-only about 1; PWA-only about 6 | the same |
 | **All together** | **about 5 to 6** | **about 5 to 6**; the release train adds about 15 after the merge |
 
-**Cost.** Hosted minutes on a public repository are free, so what is spent is machines: the `ab-ci` pool on SRE-owned
+**Cost (estimate).** Hosted minutes on a public repository are free, so what is spent is machines: the `ab-ci` pool on SRE-owned
 machines (SRE R4 prices extra VMs; the owner has approved adding more). Sharding spends more job-minutes to save wall time (about
 6 more per run for each extra setup and build); moving pack, installer and publish out of the gate takes about 40 to 50
 job-minutes off every main run. Net (estimate), main falls from 101 to about 55 job-minutes on average; a pull request stays near 35.
 
-**Order of work.** (1) The per-SHA concurrency line, and the test that pins `ci.yml`'s concurrency (`CiPlanTests`) with it:
+**Order of work (proposed).** (1) The per-SHA concurrency line, and the test that pins `ci.yml`'s concurrency (`CiPlanTests`) with it:
 no risk, stops the cancelling. (2) The routing guard and its lint, with `ab-ci` off (`AB_CI_SELF_HOSTED` unset). (3) The
 runners registered, then `AB_CI_SELF_HOSTED=true`. (4) The app self-test sections option, the each-section-alone job, then
-the shards. (5) Product shards, the PWA filters. (6) The installer and publish leave `ci.yml` when #3769 lands. Quality alone
+the shards. (5) Product shards, the PWA filters. (6) Pack, installer, `sign` and `attest` become non-required jobs in `ci.yml`, and the train installs and self-tests their bytes
+before it publishes (#3769); `publish` moves to the train. Quality alone
 pushes `ci.yml` and the merge rule: this document is the design, and steps (1) and (2) are already written as a patch,
 `docs/design/proposals/ci-per-sha-and-ab-ci-routing.diff` (`git apply` it: `ci.yml`, the plan's pinned concurrency expression in
 `tools/AgentBridge.Quality/CiPlan.cs` and `CiPlanTests`; the Quality tests pass with it applied).
