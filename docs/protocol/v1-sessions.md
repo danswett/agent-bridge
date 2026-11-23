@@ -1436,8 +1436,8 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
   "keys": { "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV…", "auth": "BTBZMqHH6r4Tts7J_aSIgg" },
   "app": "https://danswett.github.io/agent-bridge/app/",
   "device": "iPhone · Slipgates",
-  "notify": { "questions": true, "pinned": true, "all": false, "delivery_failures": false,
-              "pinned_sessions": ["3f9c0a52-1d7e-4b8a-9c11-0a5e7d2b6f40"] }
+  "notify": { "questions": true, "pinned": true, "all": false, "deliveryFailures": false,
+              "pinnedSessions": ["3f9c0a52-1d7e-4b8a-9c11-0a5e7d2b6f40"] }
 }
 ```
 
@@ -1470,10 +1470,10 @@ visible notification for every push it receives. A flag left out takes its defau
 | Field | Default | Effect |
 |---|---|---|
 | `questions` | true | `question` notices (a session waiting on an answer). `resolved` follows the question it withdraws and is not filtered separately |
-| `pinned` | true | `finished` notices for the sessions in `pinned_sessions` |
+| `pinned` | true | `finished` notices for the sessions in `pinnedSessions` |
 | `all` | false | `finished` notices for every session; it covers `pinned` |
-| `delivery_failures` | false | A count-only notice, debounced to one per 60 s and always visible, for messages a lane could not deliver. A host that does not send it ignores the flag |
-| `pinned_sessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids. An id the host does not know is ignored |
+| `deliveryFailures` | false | A count-only notice, debounced to one per 60 s and always visible, for messages a lane could not deliver. A host that does not send it ignores the flag |
+| `pinnedSessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids. An id the host does not know is ignored |
 
 A client sends `push.subscribe` again, with the whole current `notify`, whenever a flag or a
 pin changes while notifications are on; the host replaces the device's filters. The pinned set
