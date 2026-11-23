@@ -3,8 +3,8 @@
 For Quality. It turns on only with `PWA_WEBKIT_OFF_PUSH=true`; with the variable unset (the default), the train behaves as v8 does.
 
 **Apply in this order**, each with `git apply`, on main:
-1. `patches/release-train-3769.patch` (v8, branch `sg-patch/release-train-3769`, dd98b6ce).
-2. `patches/pwa-webkit-off-push-2454.patch` (branch `sg-patch/pwa-webkit-off-push-2454`). It conflicts with v8 on one line: `.github/workflows/merge-rule.yml`'s `workflow_run.workflows` list. Keep both names, `... Ops probe, PWA WebKit, Pages, Perf, Re-run known flakes, Relay deploy, Release train, ...` (`git apply -3`, then edit that line).
+1. `patches/release-train-3769.patch` (v9, branch `sg-patch/release-train-3769`, cee23c3b).
+2. `patches/pwa-webkit-off-push-2454.patch` (branch `sg-patch/pwa-webkit-off-push-2454`). Rebuilt for v9: it applies cleanly after it.
 3. `patches/main-red-webkit-2454.patch` (branch `sg-patch/main-red-webkit-2454`): hourly WebKit failures feed main-red as their own stream.
 4. **This patch**, `patches/release-train-webkit-hook-2454.patch`.
 
@@ -14,4 +14,6 @@ For Quality. It turns on only with `PWA_WEBKIT_OFF_PUSH=true`; with the variable
 - `alert` also fires when `webkit` fails, because nothing was published then.
 - `quality/catalog.yml`: the pwa-ui suite's `where:` names `release-train.yml webkit`, as the catalog check requires.
 
-**Checks, with all four applied on main 386dd407:** catalog check complete; Quality.Tests 791 passed, 1 skipped; test-main-red 100 checks passed.
+**v9's own pin:** `ReleaseTrainWorkflowTests.Publish_still_needs_the_whole_verify_job...` is updated in this patch. Publish still needs `verify` and now also requires `needs.verify.result == 'success'` explicitly, plus webkit success or skipped. v9's record-only Arm64 self-test keeps `verify` green when only Arm64 fails.
+
+**Checks, with all four applied in order on main 269b9a17:** each `git apply --check` passes; catalog check complete; Quality.Tests 816 passed, 1 skipped; test-main-red 100 checks; test-select-release-commit all passed.

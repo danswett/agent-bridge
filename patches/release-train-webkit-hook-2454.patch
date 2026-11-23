@@ -1,10 +1,10 @@
 diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
-index e5c7ad53..40679178 100644
+index ea2452d3..4ebe1dce 100644
 --- a/.github/workflows/release-train.yml
 +++ b/.github/workflows/release-train.yml
-@@ -139,12 +139,25 @@ jobs:
-           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
-           exit $LASTEXITCODE
+@@ -166,12 +166,25 @@ jobs:
+             echo "::warning title=release train::the Arm64 installed-app self-test failed; it is recorded and does not hold the release"
+           fi
  
 +  webkit:
 +    name: The PWA in WebKit at the picked commit
@@ -32,7 +32,7 @@ index e5c7ad53..40679178 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
      permissions: {}
-@@ -154,7 +167,7 @@ jobs:
+@@ -181,7 +194,7 @@ jobs:
            SHA: ${{ needs.pick.outputs.sha }}
            RUN_ID: ${{ needs.pick.outputs.run }}
          run: |
@@ -41,7 +41,7 @@ index e5c7ad53..40679178 100644
            echo "### Release train: verification failed, nothing published ($SHA, CI run $RUN_ID)" >> "$GITHUB_STEP_SUMMARY"
            exit 1
  
-@@ -162,9 +175,13 @@ jobs:
+@@ -189,9 +202,13 @@ jobs:
      name: Publish the picked commit
      # contents: write is here only, and only for a verified pick. APP_SIGNING true never gets here: the
      # pick job fails first. A failed verification skips this job (it needs verify to succeed).
@@ -70,3 +70,19 @@ index da0c076e..0b21e844 100644
      # WebKit runs after merge (#3208); Chromium blocks. With PWA_WEBKIT_OFF_PUSH on, pwa-webkit.yml
      # runs it hourly and before a release instead of on every main push (#2454).
      tier: post-merge
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+index 20f81b0e..5c9d6377 100644
+--- a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -64,6 +64,10 @@ public sealed class ReleaseTrainWorkflowTests
+     {
+         var publish = Job(Workflow(), "publish");
+ 
+-        Assert.Contains("needs: [pick, verify]", publish, StringComparison.Ordinal);
++        Assert.Contains("needs: [pick, verify, webkit]", publish, StringComparison.Ordinal);
++        // Its if is explicit (#2454 item B): the whole verify job must still succeed; webkit must pass when it ran and
++        // is skipped while PWA_WEBKIT_OFF_PUSH is off.
++        Assert.Contains("needs.verify.result == 'success'", publish, StringComparison.Ordinal);
++        Assert.Contains("(needs.webkit.result == 'success' || needs.webkit.result == 'skipped')", publish, StringComparison.Ordinal);
+     }
+ }
