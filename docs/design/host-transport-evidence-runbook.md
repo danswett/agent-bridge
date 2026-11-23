@@ -27,12 +27,25 @@ time. Anything else is out of bounds and stops the run.
 |---|---|---|
 | Issue and confirm the launch grant for the run | OWNER, in the app | The owner, at S1, after seeing scope and caps |
 | Restart a disposable host (the restart that finishes each deploy at S-1, S8, S5 if needed, the warm-up restarts) | OWNER, from that host's own control | The owner, per event, before it happens |
-| **PENDING OWNER (who runs the elevated commands: the owner, or an owner-approved elevated session; not SRE until the owner says).** Drop a disposable host's relay connection, then restore it (S5, S8) | The commands need elevation. Exactly these two commands, run only after the owner approves that event, by whoever the owner names (see the first column). Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
+| Drop a disposable host's relay connection, then restore it (S5, S8) | The **elevated relay-drop session** (see below), at SRE's request, running exactly these two commands per event and nothing else. Drop: `New-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>' -Direction Outbound -RemoteAddress <relay address from the frozen plan> -Action Block`. Restore: `Remove-NetFirewallRule -DisplayName 'evidence-relay-drop-<event id>'` | The owner, per event, before it happens. A firewall rule is a host change, so it is these commands only: never another rule, a process kill or a service stop |
 | Cut the response read to a disposable HA (S5) | **NOT COVERED: there is no disposable HA**, so the HA-side lost-response twin is not run and nothing is cut | n/a; the receipt says NOT COVERED |
 | Start and stop the sessions the run itself launches | SRE, by list, through the existing end path | Already covered by the grant and the plan |
 | Deploy a build to a disposable host | SRE, approved by SRE | The gates (Quality merge, staging and smoke green, health check); never the owner |
 
 Nothing else: no trust change, no key or credential change, no ACL, no settings change, no new account, no change to the owner's real
+
+### The elevated relay-drop session
+
+The firewall commands need elevation, so the run uses **one elevated session, for this run only**.
+
+- **Its own approval.** It is launched later as its **own owner approval through the Chief**, not as part of any other approval here. This runbook does not
+  launch it and the run does not start until it exists.
+- **Exactly what it runs.** Per induced event, after the owner approves that event, it runs the two commands in the table above, the drop and then the
+  restore, with that event's id in the rule name, and **nothing else**: no other rule, no other command, no process kill, no service stop, no change to
+  any setting, trust, credential, key or ACL.
+- **Ended after the run.** SRE ends the session as soon as the last event is restored, and in any case at S11. SRE then confirms by a read, not through
+  that session, that no rule named `evidence-relay-drop-*` remains on any disposable host, and records the end and that read.
+- **Per-event record.** Each drop and restore is recorded with its event id, time, host and the owner's approval; the receipt carries no relay address.
 Home Assistant (there is no disposable HA, so the HA comparison and the fallback checks are NOT COVERED).
 
 ## Preconditions (SRE checks, records each)
@@ -89,10 +102,10 @@ sha256, and the load readings before and after.
 | **S2** | SRE | **Smoke:** one Host launch and its HA twin on one pair. Stop if it does not start and register exactly once | Both receipts, the three double-launch counts |
 | **S3** | SRE | **Main pairs:** at least 100 compared pairs in batches no larger than the cap, each batch ended by list before the next; the 50 consecutive count is inside this | Per pair: both receipts and exit codes, `sessions.list`, `launches list`, the counter rise |
 | **S4** | SRE | **Host-only refusals:** 5 of each Host-only case, 3 for the warm-up case (the warm-up needs a restart: S8) | Per case: the receipt, the refusal code, the unchanged counters |
-| **S5** | SRE (the owner only if a fault needs a restart) | **Lost response x3:** SRE drops the target's relay connection after the send on the Host side (the HA-side twin is NOT COVERED: no disposable HA); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
+| **S5** | SRE (the owner only if a fault needs a restart) | **Lost response x3:** the elevated relay-drop session drops the target's relay connection after the send on the Host side, at SRE's request (the HA-side twin is NOT COVERED: no disposable HA); each is resolved with `launches status` | The fault time, the receipt, the resolving read |
 | **S6** | SRE | **Concurrent bursts x3** inside the cap | The invariants: sessions equal accepted requests, one session per request, counter rise equal, no double |
 | **S7** | SRE | **Long prompts x5**, one near 60 KB | Receipts, and that the prompt text is not kept in any record |
-| **S8** | **OWNER** presses each restart; SRE drops and restores the relay link | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
+| **S8** | **OWNER** presses each restart; the elevated relay-drop session drops and restores the relay link at SRE's request | **Window:** at least 6 hours across at least 4 distinct hours with one induced host restart and one relay reconnect, and the 3 warm-up restarts. The owner approves each event before it happens | Each event, its time, who pressed, the approval, and the receipts around it |
 | **S9** | SRE | **Late second session:** after each launch, wait 5 minutes and confirm no second session for that request | The late reads |
 | **S10** | SRE | **End-by-list sweep:** end whatever the plan's names still show live, by the ends rule below (two idle reads, name check, end only, worktrees stay), never a raw kill; confirm none of the plan's names remains on any disposable host | The sweep results and the final session lists |
 | **S11** | SRE, then Quality | Assemble the receipt (the frozen plan, actual counts and denominators per floor, every record with its sha256, the evidence path, failed and INCONCLUSIVE runs kept); Quality attests against the bars | The receipt |
