@@ -2279,6 +2279,7 @@ public class HistoryTests
             [(DelegateEventKind.Started, "Check the docs"), (DelegateEventKind.Reported, "Check the docs"),
              (DelegateEventKind.Started, "Explore the code"), (DelegateEventKind.Reported, "Explore the code")],
             delegates);
+        Assert.NotNull(page.Turns);
         Assert.Null(page.Turns.Single().Truncated);
     }
 
