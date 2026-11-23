@@ -41,6 +41,27 @@ wiring; A5 #2011 supplies answer/lookup wiring. A6a is #2064 / PR #2066,
 not the remaining A6 durable-head/archive/pruning work. The gate must not claim
 integrity before A3 lands. Existing hash links alone cannot prove no tail was lost.
 
+### Status at main 0416b9d7b (S1 definition of the remaining #1401 and row 25 work)
+
+Checked against source and commit subjects only; not a live run.
+
+* **#1401 dependencies landed:** A3 #2009 (#2222), A4 #2010 (#2017), A5 #2011 (#2013) and
+  A6a #2064 (#2066, merged; the "unmerged" statement above is out of date). Later audit
+  work also landed: archive (#3162), person-signed rotation (#3566, #3580, #3551).
+* **Counter source in code:** `src/AgentBridge.Host/GateAudit.cs` defines the `path`
+  (`relay`, `local`, `legacy-ha`), `actorKind` and control phases (`gate.start`, `gate.pause`,
+  `gate.reset`, `gate.seal`); launch, approval and stop wiring exist in `GateLaunchAudit.cs`,
+  `PhoneApprovalEvidence.cs`, `StopAudit.cs` and `HaRunning.cs` (red tests #2570, #2588,
+  #2596, #2629).
+* **Not verified as landed:** the gate reader/view (slices 1 and 7) and A6-rest continuity
+  (slice 9). The S3 landed-state check for #1401 covers these; no qualifying run starts first.
+* **Proposed, not decided:** using the #1401 audit log as the counter source for launches,
+  approvals and stops. Engineering confirms it. The owner is asked through the Chief; until
+  the owner answers, this stays a proposal and the counters are not claimed as evidence.
+* **Row 25 gap in fleet:** fleet `ops/ha-retirement` has the PowerShell-only no-new-call-site
+  gate; it misses `.psm1`-only changes and the Python caller `pump/fleet_pump/wake.py`. That is
+  fleet slice S5, defined in fleet `docs/ha-retirement.md`.
+
 ## 2. Authority and path
 
 The destination host owns launch, approval and stop counts. Neither the
