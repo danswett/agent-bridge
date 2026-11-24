@@ -1,30 +1,22 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace AgentBridge.Hooks;
 
-// #1003 PR C: the hook's end of approval.wait (docs/design/claude-approval-channel.md). Over the host's local pipe (4-byte little-endian length, then UTF-8 JSON,
-// docs/protocol/local-pipe.md) it says hello and agent.hello (the session token, which the host checks), sends the Claude PermissionRequest event with approval.wait, and takes the verdict from the one reply: anything but
-// exactly allow or deny in a successful reply to that request is none. It sends NOTHING until it has verified that the server is the host's own program, and
-// any failure, refusal, timeout or hang-up is none, so Claude shows its own prompt. AOT-safe: no reflection.
+// #1003 PR C: the hook's end of approval.wait (docs/design/claude-approval-channel.md), over the host's local pipe (docs/protocol/local-pipe.md): hello, agent.hello with
+// the session token, approval.wait with the event. Nothing is sent until the server is verified as the host's own program; anything but allow or deny is none. AOT-safe.
 public static class ApprovalClient
 {
     public const int MaxEventBytes = 16 * 1024;
     const int MaxFrame = 65519;
 
-    // The host's own pipe name (LocalEndpoint.For): 16 hex digits of SHA-256 of "<user SID>|<profile folder, lower case>".
-    public static string PipeName(string userSid, string profileFolder) =>
-        "AgentBridge.Host." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{userSid}|{profileFolder.ToLowerInvariant()}")), 0, 8).ToLowerInvariant();
-
-    // The server runs the host's program: the same full path the hook was installed with, never on a missing one.
     public static bool IsHostImage(string? serverImage, string? expectedHostExe) =>
         !string.IsNullOrEmpty(serverImage) && string.Equals(serverImage, expectedHostExe, StringComparison.OrdinalIgnoreCase);
 
-    // The check on a real connection (Windows; elsewhere it verifies nothing, so nothing is asked). No unit test: it needs a pipe server in another process.
+    // Windows only; elsewhere nothing is asked. Untested: it needs a pipe server in another process.
     public static Func<NamedPipeClientStream, bool> HostVerifier(string? expectedHostExe) => pipe => OperatingSystem.IsWindows() && IsHostImage(ServerImage(pipe), expectedHostExe);
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -47,7 +39,6 @@ public static class ApprovalClient
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern unsafe int QueryFullProcessImageNameW(IntPtr process, uint flags, char* buffer, ref uint size);
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern int CloseHandle(IntPtr handle);
 
-    // Connects (no host is none after connectWait), verifies the server, and asks. Null for anything but a verdict of allow or deny.
     public static async Task<string?> AskHostAsync(string pipeName, Func<NamedPipeClientStream, bool> verifyServer, string eventText, string? token, TimeSpan wait, TimeSpan connectWait)
     {
         if (string.IsNullOrEmpty(token) || Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
@@ -90,7 +81,7 @@ public static class ApprovalClient
         return true;
     }
 
-    // The frame that answers request `id` (events, progress and other requests' frames are skipped); null at end of stream.
+    // The frame answering request `id`; events, progress and other frames are skipped.
     static async Task<JsonDocument?> ReplyAsync(Stream pipe, int id, CancellationToken ct)
     {
         while (true)

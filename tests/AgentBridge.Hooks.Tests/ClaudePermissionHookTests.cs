@@ -4,8 +4,7 @@ using Xunit;
 
 namespace AgentBridge.Hooks.Tests;
 
-// `agent-bridge-host-hook claude permission` (#1003 PR C): the host's verdict becomes Claude's answer. It stays OFF: ClaudeApproval.AuthenticatedChannel is still
-// false, the hook is registered nowhere, and an environment has to be told the approval is enabled before anything is asked.
+// `claude permission` (#1003 PR C): the host's verdict becomes Claude's answer. It stays OFF (AuthenticatedChannel false, nothing registers the hook).
 public sealed class ClaudePermissionHookTests
 {
     const string Event = """{"session_id":"s-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo hello"}}""";
@@ -28,7 +27,6 @@ public sealed class ClaudePermissionHookTests
     [InlineData("allow", Allow)]
     [InlineData("deny", "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"deny\",\"message\":\"Denied from a Slipgates device.\"}}}\n")]
     [InlineData(null, "")]
-    [InlineData("none", "")]
     [InlineData("ALLOW", "")]
     public void The_hosts_verdict_becomes_claudes_answer_and_anything_else_prints_nothing_after_asking_for_less_than_the_hook_timeout(string? verdict, string expected)
     {

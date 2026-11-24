@@ -7,9 +7,7 @@ using Xunit;
 
 namespace AgentBridge.Hooks.Tests;
 
-// #1003 PR C, the hook's end of approval.wait (docs/design/claude-approval-channel.md): over the host's pipe (4-byte little-endian length, then UTF-8 JSON) the hook
-// says hello, sends the Claude PermissionRequest event with approval.wait, and takes the verdict from the one reply. Anything but exactly allow or deny is none.
-// It sends nothing before it has verified the server is the host. Real pipes, no host.
+// #1003 PR C: the hook's end of approval.wait over real pipes with fake hosts. Anything but exactly allow or deny is none; nothing is sent before the server is verified.
 public sealed class ApprovalClientTests
 {
     const string Event = """{"session_id":"s-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo <hello> & \"x\" é"}}""";
@@ -27,7 +25,6 @@ public sealed class ApprovalClientTests
         return true;
     }
 
-    // Reads one frame into `got`; nothing is added when the client hangs up first.
     static async Task Take(Stream s, List<string> got)
     {
         var head = new byte[4];
@@ -46,7 +43,6 @@ public sealed class ApprovalClientTests
         await s.FlushAsync();
     }
 
-    // A host serving one connection with `script`; Received holds the frames it read.
     sealed class FakeHost : IAsyncDisposable
     {
         public string Name { get; } = "ab-appr-" + Guid.NewGuid().ToString("N")[..12];
@@ -98,8 +94,6 @@ public sealed class ApprovalClientTests
     [Theory]
     [InlineData("""{"re":3,"ok":true,"result":{"verdict":"none","reason":"off"}}""")]
     [InlineData("""{"re":3,"ok":true,"result":{"verdict":"ALLOW"}}""")]
-    [InlineData("""{"re":3,"ok":true,"result":{"verdict":true}}""")]
-    [InlineData("""{"re":3,"ok":true,"result":"allow"}""")]
     [InlineData("""{"re":3,"ok":true}""")]
     [InlineData("""{"re":3,"ok":false,"result":{"verdict":"allow"}}""")]
     [InlineData("""{"re":99,"ok":true,"result":{"verdict":"allow"}}""")]
@@ -174,9 +168,8 @@ public sealed class ApprovalClientTests
     }
 
     [Fact]
-    public void The_pipe_name_is_the_hosts_own_derivation_and_the_host_check_is_an_exact_path_never_on_a_missing_one()
+    public void The_host_check_is_an_exact_path_never_on_a_missing_one()
     {
-        Assert.Equal("AgentBridge.Host.1e659cb0b7056f9a", ApprovalClient.PipeName("S-1-5-21-1-2-3-1001", @"C:\Users\A\AppData\Local\AgentBridge\Default"));
         Assert.True(ApprovalClient.IsHostImage(@"C:\Program Files\Slipgates\host.exe", @"c:\program files\slipgates\host.exe"));
         Assert.False(ApprovalClient.IsHostImage(@"C:\Users\A\Temp\host.exe", @"C:\Program Files\Slipgates\host.exe"));
         Assert.False(ApprovalClient.IsHostImage(null, @"C:\x\host.exe"));

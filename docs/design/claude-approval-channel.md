@@ -47,7 +47,7 @@ tool
 input`, as `ClaudeApproval.RequestId`) and builds the text shown
   (`tool: command`, or the raw input, after `ShownText.Reveal`); the broker digests it. The caller check is `agent.hello`'s (#4287, #4302, #4303), reused, and the event's
   `session_id` must be that credential's session. `none` reasons: `bad-event`, `caller`, `busy`, `truncated` (at once), `timeout`. Off: the op is offered only if the host is
-  handed it; nothing hands it and the setting does not exist. Still to close in C: the hook verifying the pipe server is the host.
+  handed it; nothing hands it and the setting does not exist. C (the hook client, off): hello, `agent.hello` with the session token, then `approval.wait`; nothing is sent until the pipe server is verified as the host's own program.
 - **C: the listing and the surfaces.** The tracker lists the prompt as answerable (not `atMachine`) when readable and not truncated; `host-answers.md`,
   the app and push follow; the setting `permissions.claudeApproval` (default off) appears here.
 - **D: the live check** from #4277's body, then turning it on.
