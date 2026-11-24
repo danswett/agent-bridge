@@ -1754,7 +1754,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Interlocked.Exchange(ref p.AuditRegistered, null)?.Invoke(id);
             RequestRegistered?.Invoke(p.Key, id);
         }
-        if (result.Outcome == LaunchOutcome.Failed) { RequestFailed?.Invoke(p.Key); }
+        if (result.Outcome == LaunchOutcome.Failed)
+        {
+            // A proven failure gives a fleet reservation back at once (a worker that exited before its session registered); a bound launch is not touched (#2770).
+            try { provenance.ReleaseFleetReservation(p.Key); } catch (InvalidOperationException) { /* the record is unavailable: the lifetime frees it */ }
+            RequestFailed?.Invoke(p.Key);
+        }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;

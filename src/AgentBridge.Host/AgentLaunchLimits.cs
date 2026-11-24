@@ -29,17 +29,13 @@ public sealed record AgentLaunchLimits
             LiveFleetWorkers = ReadFleet("liveFleetWorkers", d.LiveFleetWorkers),
         };
 
-        // A whole number from 1: above the hard ceiling it is the ceiling (said), and anything else is the default, so never unlimited.
+        // A whole number from 1: above the hard ceiling it is the ceiling, and anything else is the default, so never unlimited. Neither is reported as a problem: a
+        // problem in the agents section turns the whole policy (and so the route) off, and a clamp or a fallback only ever narrows what was asked.
         int ReadFleet(string key, int fallback)
         {
             if (limits is not { } section || !section.TryGetProperty(key, out var value) || value.ValueKind == JsonValueKind.Null) { return fallback; }
             if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n) && n >= 1)
-            {
-                if (n <= FleetCeiling) { return n; }
-                problems.Add($"agents.limits.{key} is above {FleetCeiling}, so it is {FleetCeiling}");
-                return FleetCeiling;
-            }
-            problems.Add($"agents.limits.{key} must be a whole number from 1 to {FleetCeiling}, so it is {fallback}");
+            { return Math.Min(n, FleetCeiling); }
             return fallback;
         }
 

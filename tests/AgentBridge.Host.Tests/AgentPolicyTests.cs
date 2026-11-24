@@ -168,8 +168,8 @@ public sealed class AgentPolicyTests
         var s = Parse("""{ "agents": { "enabled": true, "fleetLaunch": { "enabled": true }, "limits": { "fleetPerHour": 20, "liveFleetWorkers": 70 } } }""");
         Assert.True(s.Agents.FleetLaunchEnabled);
         Assert.Equal((20, 60), (s.Agents.Limits.Launch.FleetPerHour, s.Agents.Limits.Launch.LiveFleetWorkers));
-        Assert.Contains(s.AgentsProblems, p => p.Contains("liveFleetWorkers") && p.Contains("60"));
-        Assert.DoesNotContain(s.AgentsProblems, p => p.Contains("not a setting"));
+        // A clamp is not a problem: a problem turns the whole agents policy, and so the route, off.
+        Assert.Empty(s.AgentsProblems);
     }
 
     [Theory]
@@ -182,6 +182,7 @@ public sealed class AgentPolicyTests
     {
         var s = Parse("{ \"agents\": { \"limits\": { \"fleetPerHour\": " + value + ", \"liveFleetWorkers\": " + value + " } } }");
         Assert.Equal((8, 6), (s.Agents.Limits.Launch.FleetPerHour, s.Agents.Limits.Launch.LiveFleetWorkers));
+        Assert.Empty(s.AgentsProblems);
     }
 
     [Fact]

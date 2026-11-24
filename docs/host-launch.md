@@ -115,11 +115,14 @@ only by the person at the machine (never read from a wire request, and nothing a
 
 - `agents.fleetLaunch.enabled`: the route itself, **off by default**. Off, every fleet launch is refused whatever else is right.
 - `agents.limits.fleetPerHour` (default 8) and `agents.limits.liveFleetWorkers` (default 6): the owner can raise them to a hard ceiling of **60** each. A larger
-  number is read as 60, and zero, a negative or anything that is not a whole number is read as the default: never unlimited.
+  number is read as 60 (not an error, so it never turns the route off), and zero, a negative or anything that is not a whole number is read as the default: never unlimited.
 
 Admission is atomic and survives a restart: the hourly count and the live count are taken from the host's durable launch record inside its own lock, and a new fleet
 launch reserves its slot in the same step, so two launches at once cannot both take the last one. A fleet launch refused for a cap says which cap and its number in the
-refusal reason, which is what the launch audit records. Agent-started sessions and coordinators have their own caps above and are not counted here, so a full fleet never blocks a coordinator.
+refusal reason it returns to the caller. A reservation is never held forever: when the worker exits before its session registers, the launch fails and the slot is released at once; a reservation
+whose host crashed before the worker registered stops counting after 40 minutes (the longest follow window, a folder-trust question, is 30 minutes, plus 10), so a
+run of failed workers cannot starve the dispatcher. The unregistered record itself stays, so a process that is somehow still running is never adopted.
+Agent-started sessions and coordinators have their own caps above and are not counted here, so a full fleet never blocks a coordinator.
 
 Only the person at the machine changes `agents.limits` in the host's config.
 The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
@@ -573,8 +576,8 @@ Prompts and attachment names are never logged, only their length and count.
 A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
 `scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
 The separate `launch:fleet` grant is off for each newly minted credential.
-Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
-enabling a credential's grant does not yet enable dispatch.
+Dispatch also needs the owner's route switch, `agents.fleetLaunch.enabled` (off by default), and is bounded by the fleet caps (see "Fleet launch caps" below);
+enabling a credential's grant alone does not enable dispatch.
 Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 (empty by default). Fleet launches require an explicitly named agent, permissions and
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,

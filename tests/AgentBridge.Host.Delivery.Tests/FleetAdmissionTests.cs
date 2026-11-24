@@ -97,6 +97,43 @@ public sealed class FleetAdmissionTests : IDisposable
         Assert.Null(store.ReserveFleet(Guid.NewGuid(), "third", null, new(1, 1), Now, _ => null));
     }
 
+    // P1 of the #4459 read: a reservation whose worker never registers must not starve the dispatcher. It stops counting after its lifetime (also across a
+    // restart, with no deletion: an unbound row stays so a still-running unregistered process is never adoptable), and a proven failure releases it at once.
+    [Fact]
+    public void An_unbound_reservation_stops_counting_after_its_lifetime_even_across_a_restart()
+    {
+        var store = Open();
+        for (var i = 1; i <= 6; i++) { Assert.Null(store.ReserveFleet(Guid.NewGuid(), $"lost-{i}", null, new(60, 6), Now, _ => null)); }
+        Assert.Contains("6 live", Open().ReserveFleet(Guid.NewGuid(), "seventh", null, new(60, 6), Now.AddMinutes(10), _ => null));
+        var lifetime = LaunchProvenance.FleetReservationLifetime;
+        Assert.Contains("6 live", Open().ReserveFleet(Guid.NewGuid(), "still-held", null, new(60, 6), Now + lifetime - TimeSpan.FromSeconds(1), _ => null));
+        Assert.Null(Open().ReserveFleet(Guid.NewGuid(), "after-lifetime", null, new(60, 6), Now + lifetime + TimeSpan.FromSeconds(1), _ => null));
+    }
+
+    [Fact]
+    public void A_proven_failure_releases_its_reservation_and_a_bound_launch_is_never_released()
+    {
+        var store = Open();
+        var failed = Guid.NewGuid();
+        Assert.Null(store.ReserveFleet(failed, "never-registered", null, new(1, 1), Now, _ => null));
+        Assert.NotNull(store.ReserveFleet(Guid.NewGuid(), "blocked", null, new(1, 1), Now, _ => null));
+        Assert.True(store.ReleaseFleetReservation(failed));
+        var next = Guid.NewGuid();
+        Assert.Null(store.ReserveFleet(next, "after-release", null, new(1, 1), Now, _ => null));
+        store.Bound(next, "after-release", new SessionProcess(4000, Now));
+        Assert.False(store.ReleaseFleetReservation(next));
+        Assert.False(store.ReleaseFleetReservation(Guid.NewGuid()));
+        Assert.True(Open().IsFleetWorker("after-release", new SessionProcess(4000, Now)));
+    }
+
+    [Fact]
+    public void A_fleet_resume_row_without_a_reservation_does_not_count_against_the_caps()
+    {
+        var store = Open();
+        store.Preparing(Guid.NewGuid(), "resumed", "fleet");
+        Assert.Null(store.ReserveFleet(Guid.NewGuid(), "new-one", null, new(1, 1), Now, _ => null));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]

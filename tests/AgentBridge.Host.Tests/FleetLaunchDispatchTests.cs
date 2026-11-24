@@ -10,6 +10,31 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
 {
     private protected override bool UsesRelay => false;
 
+// P1 of the #4459 read, through the real flow: a worker that exits before its session registers frees its reservation, so a run of such failures never
+    // starves the dispatcher (6 failed launches, then more, with the default 6 live and 8 an hour).
+    [Fact]
+    public async Task A_fleet_worker_that_exits_before_it_registers_frees_its_slot()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var config = Config(c => c with { Workspaces = [new("App", app, true)] });
+        var launcher = Launcher(config, credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: (workspace, made, _) => AgentLaunchWorktreeCheck.Check(workspace, made, "claude"), agentWorktreeRefusalAudit: (_, _, _) => true);
+        const string principal = "script:machine/dispatcher";
+        for (var i = 0; i < 9; i++)
+        {
+            var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude", Workspace = "App", Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" };
+            var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
+            Assert.True(result.Outcome == LaunchOutcome.Failed, $"launch {i + 1}: {result.Outcome}: {result.Reason}");
+        }
+    }
+
     [Theory]
     [InlineData(true, null)]
     [InlineData(false, null)]
