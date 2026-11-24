@@ -46,21 +46,26 @@ public sealed class SessionGroups
 {
     readonly Dictionary<string, GroupRegister> groups;
     readonly Dictionary<string, GroupRegister> membership;
+    readonly Dictionary<string, long> listed;
     readonly string deviceTag;
     readonly TimeProvider time;
     readonly Action save;
     readonly Action<string> prepend;
     readonly Action<IReadOnlyCollection<string>> lift;
     readonly Func<IReadOnlyList<string>> unpinned;
+    long listingSavedAt;
+    internal bool ListingDirty { get; private set; }
 
     internal SessionGroups(Dictionary<string, GroupRegister> groups, Dictionary<string, GroupRegister> membership,
-        string deviceTag, TimeProvider time, Action save, Action<string> prepend,
+        Dictionary<string, long> listed, string deviceTag, TimeProvider time, Action save, Action<string> prepend,
         Action<IReadOnlyCollection<string>> lift, Func<IReadOnlyList<string>> unpinned)
     {
         this.groups = groups;
         this.membership = membership;
+        this.listed = listed;
         this.deviceTag = deviceTag;
         this.time = time;
+        listingSavedAt = Now;
         this.save = save;
         this.prepend = prepend;
         this.lift = lift;
@@ -76,6 +81,8 @@ public sealed class SessionGroups
             }
         }
     }
+
+    long Now => time.GetUtcNow().ToUnixTimeMilliseconds();
 
     public IReadOnlyList<SessionGroup> Items => groups.Where(p => !p.Value.Tombstone && !string.IsNullOrWhiteSpace(p.Value.Value))
         .Select(p => new SessionGroup(p.Key, p.Value.Value!)).ToList();
@@ -131,6 +138,7 @@ public sealed class SessionGroups
         if (id is not null) { Require(id); }
         if (GroupOf(key) == id) { return; }
         Write(membership, key, id);
+        if (id is null) { listed.Remove(key); } else { listed[key] = Now; }
         prepend(key);
         save();
     }
@@ -143,8 +151,39 @@ public sealed class SessionGroups
         foreach (var key in members)
         {
             Write(membership, key, null);
+            listed.Remove(key);
         }
         Write(groups, id, null, tombstone: true);
         save();
+    }
+
+    internal void Saved() { ListingDirty = false; listingSavedAt = Now; }
+
+    // Membership lasts 30 days past the last time its session was listed on any known machine
+    // (live: every session of every machine, whatever the picker shows). Stamps stay exact in
+    // memory; a refresh alone asks for a save at most once a day (and Flush saves the rest).
+    internal bool Remember(IReadOnlyList<OrderEntry> live)
+    {
+        var keys = live.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
+        var now = Now;
+        var changed = false;
+        foreach (var key in membership.Keys.ToArray())
+        {
+            if (GroupOf(key) is null) { continue; }
+            var stamped = listed.TryGetValue(key, out var last);
+            if (keys.Contains(key) || !stamped)
+            {
+                ListingDirty |= !stamped || last != now;
+                listed[key] = now;
+                changed |= !stamped;
+            }
+            else if (now - last > 30L * 86400000)
+            {
+                Write(membership, key, null);
+                listed.Remove(key);
+                changed = true;
+            }
+        }
+        return changed || ListingDirty && now - listingSavedAt >= 86400000;
     }
 }
