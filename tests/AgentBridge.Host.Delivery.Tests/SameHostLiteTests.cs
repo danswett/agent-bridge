@@ -54,7 +54,7 @@ public sealed class SameHostLiteTests
         {
             // As ReplyService does at the typing slot and before injecting: a fence that fails types nothing.
             BeforeType?.Invoke();
-            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "no longer current")); }
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "no longer current") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             Replies.Add(request);
             return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered, ""));
         }
