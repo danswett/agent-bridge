@@ -1112,6 +1112,19 @@ suites:
     where: relay.yml production, rollback
     status: exists
 
+  - id: ab-ci-smoke
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand on main with use_ab_ci: proves an ab-ci runner's environment as the runner (PATH, NuGet mirror, a
+    # Release build), before AB_CI_SELF_HOSTED is set again (#4104).
+    platforms: [win-x64]
+    runner: lab
+    command: see ab-ci-smoke.yml smoke
+    where: ab-ci-smoke.yml smoke
+    status: exists
+
   - id: release-feed-worker
     validation_plan: native
     kind: unit
