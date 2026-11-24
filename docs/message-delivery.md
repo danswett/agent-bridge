@@ -1,5 +1,5 @@
 # Message delivery: envelope, lanes and journal (#2568)
-Status: slice 3a standalone priority journal core and Phase 1 S3 source-only dispatch pump; delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
+Status: slice 3a standalone priority journal core, Phase 1 S3 dispatch pump and S4 Lite wiring (default off); delivery integration/live wiring held, 2026-11-22 PT. Inputs: #2568
 rulings 6867525734, 6867631192, 6867667571, 6867669427; owner evidence 6867540072. **Change**: a departure, with ID-first addressing approved below.
 ## Owner decisions cited
 [Owner decisions](https://github.com/danswett/slipgates-fleet/blob/main/docs/owner-decisions.md#nov-19), Nov 19, 2026 PT:
@@ -143,6 +143,13 @@ pump exception) stops the whole pump. A second pump on one ISessionSource throws
 Removing a session cancels its timers and drops its pending state.
 BeginStop cancels retries and new wakes, never an admitted injector; S6 owns its shutdown wiring.
 The laneDelivery flag stays default off; this adds no agent urgent or cross-node queued acceptance.
+Phase 1 S4 wires LiteDeliver to the lane through LaneComposition. Only while laneDelivery is on, and only for
+Copilot targets: a Claude target, or the flag off, keeps the legacy idle-typing path unchanged (a Claude lane comes later).
+An offer goes through composition.Offer, whose Offered event wakes the pump; there is no separate Wake call. With the flag on and
+the journal refused, a send is refused busy and never falls back to legacy typing. The host builds one composition and one
+pump. Phase 1 S6 stops it: BeginStop runs once a planned stop holds the delivery fence, or a restart commits, and never before,
+because a stop the host then refuses (a delivery outlasting 15 s) leaves it running and BeginStop cannot be undone. An admitted
+delivery is never aborted; the pump and its composition are disposed when the host run ends, the pump first.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
@@ -325,4 +332,18 @@ A this doc (#3828) and D1 (docs child: states, timings, depth cap, memory-only s
 3. A long turn plus 20 fyi, then an owner message: the owner message arrives first.
 4. Windows Terminal and conhost, kitty and non-kitty: fills the table; not capable waits for idle.
 5. `send_session_message` spike: steer or queue, sender, order, confirmation. Not adopted.
+## Stale orders (Part of #4435, slice 1, no protocol change)
+
+A relay message that arrives after a NEWER one from the same sender is typed as before and its provenance header adds
+`STALE: sent HH:mm PT, a newer message from this sender was delivered first`. Nothing is dropped, reordered or held; a message that
+types nothing (busy, refused, unconfirmed) never raises the newest time. The time compared is when the sender first asked to send:
+`agent.send` takes an optional `sentAt` (Unix seconds) that a tool retrying a busy send passes on every retry,
+because each `agent.send` is a new sealed envelope whose signed lifetime is at most two minutes. It rides beside the envelope, unsigned,
+so it is ADDITIVE and OPTIONAL (no version change; a host that does not know it ignores it) and LIMITED: it only orders messages from the
+same authenticated sender to the same session and prints the time, and is never read for authorization, expiry, dedupe or anything else.
+A `sentAt` more than two minutes ahead, over a day old, or not whole seconds is ignored (on `agent.send` as if none was given; on the
+receiver the header says `send time not given`), never trusted. With none, `issuedAt` is used. Strictly older is stale;
+equal times are not. The newest time per sender and target lives in memory for the host run (a restart forgets it and marks fewer, never
+more). A per-sender `seq` would be a signed-body change (protocol version) and is a later slice.
+
 ## Out of scope: app rendering (#2538), the reply slot (#1323), which host types (#2560), CLI changes.

@@ -32,11 +32,11 @@ public static class ConfigCommands
         "launch.enabled", "launch.defaultWorkspace", "launch.defaultAgent", "launch.permissions",
         "launch.worktrees.root", "launch.worktrees.limit", "launch.worktrees.idleHours",
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust", "launch.remoteFolderTrustDevices",
-        "homeAssistant.enabled", "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
+        "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
-        "agentMessaging.remote", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "agentMessaging.laneDelivery", "agentMessaging.claudeBusyQueue", "security.roster",
+        "agentMessaging.remote", "agentMessaging.scope", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "agentMessaging.laneDelivery", "agentMessaging.claudeBusyQueue", "security.roster",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];
@@ -61,6 +61,17 @@ public static class ConfigCommands
                 _ => Usage(error),
             };
         }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            error.WriteLine($"{path}: {e.Message}");
+            return 1;
+        }
+    }
+
+    internal static int SetAuditedHaConnection(string folder, bool enabled, TextWriter output, TextWriter error)
+    {
+        var path = Path.Combine(folder, HostSettings.FileName);
+        try { return Set(path, "homeAssistant.enabled", enabled ? "true" : "false", output, error, connectionControl: true); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
             error.WriteLine($"{path}: {e.Message}");
@@ -126,6 +137,8 @@ public static class ConfigCommands
             WorkspaceApproval.NotGit => $"{added.Path} is not in a git repository, so its sessions cannot have worktrees of their own; add it without --isolate",
             WorkspaceApproval.AlreadyApproved => $"{added.Path} is already approved, as '{added.Label}'",
             WorkspaceApproval.LabelInUse => $"another workspace is already labelled '{added.Label}'; choose one with --label",
+            WorkspaceApproval.NotLocal => $"{added.Path} is not on a fixed drive of this machine; only folders on its own drives can be approved",
+            WorkspaceApproval.Busy => "config.json is being changed by another process; try again",
             WorkspaceApproval.TooMany => $"at most {AgentBridge.Protocol.LaunchProtocol.MaxWorkspaces} workspaces can be approved; remove one first",
             _ => added.Detail,
         };
@@ -161,10 +174,15 @@ public static class ConfigCommands
         return 0;
     }
 
-    static int Set(string path, string key, string? value, TextWriter output, TextWriter error)
+    static int Set(string path, string key, string? value, TextWriter output, TextWriter error, bool connectionControl = false)
     {
+        if (key == "homeAssistant.enabled" && !connectionControl)
+        {
+            error.WriteLine("Use agent-bridge-host ha off or agent-bridge-host ha on for the audited connection control.");
+            return 2;
+        }
         var parts = key.Split('.');
-        var known = Keys.Contains(key, StringComparer.Ordinal)
+        var known = connectionControl && key == "homeAssistant.enabled" || Keys.Contains(key, StringComparer.Ordinal)
             || (parts.Length == 4 && parts[0] == "launch" && parts[1] == "agents" && Delivery.Launch.Launchers.Find(parts[2]) is not null && AgentKeys.Contains(parts[3]));
         if (!known)
         {

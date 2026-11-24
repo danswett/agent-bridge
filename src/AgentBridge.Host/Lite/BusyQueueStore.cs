@@ -25,6 +25,7 @@ public sealed class BusyQueueStore(TimeProvider time)
     // The slot: session id -> the key (peer + request) that claims it.
     readonly Dictionary<string, string> slots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> sessionOf = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (string? Transcript, long Offset)> tracked = new(StringComparer.Ordinal);
 
     static string KeyOf(string principal, string request) => principal + '\u001f' + request;
 
@@ -73,6 +74,20 @@ public sealed class BusyQueueStore(TimeProvider time)
         }
     }
 
+    // Settle only while the record is still in the state the caller read (#4129): a send settled delivered or released in between is left as it is,
+    // never moved back to queued or held with no slot. The check and the change are one step under the lock.
+    public bool SettleIf(string request, Func<Record, bool> still, string state, string? reason, bool held, string? principal = null)
+    {
+        lock (gate)
+        {
+            if (Find(request, principal) is not { } key || !still(records[key])) { return false; }
+            var r = records[key];
+            records[key] = r with { State = state, Reason = reason, Held = held, Until = state == Queued ? time.GetUtcNow() + Watch : r.Until };
+            if (!held) { FreeSlot(key); }
+            return true;
+        }
+    }
+
     // Nothing was typed: the record and the slot go.
     public void Release(string request, string? principal = null)
     {
@@ -82,6 +97,28 @@ public sealed class BusyQueueStore(TimeProvider time)
     public Record? Get(string request, string? principal = null)
     {
         lock (gate) { return Find(request, principal) is { } key ? records[key] : null; }
+    }
+
+    public sealed record Holding(string Request, string? Transcript, long Offset, string? Principal = null);
+    // Where a held send's transcript stands: the file and the offset it had when the send began, so a prompt Claude takes later can be found.
+    public void Track(string request, string? transcript, long offset, string? principal = null)
+    {
+        lock (gate) { if (Find(request, principal) is { } key) { tracked[key] = (transcript, offset); } }
+    }
+
+    public (string? Transcript, long Offset) Tracking(string request, string? principal = null)
+    {
+        lock (gate) { return Find(request, principal) is { } key && tracked.TryGetValue(key, out var where) ? where : default; }
+    }
+
+    public Holding? Holder(string session)
+    {
+        lock (gate)
+        {
+            if (!slots.TryGetValue(session, out var key) || !records.TryGetValue(key, out var held)) { return null; }
+            tracked.TryGetValue(key, out var where);
+            return new Holding(held.Request, where.Transcript, where.Offset, held.Principal);
+        }
     }
 
     public bool SlotHeld(string session)
@@ -96,6 +133,7 @@ public sealed class BusyQueueStore(TimeProvider time)
 
     void FreeSlot(string key)
     {
+        tracked.Remove(key);
         if (sessionOf.Remove(key, out var session) && slots.TryGetValue(session, out var holder) && holder == key) { slots.Remove(session); }
     }
 
