@@ -29,7 +29,7 @@ sampler is measurement only: it keeps a short in-memory ring so an event's recor
 minutes before it, and a last-resort timer is a documented alarm reported as a fault, never a
 trigger. `load.get` also works on the OS-authenticated local pipe for launch admission
 ([#2982](https://github.com/danswett/agent-bridge/issues/2982)), using the same sampler and host freshness.
-Pipe peer checks and scoped-script restrictions are unchanged. Subscriptions, updates and the
+The pipe's OS peer check is unchanged and decides who may ask: any process it admits may read this record, as it may read `sessions.list`; it is read-only and acts on nothing. Subscriptions, updates and the
 `load` capability remain relay-only; a connection may hold one subscription, and
 `load.unsubscribe` `{}` ends it. `seq` is the channel's.
 

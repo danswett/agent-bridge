@@ -76,7 +76,7 @@ reading for a process inside an agent session ([below](#who-may-manage-the-host)
 
 `load.get` `{}` returns the current [MachineLoad](v1-machine-load.md#machineload),
 including optional `runQueueAvg` and host-computed `ageMs`, when `load.enabled` is on.
-OS peer authentication and scoped-script restrictions still apply. `load.subscribe`,
+It only reads, like `sessions.list`: any process the pipe's OS peer check admits may call it (the app, a script or an agent session credential included), and it acts on nothing; it is not served when `load.enabled` is off. `load.subscribe`,
 `load.unsubscribe`, `load.update` and the `load` capability remain relay-only.
 
 Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
