@@ -64,7 +64,7 @@ public sealed partial class LaunchFlowTests
         var folder = Directory.CreateDirectory(Path.Combine(f.Root, "tick-resume")).FullName;
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
         {
-            agents = new { enabled = true, resume = new { roles = new[] { "quality-lead" } } }, launch = new { enabled = true, workspaces = Array.Empty<string>() },
+            agents = new { enabled = true, resume = new { roles = new[] { "quality-lead" } } }, launch = new { enabled = true, workspaces = new[] { new { label = "App", path = folder } } },
         }));
         var credentials = new AgentCredentials(folder, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rootAlive: (_, _) => true);
         var launcher = Launcher(Config(), credentials: credentials, agentLaunchOn: true);
@@ -79,7 +79,7 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(("quality-lead", "session", 0, true), (launcher.LaunchRole(caller.Session), caller.Kind, caller.Depth, credentials.IsLive(caller)));
         var resumed = new List<ResumeAsk>();
         var handler = new FleetResumeCommands(folder, credentials, launcher.LaunchRole, _ => true, _ => false,
-            _ => new RestoreLaunch("copilot", "API", null, null, null, null, null, LaunchProtocol.Ask),
+            _ => new RestoreLaunch("copilot", "App", null, null, null, null, null, LaunchProtocol.Ask),
             (ask, _) => { resumed.Add(ask); return Task.FromResult(new LaunchResult(LaunchOutcome.Started, null) { Session = ask.Id }); });
         var receipt = await handler.HandleAsync(caller, JsonSerializer.SerializeToElement(new { version = 1, request = Guid.NewGuid(), session = Guid.NewGuid().ToString() }));
         Assert.Equal((outcome, reason), (receipt.Outcome, receipt.Reason));
