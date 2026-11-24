@@ -584,7 +584,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // then no session has an owner, so R2 stays quiet and nothing is addressed to an agent (agent delivery is S3).
     PeriodicTimer? watchTick = null;
     var sessionWatch = AgentBridge.Host.Core.Watch.SessionWatchStarter.Start(() => HostSettings.SessionWatchEnabled(identity.Folder),
-        source.Snapshot, () => source.Held is not null, _ => null, (title, body) => push?.NotifyWatch(title, body), () => DateTimeOffset.UtcNow, Log,
+        source.Snapshot, () => source.Held is not null, _ => null, source.EndedByHook, (title, body) => push?.NotifyWatch(title, body), () => DateTimeOffset.UtcNow, Log,
         token => (watchTick ??= new PeriodicTimer(AgentBridge.Host.Core.Watch.SessionWatchLoop.Tick)).WaitForNextTickAsync(token).AsTask(), stop.Token);
     if (sessionWatch is not null)
     {

@@ -236,6 +236,20 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         finally { _pass.Release(); }
     }
 
+    // Sessions removed because their own agent said they ended (positive ended evidence), newest last and bounded: the watch asks after the row has gone.
+    readonly HashSet<string> _endedByHook = new(StringComparer.Ordinal);
+    readonly Queue<string> _endedOrder = new();
+    const int MaxEndedByHook = 1024;
+
+    public bool EndedByHook(string id) { lock (_gate) { return _endedByHook.Contains(id); } }
+
+    void RememberEnd(string id)
+    {
+        if (!_endedByHook.Add(id)) { return; }
+        _endedOrder.Enqueue(id);
+        while (_endedOrder.Count > MaxEndedByHook) { _endedByHook.Remove(_endedOrder.Dequeue()); }
+    }
+
     public SessionProcess? ProcessOf(string id)
     {
         lock (_gate)
@@ -465,6 +479,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 // first, a reader saw it neither listed nor held, and a resume started a second CLI on its transcript.
                 replaced.UnionWith(gone.Where(live.Contains));
                 gone.RemoveAll(replaced.Contains);
+                foreach (var id in gone.Where(id => Ended(_entries[id]))) { RememberEnd(id); }
                 // Admissions before row changes: readers and launch skip _pass, so an omitted live session already holds.
                 var listed = _entries.Keys.Except(gone).ToHashSet(StringComparer.Ordinal);
                 var slots = MaxSessions - listed.Count;
@@ -481,6 +496,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                     admitted.Add(candidate);
                 }
                 found = admitted;
+                // A session that is live again (resumed) is no longer one that ended: a later vanish must not read as a clean end.
+                foreach (var again in admitted) { _endedByHook.Remove(again.Id); }
             }
             held = HeldBy(observed);
             if (overflow.Count > 0) { held = WithUnread(held, overflow, $"the {MaxSessions}-session roster limit was reached"); }

@@ -15,6 +15,9 @@ public sealed record WatchSettings
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(20);
     // R4: a delivered session idle this long is OFFERED for ending (the host ends nothing).
     public TimeSpan FinishedAfter { get; init; } = TimeSpan.FromMinutes(30);
+    // R3 only watches agents that can say they ended cleanly (their own SessionEnd hook): Codex today. A Claude or Copilot session has no such
+    // signal, so it never raises a missing alarm (it would alarm on every normal exit) and the log says so.
+    public IReadOnlySet<AgentKind> CleanEndAgents { get; init; } = new HashSet<AgentKind> { AgentKind.Codex };
     // R3: a missing session is forgotten this long after it was first noticed missing.
     public TimeSpan MissingForget { get; init; } = TimeSpan.FromHours(24);
     // The same episode is not noticed again within this long (#4262: 30 minutes).
@@ -27,13 +30,13 @@ public sealed record WatchSettings
 // then idle: an offer) in docs/design/session-watch.md. It reads sessions and says what to notice; it never sends, answers, types or ends
 // anything. ownerOf is the host's durable owner record (S1b); null means no owner, so the person only. ended says whether a session's
 // end is explained (a stop or `fleet end` on record, or a clean exit); with no end source (null) R3 stays off.
-public sealed class SessionWatch(WatchSettings settings, Func<string, string?> ownerOf, Func<string, bool>? ended = null)
+public sealed class SessionWatch(WatchSettings settings, Func<string, string?> ownerOf, Func<string, bool>? ended = null, Action<string>? log = null)
 {
     enum Delivery { Unknown, No, Yes }
 
     readonly Dictionary<string, (SessionStatus Status, Delivery Delivery)> seen = [];
     readonly Dictionary<(WatchRule, string), (DateTimeOffset Since, DateTimeOffset Last, int Count)> ledger = [];
-    readonly HashSet<string> owned = [];
+    readonly Dictionary<string, AgentKind> owned = [];
     readonly Dictionary<string, DateTimeOffset> missingSince = [];
 
     // held: discovery is held, so absence decides nothing and nothing is judged or forgotten this pass.
@@ -48,7 +51,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
             var delivery = Track(s);
             var inState = now - s.StatusSince;
             var owner = ownerOf(s.Id);
-            if (owner is not null && ended is not null) { owned.Add(s.Id); missingSince.Remove(s.Id); }
+            if (owner is not null && ended is not null) { owned[s.Id] = s.Agent; missingSince.Remove(s.Id); }
             WatchRule? rule = s.Status switch
             {
                 SessionStatus.Waiting when inState >= settings.PromptAfter => WatchRule.Prompt,
@@ -64,8 +67,14 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
         var ids = sessions.Select(s => s.Id).ToHashSet();
         if (ended is not null)
         {
-            foreach (var id in owned.Where(id => !ids.Contains(id)).ToList())
+            foreach (var (id, agent) in owned.Where(o => !ids.Contains(o.Key)).ToList())
             {
+                if (!settings.CleanEndAgents.Contains(agent))
+                {
+                    log?.Invoke($"session watch: {(id.Length <= 8 ? id : id[..8])} is a {agent} session with no clean-end signal, so it cannot raise a missing alarm");
+                    owned.Remove(id); missingSince.Remove(id);
+                    continue;
+                }
                 if (ended(id)) { owned.Remove(id); missingSince.Remove(id); continue; }
                 // Explained by what the watch saw: the host was ending it (Ending), or it had delivered and was closed. Decided at the first absence.
                 if (!missingSince.ContainsKey(id) && seen.TryGetValue(id, out var last) && (last.Status == SessionStatus.Ending || last.Delivery == Delivery.Yes))

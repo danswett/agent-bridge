@@ -12,7 +12,7 @@ public class SessionWatchTests
     static Session S(SessionStatus status, DateTimeOffset since, string id = "s1", string? response = null) => new()
     {
         Id = id,
-        Agent = AgentKind.Claude,
+        Agent = AgentKind.Codex,
         Status = status,
         StatusSince = since,
         UpdatedAt = since,
@@ -182,6 +182,37 @@ public class SessionWatchTests
     // S4b: R4 (delivered, then idle past the limit: an OFFER, the host ends nothing) and R3 (an owned session that vanished unexplained).
     static SessionWatch WatchEnded(Func<string, bool>? ended, params string[] owned) =>
         new(new WatchSettings(), id => owned.Contains(id) ? Boss : null, ended);
+
+    [Fact]
+    public void An_owned_Claude_or_Copilot_session_that_vanishes_never_raises_missing_and_the_log_says_why_once()
+    {
+        var log = new List<string>();
+        var w = new SessionWatch(new WatchSettings(), id => Boss, _ => false, log.Add);
+        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Copilot })
+        {
+            w.Evaluate([S(SessionStatus.Working, T.AddHours(-1), agent.ToString()) with { Agent = agent }], T.AddMinutes(-1));
+            Assert.Empty(w.Evaluate([], T));
+            Assert.Empty(w.Evaluate([], T.AddHours(1)));
+        }
+        Assert.Equal(2, log.Count(l => l.Contains("no clean-end signal")));
+    }
+
+    [Fact]
+    public void A_Codex_vanish_with_no_session_end_and_no_deliberate_end_raises_missing_but_a_session_end_or_a_stop_does_not()
+    {
+        var crash = WatchEnded(_ => false, "s1");
+        crash.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Equal(WatchRule.Missing, Assert.Single(crash.Evaluate([], T)).Rule);
+
+        var cleanExit = WatchEnded(id => id == "s1", "s1");
+        cleanExit.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Empty(cleanExit.Evaluate([], T));
+
+        var stopped = WatchEnded(_ => false, "s1");
+        stopped.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-2));
+        stopped.Evaluate([S(SessionStatus.Ending, T.AddMinutes(-1))], T.AddMinutes(-1));
+        Assert.Empty(stopped.Evaluate([], T));
+    }
 
     static void Delivered(SessionWatch w, string id = "s1")
     {
