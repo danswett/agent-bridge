@@ -231,6 +231,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
 
     // What a person (or an agent) does on the card, and the change Home Assistant reports for it.
     public HaTrigger Press(string entityId, string? userId = "person") => Apply("button.press", entityId, "", userId);
+    // A select left holding what the machine has stopped offering, which Home Assistant would not let a person choose.
+    public void Force(string entityId, string value) { lock (gate) { optimistic[Registry.First(p => p.Value == entityId).Key] = (value, "person"); } }
+
     public HaTrigger Choose(string entityId, string option, string? userId = "person") => Apply("select.select_option", entityId, option, userId);
     public HaTrigger Type(string entityId, string text, string? userId = "person") => Apply("text.set_value", entityId, text, userId);
 
