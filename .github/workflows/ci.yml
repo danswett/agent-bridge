@@ -92,6 +92,7 @@ jobs:
       app: ${{ steps.select.outputs.app }}
       app-installer: ${{ steps.select.outputs.app-installer }}
       light: ${{ steps.select.outputs.light }}
+      playwright-apt: ${{ steps.select.outputs.playwright-apt }}
       pwa-ui: ${{ steps.select.outputs.pwa-ui }}
       pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
       suites: ${{ steps.select.outputs.suites }}
@@ -257,7 +258,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
+          JOBS: product ha-integration spikes spikes-linux app app-installer light playwright-apt pwa-ui pwa-e2e
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -1406,8 +1407,6 @@ jobs:
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
     #    server, offline (tools/lab/forms-soak);
-    #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
-    #    when it should (.github/actions/playwright-system-packages);
     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
     #    offline (lab-release-verify.yml);
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
@@ -1512,9 +1511,6 @@ jobs:
       - name: MCP server tests
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
         run: node --test "mcp/test/*.test.mjs"
-      - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
-        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
-        run: bash .github/actions/playwright-system-packages/test.sh
       - name: The lab release verification's gate refuses every run today, and its verdict passes only the release asked for
         # Offline: nothing reaches Azure or GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-release-verify')) }}
@@ -1656,6 +1652,20 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
           fi
+
+  # The Playwright system packages' download and offline install checks, on a runner of their own (#4104): they took 45-49 s of the light job's serial run.
+  # Run when the plan selects the playwright-apt suite (quality/catalog.yml), or on the whole ring.
+  playwright-apt:
+    needs: plan
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.playwright-apt == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
+        run: bash .github/actions/playwright-system-packages/test.sh
 
   pwa-ui:
     # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
@@ -1871,7 +1881,7 @@ jobs:
     # new gate's check only once every job it needs is done; under the same name, the draft's
     # green gate would stand for the whole head until then, and a merge could go through on it.
     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
+    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, playwright-apt, pwa-ui, pwa-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

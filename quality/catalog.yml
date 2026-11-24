@@ -975,7 +975,7 @@ suites:
     # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
-    where: ci.yml light
+    where: ci.yml playwright-apt
     status: exists
 
   - id: pwa-pages

@@ -420,9 +420,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      summary and self-test artifact retain the input identity; job duration excludes the wait
      for `app`. App parallelism and product sharding remain separate #1755 slices.
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
-     `pwa-unit` with its coverage pass, `pwa-site-csp`, `playwright-apt` and `docs-links`. Each step runs when its
+     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
+   - `playwright-apt` runs the Playwright system packages' download and offline install checks
+     (`.github/actions/playwright-system-packages/test.sh`) on a runner of its own, beside `light`:
+     they took 45-49 s of its serial run (#4104). It is gated on the plan like the others, is in
+     quality-gate's needs, and so a selected one that failed, was cancelled or was skipped fails the gate;
+     quality/merge-rule.yml's `main_green.jobs` lists it.
    - `pwa-ui` runs Playwright on six runners: three Chromium and three WebKit
      `--shard`s, with `--fully-parallel` so a shard splits by test rather than by file.
      `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
