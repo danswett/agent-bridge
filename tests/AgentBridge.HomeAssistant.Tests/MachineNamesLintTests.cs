@@ -57,11 +57,11 @@ public sealed class MachineNamesLintTests
     }
 
     [Theory]
-    [InlineData("const string Machine = \"" + "DSW" + "ETT-DEV-VM1\";")]
+    [InlineData("const string Machine = \"" + "DSW" + "ETT-DEV-VM" + "1\";")]
     [InlineData("MachineName = \"" + "DSW" + "ETT-ARM" + "8\"")]
-    [InlineData("Slug(\"dsw" + "ett_dev_vm1\")")]
+    [InlineData("Slug(\"dsw" + "ett_dev_vm" + "1\")")]
     [InlineData("the dashboard " + "DSW" + "ETT-HOME generates")]
-    [InlineData("DEV-" + "VM2 (shadow)")]
+    [InlineData("DEV-" + "VM" + "2 (shadow)")]
     [InlineData("a host named vm" + "3 here")]
     [InlineData("host_vm" + "1")]
     [InlineData("vm" + "10")]
