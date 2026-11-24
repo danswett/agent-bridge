@@ -66,4 +66,63 @@ public class ClaudeReplyRefTests
         Assert.False(string.IsNullOrEmpty(a.ResponseId));
         Assert.False(string.IsNullOrEmpty(a.ResponseRef));
     }
+
+    // #4333 review P2: the ref of a reply that GROWS across a tool or a notice (the same message id, not contiguous) is its first part's, and a re-read of the
+    // same transcript after a host restart gives every reply the same ref.
+    [Fact]
+    public async Task A_reply_that_grows_across_a_tool_keeps_its_first_ref_and_the_next_reply_has_another()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        await using var source = f.Source();
+        var seen = new List<(string? Ref, string? Text)>();
+        async Task Step(params string[] lines)
+        {
+            Fixture.Append(transcript, lines);
+            await source.RefreshAsync();
+            var a = source.Get(Id)!.Activity;
+            seen.Add((a.ResponseRef, a.Response));
+        }
+        await Step(Claude.User("go", 1), Claude.AssistantMessage("m1", 2, null, Claude.Text("One")));
+        await Step(Claude.AssistantMessage("m1", 3, null, Claude.ToolUse("b1", "Bash", new JsonObject { ["command"] = "echo" })), Claude.ToolResult("b1", 4));
+        await Step(Claude.AssistantMessage("m1", 5, null, Claude.Text("Two")));                                            // the same message grows across the tool
+        await Step(Claude.AssistantMessage("m2", 6, "end_turn", Claude.Text("Next")));
+        var one = seen.First(s => s.Text == "One");
+        var grown = seen.First(s => s.Text == "One\n\nTwo");
+        var next = seen.First(s => s.Text == "Next");
+        Assert.False(string.IsNullOrEmpty(one.Ref));
+        Assert.Equal(one.Ref, grown.Ref);                                                                                   // one reply, one ref, however far it grows
+        Assert.NotEqual(grown.Ref, next.Ref);                                                                               // the next reply is another
+    }
+
+    [Fact]
+    public async Task A_host_restart_and_a_full_re_read_give_the_same_reply_the_same_ref()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        string? before;
+        await using (var first = f.Source())
+        {
+            Fixture.Append(transcript, Claude.User("go", 1), Claude.AssistantMessage("m1", 2, null, Claude.Text("One")),
+                Claude.AssistantMessage("m2", 3, "end_turn", Claude.Text("Two")));
+            await first.RefreshAsync();
+            before = first.Get(Id)!.Activity.ResponseRef;
+        }
+        Assert.False(string.IsNullOrEmpty(before));
+        await using var second = f.Source();                                                                                // a new host run reads the whole transcript again
+        await second.RefreshAsync();
+        var after = second.Get(Id)!.Activity;
+        Assert.Equal("Two", after.Response);
+        Assert.Equal(before, after.ResponseRef);
+        // And a host that starts reading in the middle (only the last record is inside the window) still gives that reply the same ref: it comes from the record, not from a count.
+        var lastLine = File.ReadLines(transcript).Last();
+        await using var third = f.Source(tailBytes: System.Text.Encoding.UTF8.GetByteCount(lastLine) + 4);
+        await third.RefreshAsync();
+        Assert.Equal("Two", third.Get(Id)!.Activity.Response);
+        Assert.Equal(before, third.Get(Id)!.Activity.ResponseRef);
+    }
 }
