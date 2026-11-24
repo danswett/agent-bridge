@@ -140,6 +140,7 @@ Nothing is created, guessed or widened; the receipt is `refused` (the host log s
   running, which refuses. Not an op the gate audit knows; a follow-up if Quality wants it.
 - **Sessions launched before this ships have no recorded role,** so nobody can resume them by this op (fail closed) until
   they are relaunched by a person; the owner resumes those by hand meanwhile.
+- **A resumed Copilot worker is not narrowed to its role's `launch.workerMcp` list.** Resume restores the recorded launch settings (profile, model, effort, context, permissions) and the worker `role` is not part of them, so a resumed worker keeps the MCP servers its profile gives it, not the narrower set its original role chose. Follow-up if the owner wants it narrowed.
 - **`agents.resume.roles` is the owner's step:** empty (the default) means resume is off.
 - **No new coordinators:** a coordinator session is only ever started by a person (owner decision, item 2).
 
