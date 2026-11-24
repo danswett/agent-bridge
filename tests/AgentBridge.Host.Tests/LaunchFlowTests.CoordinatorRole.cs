@@ -79,7 +79,7 @@ public sealed partial class LaunchFlowTests
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
         {
-            agents = new { enabled = true, resume = new { roles = new[] { "quality-lead" } } }, launch = new { enabled = true, workspaces = Array.Empty<string>() },
+            agents = new { enabled = true, resume = new { roles = new[] { "quality-lead" } } }, launch = new { enabled = true, workspaces = new[] { new { label = "API", path = folder } } },
         }));
         var credentials = new AgentCredentials(folder, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         var caller = credentials.Check(credentials.Mint(session, "person-launch", 100, DateTimeOffset.UtcNow, AgentProtocol.ScopeReadReplyLaunch),
