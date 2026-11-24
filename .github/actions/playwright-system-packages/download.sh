@@ -294,7 +294,7 @@ fetch_timeout=${PLAYWRIGHT_APT_FETCH_TIMEOUT:-60}
 prefetch_budget=${PLAYWRIGHT_APT_PREFETCH_BUDGET:-600}
 prefetch() {
   [ "${PLAYWRIGHT_APT_PREFETCH:-true}" = true ] && [ "$force" = false ] || return 0
-  local plan work_dir uri file size hash extra rel base bases=() urls=() left=() sticky=0 planned=0 fetched=0 i try idx nb started=$SECONDS spent=false got
+  local plan work_dir uri file size hash extra rel base mapped bases=() urls=() left=() sticky=0 planned=0 fetched=0 i try idx nb started=$SECONDS spent=false got
   if [ "$prefetch_budget" -le 0 ]; then
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget is spent before it began; apt downloads every package"; return 0
   fi
@@ -315,10 +315,21 @@ prefetch() {
     fi
     if [ "$spent" = true ] || [ $((SECONDS - started)) -ge "$prefetch_budget" ]; then spent=true; left+=("$file"); continue; fi
     rel=${uri#\'}; rel=${rel%\'}; urls=()
+    # What apt prints is not always a URL curl can fetch: on the runner images apt's sources are mirror+file:/etc/apt/apt-mirrors.txt, and --print-uris prints that
+    # UNRESOLVED URI (mirror+file:/etc/apt/apt-mirrors.txt/pool/main/...deb). It is mapped onto the mirror list (the same rotation), as is an http(s) URI that names
+    # one of those mirrors; any other http(s) URI (another source's) is fetched from itself only; any other scheme is left to apt at once, with no try and no sleep.
     case "$rel" in
-      */ubuntu/*) rel=${rel#*/ubuntu/}; for ((i = 0; i < nb; i++)); do urls+=("$(( (sticky + i) % nb ))|${bases[$(( (sticky + i) % nb ))]}/$rel"); done ;;
-      *) urls=("-1|$rel") ;;
+      mirror+file:*/apt-mirrors.txt/*) rel=${rel#mirror+file:*/apt-mirrors.txt/}; mapped=true ;;
+      http://*/ubuntu/* | https://*/ubuntu/*)
+        mapped=false
+        for base in "${bases[@]}"; do [ "${rel%%/ubuntu/*}/ubuntu" != "$base" ] || { mapped=true; break; }; done
+        [ "$mapped" = false ] || rel=${rel#*/ubuntu/} ;;
+      http://* | https://*) mapped=false ;;
+      *) left+=("$file"); continue ;;
     esac
+    if [ "$mapped" = true ]; then
+      for ((i = 0; i < nb; i++)); do urls+=("$(( (sticky + i) % nb ))|${bases[$(( (sticky + i) % nb ))]}/$rel"); done
+    else urls=("-1|$rel"); fi
     got=false
     for base in "${urls[@]}"; do
       idx=${base%%|*}; base=${base#*|}

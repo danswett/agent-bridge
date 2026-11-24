@@ -224,11 +224,12 @@ index_hash() {
   [ "$code" -eq 0 ] || { echo "exit-$code"; return 0; }
   sed -n 's/^index-hash=//p' "$GITHUB_OUTPUT"
 }
-# deb <file> <content>: the package on both mirrors; prints its plan line (the signed size and hash).
+# deb <file> <content>: the package on both mirrors; prints its plan line (the signed size and hash) in the shape real apt prints on the runner image, whose sources are
+# mirror+file:/etc/apt/apt-mirrors.txt: the UNRESOLVED mirror-list URI, never an http one (a fake that printed http URIs hid a prefetch that fetched nothing on a real runner).
 deb() {
   local hash; hash=$(printf '%s' "$2" | sha256sum); hash=${hash%% *}
   serve azure.archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"; serve archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"
-  printf "'http://azure.archive.ubuntu.com/ubuntu/pool/main/%s' %s %s SHA256:%s" "$1" "$1" "${#2}" "$hash"
+  printf "'mirror+file:/etc/apt/apt-mirrors.txt/pool/main/%s' %s %s SHA256:%s" "$1" "$1" "${#2}" "$hash"
 }
 expect() { if eval "$2"; then echo "ok: $1"; else echo "FAIL: $1"; failures=$((failures + 1)); fi; }
 dl() { DL_CODE=0; bash "$here/download.sh" chromium webkit > "$work/out" 2>&1 || DL_CODE=$?; }
@@ -305,7 +306,25 @@ stall_cases() {
   export PLAYWRIGHT_APT_ROTATE=true PLAYWRIGHT_APT_ATTEMPTS=3 APT_DOWNLOAD_TIMEOUTS=1
   check "a download attempt that timed out is retried on the NEXT mirror, not the same one again" 0 "$(printf 'update\n%s\n%s' "$download" "$download")" $'http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:3' "$canonical"
 }
-robust_cases() { index_cases; prefetch_cases; cause_cases; stall_cases; }
+# plan_line <uri> <file> <content>: a plan line for a package whose URI is exactly <uri>.
+plan_line() { local hash; hash=$(printf '%s' "$3" | sha256sum); hash=${hash%% *}; printf "'%s' %s %s SHA256:%s" "$1" "$2" "${#3}" "$hash"; }
+uri_cases() {
+  local a calls
+  calls=$(printf 'update\n%s\n%s' "$verify" "$download")
+  reset "$azure" "$canonical"; serve archive.ubuntu.com /ubuntu/pool/main/libx_1_amd64.deb 'package x'
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$(plan_line 'cdrom:[Ubuntu]/pool/main/libx_1_amd64.deb' libx_1_amd64.deb 'package x')"$'\n'"$(plan_line 'file:/var/cache/libx_2_amd64.deb' libx_2_amd64.deb 'package x2')"$'\n'"$(plan_line 'mirror+copy:/x/libx_3_amd64.deb' libx_3_amd64.deb 'package x3')"
+  check "a plan URI with a scheme curl cannot fetch is left to apt at once, with no fetch, no retry and no sleep" 0 "$calls" "$azure" "$canonical"
+  expect "nothing was fetched, nothing slept, and the log names them" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && [ ! -s "$SLEEP_LOG" ] && grep -q "left to apt.*libx_1_amd64.deb.*libx_2_amd64.deb.*libx_3_amd64.deb" "$work/out"'
+  reset "$azure" "$canonical"; serve packages.microsoft.com /ubuntu/24.04/prod/pool/main/m/msx_1_amd64.deb 'package ms'
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$(plan_line 'https://packages.microsoft.com/ubuntu/24.04/prod/pool/main/m/msx_1_amd64.deb' msx_1_amd64.deb 'package ms')"
+  check "a package from a non-Ubuntu source is fetched from its own URI only, never from the Ubuntu mirrors" 0 "$calls" "$azure" "$canonical"
+  expect "only packages.microsoft.com was asked, and the package arrived" '[ "$(curls "packages.microsoft.com")" -eq 1 ] && [ "$(curls "ubuntu.com")" -eq 0 ] && [ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/msx_1_amd64.deb")" = "package ms" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a" CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  check "a mirror+file URI is mapped onto the mirror list and rotates when a mirror is down, as a real runner needs" 0 "$calls" "$azure" "$canonical"
+  expect "it was fetched, from Canonical after Azure failed, and the summary counts it" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ] && grep -q "fetched 1 of 1 planned packages" "$work/out"'
+}
+robust_cases() { index_cases; prefetch_cases; uri_cases; cause_cases; stall_cases; }
 if [ "${1:-}" = --robust ]; then
   robust_cases
   [ "$failures" -eq 0 ] || { echo "::error::$failures of download.sh's robust checks failed"; exit 1; }
