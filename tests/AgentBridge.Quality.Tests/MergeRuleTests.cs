@@ -1567,10 +1567,10 @@ public class MergeRuleTests
     // The pause before an old unreadable run is read once more costs nothing here.
     static MergeRuleTests() => MergeRuleCommand.UnreadableRetryAfter = TimeSpan.Zero;
 
-    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null, IReadOnlyDictionary<long, string>? plans = null)
+    static (string Posted, string Output) JudgeMain(string mainRuns, IReadOnlyDictionary<long, string> unreadable, IReadOnlyDictionary<long, int>? times = null, IReadOnlyDictionary<long, string>? plans = null, string? recordFrom = null, string annotations = "[]")
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times, planRecords: plans);
-        var config = WriteConfig();
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: mainRuns, unreadableRuns: unreadable, unreadableTimes: times, planRecords: plans, annotations: annotations);
+        var config = WriteConfig(recordFrom: recordFrom);
         try
         {
             var output = new StringWriter();
@@ -1856,6 +1856,55 @@ public class MergeRuleTests
         var (posted, _) = Relied(runs);
 
         Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // P1-1: a parent still running only excuses a child that is green by its own jobs; a red child holds main red, not passed over for an older green run.
+    [Fact]
+    public void A_red_run_that_relied_on_a_parent_still_running_holds_main_red_and_is_not_passed_over()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "failure", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+
+        var (posted, _) = Relied(runs, (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains(Sha(8)[..7], posted, StringComparison.Ordinal);
+    }
+
+    // P2-2: from reliance_record_from on, a missing record is an error (the annotation may not have landed); an older run relied on none.
+    [Theory]
+    [InlineData(-60, " error merge-rule ")]
+    [InlineData(-10, " success merge-rule ")]
+    public void A_run_after_the_record_began_with_no_record_is_an_error_but_an_older_run_relied_on_none(int cutoffMinutesFromNow, string expected)
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
+        var from = MainNow.AddMinutes(cutoffMinutesFromNow).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string>(), recordFrom: from);
+
+        Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
+    }
+
+    [Fact]
+    public void Two_plan_base_records_on_one_run_are_an_error()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+        var one = new { title = "plan-base", message = RelyNone, annotation_level = "notice" };
+
+        var (posted, _) = JudgeMain(runs, new Dictionary<long, string>(), annotations: JsonSerializer.Serialize(new[] { one, one }));
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // The raw record text reaches the log: its control characters are shown as escapes and its length is capped, so it can't add a workflow command.
+    [Fact]
+    public void An_unreadable_record_is_shown_escaped_and_cut_short_in_the_log()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+
+        var (_, output) = Relied(runs, (8, "base=x\n::error::boom" + new string('a', 200)));
+
+        Assert.Contains("unreadable plan-base record 'base=x\\u000a::error::boom", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('a', 100), output, StringComparison.Ordinal);
     }
 
     // The depth cap: a chain of 20 relied-on parents is read to its end; a 21st is a chain too deep to trust, so main is red, never a pass.
@@ -3325,7 +3374,7 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
-    static string WriteConfig(bool arm64Waiver = false)
+    static string WriteConfig(bool arm64Waiver = false, string? recordFrom = null)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
         File.WriteAllText(path, """
@@ -3338,7 +3387,7 @@ public class MergeRuleTests
             main_green: { workflow: ci.yml, exempt_labels: [fixes-main], exempt_paths: [tests/AgentBridge.*.Tests/**], jobs: [light, app (win-x64), app (win-arm64), product] }
             copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
-            """ + (arm64Waiver ? "\n" + WaiverYaml : ""));
+            """.Replace("jobs: [light,", recordFrom is null ? "jobs: [light," : $"reliance_record_from: \"{recordFrom}\", jobs: [light,", StringComparison.Ordinal) + (arm64Waiver ? "\n" + WaiverYaml : ""));
         return path;
     }
 

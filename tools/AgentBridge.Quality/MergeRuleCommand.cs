@@ -542,8 +542,16 @@ static class MergeRuleCommand
             {
                 if (!evidence.Current.Usable) { continue; }
                 // A run that relied on a parent still running is not green yet: the judge reads on to an older run, as for a run still going.
-                var (state, why) = CheckReliance(session, evidence.Current.Jobs);
-                if (state == Reliance.Pending) { waiting.Add($"run {evidence.Current.Run.GetProperty("id").GetInt64()} {why}"); continue; }
+                var (state, why) = CheckReliance(session, evidence.Current.Run, evidence.Current.Jobs);
+                if (state == Reliance.Pending)
+                {
+                    // Only a run that is green by its own jobs is passed over: a red one holds main red whatever its parent turns out to be.
+                    var runId = evidence.Current.Run.GetProperty("id").GetInt64();
+                    var own = JudgeRun(session, runId, out log);
+                    if (own.State != "success") { return own; }
+                    waiting.Add($"run {runId} {why}");
+                    continue;
+                }
                 found = true;
                 relied = state == Reliance.Red ? why : null;
             }
@@ -569,6 +577,16 @@ static class MergeRuleCommand
             log = $"Main: couldn't read {config.MainGreen.Workflow}'s runs on {config.Base}: {e.Message}";
             return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
         }
+    }
+
+    // One main run judged by its own jobs, as main itself is: a fresh walk of main's history to it, so the caller's own walk keeps its place.
+    static MainFact JudgeRun(Session session, long id, out string log)
+    {
+        using var history = CompletedMain(session).GetEnumerator();
+        while (history.MoveNext())
+            if (history.Current.Run.GetProperty("id").GetInt64() == id)
+                return history.Current.Usable ? Judge(session, history, [], out log) : throw new InvalidOperationException($"run {id} is not usable evidence");
+        throw new InvalidOperationException($"run {id} is not in main's recent runs");
     }
 
     // The verdict on the run the enumerator stands at: its named jobs, the older runs for a job with no real result, its alerts. It reads what
@@ -717,20 +735,27 @@ static class MergeRuleCommand
     static readonly Regex PlanBase = new(@"^base=[0-9a-f]{40} relied-parent=(?<parent>none|[0-9a-f]{40})$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
 
     // The parent run a main run relied on (item A, #2454): its plan job's "plan-base" notice annotation. Null when it relied on none, or recorded
-    // nothing (a run from before the record, which diffed from a passed base). A record that is not in the shape is an error, not a guess.
-    static string? ReliedParent(Session session, Dictionary<string, JsonElement> jobs)
+    // nothing and is older than main_green.reliance_record_from (from before the record). From then on a missing record is an error: its
+    // annotation may not have landed, and "relied on nothing" would fail open. A record not in the shape, or a second one, is an error too.
+    static string? ReliedParent(Session session, JsonElement run, Dictionary<string, JsonElement> jobs)
     {
         if (!jobs.TryGetValue("plan", out var plan)) { return null; }
         using var notes = session.Rest($"repos/{session.Slug}/check-runs/{plan.GetProperty("id").GetInt64()}/annotations?per_page=100");
-        foreach (var note in notes.RootElement.EnumerateArray())
+        var records = notes.RootElement.EnumerateArray().Where(n => n.TryGetProperty("title", out var title) && title.GetString() == "plan-base").ToList();
+        if (records.Count > 1) { throw new InvalidOperationException($"{records.Count} plan-base records on one run"); }
+        if (records.Count == 0)
         {
-            if (!note.TryGetProperty("title", out var title) || title.GetString() != "plan-base") { continue; }
-            var text = note.TryGetProperty("message", out var message) ? message.GetString() ?? "" : "";
-            var match = PlanBase.Match(text);
-            if (!match.Success) { throw new InvalidOperationException($"unreadable plan-base record '{text}'"); }
-            return match.Groups["parent"].Value == "none" ? null : match.Groups["parent"].Value;
+            var from = session.Config.MainGreen.RelianceRecordFrom;
+            var older = from is not null && run.TryGetProperty("created_at", out var created) && created.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(created.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at)
+                && at < DateTimeOffset.Parse(from, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
+            return from is null || older ? null : throw new InvalidOperationException($"run {run.GetProperty("id").GetInt64()} has no plan-base record, and main records one from {from}");
         }
-        return null;
+        var text = records[0].TryGetProperty("message", out var message) ? message.GetString() ?? "" : "";
+        var match = PlanBase.Match(text);
+        // The raw text reaches the log: control characters escaped and the length capped, so it can't add a workflow command or fill a line.
+        if (!match.Success) { throw new InvalidOperationException($"unreadable plan-base record '{MergeRule.Printable(text.Length > 80 ? text[..80] + "…" : text)}'"); }
+        return match.Groups["parent"].Value == "none" ? null : match.Groups["parent"].Value;
     }
 
     /// <summary>
@@ -738,10 +763,10 @@ static class MergeRuleCommand
     /// failed, was cancelled or ran past the cap keeps main red even though the child passed, until a later run whose base covers that change passes.
     /// A parent still running within the cap is no verdict yet (the run is passed over).
     /// </summary>
-    static (Reliance State, string Why) CheckReliance(Session session, Dictionary<string, JsonElement> jobs)
+    static (Reliance State, string Why) CheckReliance(Session session, JsonElement run, Dictionary<string, JsonElement> jobs)
     {
         var config = session.Config;
-        var parent = ReliedParent(session, jobs);
+        var parent = ReliedParent(session, run, jobs);
         for (var depth = 0; parent is not null; depth++)
         {
             var name = $"relied on parent {MergeRule.Short(parent)}";
@@ -769,7 +794,7 @@ static class MergeRuleCommand
             if (!found) { return (Reliance.Red, $"{name} is not in main's recent runs"); }
             var parentJobs = history.Current.Jobs;
             if (!history.Current.Usable || Judge(session, history, [], out _).State != "success") { return (Reliance.Red, $"{name} is not green"); }
-            parent = ReliedParent(session, parentJobs);
+            parent = ReliedParent(session, parentRun, parentJobs);
         }
         return (Reliance.Covered, "");
     }

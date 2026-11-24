@@ -67,6 +67,8 @@ sealed class MergeRuleConfig
         if (config.MainGreen.InfraSteps.Any(p => string.IsNullOrWhiteSpace(p.Key)
             || p.Value is null || p.Value.Count == 0 || p.Value.Any(string.IsNullOrWhiteSpace)))
             missing.Add("valid main_green.infra_steps");
+        if (config.MainGreen.RelianceRecordFrom is { } recordFrom && !DateTimeOffset.TryParse(recordFrom, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out _))
+            missing.Add("valid main_green.reliance_record_from");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         // With nowhere to read the second review from, one review would stand in for two on a
         // sensitive change, so the config refuses to load rather than guess.
@@ -113,6 +115,8 @@ sealed class MainGreenConfig
     public List<string> Jobs { get; set; } = [];
     public List<List<string>> LegFamilies { get; set; } = [];
     public Dictionary<string, List<string>> InfraSteps { get; set; } = [];
+    /// <summary>When main's plan job began recording what each run relied on (#2454): a run created from then on with no record is an error, not "relied on nothing". Unset: relied on nothing.</summary>
+    public string? RelianceRecordFrom { get; set; }
 }
 
 sealed class Arm64WaiverConfig
