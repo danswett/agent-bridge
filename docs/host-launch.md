@@ -531,8 +531,8 @@ Prompts and attachment names are never logged, only their length and count.
 
 ## Fleet script launch grant
 
-A person at the machine may run `agent-bridge-host scripts grant-fleet <name>` or
-`scripts revoke-fleet <name>` (optionally `--profile <name>`); agents and script connections cannot.
+A person at the machine ticks or unticks it in the app (Settings > Script credentials, "Allow launching"); the host command
+line no longer does (`scripts grant-fleet` exits 4). Agents and script connections cannot.
 The separate `launch:fleet` grant is off for each newly minted credential.
 Activation remains closed until atomic, durable fleet hourly/live admission is wired (#2770);
 enabling a credential's grant does not yet enable dispatch.

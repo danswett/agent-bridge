@@ -253,7 +253,7 @@ problem and turns sharing off, never defaulting it on.
 
 ## Script credentials at the machine
 
-`agent-bridge-host scripts add|revoke <name> [--profile <name>]` is for a person at a Windows terminal.
+Script credentials are managed in the Slipgates app (Settings > Script credentials). `agent-bridge-host scripts add|revoke|grant-fleet|revoke-fleet <name>` no longer changes them: it says so and exits 4.
 The host must already serve that profile at the same elevation. Agent sessions, credentialed
 connections, the relay and other local programs cannot manage script credentials. This is a
 same-user safety rail, not a security boundary ([local pipe](protocol/local-pipe.md#who-may-manage-the-host)).
@@ -625,7 +625,7 @@ use, a 65th folder, and `--isolate` outside a git repository. The check is one f
 same check. Every command takes `--profile <name>`.
 
 `workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
-`sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
+`sign-in` and `host-sign init` are for a person. They refuse to run
 (exit code 4) inside an agent session: when
 anything they run inside is an agent CLI (`copilot`, `claude`, `codex`, `agency`, or Node or Bun
 running one), or when `AGENT_BRIDGE_SESSION` is set, as it is in every session the host

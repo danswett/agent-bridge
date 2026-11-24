@@ -134,7 +134,7 @@ host also asks *which* process each request comes from, op by op:
 |---|---|---|
 | **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included; the script credential ops (`scripts.add`, `scripts.revoke`, `scripts.grant-fleet`, `scripts.revoke-fleet`, `scripts.list`, `scripts.confirm`) only with the confirmation `scripts.confirm` issued on this connection (below) |
-| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.launch`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
+| **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.launch`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.list` (read only; it no longer changes script credentials), and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
 | **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 `session.launch` checks caller classification afresh. An untraceable caller is refused
@@ -156,7 +156,7 @@ in, or migrate the machine or roll it back (not a dry run), refuse in the same c
 full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
 too, which survives a process started detached from its parent
 ([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
-The same person-only guard applies to the script credential ops: from the host command line, or from the app with the host's confirmation (below).
+Script credential changes are app-only: the host refuses `scripts.add|revoke|grant-fleet|revoke-fleet` from a command-line caller.
 
 The app does not go round this. Asked to stop or restart a host that answers no, it reports the
 refusal and ends nothing (it ends a host only when the host does not answer at all). Its install,
@@ -179,7 +179,7 @@ host, and there is no app there to do it.
 and `rollback` must restart the host to hand agent-ha-bridge's hook spool over and back
 ([migration.md](../migration.md)), and they are run by a person, from a terminal of their own.
 So a caller that is this host's own executable, beside it, with its whole ancestry read and no
-agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add` and `scripts.revoke` (below),
+agent in it, may call `host.restart`, `session.rename`, `agent.adopt`, `agent.revoke` (below),
 but no other app-only op. It is the same rail as the
 app's: the same ancestry check refuses it inside an agent session, and the commands themselves
 refuse first, with exit 4, before reading anything. A copy of the program elsewhere, or one whose
@@ -229,9 +229,9 @@ setting a name here does not yet make it discoverable through `fleet.find`.
 
 ## Script credential management (`scripts.add`, `scripts.revoke`, `scripts.grant-fleet`, `scripts.revoke-fleet`, `scripts.list`, `scripts.confirm`)
 
-The host command line, or the local app with the host's confirmation; fresh ancestry checks; a same-user safety rail, not a
-security boundary. An agent or credentialed connection, including a revoked one, is never person authority.
-`scripts.add|revoke|grant-fleet|revoke-fleet` take `{ "name": "<script name>" }`; from the app they also take `"confirm"`, the value
+The local app only, with fresh ancestry checks and the host's confirmation; a same-user safety rail, not a security boundary.
+The host command line is refused (it may only read `scripts.list`). An agent or credentialed connection, including a revoked one,
+is never person authority. `scripts.add|revoke|grant-fleet|revoke-fleet` take `{ "name": "<script name>" }` and `"confirm"`, the value
 `scripts.confirm` (`{ "op", "name" }`) returned on the same connection: random, used once, good for two minutes on the monotonic clock,
 one outstanding per script, voided by any change to the script's credentials (see
 [script-credentials.md](../design/script-credentials.md) section 5). `scripts.list` returns each script's name, scope, latest expiry,

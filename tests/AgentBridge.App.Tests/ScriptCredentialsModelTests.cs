@@ -130,4 +130,100 @@ public sealed class ScriptCredentialsModelTests : IAsyncLifetime
         Assert.All(new[] { HostOps.ScriptAdd, HostOps.ScriptRevoke, HostOps.ScriptGrantFleet, HostOps.ScriptRevokeFleet },
             op => Assert.DoesNotContain("token", ScriptCredentialsModel.Consent(op, "pump-wake", live: 1), StringComparison.OrdinalIgnoreCase));
     }
+    // Receipt 7105890377 (#3900): the dialog tells the truth about a name that already has a credential, a malformed host reply is a
+    // notice and not a crash, the page is redrawn only when the list changed, and an old notice does not outlive a good read.
+    [Fact]
+    public async Task A_name_that_already_has_a_credential_says_rotate_because_the_host_rotates()
+    {
+        rows = [Row("pump-wake", live: 1)];
+        var model = new ScriptCredentialsModel(connection);
+        await model.RefreshAsync();
+        Assert.Contains("Rotate", model.ConsentFor(HostOps.ScriptAdd, "pump-wake"));
+        Assert.DoesNotContain("Create", model.ConsentFor(HostOps.ScriptAdd, "pump-wake"));
+        Assert.Contains("Create", model.ConsentFor(HostOps.ScriptAdd, "new-script"));
+        Assert.DoesNotContain("Rotate", model.ConsentFor(HostOps.ScriptAdd, "new-script"));
+        // Names are case-distinct on the host, so a different case is a different script and a new credential.
+        Assert.Contains("Create", model.ConsentFor(HostOps.ScriptAdd, "PUMP-WAKE"));
+        Assert.Contains("Revoke", model.ConsentFor(HostOps.ScriptRevoke, "pump-wake"));
+    }
+
+    public static IEnumerable<object[]> MalformedLists() =>
+    [
+        [new { scripts = new[] { new { name = 1, scope = "read+reply", expiresAt = "2026-12-01T00:00:00Z", live = 1, fleetLaunch = false } } }],
+        [new { scripts = new[] { new { name = "a", scope = "read+reply", expiresAt = "not a date", live = 1, fleetLaunch = false } } }],
+        [new { scripts = new[] { new { name = "a", scope = "read+reply", expiresAt = "2026-12-01T00:00:00Z", live = "many", fleetLaunch = false } } }],
+        [new { scripts = new[] { new { name = "a", scope = "read+reply", expiresAt = "2026-12-01T00:00:00Z", live = 1 } } }],
+        [new { scripts = 5 }],
+        [new { other = 1 }],
+    ];
+
+    [Theory]
+    [MemberData(nameof(MalformedLists))]
+    public async Task A_malformed_list_from_the_host_is_a_fixed_notice_and_never_throws(object reply)
+    {
+        host.On(HostOps.ScriptList, _ => reply);
+        var model = new ScriptCredentialsModel(connection);
+        await model.RefreshAsync();
+        Assert.Equal(ScriptCredentialsModel.UnreadableReply, model.Notice);
+        Assert.Empty(model.Rows);
+        Assert.Equal("", model.RowsKey);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("number")]
+    [InlineData("empty")]
+    public async Task A_malformed_confirmation_from_the_host_is_a_fixed_notice_and_nothing_is_pressed(string shape)
+    {
+        host.On(HostOps.ScriptConfirm, _ => shape switch { "missing" => new { nope = 1 }, "number" => new { confirm = 7 }, _ => (object)new { confirm = "" } });
+        var model = new ScriptCredentialsModel(connection);
+        await model.AddAsync("pump-wake");
+        Assert.Equal(ScriptCredentialsModel.UnreadableReply, model.Notice);
+        Assert.Empty(calls);
+        Assert.Empty(host.Sent(HostOps.ScriptAdd));
+    }
+
+    [Fact]
+    public async Task The_rows_key_changes_only_when_the_list_changes()
+    {
+        rows = [Row("pump-wake", live: 1), Row("dispatcher", live: 1, tick: true)];
+        var model = new ScriptCredentialsModel(connection);
+        Assert.Equal("", model.RowsKey);
+        await model.RefreshAsync();
+        var first = model.RowsKey;
+        Assert.NotEqual("", first);
+        await model.RefreshAsync();
+        Assert.Equal(first, model.RowsKey);
+        rows = [Row("pump-wake", live: 2), Row("dispatcher", live: 1, tick: true)];
+        await model.RefreshAsync();
+        Assert.NotEqual(first, model.RowsKey);
+        rows = [];
+        await model.RefreshAsync();
+        Assert.Equal("", model.RowsKey);
+    }
+
+    [Fact]
+    public async Task A_good_read_clears_an_old_notice_but_a_failed_press_keeps_its_own()
+    {
+        var model = new ScriptCredentialsModel(connection);
+        host.On(HostOps.ScriptAdd, _ => throw new InvalidOperationException("refused: two script credentials are already live for this name"));
+        await model.AddAsync("pump-wake");
+        // The press failed and the page then read the list again: the press notice must survive that read.
+        Assert.Contains("two script credentials", model.Notice);
+        rows = [Row("pump-wake")];
+        await model.RefreshAsync();
+        Assert.Null(model.Notice);
+        Assert.Single(model.Rows);
+    }
+
+    [Fact]
+    public async Task A_failed_read_after_a_good_press_shows_the_read_failure()
+    {
+        var model = new ScriptCredentialsModel(connection);
+        rows = [Row("pump-wake")];
+        host.On(HostOps.ScriptList, _ => new { scripts = 5 });
+        await model.RevokeAsync("pump-wake");
+        Assert.Equal(["scripts.revoke:pump-wake"], calls);
+        Assert.Equal(ScriptCredentialsModel.UnreadableReply, model.Notice);
+    }
 }

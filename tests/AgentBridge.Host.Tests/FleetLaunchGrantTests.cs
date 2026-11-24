@@ -15,6 +15,9 @@ public sealed class FleetLaunchGrantTests : IDisposable
     static AgentCredential Script => AgentCredential.Script("fixture", "machine", "dispatcher", Now) with { FleetLaunch = true };
     static LaunchRequest Request => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
         Workspace = "workers", Permissions = LaunchProtocol.AllowAll };
+    // The app's press: the host's confirmation for this action and script on this connection, sent back with the name.
+    static JsonElement Press(AgentCredentials store, string op, IProtocolChannel on, string name = "dispatcher") =>
+        JsonSerializer.SerializeToElement(new { name, confirm = store.IssueScriptConfirmation(op, name, on) });
     void Config(string workspace = "workers", bool isolate = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
         JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { workspace } } },
             launch = new { workspaces = new[] { new { label = "workers", path = folder, isolate } } } }));
@@ -67,9 +70,13 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var channel = new Channel();
         var data = JsonSerializer.SerializeToElement(new { name = "dispatcher" });
         var owner = new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner"));
+        var app = new FixedCallerGuard(new(CallerKind.App, "fixture app"));
         Assert.Throws<InvalidOperationException>(() => ScriptCredentialCommands.Handle(channel, "scripts.grant-fleet", data,
             new FixedCallerGuard(new(CallerKind.Agent, "fixture agent")), store, new AgentAuditLog(folder)));
-        ScriptCredentialCommands.Handle(channel, "scripts.grant-fleet", data, owner, store, new AgentAuditLog(folder));
+        // The terminal no longer grants it (P3); only the app's press with the host's confirmation does.
+        Assert.Throws<InvalidOperationException>(() => ScriptCredentialCommands.Handle(channel, "scripts.grant-fleet", Press(store, "scripts.grant-fleet", channel),
+            owner, store, new AgentAuditLog(folder)));
+        ScriptCredentialCommands.Handle(channel, "scripts.grant-fleet", Press(store, "scripts.grant-fleet", channel), app, store, new AgentAuditLog(folder));
         store.Accept(channel, script);
         Assert.True(store.Of(channel)!.FleetLaunch);
         var restarted = new AgentCredentials(folder, "machine");
@@ -83,7 +90,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Equal(AgentProtocol.ScopeReadReply, accepted.Scope);
         Assert.Equal(1, accepted.Depth);
         Assert.False(accepted.FleetLaunch);
-        ScriptCredentialCommands.Handle(new Channel(), "scripts.revoke-fleet", data, owner, store, new AgentAuditLog(folder));
+        var untick = new Channel();
+        ScriptCredentialCommands.Handle(untick, "scripts.revoke-fleet", Press(store, "scripts.revoke-fleet", untick), app, store, new AgentAuditLog(folder));
         Assert.False(store.Of(channel)!.FleetLaunch);
     }
 
@@ -206,8 +214,9 @@ public sealed class FleetLaunchGrantTests : IDisposable
         var store = new AgentCredentials(folder, "machine");
         var (script, _) = store.MintScript("dispatcher");
         var owner = new FixedCallerGuard(new(CallerKind.HostCli, "fixture owner"));
-        ScriptCredentialCommands.Handle(new Channel(), "scripts.grant-fleet",
-            JsonSerializer.SerializeToElement(new { name = "dispatcher" }), owner, store, new AgentAuditLog(folder));
+        var ticking = new Channel();
+        ScriptCredentialCommands.Handle(ticking, "scripts.grant-fleet", Press(store, "scripts.grant-fleet", ticking),
+            new FixedCallerGuard(new(CallerKind.App, "fixture app")), store, new AgentAuditLog(folder));
         var channel = new Channel();
         store.Accept(channel, script);
         var handler = LocalApi.Handler(null!, null!, owner, credentials: store);
