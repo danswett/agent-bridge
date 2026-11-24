@@ -26,6 +26,16 @@ are closed-set values, never text.
 - **Read only.** Fleet mode lists; it does not reply to, stop or launch anything on another machine. Those stay local-only and
   keep their existing authorization.
 
+## Owner change for remote messaging (Nov 23, 2026, 18:20 PT)
+
+The owner decided, option "Same person agents only" (relayed by the Engineering Lead):
+
+> An agent may message only agent sessions of the same signed-in person, on any of their machines; nothing crosses people.
+
+That is the owner change for **messaging** across the person's machines: `reply_to_agent_session` may name a `machine` and is answered by
+the local host's `agent.send`, and `list_agent_sessions` may take `scope: "fleet"`. Design: [beta-messaging.md](beta-messaging.md). It
+covers messaging only; every other item under "Not proposed" below is still an owner CHANGE, including launch, stop and keys.
+
 ## Not proposed, each an owner CHANGE if wanted
 
 - Returning `cwd`, titles, repository, branch or any question text for another machine's sessions.

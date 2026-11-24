@@ -9,6 +9,9 @@ only with a present same-account peer, by the trust rule below. A host with no s
 nothing. An explicit `"off"`, an unreadable setting or a kill keeps it off; the kill switch stays. It is removed or
 folded into the roster path when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371).
 
+Beta scope (owner decision, Nov 23, 2026, 18:20 PT): agents may message only agent sessions of the same signed-in person, on any of
+their machines; nothing crosses people. [beta-messaging.md](../design/beta-messaging.md) names this scope and the slices that build on it.
+
 ## What it trusts, and what it does not
 
 It trusts four things, all checked on the receiving machine: the relay's account authentication (the relay
