@@ -619,7 +619,9 @@ agent-bridge-host workspace remove Bridge
 ```
 
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
-use, and `--isolate` outside a git repository. Every command takes `--profile <name>`.
+use, a 65th folder, and `--isolate` outside a git repository. The check is one function
+(`WorkspaceApproval`) with one closed code per refusal, so a later in-app Add folder can ask the
+same check. Every command takes `--profile <name>`.
 
 `workspace add` and `remove`, `config set` and `unset`, `ha token set` and `clear`,
 `sign-in`, `scripts add|revoke` and `host-sign init` are for a person. They refuse to run
