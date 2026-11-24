@@ -130,16 +130,11 @@ internal sealed class LaunchProvenance
         }
     }
 
-    // The role a launch may record (#4318, R10 guards): a person's launch (no agent principal) records what it names; an agent's
-    // launch records it only when it equals the role the launching session itself was recorded with, so a session can never
-    // set or raise its own role and a builder can never record a coordinator role. Anything unclear records none.
-    public string? RoleFor(string? requested, string? agentPrincipal)
-    {
-        if (requested is null) { return null; }
-        if (agentPrincipal is null) { return requested; }
-        try { return RoleOf(agentPrincipal[(agentPrincipal.LastIndexOf('/') + 1)..]) is { } own && own == requested ? requested : null; }
-        catch (InvalidOperationException) { return null; }
-    }
+    // The role a launch may record (#4318): only a person's launch (no agent principal) records what it names. Owner decision of
+    // Nov 23, about 19:52 PT, item 2: NEW coordinator sessions still need the owner's direct approval, so an agent's launch of a
+    // new session records no role at all, even its own: a coordinator is never minted by an agent. A role survives an agent's
+    // action only on the same session resumed in place (RoleKept).
+    public string? RoleFor(string? requested, string? agentPrincipal) => agentPrincipal is null ? requested : null;
 
     // The role a resumed or restored session keeps (#4318): what its own earlier record says, so a resume never drops the role it
     // is judged by. None when unknown or unreadable.
