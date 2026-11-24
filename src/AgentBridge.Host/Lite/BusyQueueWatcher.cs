@@ -13,13 +13,13 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
     public Func<string, long, string, bool> Taken { get; init; } = ClaudeQueue.Taken;
 
     // Starts the watch in the background. A watcher that fails leaves the record held, exactly as it was.
-    public Task Start(string request, string? principal = null) => Task.Run(async () =>
+    public Task Start(string request, Func<bool>? ended = null, string? principal = null) => Task.Run(async () =>
     {
-        try { await WatchAsync(request, default, principal); }
+        try { await WatchAsync(request, default, ended, principal); }
         catch (Exception e) when (e is not OutOfMemoryException) { }
     });
 
-    public async Task WatchAsync(string request, CancellationToken ct = default, string? principal = null)
+    public async Task WatchAsync(string request, CancellationToken ct = default, Func<bool>? ended = null, string? principal = null)
     {
         if (store.Get(request, principal) is not { Held: true } first) { return; }
         // A queued send is watched until its Accepted time plus the watch; one that was unconfirmed with no row, for the watch from now.
@@ -30,6 +30,8 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
             var now = store.Get(request, principal);
             if (now is null || !now.Held || now.State == BusyQueueStore.Delivered) { return; }
             if (transcript is not null && Read(transcript, offset, request)) { store.SettleIf(request, r => r.Held && r.State != BusyQueueStore.Delivered, BusyQueueStore.Delivered, null, held: false, principal: principal); return; }
+            // The session ended: nothing can take the prompt any more, so the slot is released (sessionEnded). An unknown answer is not an end.
+            if (Ended(ended)) { store.SettleIf(request, r => r.Held && r.State != BusyQueueStore.Delivered, BusyQueueStore.Unconfirmed, "sessionEnded", held: false, principal: principal); return; }
             if (time.GetUtcNow() >= until)
             {
                 // An unconfirmed noRow send keeps its reason; a queued one is now reported watchEnded. Either stays held.
@@ -41,6 +43,11 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
         }
     }
 
+    static bool Ended(Func<bool>? ended)
+    {
+        try { return ended?.Invoke() == true; }
+        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
     bool Read(string path, long from, string request)
     {
         try { return Taken(path, from, request); }
