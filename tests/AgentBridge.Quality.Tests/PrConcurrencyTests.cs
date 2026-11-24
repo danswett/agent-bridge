@@ -8,17 +8,24 @@ public class PrConcurrencyTests
     [Theory]
     [InlineData("pull_request_target", "synchronize", "", true)]
     [InlineData("pull_request_target", "synchronize", "off", false)]
-    [InlineData("pull_request_target", "labeled", "", false)]
-    [InlineData("pull_request_target", "converted_to_draft", "", false)]
-    [InlineData("status", "", "", false)]
+    [InlineData("pull_request_target", "labeled", "", true)]
+    [InlineData("pull_request_target", "converted_to_draft", "", true)]
+    [InlineData("pull_request_target", "labeled", "off", false)]
+    [InlineData("status", "", "", true)]
+    [InlineData("status", "", "off", false)]
+    [InlineData("workflow_run", "in_progress", "", true)]
     [InlineData("workflow_run", "completed", "", false)]
     [InlineData("push", "", "", false)]
     [InlineData("release", "", "", false)]
     [InlineData("schedule", "", "", false)]
     [InlineData("workflow_dispatch", "", "", false)]
-    public void Only_a_new_head_cancels_its_PR_admission_and_never_a_sweep(string name, string action, string kill, bool cancels)
+    // #4104 (the run backlog): every newer run about the same pull request or head cancels the older one, not only a
+    // new head; a sweep (no head: cron, dispatch, main's CI) never cancels, nor does anything with the kill switch on.
+    public void Only_a_newer_run_of_the_same_PR_or_head_cancels_its_admission_and_never_a_sweep(string name, string action, string kill, bool cancels)
     {
         var context = Context(name, "42");
+        context["github.event.sha"] = name == "status" ? "old-head" : null;
+        context["github.event.workflow_run.head_sha"] = name == "workflow_run" && action == "in_progress" ? "old-head" : null;
         context["github.event.action"] = action;
         context["vars.FLEET_MERGERULE"] = kill;
         var concurrency = Load("merge-rule.yml");
