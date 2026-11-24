@@ -32,8 +32,8 @@ $out
 '@
 
 function Job([string]$name, [string]$conclusion) { @{ name = $name; conclusion = $conclusion; html_url = "https://github.com/o/r/actions/runs/101/job/$($name.Length)" } }
-function Issue([int]$number, [string]$key, [string]$last = $other, [string]$state = 'red', $labels = @(@{ name = 'full-red' })) {
-    @{ number = $number; state = 'open'; labels = $labels; body = "<!-- full-red-job:$key -->`n<!-- full-red-last:$last -->`n<!-- full-red-state:$state -->`nold body" }
+function Issue([int]$number, [string]$key, [string]$last = $other, [string]$state = 'red', $labels = @(@{ name = 'full-red' }), $user = @{ login = 'github-actions[bot]'; type = 'Bot' }) {
+    @{ number = $number; state = 'open'; labels = $labels; user = $user; body = "<!-- full-red-job:$key -->`n<!-- full-red-last:$last -->`n<!-- full-red-state:$state -->`nold body" }
 }
 # Runs the script on one case; the flags are files the stub looks for. Returns the exit code and every call.
 function Run-Case($jobs, $issues = @(), [hashtable]$run = @{}, [string[]]$flags = @()) {
@@ -81,6 +81,22 @@ try {
     Assert ((Creates $r).Count -eq 0 -and (Comments $r).Count -eq 1) 'the issue is found by its marker, not its label: with the label removed there is still no second issue'
     $r = Run-Case $spikesRed @((Issue 7 'pwa-e2e'), @{ number = 8; state = 'open'; pull_request = @{ url = 'x' }; body = '<!-- full-red-job:spikes --> a pull request' })
     Assert ((Creates $r).Count -eq 1) 'another job''s issue is not reused, and a pull request carrying the text is ignored'
+
+    # Only the workflow's own issues count: a person's issue that carries the marker must never have its body rewritten or a comment added (#4503, R4zzB827).
+    $alice = @{ login = 'alice'; type = 'User' }
+    $r = Run-Case $spikesRed @((Issue 7 'spikes' $other 'red' @(@{ name = 'full-red' }) $alice))
+    Assert ((Creates $r).Count -eq 1 -and @((Writes $r) | Where-Object { $_ -match 'issues/7' }).Count -eq 0) 'a person''s issue carrying the marker is not touched: a red job opens its own issue instead'
+    $noUser = Issue 7 'spikes'; $noUser.Remove('user')
+    $r = Run-Case $spikesRed @($noUser)
+    Assert ((Creates $r).Count -eq 1 -and @((Writes $r) | Where-Object { $_ -match 'issues/7' }).Count -eq 0) 'an issue with no author is not the workflow''s: it is left alone'
+    $r = Run-Case $spikesRed @((Issue 7 'spikes' $other 'red' @(@{ name = 'full-red' }) @{ login = 'github-actions[bot]'; type = 'User' }))
+    Assert ((Creates $r).Count -eq 1) 'the bot''s login with a user type is not the bot'
+    $r = Run-Case $spikesRed @((Issue 7 'spikes' $other 'red' @(@{ name = 'full-red' }) @{ login = 'dependabot[bot]'; type = 'Bot' }))
+    Assert ((Creates $r).Count -eq 1 -and @((Writes $r) | Where-Object { $_ -match 'issues/7' }).Count -eq 0) 'another app''s bot is not the workflow''s token either: only github-actions[bot]'
+    $r = Run-Case @((Job 'spikes' 'success')) @((Issue 7 'spikes' $other 'red' @(@{ name = 'full-red' }) $alice)) -run @{ conclusion = 'success' }
+    Assert ((Writes $r).Count -eq 0) 'a person''s issue is not commented or rewritten when its job is green again'
+    $r = Run-Case $spikesRed @((Issue 7 'spikes' $other 'red' @(@{ name = 'full-red' }) $alice), (Issue 8 'spikes'))
+    Assert ((Creates $r).Count -eq 0 -and @((Writes $r) | Where-Object { $_ -match 'issues/8' }).Count -ge 1 -and @((Writes $r) | Where-Object { $_ -match 'issues/7' }).Count -eq 0) 'the workflow''s own issue is found past a person''s with the same marker'
 
     $waivedOnly = @((Job 'trigger' 'success'), (Job 'app-selftest (win-x64)' 'success'), (Job 'app-installer (win-arm64)' 'failure'), (Job 'full-gate' 'success'))
     $r = Run-Case $waivedOnly -run @{ conclusion = 'success' }

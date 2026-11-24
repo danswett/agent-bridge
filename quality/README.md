@@ -471,6 +471,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
      outside these network retry budgets; dpkg is deliberately not wrapped in the network
      timeout. These fakes establish bounds/branches, not hosted cold-run success.
+     **Today `full.yml` has no `force-apt-fallback` input, so the proof below cannot be run until the follow-up (#4508) adds it.**
      To prove that fallback once without waiting for a slow mirror, once `full.yml`'s
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
@@ -887,9 +888,11 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 `app (win-arm64)`, `product (windows-11-arm)`, `pwa-ui` and `pwa-e2e` (Chromium and WebKit), `spikes` and `spikes-linux`, and an aggregate
 `full-gate` that, like `quality-gate`, fails when a job it selected was skipped (so a FULL run whose WebKit lane did not run is not a pass).
 * **When FULL is to run.** After each push to `main` whose FAST run passed (a `workflow_run` of `CI`, so it packs as
-  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); a newer push
-  cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
-  with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
+  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); FULL's concurrency group `full-main` cancels by **arrival, not by commit**: a FULL run that starts later cancels the one in progress, so a slow older commit's FULL
+  can cancel the newest commit's, and then **the newest commit has no FULL run and Pages does not deploy it until the next push**. To re-run it, dispatch FULL by hand on `main` while that commit is still
+  main's tip: `gh workflow run full.yml --ref main` (no input: it tests the tip of `main`). A by-hand FULL run on `main` at the exact commit counts for Pages and the train (`Select-FullRunRow`: `head_branch` is `main`,
+  `head_sha` is that commit), and one on any branch never counts; only people who can run workflows here (write access) can dispatch it. There is no scheduled sweep for a commit without a FULL run and the release train
+  does not dispatch FULL (neither exists yet); cancelling by commit in the workflow is a later follow-up, only if this shows in practice.
   **Only for a run it may follow, and on that commit** (enforced by the catalog check, `FullLane.Check`, once `full.yml` exists): every job but the
   aggregate needs the `trigger` job and runs only when `needs.trigger.outputs.ok == 'true'`; `ok` tests a run by hand, or a `workflow_run` whose
   conclusion is `success`, whose event is `push`, and whose branch is `main` (the trigger reads the run through this repository's API, so a fork's run never resolves; a pull request's or another
@@ -934,7 +937,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   was given, and each job's `actions/checkout` is that sha, so a run that tested another commit than the one it is found for is visible. The first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
-  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof and its guard moved to `full.yml`'s dispatch (`ci.yml` has no `workflow_dispatch` now), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof has no trigger until the follow-up (#4508) gives `full.yml`'s dispatch its one boolean `force-apt-fallback` (`ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single

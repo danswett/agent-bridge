@@ -12,7 +12,7 @@
 #   Waived    the Arm64 self-test, tests and installer (owner, #2454): recorded here, publish continues.
 # The aggregates (trigger, full-gate) are never a cause. A run that failed with no failed job behind it (a startup failure, or a job that was skipped or
 # cancelled) is red as "(whole run)". Names are cut down to a safe alphabet before they reach an issue, no log is read, and the only label is full-red.
-# Needs issues: write and actions: read (the workflow's token). Any API error fails the run; only "the label already exists" (422) is let through.
+# Only issues opened by the workflow's own token (github-actions[bot]) are found by that marker. Needs issues: write and actions: read (the workflow's token). Any API error fails the run; only "the label already exists" (422) is let through.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][long]$RunId,
@@ -55,10 +55,12 @@ if ($causes.Count -eq 0 -and $run.conclusion -in 'failure', 'timed_out', 'startu
 }
 $green = @($jobs | Where-Object { $_.conclusion -eq 'success' } | ForEach-Object { Get-Safe $_.name })
 
-# The open issues carrying a job marker, whatever their labels, and not pull requests.
+# The open issues carrying a job marker, whatever their labels, not pull requests, and opened BY THE WORKFLOW'S OWN TOKEN (github-actions[bot], type Bot): a person's issue that happens to carry the marker
+# is never found, so its body is never rewritten and it is never commented on (a new issue is opened instead).
+$botLogin = 'github-actions[bot]'
 $marker = [regex]'<!-- full-red-job:([^>]*?) -->'
 $open = @(Invoke-Gh api "repos/$Repository/issues?state=open&per_page=100" --paginate --slurp | ConvertFrom-Json | ForEach-Object { $_ } |
-    Where-Object { $_.body -and -not $_.PSObject.Properties['pull_request'] -and $marker.IsMatch($_.body) })
+    Where-Object { $_.body -and -not $_.PSObject.Properties['pull_request'] -and $_.PSObject.Properties['user'] -and $_.user -and $_.user.login -ceq $botLogin -and $_.user.type -ceq 'Bot' -and $marker.IsMatch($_.body) })
 function Get-Issue([string]$key) { $open | Where-Object { $marker.Match($_.body).Groups[1].Value -ceq $key } | Select-Object -First 1 }
 $summary = @()
 $nl = [Environment]::NewLine
