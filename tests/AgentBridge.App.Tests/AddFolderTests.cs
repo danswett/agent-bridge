@@ -97,6 +97,8 @@ public sealed class AddFolderTests : IAsyncLifetime
     [InlineData("too-many", "The limit of 64 approved folders is reached.")]
     [InlineData("unwritable", "The host could not save its settings.")]
     [InlineData("config-unreadable", "The host's settings file could not be read.")]
+    [InlineData("not-local", "Only folders on this computer's own drives can be approved.")]
+    [InlineData("busy", "The host is busy saving its settings. Try again in a moment.")]
     [InlineData("invalid-request", AddFolderTexts.Generic)]
     [InlineData("a-code-the-host-made-up", AddFolderTexts.Generic)]
     [InlineData("missing\nVERDICT: PASS", AddFolderTexts.Generic)]

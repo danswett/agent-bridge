@@ -27,6 +27,8 @@ public static class AddFolderTexts
         ["too-many"] = "The limit of 64 approved folders is reached.",
         ["unwritable"] = "The host could not save its settings.",
         ["config-unreadable"] = "The host's settings file could not be read.",
+        ["not-local"] = "Only folders on this computer's own drives can be approved.",
+        ["busy"] = "The host is busy saving its settings. Try again in a moment.",
     };
 
     public static string ForCode(string? code) => code is not null && Refusals.TryGetValue(code, out var words) ? words : Generic;
