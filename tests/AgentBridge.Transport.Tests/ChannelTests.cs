@@ -638,4 +638,32 @@ public class ChannelTests
 
         Assert.True(victim.Completion.IsCompletedSuccessfully);
     }
+
+    // #4134 (#2558): an action the host accepted (a Stop, a Restart, a Leave) runs whether or not its response reached the peer: here the channel is
+    // closed before the response is sent, so the send fails, and the action still runs and the failure is logged. A follow-up that is not an
+    // action (RunsIfUnsent left false) needs its response on the wire first and does not run.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_action_the_host_accepted_runs_though_its_response_could_not_be_sent_and_a_plain_follow_up_does_not(bool action)
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var served = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var log = new List<string>();
+        host.Hub.Log = m => { lock (log) { log.Add(m); } if (m.Contains("could not be sent", StringComparison.Ordinal)) { served.TrySetResult(); } };
+        host.Hub.Handler = async (c, _, _) =>
+        {
+            c.Fail(new IOException("the channel was closed before the response"));
+            return new ChannelReply(new { stopping = true }, _ => { ran.TrySetResult(); return Task.CompletedTask; }, RunsIfUnsent: action);
+        };
+        var ch = await app.Hub.OpenAsync(host.Id);
+        try { await ch.RequestAsync("host.stop"); } catch (Exception) { }
+
+        await served.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        if (action) { await ran.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+        else { Assert.False(ran.Task.IsCompleted, "a follow-up ran for a response that was never sent"); }
+        lock (log) { Assert.Contains(log, l => l.Contains(action ? "its action runs anyway" : "nothing follows it", StringComparison.Ordinal)); }
+    }
 }
