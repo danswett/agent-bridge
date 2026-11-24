@@ -76,6 +76,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public bool ReportsDownloadFacts { get; set; }
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
+        // As Velopack's: a download completes the release it began with, whatever a check finds while it runs.
+        public bool DownloadsWhatItBeganWith;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
@@ -96,12 +98,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
+            var began = Found;
             OnDownload?.Invoke();
             DownloadWithBytes?.Invoke(progress, bytes);
             if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
-            Ready = Found;
+            Ready = DownloadsWhatItBeganWith ? began : Found;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -650,12 +653,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var holds = 0;
         var holdsAtStop = -1;
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref holds) < 3, "finishing"));
-        host.On(HostOps.Stop, data =>
-        {
-            holdsAtStop = Volatile.Read(ref holds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => holdsAtStop = Volatile.Read(ref holds));
 
         await manager.StopAsync();
 
@@ -734,12 +732,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var otherHoldsAtStop = -1;
         other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref otherHolds) < 3, "finishing"));
         elsewhere.Status = FakeHost.StatusOf() with { ProcessId = 5151 };
-        host.On(HostOps.Stop, data =>
-        {
-            otherHoldsAtStop = Volatile.Read(ref otherHolds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => otherHoldsAtStop = Volatile.Read(ref otherHolds));
         other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
         var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], package: [4242, 6161]);
         var applied = false;
@@ -800,11 +793,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return new ProbeHoldResult(n < 4, "finishing");
         });
         late.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         var updating = Manager(others: [busy.Folder, late.Folder], packageNow: () => Volatile.Read(ref started) ? [4242, 6161, 7171] : [4242, 6161]);
         var applied = false;
 
@@ -847,11 +836,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             }
             return new ProbeHoldResult(false);
         });
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171], startsKnown: false);
         var applied = false;
 
@@ -926,11 +911,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             waiting.TrySetResult();
             return new ProbeHoldResult(true, "finishing");
         });
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         // Waits as long as a real update would for that probe.
         var updating = Manager(others: [other.Folder], package: [4242, 6161], probeWait: TimeSpan.FromMinutes(11));
         var applied = false;
@@ -2247,8 +2228,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             : Task.FromException<LocalChannel>(new HostNotRunningException("stopped"));
         await StartAsync();
         await auto.TickAsync();
-        await host.StopAsync();
+        // The flag first: from here a connect attempt is the one this test wants (never reaching, or hanging for, a host that has just
+        // stopped). Set after the stop, an attempt the connection made in between hit a host that was gone and on Linux, where its socket is
+        // simply absent, failed at once with NotRunning; the later attempts then hung and the state never moved to Connecting (a 15 s wait).
         disconnected = true;
+        await host.StopAsync();
         connection.Reconnect();
         await Wait.UntilAsync(() => connection.State == (reconnecting ? LinkState.Connecting : LinkState.NotRunning), "the disconnected host");
         var warnings = 0;
@@ -3455,6 +3439,156 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(AppUpdateViewModel.DidNotInstall("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", again: true), banner.Message);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
     }
+    // Updater robustness (owner, Nov 23: a machine failed 8040 -> 8050 when 8051 landed minutes later). A download or an
+    // apply under way completes: a newer release found meanwhile (Settings' check, a tick's) is not looked for until
+    // it has finished, so it can neither replace the package being applied nor leave the install to abort or restart.
+    // The newer one is checked for afterwards.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newer_release_found_by_Settings_while_the_host_stops_does_not_abort_the_install_being_applied()
+    {
+        shared = new ObservedUpdater(updater, time);
+        // As Velopack's: a check that finds another release drops the one downloaded.
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+        Assert.Equal("0.2.0", banner.Version);
+        var checks = updater.Checks;
+
+        var press = Task.Run(() => banner.RestartAsync(_ => Task.FromResult(true)));
+        await stopAsked;
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        letGo();
+        await press;
+
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(checks, updater.Checks);
+        Assert.True(updater.Applied, string.Join("\n", log));
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+        Assert.DoesNotContain(log, l => l.Contains("package ready changed"));
+        // Applied, not restarted: the host stays down for the installer.
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
+    public async Task A_download_under_way_finishes_though_a_newer_release_is_found_and_the_newer_is_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        updater.DownloadsWhatItBeganWith = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await StartAsync();
+
+        var tick = Task.Run(() => auto.TickAsync());
+        await Wait.UntilAsync(() => updater.Downloads == 1, "the download to begin");
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(1, updater.Checks);
+        updater.DownloadGate.SetResult();
+        await tick;
+
+        Assert.Equal("0.2.0", shared.Ready);
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.True(shared.CheckDeferred);
+        // Afterwards, the next tick that can asks, and the newer release is downloaded and offered.
+        updater.DownloadGate = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.False(shared.CheckDeferred);
+        Assert.Equal("0.3.0", auto.Pending);
+        Assert.Equal("0.3.0", shared.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_install_that_failed_leaves_the_newer_release_found_meanwhile_to_be_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        updater.ApplyFails = new IOException("the installer could not start");
+
+        var press = Task.Run(() => auto.RestartToUpdateAsync());
+        await stopAsked;
+        updater.Found = "0.3.0";
+        await shared.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        letGo();
+        await press;
+
+        Assert.False(updater.Applied);
+        Assert.True(shared.CheckDeferred);
+        updater.ApplyFails = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal("0.3.0", shared.Found);
+    }
+
+    [Fact]
+    public async Task A_hold_for_an_apply_defers_checks_and_other_downloads_until_it_ends()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal("0.2.0", observed.Ready);
+        var (checks, downloads) = (updater.Checks, updater.Downloads);
+
+        var hold = await observed.ApplyingAsync();
+        updater.Found = "0.3.0";
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal((checks, downloads), (updater.Checks, updater.Downloads));
+        Assert.Equal("0.2.0", observed.Ready);
+        Assert.True(observed.CheckDeferred);
+
+        hold.Dispose();
+        Assert.Equal("0.3.0", await observed.CheckAsync());
+        Assert.False(observed.CheckDeferred);
+        Assert.Equal(checks + 1, updater.Checks);
+    }
+
+    [Fact]
+    public async Task A_check_put_off_and_then_attempted_clears_the_deferral_even_when_it_fails()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        var hold = await observed.ApplyingAsync();
+        await observed.CheckAsync();
+        Assert.True(observed.CheckDeferred);
+        hold.Dispose();
+
+        // A failing feed is asked at the next check, not at every tick.
+        updater.CheckFails = new InvalidOperationException("the feed refused");
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.CheckAsync);
+        Assert.False(observed.CheckDeferred);
+    }
+
+    [Fact]
+    public async Task A_Changed_handler_that_throws_does_not_leave_an_install_hold_behind()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        void Throws() => throw new InvalidOperationException("a handler failed");
+        observed.Changed += Throws;
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.ApplyingAsync);
+        observed.Changed -= Throws;
+
+        // Nothing is held: a check goes to the feed, and is not put off.
+        await observed.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        Assert.False(observed.CheckDeferred);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
@@ -4225,12 +4359,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var taken = false;
         preflight = () => Volatile.Read(ref taken) ? "an outside fixture (pid 42)" : null;
         host.On(HostOps.UpdateDepart, _ => Committed);
-        host.On(HostOps.Stop, data =>
-        {
-            Volatile.Write(ref taken, true);
-            _ = Task.Run(() => host.StopAsync());
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => Volatile.Write(ref taken, true));
 
         if (departing) { await NowAsync(); }
         else { await auto.RestartToUpdateAsync(_ => Task.FromResult(true)); }
@@ -4698,7 +4827,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    public async Task A_new_release_found_after_a_download_has_none_of_the_old_releases_counts()
     {
         updater.ReportsDownloadFacts = true;
         updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -4708,14 +4837,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var downloading = observed.DownloadAsync(_ => { });
         Assert.Equal(3, observed.Bytes);
 
+        // A download under way completes first: the check is put off, so the release downloading keeps its own counts.
         updater.Found = "0.3.0";
         await observed.CheckAsync();
-        var counts = (observed.Bytes, observed.Total);
+        var during = (observed.Found, observed.Bytes, observed.Total);
         updater.DownloadGate.SetResult();
         await downloading;
+        Assert.Equal(("0.2.0", (long?)3, (long?)10), during);
 
+        // The newer release is found once it has ended, and none of the old release's counts go with it.
+        await observed.CheckAsync();
         Assert.Equal("0.3.0", observed.Found);
-        Assert.Equal(((long?)null, (long?)null), counts);
+        Assert.Equal(((long?)null, (long?)null), (observed.Bytes, observed.Total));
     }
 
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed

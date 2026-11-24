@@ -951,6 +951,129 @@ public sealed class ConversationEndPinTests
         Assert.False(view.Pinned);
     }
 
+    // #4243: a wheel notch's animation starts before its first view change reaches us. A correction of ours
+    // landing in that gap (a row realised above the top block, an earlier-history prepend) is a ChangeView
+    // without animation, which cancels the notch where it is: identical notches then move different distances.
+    [Theory]
+    [InlineData("top-block")]
+    [InlineData("earlier-history")]
+    public void Identical_wheel_notches_move_the_same_distance_while_rows_realise_between_them(string work)
+    {
+        var view = new SessionView();
+        if (work == "earlier-history")
+        {
+            view.PrepareHistoryForProbe();
+            view.LayoutDuringMeasure = () => view.Scroller.ScrollableHeight = 48000 + view.ShownCount * 160;
+            view.FirstFrameForProbe();
+        }
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48160);
+        view.Moved(30000);
+        const double notch = 144; // one 120 wheel delta: three 48 DIP lines
+        var moved = new List<double>();
+        // Tool rows realise 112 taller than estimated, text rows 42.
+        foreach (var grew in new[] { 112.0, 42, 112, 42, 112, 42, 112, 42 })
+        {
+            var from = view.Scroller.VerticalOffset;
+            view.Scroller.Targets.Clear();
+            view.Scroller.Wheel();
+            if (work == "top-block") { view.TakeAnchorForProbe(40 - grew); view.LaidOutForProbe(); }
+            else { view.DrawEarlierForProbe(); view.DrainForProbe(); }
+            // Measured as the app would see it: the notch ends at our target if we asked for one, else where it was sent.
+            var to = view.Scroller.Targets.Count > 0 ? view.Scroller.Targets[^1] : from - notch;
+            view.Moved(from - notch / 2, final: false);
+            view.Moved(to);
+            moved.Add(Math.Round(from - to, 2));
+        }
+        Assert.True(moved.All(d => d == notch), $"requested {notch} per notch, moved: {string.Join(", ", moved)}");
+        // Once the notch's own view changes arrive, the corrections work again.
+        view.Scroller.Targets.Clear();
+        view.TakeAnchorForProbe(-72);
+        view.LaidOutForProbe();
+        Assert.Equal([view.Scroller.VerticalOffset + 112], view.Scroller.Targets);
+    }
+
+    // #4243 owner repro: spinning the wheel down "goes about 3 notches and then jumps back up four notches". The
+    // last rows realise as the end comes into view (a tall tool row 112 over its estimate), and the list's native
+    // remeasure lands one viewport (about four notches) short of the end. The wheel had released the pin and the
+    // pointer over the conversation holds end-following, so nothing undid it; spinning on looped.
+    [Fact]
+    public void Spinning_the_wheel_down_to_the_end_never_moves_the_view_back_up_and_stops_at_the_end()
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.FollowState.PointerOver(7);
+        var (offsets, extent) = (new List<double> { 47424 }, 48000.0);
+        view.Scroller.Wheel(); view.Moved(47712, final: false); view.Moved(47424);
+        for (var notch = 0; notch < 8; notch++)
+        {
+            view.Scroller.Targets.Clear();
+            var from = view.Scroller.VerticalOffset;
+            view.Scroller.Wheel(-120);
+            view.Moved(Math.Min(from + 72, extent), final: false);
+            view.Moved(Math.Min(from + 144, extent));
+            if (view.Scroller.VerticalOffset >= extent - 0.5 && extent < 48112)
+            {
+                extent = 48112;
+                view.LayoutForProbe(() => { view.Scroller.ScrollableHeight = extent; view.Moved(extent - 600); });
+            }
+            view.Follow();
+            view.DrainForProbe();
+            if (view.Scroller.Targets.Count > 0) { view.Moved(view.Scroller.Targets[^1]); }
+            offsets.Add(view.Scroller.VerticalOffset);
+        }
+        var back = offsets.Zip(offsets.Skip(1), (a, b) => a - b).Max();
+        Assert.True(back <= 0.5 && Math.Abs(offsets[^1] - extent) <= 0.5,
+            $"offset after each notch: {string.Join(", ", offsets)} (end {extent}, worst move back {back})");
+    }
+
+    // A wheel event that raises no view change (another scroller took it, or a zero delta): its hold lapses by
+    // itself, and only the latest notch's lapse lets go.
+    [Fact]
+    public void A_wheel_with_no_view_change_lets_go_after_its_start_window()
+    {
+        var view = new SessionView();
+        view.Moved(200);
+        view.Scroller.Wheel();
+        Assert.False(view.HistoryEnd);
+        view.TakeAnchorForProbe(-72);
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        var first = view.DispatcherTimersForProbe;
+        view.Scroller.Wheel();
+        first.Elapse();
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        // Still at the end once it lapses: the next reply re-engages the pin there.
+        view.LapseWheelForProbe();
+        Assert.True(view.HistoryEnd, view.PinState());
+    }
+
+    // #4313 (P2 on #4252): the wheel turned down at the very end cannot move the view, yet it released the pin and held
+    // the view for 250 ms. A reply streaming in meanwhile was not followed, and once it grew past the 8 DIP slack later
+    // updates never re-engaged: the view was left above a growing reply. Turning the wheel at the edge it points to
+    // now leaves the pin and the view alone; turning it away from the end still releases at once.
+    [Fact]
+    public void A_wheel_turned_down_at_the_very_end_keeps_following_a_streaming_reply()
+    {
+        var view = new SessionView { MeasuredExtent = 48000 };
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.Scroller.Wheel(-120);
+        foreach (var extent in new[] { 48300.0, 48600 })
+        {
+            view.MeasuredExtent = view.Scroller.ScrollableHeight = extent;
+            view.ReplyForProbe();
+            view.DrainForProbe();
+            view.LapseWheelForProbe();
+            Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == extent, $"follows the reply to {extent}: {view.PinState()}");
+            view.Moved(extent);
+        }
+        Assert.Equal(0, view.Releases);
+        view.Scroller.Wheel(120);
+        Assert.False(view.Pinned);
+    }
+
     [Fact]
     public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
     {

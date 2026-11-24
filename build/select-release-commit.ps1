@@ -42,11 +42,15 @@ function Get-RunRedReason($run) {
     $null
 }
 
-# The FULL lane (full.yml) gates the release, never a merge (S2, #4104): its x64 self-test, pack and installer must have succeeded, and no
-# other job there may be red, Arm64's apart (owner decision, #2454: Arm64 runs and reports but does not gate). A run with no FULL run
-# yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
-$script:FullRequiredJobs = @('app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)')
-$script:ArmJobs = @('app (win-arm64)', 'app-selftest (win-arm64)', 'app-pack (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
+# The FULL lane (full.yml) gates the release, never a merge (S2, #4104). Required, all succeeded: the aggregate full-gate (which fails when a lane
+# it selected was skipped, WebKit's included), the x64 self-test, pack and installer, and the Arm64 PACK (with its package and SBOM, below). Waived (owner
+# decision, #2454 and "ship now"; R8b on 4220): everything Arm64 that RUNS the app: the self-test, the tests, and the Arm64 INSTALLER, which installs and starts
+# the app, i.e. is the Arm64 self-test (#4159: a red Arm64 installer must not block a release). So the Arm64 package is never optional, but its checks are.
+# No other job there may be red. A run with no FULL run yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
+$script:FullRequiredJobs = @('full-gate', 'app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)', 'app-pack (win-arm64)')
+$script:ArmJobs = @('app (win-arm64)', 'app-selftest (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
+# A waived job by name: the listed ones, and the Arm64 self-test whatever its shard suffix ('app-selftest (win-arm64) 2/3').
+function Test-ArmWaived([string]$Name) { $Name -cin $script:ArmJobs -or $Name -clike 'app-selftest (win-arm64)*' }
 function Get-FullRedReason($run) {
     $full = $run.PSObject.Properties['Full']?.Value
     if ($null -eq $full) { return 'no FULL run for this commit yet' }
@@ -56,9 +60,45 @@ function Get-FullRedReason($run) {
     $missing = @($script:FullRequiredJobs | Where-Object { $jobs[$_] -cne 'success' })
     if ($missing) { return "FULL: $($missing -join ', ') did not succeed" }
     $red = @('failure', 'timed_out', 'startup_failure', 'action_required', 'cancelled')
-    $others = @($jobs.GetEnumerator() | Where-Object { $_.Value -cin $red -and $_.Key -cnotin $script:ArmJobs } | ForEach-Object { "FULL: $($_.Key) $($_.Value)" })
+    $others = @($jobs.GetEnumerator() | Where-Object { $_.Value -cin $red -and -not (Test-ArmWaived $_.Key) } | ForEach-Object { "FULL: $($_.Key) $($_.Value)" })
     if ($others) { return $others -join ', ' }
     $null
+}
+
+# What was waived, said, never silent (Quality's condition on 4220): the Arm64 self-test, tests and installer may be red, skipped or absent and the release
+# still goes out, so the train's publish summary carries this notice, and full-red's alert names a red Arm64 job too. $null when nothing Arm64 was waived.
+function Format-WaivedNotice($run) {
+    $full = $run.PSObject.Properties['Full']?.Value
+    $jobs = if ($full) { $full.PSObject.Properties['AllJobs']?.Value } else { $null }
+    if ($null -eq $jobs) { return $null }
+    $lines = @($jobs.GetEnumerator() | Where-Object { (Test-ArmWaived $_.Key) -and $_.Value -cne 'success' } | Sort-Object Key | ForEach-Object { "$($_.Key): $(if ($_.Value) { $_.Value } else { 'not run' })" })
+    foreach ($name in 'app-installer (win-arm64)') { if ($null -eq $jobs[$name]) { $lines += "${name}: not run" } }
+    if (-not @($jobs.Keys | Where-Object { $_ -clike 'app-selftest (win-arm64)*' })) { $lines += 'app-selftest (win-arm64): not run' }
+    if (-not $lines) { return $null }
+    "Arm64 checks waived for this release, which was published: $($lines -join '; ')"
+}
+
+# The FULL run of a commit is found by the commit's head_sha, never by branch: a branch lookup could name another commit's run.
+function Get-FullRunsPath([string]$Repository, [string]$Sha) { "repos/$Repository/actions/workflows/full.yml/runs?head_sha=$Sha&per_page=20" }
+
+# The first run row (id, conclusion, head_sha, event, head_branch; tab-separated, newest first) that counts for the commit: its head_sha IS the commit (a
+# dispatch made at another head has that head's sha and fails closed, which the go-live proof covers), its event a push or workflow_run, its branch main.
+function Select-FullRunRow([string[]]$Rows, [string]$Sha) {
+    foreach ($row in $Rows) {
+        $id, $conclusion, $head, $evt, $branch = $row -split "`t"
+        if ($head -ceq $Sha -and $evt -cin 'push', 'workflow_run' -and $branch -ceq 'main') { return [pscustomobject]@{ Id = $id; Conclusion = $conclusion } }
+    }
+    $null
+}
+
+# What FULL built for a commit, from its run's unexpired artifact names, under the FAST run's number (FULL packs as 0.1.<that number>; its own
+# run number is never the version): both architectures' packages AND both SBOMs, which the attestation needs. Incomplete is named, not a version.
+function Get-FullPackages([string[]]$ArtifactNames, [int]$Number) {
+    $prefix = @($ArtifactNames | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$Number$") { $Matches[1] } }) | Select-Object -First 1
+    if (-not $prefix) { return [pscustomobject]@{ Version = ''; Complete = $false; Missing = @("agent-bridge-windows-<version>.$Number") } }
+    $missing = @("agent-bridge-windows-$prefix.$Number", "agent-bridge-windows-arm64-$prefix.$Number", "sbom-win-x64-$prefix.$Number", "sbom-win-arm64-$prefix.$Number" |
+        Where-Object { $ArtifactNames -cnotcontains $_ })
+    [pscustomobject]@{ Version = "$prefix.$Number"; Complete = ($missing.Count -eq 0); Missing = $missing }
 }
 
 # Why the in-flight parents a run relied on do not cover it, or $null when the whole chain is green. A parent that ended cancelled never
@@ -102,10 +142,10 @@ function Select-ReleaseCommit {
         if ($reliedRed) { $why.Add("$($run.Sha) run $($run.Number): $reliedRed"); continue }
         $fullRed = Get-FullRedReason $run
         if ($fullRed) { $why.Add("$($run.Sha) run $($run.Number): $fullRed"); continue }
-        if (-not $run.Full.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): package artifacts expired"); continue }
+        if (-not $run.Full.ArtifactsUnexpired) { $why.Add("$($run.Sha) run $($run.Number): FULL's packages or SBOMs expired or missing"); continue }
         if ($run.Number -le $floor) { $why.Add("$($run.Sha) run $($run.Number): not above published version $floor"); continue }
         if ($Latest -and (& $IsDescendant $run.Sha $Latest.Commit) -cne $true) { $why.Add("$($run.Sha) does not follow the latest release's commit"); continue }
-        if ($Explain) { return "selected $($run.Sha)" }
+        if ($Explain) { $waived = Format-WaivedNotice $run; return "selected $($run.Sha)$(if ($waived) { "; $waived" })" }
         return $run
     }
     if ($Explain) { return ($why -join "`n") }
@@ -132,7 +172,7 @@ function Invoke-ReleaseGh {
 # Main's push CI runs for the selector, newest first (gh, GH_TOKEN): one list of runs, and per
 # run its jobs (the latest attempt, so a successful re-run counts) and its artifacts. The version
 # is read off the artifact names, so a minor bump (0.2.n) needs no change here. Not covered by the
-# fixture test; a dispatch run checks it.
+# fixture test's mock gh (the wiring; Complete, head_sha, event, pages); the go-live dispatch checks the real thing.
 function Get-ReleaseRuns([string]$Repository, [int]$Count = 20) {
     $list = Invoke-ReleaseGh api "repos/$Repository/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=$Count" --jq '.workflow_runs[] | [.id, .head_sha, .run_number, .conclusion] | @tsv'
     foreach ($row in $list) {
@@ -149,20 +189,21 @@ function Get-ReleaseRuns([string]$Repository, [int]$Count = 20) {
         }
         # The FULL run for this commit (full.yml; its newest run, latest attempt), and the packages it built: FULL builds under this run's
         # number (0.1.<number>), so its artifacts carry the version the selector floors against. None yet: Full is $null.
-        $fullRow = @(Invoke-ReleaseGh api "repos/$Repository/actions/workflows/full.yml/runs?head_sha=$sha&per_page=1" --jq '.workflow_runs[] | [.id, .conclusion] | @tsv') | Select-Object -First 1
+        $fullRow = Select-FullRunRow @(Invoke-ReleaseGh api (Get-FullRunsPath $Repository $sha) --jq '.workflow_runs[] | [.id, .conclusion, .head_sha, .event, .head_branch] | @tsv') $sha
         $full = $null
         $both = $false
         $prefix = $null
         if ($fullRow) {
-            $fullId, $fullConclusion = $fullRow -split "`t"
+            $fullId, $fullConclusion = $fullRow.Id, $fullRow.Conclusion
             $fullJobs = @{}
             foreach ($job in (Invoke-ReleaseGh api "repos/$Repository/actions/runs/$fullId/jobs?filter=latest&per_page=100" --paginate --jq '.jobs[] | [.name, .conclusion] | @tsv')) {
                 $name, $result = $job -split "`t"
                 $fullJobs[$name] = $result
             }
-            $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$fullId/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | .name')
-            $prefix = ($names | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$number$") { $Matches[1] } } | Select-Object -First 1)
-            $both = $prefix -and ($names -contains "agent-bridge-windows-$prefix.$number") -and ($names -contains "agent-bridge-windows-arm64-$prefix.$number")
+            $names = @(Invoke-ReleaseGh api "repos/$Repository/actions/runs/$fullId/artifacts?per_page=100" --paginate --jq '.artifacts[] | select(.expired == false) | .name')
+            $packages = Get-FullPackages $names ([int]$number)
+            $prefix = $packages.Version -replace '\.\d+$', ''
+            $both = $packages.Complete
             $full = [pscustomobject]@{ Id = $fullId; Conclusion = $fullConclusion; AllJobs = $fullJobs; ArtifactsUnexpired = [bool]$both }
         }
         # The in-flight parent this run relied on, from its plan job's plan-base notice (none when there is no record).
