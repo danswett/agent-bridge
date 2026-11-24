@@ -516,9 +516,9 @@ suites:
     # Both Windows runners run these steps, so a build/ change reaches windows-11-arm too.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    triggers: [build/**]
+    triggers: [build/**, .github/workflows/publish-pending.yml]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
-    where: ci.yml product
+    where: ci.yml product; publish-pending.yml
     status: exists
 
   - id: lab-scripts
