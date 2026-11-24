@@ -1,0 +1,126 @@
+From af225efd2168eabc8f9b20de450d4c0ac4620e01 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 17:19:09 -0800
+Subject: [PATCH] CI S2, piece 7a: full-red.yml runs full-red.ps1 after each
+ Full run (Part of #4104)
+
+The workflow (a workflow_run of Full on main, issues: write), the ci.yml light step that runs the script's offline test, the
+catalog suite flipped to exists and naming full-red.yml report, and Full red in the merge rule's exclusion list (it cannot
+reach a pull request's head).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml                      |  6 +++
+ .github/workflows/full-red.yml                | 38 +++++++++++++++++++
+ quality/catalog.yml                           |  6 +--
+ .../MergeRuleTests.cs                         |  3 +-
+ 4 files changed, 48 insertions(+), 5 deletions(-)
+ create mode 100644 .github/workflows/full-red.yml
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 17f2db33c..cad5bdcaa 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1380,6 +1380,7 @@ jobs:
+     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
++    #  - full-red-script: the FULL lane's red alert (one issue per commit), on a stub gh (quality/full-red.ps1);
+     #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
+     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
+     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+@@ -1427,6 +1428,11 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'wake-watch-script')) }}
+         shell: pwsh
+         run: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
++      - name: The FULL lane's red alert opens one issue per commit and keeps the waived Arm64 results apart
++        # A stub gh: nothing reaches GitHub.
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'full-red-script')) }}
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/test-full-red.ps1
+       - name: The red-minutes figure counts spells the way the guardian does
+         # A fixed run list: nothing reaches GitHub.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+diff --git a/.github/workflows/full-red.yml b/.github/workflows/full-red.yml
+new file mode 100644
+index 000000000..c2049578d
+--- /dev/null
++++ b/.github/workflows/full-red.yml
+@@ -0,0 +1,38 @@
++name: Full red
++
++# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one issue per commit, labelled full-red, listing the red
++# jobs, the blocking ones apart from the Arm64 results the owner waived. It never holds a merge and fails nothing.
++on:
++  # Reads a finished Full run on main only; runs main's copy of the script and never checks out the run's code.
++  workflow_run: # zizmor: ignore[dangerous-triggers]
++    workflows: [Full]
++    types: [completed]
++    branches: [main]
++
++permissions:
++  contents: read
++
++concurrency:
++  group: full-red
++  cancel-in-progress: false
++
++jobs:
++  report:
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions:
++      contents: read
++      actions: read
++      issues: write
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++          sparse-checkout: quality
++      - name: Open or update the commit's issue when a FULL job is red
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          RUN_ID: ${{ github.event.workflow_run.id }}
++          REPOSITORY: ${{ github.repository }}
++        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
+\ No newline at end of file
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index f026c2715..2b3722033 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -620,10 +620,8 @@ suites:
+     runner: local
+     triggers: [quality/full-red.ps1, quality/test-full-red.ps1]
+     command: pwsh -NoProfile -File quality/test-full-red.ps1
+-    where: ci.yml light
+-    # planned until full-red.yml and its ci.yml step land (patches/ci-s2-piece7a-full-red-4104.patch, applied by Quality). Flip to
+-    # exists, and add full-red.yml report to the where, with that patch.
+-    status: planned
++    where: ci.yml light, full-red.yml report
++    status: exists
+ 
+   - id: arm64-waiver-script
+     validation_plan: native
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index d36aad039..5d959a354 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1065,11 +1065,12 @@ public class MergeRuleTests
+     //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
+     //                               branch's tip, never a pull request's head, and it cannot be dispatched.
+     //   Re-run known flakes         the same trigger, the same reason.
++    //   Full red                    workflow_run, completed Full on main only (Full is itself a workflow_run of CI on main), the same reason.
+     //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
+     //                               on a pull request's branch ends skipped, which the judge counts as passing.
+     // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
+     // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
+-    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
++    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Re-run known flakes", "Upload release halt policy"];
+ 
+     // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
+     // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
+-- 
+2.56.1.windows.1
+
