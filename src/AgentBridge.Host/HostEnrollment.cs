@@ -272,7 +272,7 @@ internal sealed class HostEnrollment(HostRosterReader reader, string account, st
                 || !joiner.Accepts(verifier.Graph[add].Entry, attempt.Own, attempt.Approver!)) { return "not-added"; }
             var history = reader.RememberEnrollment(verifier);
             if (history is not null) { return history; }
-            if (verifier.State.ActiveAdd(attempt.Approver!) is not { } by || verifier.OnProbation(by) || verifier.Held.Contains(attempt.Approver!)) { return "approver-probation"; }
+            if (verifier.State.ActiveAdd(attempt.Approver!) is not { } by || verifier.OnProbation(by) || verifier.Held.Contains(attempt.Approver!)) { return EnrollmentRefusal.ApproverProbation; }
             var written = HostRosterPinWriter.Write(pinPath, new PersonGenesis("enrollment", genesis), relay, account, reader.RunningTime, isCapSignGenesis);
             if (written == "pinned") { reader.Update(relay, account); }
             return written;
