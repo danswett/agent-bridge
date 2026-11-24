@@ -46,7 +46,7 @@ row 5, for the Chief to confirm); stop and launch, keys and every other bullet s
 ## Not proposed, each an owner CHANGE if wanted
 
 - Returning `cwd`, titles, repository, branch or any question text for another machine's sessions.
-- Acting on a remote session (reply, stop, launch) from the MCP server.
+- Acting on a remote session (reply, stop, launch) from the MCP server. **Amended for reply only (departure row 5, for the Chief to confirm):** a reply to a same-person session on another machine; stop and launch stay here.
 - A new relay field or op for this; the existing `fleet.list` is enough.
 - A default of fleet scope.
 
