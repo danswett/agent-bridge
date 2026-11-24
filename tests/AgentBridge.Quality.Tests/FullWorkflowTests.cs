@@ -128,7 +128,7 @@ public class FullWorkflowTests
 
         Assert.Equal("${{ steps.commit.outputs.tested }}", Scalar(trigger["outputs"], "tested"));
         Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
-        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
+        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "tested=$sha\" >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
     }
@@ -190,10 +190,10 @@ public class FullWorkflowTests
         var badTip = RunCommitStep("workflow_dispatch", "main");
 
         Assert.Equal(0, push.Code);
-        Assert.Contains($"sha={RunSha}", push.Output, StringComparison.Ordinal);
-        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("sha=", r.Output, StringComparison.Ordinal); });
+        Assert.Contains($"tested={RunSha}", push.Output, StringComparison.Ordinal);
+        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("tested=", r.Output, StringComparison.Ordinal); });
         Assert.Equal(0, byHand.Code);
-        Assert.Contains($"sha={Tip}", byHand.Output, StringComparison.Ordinal);
+        Assert.Contains($"tested={Tip}", byHand.Output, StringComparison.Ordinal);
         Assert.Equal("", byHand.Log); // a run by hand makes no API call at all: nothing to follow
         Assert.NotEqual(0, badTip.Code);
     }
