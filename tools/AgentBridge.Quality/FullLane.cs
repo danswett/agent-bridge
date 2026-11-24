@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
 
 namespace AgentBridge.Quality;
@@ -16,6 +17,18 @@ static class FullLane
     const string Gate = "full-gate";
     const string Kind = "full-lane";
     static readonly string[] Triggers = ["workflow_run", "schedule", "workflow_dispatch"];
+
+    // The commit under test: the jobs run only when the trigger job says ok, and it says ok only for a run by hand or a green push run on main
+    // (the trigger reads that run through THIS repository's API, so a fork's run never resolves), so a pull request's or another branch's run, or a CI run that did not pass,
+    // never starts them; and each checks out the commit the trigger verified.
+    const string RunByHand = "github.event_name == 'workflow_dispatch'";
+    static readonly string[] GreenPushOnMain =
+    [
+        "github.event.workflow_run.conclusion == 'success'", "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_branch == 'main'",
+    ];
+    const string CommitRef = "${{ needs.trigger.outputs.tested }}";
+    const string OnlyWhenOk = "needs.trigger.outputs.ok == 'true'";
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {
@@ -37,6 +50,7 @@ static class FullLane
         var jobs = jobMap.Children
             .Where(c => c.Key is YamlScalarNode { Value: not null } && c.Value is YamlMappingNode)
             .ToDictionary(c => ((YamlScalarNode)c.Key).Value!, c => (YamlMappingNode)c.Value, StringComparer.Ordinal);
+        CheckGuards(jobs, Add);
         if (!jobs.TryGetValue(Gate, out var gate))
         {
             Add($"{File} has no {Gate} job");
@@ -59,6 +73,52 @@ static class FullLane
             Add($"{File} {Gate} reads no toJSON(needs), so it cannot tell a skipped job from a passed one");
         return problems;
     }
+
+    static void CheckGuards(Dictionary<string, YamlMappingNode> jobs, Action<string> add)
+    {
+        if (!jobs.TryGetValue("trigger", out var trigger))
+            add($"{File} has no trigger job, the one that says whether there is a green push run of this repository on main to test");
+        else
+        {
+            var ok = Collapse(Child(trigger, "outputs") is YamlMappingNode outputs ? Scalar(outputs, "ok") : "");
+            foreach (var condition in GreenPushOnMain.Prepend(RunByHand).Where(c => !ok.Contains(c, StringComparison.Ordinal)))
+                add($"{File}'s trigger ok output doesn't test {condition}, so the jobs could start for a run they must not follow");
+        }
+        foreach (var (id, job) in jobs.Where(j => j.Key is not ("trigger" or Gate)))
+        {
+            if (!NeedsOf(job).Contains("trigger", StringComparer.Ordinal))
+                add($"{File} job {id} doesn't need trigger");
+            if (Collapse(Unwrap(Scalar(job, "if"))) != OnlyWhenOk)
+                add($"{File} job {id}'s if: isn't {OnlyWhenOk}, so it could run when the trigger said no");
+        }
+        foreach (var (id, job) in jobs)
+            foreach (var step in (Child(job, "steps") as YamlSequenceNode)?.Children.OfType<YamlMappingNode>() ?? [])
+            {
+                if (!Scalar(step, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal))
+                    continue;
+                var with = Child(step, "with") as YamlMappingNode;
+                var reference = with is null ? "" : Collapse(Scalar(with, "ref"));
+                if (reference.Length == 0)
+                    add($"{File} job {id}'s checkout has no ref, so it would test the workflow's own commit, not the one the FAST run passed on");
+                else if (reference != CommitRef)
+                    add($"{File} job {id} checks out {reference}, not the commit the FAST run passed on ({CommitRef})");
+                if (with is null || Scalar(with, "persist-credentials") != "false")
+                    add($"{File} job {id}'s checkout keeps credentials: persist-credentials must be false");
+            }
+    }
+
+    static HashSet<string> NeedsOf(YamlMappingNode job) => Child(job, "needs") switch
+    {
+        YamlScalarNode { Value: not null } one => [one.Value],
+        YamlSequenceNode many => many.Children.OfType<YamlScalarNode>().Select(n => n.Value!).ToHashSet(StringComparer.Ordinal),
+        _ => [],
+    };
+
+    static string Scalar(YamlMappingNode map, string key) => (Child(map, key) as YamlScalarNode)?.Value ?? "";
+
+    static string Unwrap(string value) => value.Trim().StartsWith("${{", StringComparison.Ordinal) && value.Trim().EndsWith("}}", StringComparison.Ordinal) ? value.Trim()[3..^2] : value;
+
+    static string Collapse(string value) => Regex.Replace(value, @"\s+", " ").Trim();
 
     static IEnumerable<string> TriggerNames(YamlNode? on) => on switch
     {
