@@ -1,24 +1,18 @@
 #Requires -Version 7.4
 <#
 .SYNOPSIS
-  The product-os pin (#4104, R8b on #4306): whether quality/plan.ps1 can put anything but its $runners map's values in
-  ci.yml product's matrix, read from the PowerShell parser's syntax tree, not the text.
-
-.DESCRIPTION
-  Writes one line of JSON: { "problems": [...], "runners": [...] }; RunnerRouting.ProductOsProblems holds runners
-  (the map's values) to ProductRunners. An allow-list: $runners is one [ordered] map of quoted constants; $productOs
-  is written only as @($runners.Keys | Where-Object { <inert filter> } | ForEach-Object { $runners[$_] }); $outputs
-  keys are constants, or $job inside 'foreach ($job in $Jobs)' before the one product-os statement; $lines and the
-  output file appear only in the pinned output statements. Anything that writes a variable or a file by name
-  (*-Variable, Invoke-Expression, [ref], -OutVariable, splatting into a script command, redirection, a computed
-  command or key) is refused, and so is every use of these variables the pin doesn't know..EXAMPLE
-  pwsh -NoProfile -File quality/product-os-pin.ps1 -Plan quality/plan.ps1
-#>
-using namespace System.Management.Automation.Language
+  The product-os pin (#4104, #4306): reads quality/plan.ps1 with the PowerShell parser and writes one line of JSON,
+  { "problems": [...], "runners": [...] }; RunnerRouting.ProductOsProblems holds runners to ProductRunners.
+  An allow-list: $runners is one [ordered] map of quoted constants; $productOs is written only as
+  @($runners.Keys | Where-Object { <inert filter> } | ForEach-Object { $runners[$_] }); $outputs keys are constants,
+  or $job inside 'foreach ($job in $Jobs)' before the one product-os statement; $lines and the output file appear only
+  in the pinned output statements. Writing a variable or file by name (*-Variable, Invoke-Expression, [ref],
+  -OutVariable, splatting into a script command, dot-sourcing, redirection, a computed command or key) is refused,
+  and so is every use of these variables the pin doesn't know.
+#>using namespace System.Management.Automation.Language
 param([Parameter(Mandatory)] [string] $Plan)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
 $errors = $null
 $ast = [Parser]::ParseFile((Resolve-Path -LiteralPath $Plan).Path, [ref]$null, [ref]$errors)
 $problems = [Collections.Generic.List[string]]::new()
@@ -30,7 +24,6 @@ function Norm([Ast]$Node) { ($Node.Extent.Text -replace '\s+', ' ').Trim() }
 function Name([VariableExpressionAst]$V) { ($V.VariablePath.UserPath -replace '^(?i)(script|global|local|private|using):', '').ToLowerInvariant() }
 function Is-Var($Node, [string]$Name) { $Node -is [VariableExpressionAst] -and (Name $Node) -eq $Name.ToLowerInvariant() }
 function Inside([Ast]$Node, [Ast]$Outer) { for ($p = $Node; $p; $p = $p.Parent) { if ($p -eq $Outer) { return $true } }; $false }
-
 # The two pinned output statements, as the plan writes them.
 $pinnedText = @(
     'if ($env:GITHUB_OUTPUT) { $lines | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 } else { $lines | Write-Output }',
@@ -39,7 +32,6 @@ $pinnedText = @(
 $pinned = @(Find { param($n) $n -is [StatementAst] -and (Norm $n) -in $pinnedText })
 foreach ($text in $pinnedText) { if (@($pinned | Where-Object { (Norm $_) -eq $text }).Count -ne 1) { $problems.Add("plan.ps1 doesn't have exactly one: $text") } }
 function In-Pinned([Ast]$Node) { foreach ($p in $pinned) { if (Inside $Node $p) { return $true } }; $false }
-
 # --- Anything that can write a variable by name, or reach the output file another way. ---
 $byName = '^(?i)(Set|New|Clear|Remove|Get)-Variable$|^(?i)(sv|nv|clv|rv|gv|Invoke-Expression|iex|Invoke-Command|icm|Set-Item|si|New-Item|ni|Out-File|Set-Content|sc|Tee-Object|tee|Copy-Item|Move-Item)$'
 foreach ($c in Find { param($n) $n -is [CommandAst] }) {
@@ -70,7 +62,6 @@ foreach ($m in Find { param($n) $n -is [InvokeMemberExpressionAst] }) {
     if ($m.Member -isnot [StringConstantExpressionAst]) { Add-Problem $m 'a method whose name is computed'; continue }
     if ($m.Member.Value -match '^(?i)(Invoke|InvokeReturnAsIs|SetValue|set_Item|Create|InvokeScript|NewScriptBlock)$') { Add-Problem $m ".$($m.Member.Value)() can run or write anything" }
 }
-
 # --- $runners: one constant [ordered] map. ---
 $runnerValues = @()
 $assignments = Find { param($n) $n -is [AssignmentStatementAst] }
@@ -153,7 +144,6 @@ elseif (@($allowedWrites | Where-Object { $_.PSObject.Properties['ByJob'] -and $
     $problems.Add("plan.ps1 writes `$outputs[`$job] after the product-os statement, which a job named product-os would overwrite")
 }
 if (-not $runnerValues) { $problems.Add('plan.ps1 has no $runners map') }
-
 # --- Every other use of the watched variables is a known read. ---
 foreach ($v in Find { param($n) $n -is [VariableExpressionAst] -and (Name $n) -in $watched }) {
     $p = $v.Parent
@@ -178,5 +168,4 @@ foreach ($s in Find { param($n) $n -is [ExpandableStringExpressionAst] }) {
     foreach ($nested in @($s.NestedExpressions | Sort-Object { $_.Extent.StartOffset } -Descending)) { $text = $text.Remove($nested.Extent.StartOffset - $s.Extent.StartOffset, $nested.Extent.EndOffset - $nested.Extent.StartOffset) }
     if ($text -match '(?i)product-os') { Add-Problem $s 'product-os in a double-quoted string' }
 }
-
 [pscustomobject]@{ problems = @($problems | Sort-Object -Unique); runners = $runnerValues } | ConvertTo-Json -Compress

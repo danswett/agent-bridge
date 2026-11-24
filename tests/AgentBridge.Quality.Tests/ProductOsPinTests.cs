@@ -87,13 +87,7 @@ public class ProductOsPinTests
         Assert.NotEmpty(Pin(plan.Replace(from, to, StringComparison.Ordinal)));
     }
 
-    static string Root()
-    {
-        var root = AppContext.BaseDirectory;
-        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output."); }
-        return root;
-    }
-
+    static string Root() => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
     static string Plan() => File.ReadAllText(Path.Combine(Root(), "quality", "plan.ps1"));
 
     static List<string> Pin(string plan)
