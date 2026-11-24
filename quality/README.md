@@ -857,6 +857,10 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); a newer push
   cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
   with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
+  **Only for a run it may follow, and on that commit** (enforced by the catalog check, `FullLane.Check`, once `full.yml` exists): every job but the
+  aggregate needs the `trigger` job and runs only when `needs.trigger.outputs.ok == 'true'`; `ok` tests a run by hand, or a `workflow_run` whose
+  conclusion is `success`, whose event is `push`, whose branch is `main` and whose head repository is this one (a fork's, a pull request's or another
+  branch's run never starts a job); and every checkout is `ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}` with `persist-credentials: false`.
 * **A red FULL lane is to open an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
   **never holds a merge**: merges continue.
 * **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
