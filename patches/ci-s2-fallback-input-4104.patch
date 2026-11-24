@@ -1,0 +1,89 @@
+From f4d78335fdee85832818bea2b34fb5a9a69ee9b5 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 09:04:36 -0800
+Subject: [PATCH] CI S2: FULL takes ONE boolean workflow_dispatch input,
+ force-apt-fallback, restoring 5c's by-hand apt-fallback proof (Part of #4104)
+
+Workflow part, a patch for Quality. Patch branch: sg-patch/ci-s2-fallback-input-4104. BASE: ci/s2-combined3 at a44705bb0a2c9e649a7db76fbcfbf47ed67af208 (#4503 with the Pages unblock and README truth fixes), with the
+non-workflow part (pull request branch ci/s2-fallback-input-4104, see it for its head) on top; apply on that, or on main once both have merged.
+
+full.yml: on.workflow_dispatch.inputs gets one boolean (default false) and no commit or ref input; the trigger job gets the guard step (a run by hand without the flag is on the main ref; with it, on a branch
+other than main at its own new commit that is neither main's head nor an open pull request's); pwa-ui passes the boolean to the restore action's force-apt-fallback input. The boolean is read ONLY in those two steps
+(an env flag and an action input), never in a checkout or in the trigger's commit step; FullWorkflowTests pins that.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/full.yml | 38 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index 4612522b6..6ef8884f1 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -16,6 +16,11 @@ on:
+   # By hand, with no commit input: it re-runs FULL on the tip of the ref it is dispatched on (a person dispatches it on main), so nothing a person types can reach a checkout. CodeQL
+   # followed the old sha input through the trigger job into every checkout and raised cache-poisoning alerts on this workflow, and a static analyser cannot see an on-main check.
+   workflow_dispatch:
++    inputs:
++      force-apt-fallback:
++        description: "pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a proof run, on a branch other than main only, at that branch's own new commit; it names no commit)"
++        type: boolean
++        default: false
+ 
+ 
+ permissions:
+@@ -38,6 +43,34 @@ jobs:
+       tested: ${{ steps.commit.outputs.tested }}
+       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+     steps:
++      # A run by hand is one of two things, and anything else fails here before a job runs. Its checks land on the commit it runs (the merge rule reads the latest run per head), so: a normal
++      # run is on the main ref; a fallback proof (force-apt-fallback, the proof that pwa-ui's WebKit legs download from Canonical when the Azure mirror is slow, quality/README.md section 4.7)
++      # is on a branch other than main, at that branch's own commit, which is neither main's head nor any open pull request's. Push and workflow_run runs skip this step.
++      - name: A run by hand is for main, or a fallback proof on a branch's own new commit
++        if: github.event_name == 'workflow_dispatch'
++        env:
++          FORCE: ${{ inputs.force-apt-fallback }}
++          REF: ${{ github.ref }}
++          SHA: ${{ github.sha }}
++          REPO: ${{ github.repository }}
++          GH_TOKEN: ${{ github.token }}
++        run: |
++          fail() { echo "::error title=full.yml by hand::$1"; exit 1; }
++          if [ "$FORCE" != true ]; then
++            [ "$REF" = refs/heads/main ] || fail "a run without force-apt-fallback is for a commit on main: run it on the main ref, not $REF"
++            exit 0
++          fi
++          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
++            fail "force-apt-fallback only on a branch other than main, not $REF"
++          fi
++          main=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha) || fail "couldn't read main's head"
++          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read main's head"
++          [ "$SHA" != "$main" ] || fail "$SHA is main's head; prove on a new commit of its own"
++          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].head.sha' > "$RUNNER_TEMP/pr-heads" || fail "couldn't list the open pull requests"
++          while read -r head; do
++            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
++            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
++          done < "$RUNNER_TEMP/pr-heads"
+       # The commit every other job checks out, and the only place a commit is decided. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
+       # the event's text, and only for a push to main; a run by hand tests the tip of the ref it was dispatched on (github.sha), because no input names a commit. Either is refused
+       # unless it is 40 lowercase hex: no job reads the event's commit or an input, they all read this output.
+@@ -328,13 +361,14 @@ jobs:
+       # Playwright's system packages, downloaded before its install so a slow apt mirror can be
+       # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
+       # how). The install below then finds them all downloaded; it, and the packages, are as before.
+-      # The action's force-apt-fallback (the by-hand proof of quality/README.md §4.7) is not passed here: a run of this workflow by hand takes no input (#4254's CodeQL fix), so the
+-      # proof has no trigger in FULL until one is chosen (see the pull request). Every run uses the action exactly as before.
++      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md section 4.7) skips the first mirror's download and takes that fallback before any package is downloaded, to prove it
++      # once; the WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is false on every workflow_run, which runs the action exactly as before.
+       - name: Download Playwright's system packages
+         uses: ./.github/actions/playwright-system-packages
+         with:
+           browsers: ${{ matrix.project }}
+           working-directory: pwa
++          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
+       - run: npx playwright install "$PROJECT"
+       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+       # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
+-- 
+2.56.1.windows.1
+
