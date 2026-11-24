@@ -43,6 +43,36 @@ public sealed class FleetProvenanceTests : IDisposable
     }
 
     [Fact]
+    public void A_resumed_fleet_worker_replaces_its_old_record_so_only_its_new_process_is_a_fleet_worker()
+    {
+        var store = Open();
+        var first = Guid.NewGuid();
+        store.Preparing(first, Session, "fleet");
+        store.Bound(first, Session, Process);
+        var again = Guid.NewGuid();
+        var second = Process with { Id = 701 };
+        store.Preparing(again, Session, "fleet", null, supersedes: true);
+        Assert.Throws<InvalidOperationException>(() => store.WasFleetLaunched(Session));      // unfinished until bound
+        store.Bound(again, Session, second);
+        var reopened = Open();
+        Assert.True(reopened.IsFleetWorker(Session, second));
+        Assert.False(reopened.IsFleetWorker(Session, Process));
+        Assert.True(reopened.WasFleetLaunched(Session));
+    }
+
+    [Fact]
+    public void A_resume_never_supersedes_a_session_any_person_launch_touched()
+    {
+        var store = Open();
+        var person = Guid.NewGuid();
+        store.Preparing(person, Session);
+        store.Bound(person, Session, Process);
+        Assert.Throws<InvalidOperationException>(() => store.Preparing(Guid.NewGuid(), Session, "fleet", null, supersedes: true));
+        Assert.False(Open().WasFleetLaunched(Session));
+        Assert.True(Open().Contains(Session, Process));
+    }
+
+    [Fact]
     public void A_mixed_or_unfinished_record_never_proves_a_fleet_launch_and_an_unreadable_one_throws()
     {
         var store = Open();

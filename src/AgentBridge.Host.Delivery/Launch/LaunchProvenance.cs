@@ -13,6 +13,7 @@ internal sealed class LaunchProvenance
     readonly Action<string> log;
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
+    readonly HashSet<Guid> superseding = [];
     bool unavailable;
     // Role: the launch's own role name (a coordinator's role, #4318), kept so a later caller is judged by what was recorded, never by a name.
     sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
@@ -43,14 +44,28 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null)
+    // supersedes: a fleet worker resumed in place (#4318): its earlier records go when this one is bound, and only if every one of
+    // them is a fleet launch (a session a person ever launched is never taken over).
+    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null, bool supersedes = false)
     {
-        lock (gate) { Check(); origins[request] = new(session, null, grant, role); Save(); }
+        lock (gate)
+        {
+            Check();
+            if (supersedes)
+            {
+                var earlier = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (earlier.Length == 0 || grant != "fleet" || earlier.Any(o => o.Grant != "fleet" || o.Process is null))
+                { throw new InvalidOperationException("refused: only a fleet launch's own session is resumed in place"); }
+                superseding.Add(request);
+            }
+            origins[request] = new(session, null, grant, role);
+            Save();
+        }
     }
 
     public void Abandon(Guid request)
     {
-        lock (gate) { Check(); origins.Remove(request); Save(); }
+        lock (gate) { Check(); origins.Remove(request); superseding.Remove(request); Save(); }
     }
 
     public void Bound(Guid request, string session, SessionProcess process)
@@ -61,6 +76,10 @@ internal sealed class LaunchProvenance
             var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
+            if (superseding.Remove(request))
+            {
+                foreach (var old in origins.Where(e => e.Key != request && string.Equals(e.Value.Session, session, StringComparison.OrdinalIgnoreCase)).Select(e => e.Key).ToList()) { origins.Remove(old); }
+            }
             Save();
         }
     }

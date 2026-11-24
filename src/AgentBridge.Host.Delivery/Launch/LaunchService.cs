@@ -830,7 +830,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // launched it with, each only while launch.options still offers it; a session started by hand, of
     // which nothing is known, asks permission whatever the machine's default is: it is never given
     // Allow all it may not have had.
-    public Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default)
+    public Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default) => ResumeCore(ask, fleet: false, cancellationToken);
+
+    // A fleet worker resumed in place (#4318): the same session id and folder, as a fleet worker again (its read+reply credential,
+    // a fleet record), with the settings it was launched with and never the machine's defaults, so a session with none recorded
+    // is refused rather than guessed at.
+    public Task<LaunchResult> ResumeFleetAsync(ResumeAsk ask, CancellationToken cancellationToken = default) =>
+        ask.Launch is null ? Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "the settings this session was launched with are not recorded"))
+            : ResumeCore(ask, fleet: true, cancellationToken);
+
+    Task<LaunchResult> ResumeCore(ResumeAsk ask, bool fleet, CancellationToken cancellationToken)
     {
         var key = Guid.NewGuid();
         var l = ask.Launch;
@@ -848,7 +857,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Context = l is null ? null : l.Context ?? "",
             Permissions = l?.Permissions == LaunchProtocol.AllowAll ? LaunchProtocol.AllowAll : LaunchProtocol.Ask,
         };
-        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken), result =>
+        return requests.Once(key, () => RunAsync(request, key, ask.By, restoring: true, cancellationToken, fleet: fleet), result =>
             Settled(request, result, $"launch {Short(key)} ({ask.By})", ask.By));
     }
 
@@ -1160,7 +1169,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // bound to its launch as the first new Codex session to appear: with Codex's
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
-            if (agentPrincipal is not null && (plan.Isolated is null || plan.Resume is not null || plan.Transfer is not null))
+            // The one exception (#4318): a fleet worker resumed in place keeps its own worktree. FleetResume is the only caller
+            // that sets restoring and fleet together, and it has checked the session is one the host's record shows a fleet launch.
+            var fleetResume = fleet && restoring && plan.Resume is not null && plan.Transfer is null;
+            if (agentPrincipal is not null && !fleetResume && (plan.Isolated is null || plan.Resume is not null || plan.Transfer is not null))
             {
                 return RefuseAgentWorktree(key, agentPrincipal, "Agent launches require a fresh isolated worktree; existing sessions and trees cannot be reused.");
             }
@@ -1330,7 +1342,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, provenance.RoleFor(plan.Role, agentPrincipal));
+            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, provenance.RoleFor(plan.Role, agentPrincipal), supersedes: fleetResume);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
