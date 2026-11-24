@@ -211,7 +211,7 @@ public sealed class FleetStopTests : IDisposable
     public async Task The_remote_path_keeps_the_exclusion_lists_and_the_kill_the_local_path_has(string setting, string reason)
     {
         var subject = GrantRemote();
-        if (setting == "excluded") { Settings("protected", true); }
+        if (setting == "excluded") { Settings("repo", true); }   // the grant allows "repo": only the exclusion list can refuse it
         else { File.WriteAllText(Path.Combine(Folder, HostSettings.FileName), """{"agents":{"enabled":false}}"""); }
         Assert.Equal(reason, (await Open().HandleRemoteAsync(subject, EndData())).Reason);
         Assert.Equal(0, injector.Calls);
