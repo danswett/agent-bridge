@@ -3,7 +3,8 @@ name: ab-ci smoke
 # Proves an ab-ci runner's environment, as the runner itself (#4104): who runs the job, where dotnet, python, git, node,
 # gh and pwsh resolve, and that `dotnet tool restore`, a whole-solution `dotnet restore` and a Release build pass through
 # the runner's NuGet mirror with the config ci.yml's product uses (quality/nuget-mirror.ps1, New-AbCiNuGetConfig:
-# the pinned mirror only, nuget.org-signed packages only). Run it by hand on main with use_ab_ci ticked, once per VM's
+# the pinned mirror only, nuget.org-signed packages only), and that the tests which failed only on ab-ci (HostManagerTests;
+# EfficiencyActiveSessionTests, 2 of its 3 run, the third being quarantined in issue 3121) run and pass there. Run it by hand on main with use_ab_ci ticked, once per VM's
 # pool, before AB_CI_SELF_HOSTED is set again. Without use_ab_ci it runs on a hosted runner, which proves nothing about
 # the pool. No secret is read.
 on:
@@ -72,9 +73,20 @@ jobs:
       - name: The tests that failed only on ab-ci (HostManagerTests, efficiency viewer and rates)
         shell: pwsh
         run: |
-          dotnet test tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HostManagerTests" --blame-hang --blame-hang-timeout 5m
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          dotnet test tests/AgentBridge.Quality.Tests/AgentBridge.Quality.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~EfficiencyActiveSessionTests" --blame-hang --blame-hang-timeout 5m
+          # A filter that matches nothing exits 0 ("No test matches the given testcase filter"), so a renamed class would make this green and prove
+          # nothing: each class must run at least one test (its trx counts them). --blame-hang-dump-type none, as every other test step sets it:
+          # a hang ends the test host without writing a full dump of it into TestResults on the runner.
+          $results = Join-Path $env:RUNNER_TEMP 'smoke-results'
+          function Invoke-SmokeTests($project, $class) {
+            dotnet test $project -c Release --no-build --nologo --filter "FullyQualifiedName~$class" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $results --logger "trx;LogFileName=$class.trx"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $trx = Join-Path $results "$class.trx"
+            $ran = if (Test-Path $trx) { [int](Select-Xml -Path $trx -XPath '//t:Counters' -Namespace @{ t = 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010' }).Node.executed } else { 0 }
+            Write-Host "$class`: $ran tests ran"
+            if ($ran -lt 1) { Write-Host "::error::the filter for $class matched no tests, so this step proved nothing"; exit 1 }
+          }
+          Invoke-SmokeTests tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj HostManagerTests
+          Invoke-SmokeTests tests/AgentBridge.Quality.Tests/AgentBridge.Quality.Tests.csproj EfficiencyActiveSessionTests
       - name: Stop this job's build servers
         if: always()
         run: dotnet build-server shutdown
