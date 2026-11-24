@@ -303,3 +303,11 @@ Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 1
 | 13 | Bridge | PWA role-send binding, 220 | 8,12 | Yes | Session reply/answer drafts stay pinned; changed holder requires new action; uncertain request never retargets |
 | 14 | Bridge | Person assignment/recovery approval UI, 240 | 2,7-8 | Yes | Per-successor owner approval and confirmed stop; resume/move/host recovery preserves ROLE, renews SESSION; compromised ROLE stays retired |
 | 15 | Fleet | Explicit name-to-ID configuration migration, 220 | 10-14 | Yes | Person-enrolled mappings only; rename leaves GUIDs/epoch unchanged; legacy names display-only, rollback cannot restore name-send fallback |
+
+### Slice 1 wire format (additive; fills gaps, changes nothing above)
+
+Engineering lead ruling, Nov 23, 2026 PT: these fill gaps by reusing [devices.md](../protocol/devices.md) conventions; vectors are [role-claim.json](../protocol/vectors/role-claim.json).
+- A purposes: the authority signs `F("agent-bridge role claim v1", body)`; the host proof's label is `agent-bridge role binding v1` (labels as §Framing); any other purpose refuses.
+- B `version` is the integer `1`, as person commands' `v`; any other value refuses.
+- C bytes: compact UTF-8 JSON, members in §2's order, no whitespace (canonical as §Entries); the body omits `signature`. `account` as entries'; `generation`, `hostKeyId` and `authorityKeyId` 32 lowercase hex as §Encodings ids; `hostAdd` and `assignmentDigest` 32-byte base64url as §Encodings; `bindingProof` and `signature` strict low-S DER; `holderEpoch` a non-negative integer as `seq`; times RFC 3339 UTC as person commands'.
+- D `state` is one of `active`, `quiescing`, `revoked`, `noHolder` (§2-§3 and §6 names). A reader refuses a claim whose `roleId` is not the role it asked for, or equals its `sessionId`.
