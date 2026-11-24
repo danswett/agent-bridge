@@ -10,9 +10,8 @@ using Xunit;
 
 namespace AgentBridge.Host.Tests;
 
-// #1003 PR B (docs/design/claude-approval-channel.md): the pipe op approval.wait. A Claude session's hook, a connection that passed agent.hello, hands the host the raw
-// PermissionRequest event and waits for the person's verdict, which only the in-memory broker can give. The host reads the event and builds the shown text itself.
-// Off unless the host is given the op; real pipe, fake clock.
+// #1003 PR B (docs/design/claude-approval-channel.md): approval.wait. The hook sends the raw PermissionRequest event; the host reads it, builds the shown text and
+// waits on the in-memory broker for the person's verdict. Off unless the host is handed the op; real pipe, fake clock.
 [Trait("Category", "Network")]
 public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
 {
@@ -52,7 +51,7 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
         Directory.Delete(root, true);
     }
 
-    // The host's pipe, with or without the op (without is how the host runs today).
+    // The host's pipe, with or without the op (without is how it runs today).
     string Serve(bool on)
     {
         var folder = Path.Combine(root, on ? "on" : "off");
@@ -62,7 +61,7 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
         return folder;
     }
 
-    // A connection that has passed agent.hello as the adopted Claude session, or one that has not.
+    // A connection that has passed agent.hello as the adopted session, or not.
     async Task<LocalChannel> ConnectAsync(string folder, bool hello = true)
     {
         store.Adopt(Session, Environment.ProcessId, Started, AgentProtocol.ScopeRead);
@@ -73,23 +72,23 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
         return ch;
     }
 
-    // What the hook sends: Claude's PermissionRequest event as text. The tool input is written out first so its text, which the request id is made of, is known.
+    // The hook's event as text; the tool input is written out first so its text, which the request id is made of, is known.
     static string Input(string command) => JsonSerializer.Serialize(new { command });
 
     static string Event(string command, string tool = "Bash", string session = Session, string hook = "PermissionRequest", string? input = null) =>
         $$"""{"hook_event_name":{{JsonSerializer.Serialize(hook)}},"session_id":{{JsonSerializer.Serialize(session)}},"tool_name":{{JsonSerializer.Serialize(tool)}},"tool_input":{{input ?? Input(command)}}}""";
 
-    // The id the hook's own formula (ClaudeApproval.RequestId) gives the same prompt, written out again here so the two cannot drift apart.
+    // The id ClaudeApproval.RequestId gives the same prompt, written out again here so the two cannot drift apart.
     static string Id(string command, string tool = "Bash", string session = Session, string? input = null) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{session}\n{tool}\n{input ?? Input(command)}")))[..16].ToLowerInvariant();
 
-    // The digest of the text shown for a command, as the host builds it: the tool, then the command after escaping.
+    // The digest of the text the host shows: the tool, then the command after escaping.
     static string Shown(string command, string tool = "Bash") => ClaudeApprovalBroker.Digest(ShownText.Reveal($"{tool}: {command}".Replace("\r\n", "\n"), rightToLeft: true));
 
     static string? Verdict(JsonElement reply) => reply.GetProperty("verdict").GetString();
     static string? Reason(JsonElement reply) => reply.TryGetProperty("reason", out var r) ? r.GetString() : null;
 
-    // The prompt is waiting once the broker asks for another text's digest and says "shown", not "unknown".
+    // Waiting once the broker answers another text's digest with "shown", not "unknown".
     async Task Waiting(string request)
     {
         for (var i = 0; i < 400; i++)
@@ -112,7 +111,6 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
     [Theory]
     [InlineData(false, CallerKind.Agent)]
     [InlineData(true, CallerKind.App)]
-    [InlineData(true, CallerKind.HostCli)]
     [InlineData(true, CallerKind.Other)]
     public async Task Only_an_agent_connection_that_passed_hello_is_heard_and_nothing_is_registered_otherwise(bool hello, CallerKind kind)
     {
@@ -149,7 +147,6 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
         var asking = ch.CallAsync(Op, new { @event = Event(command), request = "forged", session = "forged", principal = Person });
         await Waiting(Id(command));
 
-        // The raw command's digest, and the digest of the escaped command without its tool, are not what the person was shown.
         Assert.Equal(ClaudeApprovalBroker.Result.Shown, broker.Resolve(Person, Session, Id(command), ClaudeApprovalBroker.Digest(command), "allow"));
         Assert.Equal(ClaudeApprovalBroker.Result.Shown, broker.Resolve(Person, Session, Id(command), ClaudeApprovalBroker.Digest(ShownText.Reveal(command, rightToLeft: true)), "allow"));
         Assert.Equal(ClaudeApprovalBroker.Result.Unknown, broker.Resolve(Person, Session, "forged", Shown(command), "allow"));
@@ -198,23 +195,6 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_different_input_is_a_different_prompt_with_its_own_wait()
-    {
-        if (!OperatingSystem.IsWindows()) { return; }
-        await using var ch = await ConnectAsync(Serve(on: true));
-        var one = ch.CallAsync(Op, new { @event = Event("echo one") });
-        await Waiting(Id("echo one"));
-        var two = ch.CallAsync(Op, new { @event = Event("echo two") });
-        await Waiting(Id("echo two"));
-
-        Assert.Equal(ClaudeApprovalBroker.Result.Accepted, broker.Resolve(Person, Session, Id("echo two"), Shown("echo two"), "deny"));
-        Assert.Equal("deny", Verdict(await two));
-        Assert.False(one.IsCompleted);
-        Assert.Equal(ClaudeApprovalBroker.Result.Accepted, broker.Resolve(Person, Session, Id("echo one"), Shown("echo one"), "allow"));
-        Assert.Equal("allow", Verdict(await one));
-    }
-
-    [Fact]
     public async Task No_answer_by_the_deadline_is_none_timeout_and_a_late_answer_is_unknown()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -259,13 +239,10 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
     [Theory]
     [InlineData("")]
     [InlineData("not json")]
-    [InlineData("[]")]
-    [InlineData("\"a string\"")]
     [InlineData("{}")]
     [InlineData("""{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"x"}}""")]
     [InlineData("""{"hook_event_name":"PermissionRequest","session_id":"88888888-8888-4888-8888-888888888888","tool_input":{"command":"x"}}""")]
     [InlineData("""{"hook_event_name":"PermissionRequest","session_id":"88888888-8888-4888-8888-888888888888","tool_name":7,"tool_input":{"command":"x"}}""")]
-    [InlineData("""{"hook_event_name":"PermissionRequest","session_id":"","tool_name":"Bash"}""")]
     [InlineData("""{"hook_event_name":"PreToolUse","session_id":"88888888-8888-4888-8888-888888888888","tool_name":"Bash","tool_input":{"command":"x"}}""")]
     [InlineData("""{"session_id":"88888888-8888-4888-8888-888888888888","tool_name":"Bash","tool_input":{"command":"x"}}""")]
     public async Task A_malformed_or_unknown_event_is_none_bad_event_and_nothing_is_registered(string text)

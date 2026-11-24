@@ -133,7 +133,6 @@ public static class LocalApi
             }
             return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
-            // #1003 PR B: off unless the host is handed the op (nothing hands it today).
             if (op == ClaudeApprovalWait.Op)
             {
                 if (approvalWait is null || credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: approval.wait isn't available on this host"); }

@@ -10,19 +10,15 @@ namespace AgentBridge.Host;
 // never allows. Reason, only with "none", is one word: bad-event, caller, busy, truncated or timeout.
 public sealed record ApprovalWaitReply(string Verdict, string? Reason = null);
 
-// #1003 PR B (docs/design/claude-approval-channel.md): the pipe op approval.wait. A Claude session's hook sends the host the raw PermissionRequest event it was given
-// ({ "event": "<that JSON text>" }, at most 16 KiB) and waits for the verdict, which only the in-memory ClaudeApprovalBroker can give: nothing here is a file an agent
-// could write. The HOST reads the session, tool and input out of the event, derives the request id (the hook's own formula, so both name a prompt alike), and builds the
-// text shown (tool and input after escaping, exactly what the app shows: ShownText.Reveal); the broker digests that text, so a person's answer is bound to what
-// the host showed, and the hook cannot describe a command that differs from the real input. The caller is whoever the connection's agent.hello credential says it is,
-// checked as agent.hello and the other agent ops check it (a live session credential, and the host's own classification of the caller as an agent), never by a new
-// process walk, and the event must name THAT session. Off: LocalApi is handed this only when the host is, and nothing hands it today (no setting, no hook registered).
+// #1003 PR B (docs/design/claude-approval-channel.md): the pipe op approval.wait. The hook sends the raw PermissionRequest event ({ "event": "<JSON text>" }, at most
+// 16 KiB); the HOST reads the session, tool and input from it, derives the request id (the hook's formula) and builds the text shown (after escaping, as the app shows
+// it), which the broker digests, so a person's answer is bound to what the host showed. The caller check is agent.hello's (a live session credential, classified an agent),
+// not a new process walk, and the event must name THAT session. Off: LocalApi is handed this only when the host is; nothing hands it today.
 public sealed class ClaudeApprovalWait
 {
     public const string Op = "approval.wait";
     public const int MaxEvent = 16 * 1024;
     const string Hook = "PermissionRequest";
-
     readonly ClaudeApprovalBroker broker;
 
     internal ClaudeApprovalWait(ClaudeApprovalBroker broker) => this.broker = broker;
