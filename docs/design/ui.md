@@ -1857,11 +1857,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       screen growing is not one, and reading to the end clears it. The pill is in no layout (a row with no height,
       the pill drawn up from its foot), so it takes nothing from the conversation and never moves what is read: a
       wheel or a trackpad moves the conversation exactly as far as it says with the pill coming and going
-      (#4243). On a phone it rides above the reply area (`--foot-h`); from 760 it sits above the box. It is a
-      button, in the reading order between the conversation and the reply box. A jump scrolls the app's own way
-      (the header and the reply area hold as they do for Scroll to a question), is the reader's to interrupt, and
-      ends following the end even if the end moved. While it shows, the "Question waiting" bar (#1657) leaves it
-      the place.
+      (#4243). On a phone it rides above the reply area (`--foot-h`). A jump scrolls the app's own way (the header
+      and reply area hold as for Scroll to a question), is the reader's to interrupt, and ends following the end
+      even if the end moved. While it shows, the "Question waiting" bar (#1657) leaves it the place.
   - **H3a A question while reading back:** a question or approval that arrives while the person
     reads history is added at the end like any message, and the pill reads "Question · Jump to
     latest" in Needs you's text colour. Nothing scrolls on its own (Scroll to a question never

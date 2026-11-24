@@ -1455,9 +1455,8 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 @media (max-width: 759px) {
   .question-waiting { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--foot-h) + var(--ab-space-2)); margin: 0; z-index: 3; }
 }
-/* "Jump to latest" (ui.md §6.4 H3, #1720): more than a screen above the end, a pill above the reply box. It is in no
-   layout (a row with no height; the pill is drawn up from its foot), so it never changes the conversation's size or
-   what the person is reading. Centred with auto margins, not a transform, which its entering and leaving own. */
+/* "Jump to latest" (ui.md §6.4 H3, #1720): a pill above the reply box, in no layout (a row with no height; the pill is
+   drawn up from its foot), so it never changes what is read. Centred with margins: a transform is its entering's. */
 .jump-row { position: relative; flex: none; height: 0; z-index: 3; }
 .jump-latest {
   position: absolute; left: 0; right: 0; bottom: var(--ab-space-2); margin-inline: auto; width: fit-content;

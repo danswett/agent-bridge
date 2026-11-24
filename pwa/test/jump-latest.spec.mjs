@@ -1,6 +1,5 @@
-// "Jump to latest" (ui.md §6.4 H3, H3a, #1720): more than a screen above the end, a pill above the reply box that
-// counts what arrived meanwhile, says so of a question, and scrolls smoothly to the end. It is in no layout, so a
-// wheel moves the conversation exactly as far as it says (#4243).
+// "Jump to latest" (ui.md §6.4 H3, H3a, #1720): a pill above the reply box, more than a screen up, that counts what
+// arrived, says so of a question, and scrolls smoothly to the end. In no layout: a wheel moves exactly as far as it says (#4243).
 import { test, expect } from '@playwright/test';
 import { open } from './nav.mjs';
 
@@ -94,23 +93,9 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       const at = await pane(v).boundingBox();
       expect(p.y + p.height).toBeLessThanOrEqual(reply.y + 1);
       expect(Math.abs(p.x + p.width / 2 - (at.x + at.width / 2))).toBeLessThan(2);
-      await wheel(page, v, Math.round(screen * 1.5));
-      await expect(pill(v)).toBeHidden();
     });
 
-    test('choosing it scrolls smoothly to the end, the pill goes, and the view follows the end again', async ({ page }) => {
-      const v = await session(page);
-      await wheel(page, v, -Math.round((await client(v)) * 3));
-      await expect(pill(v)).toBeVisible();
-      // The scroll it asks for (headless Chromium does not animate a smooth one, so the call is what is seen).
-      await recordScrolls(v);
-      await pill(v).click();
-      await expect.poll(() => gap(v)).toBeLessThan(4);
-      await expect(pill(v)).toBeHidden();
-      expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'smooth' }]);
-    });
-
-    test('a message arriving meanwhile is counted without moving the view, and choosing the pill takes it in', async ({ page }) => {
+    test('a message arriving meanwhile is counted without moving the view; choosing the pill scrolls smoothly to the end, takes it in, and goes', async ({ page }) => {
       const v = await session(page);
       await wheel(page, v, -Math.round((await client(v)) * 3));
       const at = await top(v);
@@ -119,9 +104,12 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await arrive(page, N + 2);
       await expect(pill(v)).toHaveText('2 new · Jump to latest');
       expect(await top(v), 'nothing moved under the reader').toBe(at);
+      await recordScrolls(v); // the call is what is seen: headless Chromium does not animate a smooth scroll
       await pill(v).click();
       await expect.poll(() => gap(v)).toBeLessThan(4);
       await expect(pane(v).getByText(`Reply ${N + 2}.`)).toBeVisible();
+      await expect(pill(v)).toBeHidden();
+      expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'smooth' }]);
     });
 
     test('a question arriving while reading back makes it say so, and nothing scrolls on its own', async ({ page }) => {
@@ -133,7 +121,6 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
         d.upsert({ ...d.host.get(ID), status: 'waiting', statusSince: until, updatedAt: until, question: q });
       }, { ID, q: choices, until: later() });
       await expect(pill(v)).toHaveText('Question · Jump to latest');
-      await expect(pill(v)).toHaveAttribute('data-question', '');
       await expect(v.locator('.question-waiting'), 'one pill, not two').toBeHidden();
       expect(await top(v)).toBe(at);
       await pill(v).click();

@@ -189,9 +189,7 @@ test('turns arriving while away are counted; the live turn, and turns at the end
   t.after(() => follow.dispose());
   follow.display(turn('t1'));
   at(pane, 300);
-  follow.display(turn('t2'));
-  follow.display(turn('t3'));
-  follow.display(turn('t3'));
+  for (const id of ['t2', 't3', 't3']) { follow.display(turn(id)); }
   assert.equal(follow.newCount, 2, 'the same turn twice is one');
   follow.display({ activity: { turn: 't1' }, extra: 'the live words of the turn on screen' });
   assert.equal(follow.newCount, 2, 'the turn on screen growing is not new');
@@ -219,12 +217,25 @@ test('jump goes to the end and draws what waits there; a smooth one scrolls once
   assert.deepEqual(pane.scrolled.at(-1), { top: 1100, behavior: 'smooth' });
   assert.equal(pane.scrollTop, 300, 'the browser animates it; nothing is set at once');
   input.dispatchEvent(new Event('wheel'));
+  assert.equal(follow.following, false, 'a touch that stops it, with no scroll after it, is the person reading');
   at(pane, 500);
   assert.deepEqual([follow.following, follow.away], [false, true], 'the person is reading again');
 });
 
+test('a view with no height (hidden) says nothing, so it cannot hide the pill of a reader who is still back', (t) => {
+  const pane = new JumpPane();
+  const seen = [];
+  const follow = new ScrollFollow(pane, { onPosition: (s) => seen.push(s) });
+  t.after(() => follow.dispose());
+  at(pane, 300);
+  Object.assign(pane, { scrollHeight: 0, clientHeight: 0 });
+  follow.remember();
+  assert.equal(seen.length, 1);
+});
+
 test('a smooth jump ends following the end: landing with or without scrollend, and when the end moved', (t) => {
-  for (const [name, scrollend, grew] of [['landing', false, false], ['landing with scrollend', true, false], ['the end moved', true, true]]) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const [name, scrollend, grew] of [['landing', false, false], ['landing with scrollend', true, false], ['the end moved', true, true], ['the end moved, no scrollend', false, true]]) {
     const pane = new JumpPane();
     const follow = new ScrollFollow(pane);
     t.after(() => follow.dispose());
@@ -233,7 +244,7 @@ test('a smooth jump ends following the end: landing with or without scrollend, a
     at(pane, 600);
     if (grew) { pane.scrollHeight += 300; }
     at(pane, 900);
-    if (scrollend) { pane.dispatchEvent(new Event('scrollend')); }
+    if (scrollend) { pane.dispatchEvent(new Event('scrollend')); } else if (grew) { t.mock.timers.tick(1500); }
     assert.equal(pane.scrollTop, pane.scrollHeight - pane.clientHeight, `${name}: at the end there is now`);
     pane.scrollHeight += 120;
     follow.after();

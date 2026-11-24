@@ -1,5 +1,5 @@
 // The "Jump to latest" pill's rules (ui.md §6.4 H3, H3a, #1720): when it shows, and what it says.
-// ScrollFollow's part of it (away, newCount, jump) is in scroll-follow.test.mjs.
+// ScrollFollow's part (away, newCount, jump) is in scroll-follow.test.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { awayFrom, jumpText } from '../../js/ui/jump-latest.js';

@@ -3,6 +3,8 @@ import { HistoryView } from './history-view.js';
 import { awayFrom } from './jump-latest.js';
 
 export const BOTTOM_TOLERANCE_PX = 4;
+// A smooth jump that sends no scrollend (Safari) is over after this, wherever it stopped.
+const JUMP_LIMIT_MS = 1500;
 const streamedTurns = new WeakMap();
 
 // A history page may lag the live words of the current deferred turn.
@@ -76,6 +78,7 @@ export class ScrollFollow {
 
   // Said once for each change of those two, not for each scroll.
   #tell() {
+    if (!this.#client) { return; }
     const state = { away: this.away, count: this.#pending.size };
     if (state.away === this.#told.away && state.count === this.#told.count) { return; }
     this.#told = state;
@@ -136,16 +139,19 @@ export class ScrollFollow {
         el.scrollTo({ top: Math.max(0, el.scrollHeight - el.clientHeight), behavior });
       }, false);
     });
-    // Over: it landed, or it stopped (scrollend). The end may have moved while it scrolled (a reply grew below), so it
-    // carries on to the end there is now.
+    // Over: it landed, it stopped (scrollend), or it has gone on too long. The end may have moved while it scrolled (a
+    // reply grew below), so it carries on to the end there is now.
     const finish = () => { done(); this.remember(); this.after(); };
     const atEnd = () => el.scrollHeight - el.clientHeight - el.scrollTop <= BOTTOM_TOLERANCE_PX;
     if (atEnd()) { finish(); return; }
     const { signal } = ended;
     el.addEventListener('scroll', () => { if (atEnd()) { finish(); } }, { signal });
     el.addEventListener('scrollend', finish, { signal });
+    const limit = setTimeout(finish, JUMP_LIMIT_MS);
+    signal.addEventListener('abort', () => clearTimeout(limit));
+    // The person's own touch or wheel takes it over: where they are now is where they read.
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) {
-      (this.input ?? el).addEventListener(type, () => ended.abort(), { signal, capture: true, passive: true });
+      (this.input ?? el).addEventListener(type, () => { done(); this.following = atEnd(); this.remember(); }, { signal, capture: true, passive: true });
     }
   }
 
