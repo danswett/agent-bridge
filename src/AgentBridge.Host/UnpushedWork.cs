@@ -14,16 +14,20 @@ internal static class UnpushedWork
     // The newest git this process started, for tests that check it did not outlive the deadline.
     internal static int LastPid;
 
-    public static bool Pending(string folder)
+    public static bool Pending(string folder) => Pending(folder, null);
+
+    // inherited: variables added to the environment the git child would inherit, so a test can prove the GIT_* scrub without setting
+    // anything on its own process (a process-wide GIT_DIR broke other test classes running git in parallel).
+    internal static bool Pending(string folder, IReadOnlyDictionary<string, string>? inherited)
     {
         using var deadline = new CancellationTokenSource(Bound);
         var ct = deadline.Token;
         try
         {
             // The repository's own config must not hide work: untracked files and submodule changes always count.
-            if (Run(folder, ct, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=none") is not { Length: 0 }) { return true; }
-            if (Run(folder, ct, "stash", "list") is not { Length: 0 }) { return true; }
-            if (Run(folder, ct, "for-each-ref", "--format=%(upstream)%00%(upstream:track)%00", "refs/heads") is not { } branches) { return true; }
+            if (Run(folder, ct, inherited, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=none") is not { Length: 0 }) { return true; }
+            if (Run(folder, ct, inherited, "stash", "list") is not { Length: 0 }) { return true; }
+            if (Run(folder, ct, inherited, "for-each-ref", "--format=%(upstream)%00%(upstream:track)%00", "refs/heads") is not { } branches) { return true; }
             // NUL-separated (upstream, track) pairs, one pair per branch; git ends each record with a newline.
             var fields = branches.Split('\0');
             for (var i = 0; i + 1 < fields.Length; i += 2)
@@ -32,18 +36,19 @@ internal static class UnpushedWork
                 if (upstream.Length == 0 || fields[i + 1].Contains("ahead") || fields[i + 1].Contains("gone")) { return true; }
             }
             // A detached HEAD has no branch row above: its commits still need an upstream to be safe.
-            return Run(folder, ct, "rev-list", "--count", "@{upstream}..HEAD") != "0";
+            return Run(folder, ct, inherited, "rev-list", "--count", "@{upstream}..HEAD") != "0";
         }
         catch (Exception e) when (e is IOException or InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
     }
 
     // null for any failure or for the deadline, so a failed or slow read is never taken for "nothing pending".
-    static string? Run(string folder, CancellationToken deadline, params string[] args)
+    static string? Run(string folder, CancellationToken deadline, IReadOnlyDictionary<string, string>? inherited, params string[] args)
     {
         var info = new ProcessStartInfo("git") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        foreach (var (added, value) in inherited ?? new Dictionary<string, string>()) { info.Environment[added] = value; }
         // The folder is the agent's own, and so is its environment: nothing GIT_* is inherited (a GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE
         // would point git at another repository), the folder is named with -C, and no config-run programs, index lock or prompt.
-        foreach (var inherited in info.Environment.Keys.Where(k => k.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToList()) { info.Environment.Remove(inherited); }
+        foreach (var name in info.Environment.Keys.Where(k => k.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToList()) { info.Environment.Remove(name); }
         info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         info.Environment["GIT_TERMINAL_PROMPT"] = "0";
         foreach (var a in new[] { "-C", folder, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=NUL" }) { info.ArgumentList.Add(a); }

@@ -776,8 +776,56 @@ public sealed class ConversationEndPinTests
         }
         view.Scroller.EndGesture("release");
         view.LaidOutForProbe();
-        // Once let go, the view is still again, and the last realisation's move is put back as before.
-        Assert.Equal([47042.0], view.Scroller.Targets);
+        // Once let go, the last realisation's move was already drawn under the thumb: it starts again from there
+        // rather than pulling the view back on release (#4243).
+        Assert.Empty(view.Scroller.Targets);
+    }
+
+    // #4243 trackpad: a tool row realises above the top block while a pan (or the thumb) is held still, so the
+    // person sees what they read move down. The release raises no view change, and the first layout after it
+    // corrected against the anchor from before: a second jump, back, on release. It now starts again from where
+    // the person left it, and a later realisation is still kept in place.
+    [Theory]
+    [InlineData("pan")]
+    [InlineData("thumb")]
+    public void Rows_realised_under_a_held_gesture_are_not_corrected_after_its_release(string gesture)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(30000);
+        var thumb = new Microsoft.UI.Xaml.UIElement { Parent = new Microsoft.UI.Xaml.UIElement { Parent = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller } } };
+        if (gesture == "pan") { view.GestureForProbe("pan"); view.ReleasePin(); } else { view.Scroller.Press(thumb); }
+        view.Moved(29800, final: false);
+        view.TakeAnchorForProbe(40);
+        view.BlockTopForProbe = 152;
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        if (gesture == "pan") { view.GestureForProbe("none"); } else { view.Scroller.EndGesture("release"); }
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        // A text row realised after the release is kept in place as before.
+        view.BlockTopForProbe = 194;
+        view.LaidOutForProbe();
+        Assert.Equal([29842.0], view.Scroller.Targets);
+    }
+
+    // A wheel hold is not a held gesture for the release rule above: its notch ends in its own view changes, and
+    // one that raises none lapses. A row realised above the top block in its start window is still put back once
+    // the hold lapses; accepting it moved the view a notch plus the row (CI 45325080892: 48, 48, 48, 402, ...).
+    [Fact]
+    public void A_row_realised_during_a_wheel_start_window_is_still_kept_in_place_after_it_lapses()
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(30000);
+        view.TakeAnchorForProbe(40);
+        view.Scroller.Wheel();
+        view.BlockTopForProbe = 394;
+        view.LaidOutForProbe();
+        Assert.Empty(view.Scroller.Targets);
+        view.LapseWheelForProbe();
+        view.LaidOutForProbe();
+        Assert.Equal([30354.0], view.Scroller.Targets);
     }
 
     // #4243: a wheel notch's animation starts before its first view change reaches us. A correction of ours

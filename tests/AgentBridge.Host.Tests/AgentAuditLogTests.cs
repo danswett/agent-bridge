@@ -435,7 +435,8 @@ public sealed class AgentAuditLogTests : IDisposable
         using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.None))
         {
             Assert.True(Log(max: 600).Append(Entry()));
-            Assert.Contains("could not trim old files", Assert.Single(said));
+            // A file that cannot be read is held like one that cannot be deleted (it may hold an active gate run's rows, #2971).
+            Assert.Contains("kept agents-2026-11-08.jsonl", Assert.Single(said));
             Assert.Equal(3, Directory.GetFiles(Audit).Length);
             Assert.All(Directory.GetFiles(Audit), file => Assert.True(new FileInfo(file).Length > 0));
         }
