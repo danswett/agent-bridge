@@ -498,6 +498,36 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Null(replay.Reservation.Target);
     }
 
+    // #2771 (part b), through the real grant path: a grant-launched fleet worker is tracked by the live limit but never listed for idle end.
+    [Fact]
+    public async Task A_grant_launched_fleet_worker_is_never_listed_for_idle_end()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, _) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        var result = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Started, result.Result.Outcome);
+        var gate = pipe.Credentials.LaunchGate;
+        gate.ObserveSession(result.Result.Session!, DateTimeOffset.UtcNow.AddHours(-3), personTyped: false);
+        Assert.DoesNotContain(result.Result.Session!, gate.IdleSessions());
+    }
+
+    // #2771: a grant launch under 1 GiB free on the profile's disk is refused with diskLow before anything is reserved or started.
+    [Fact]
+    public async Task Under_1_GiB_free_refuses_a_grant_launch_with_diskLow()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key);
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+        var caller = pipe.Credentials.Of(pipe.Channel)!;
+        var low = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher, new ProfileDisk(folder, _ => 1L));
+        var denied = await Assert.ThrowsAsync<FleetLaunchDenied>(() => low.PrepareAsync(caller, input));
+        Assert.Equal("diskLow", denied.Message);
+        var roomy = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher, new ProfileDisk(folder, _ => 5L << 30));
+        Assert.NotNull(await roomy.PrepareAsync(caller, input with { Request = Guid.NewGuid() }));
+    }
+
     [Fact]
     public async Task Reviewer_recovery_does_not_substitute_the_current_process_for_the_launched_process()
     {

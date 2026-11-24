@@ -127,8 +127,8 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
-    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null) => new(
-        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flag }, () => true,
+    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null, Func<bool>? flagNow = null) => new(
+        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flagNow?.Invoke() ?? flag }, () => true,
         new DeliveryGate(), f, new LaneScreens((_, _) => Task.FromResult<(bool? Idle, bool? Empty)>((f.Status == SessionStatus.Idle, f.Rows == EmptyBox)), f.Clock),
         "unused", f.Log.Add, f.Clock, open ?? (() => new DeliveryJournal(new byte[32], _ => { }, f.Log.Add)));
 
@@ -166,6 +166,49 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(LiteCodes.ComposerNotEmpty, result.Code);
         Assert.Null(result.Outcome);
         Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_one_delivery_writes_exactly_one_lite_deliver_row_and_the_rate_cap_holds()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        var results = new List<LiteDelivery>();
+        for (var i = 0; i < LiteDeliver.MaxPerMinute + 1; i++)
+        { var r = Guid.NewGuid().ToString("D"); results.Add(await deliver.DeliverAsync(Envelope("hi", request: r), "hi", default)); }
+        // Six accepted (pending in the lane), the seventh in the same minute refused busy; one outcome row ("lite deliver: from") per delivery either way.
+        Assert.Equal(LiteDeliver.MaxPerMinute, results.Count(r => r.Outcome == LiteKind.Pending));
+        Assert.Equal(LiteCodes.Busy, results[^1].Code);
+        Assert.Equal(LiteDeliver.MaxPerMinute + 1, f.Log.Count(l => l.StartsWith("lite deliver: from", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(true, true, 1)]
+    [InlineData(false, true, 0)]
+    [InlineData(true, false, 0)]
+    public async Task The_lane_fence_needs_the_flag_and_the_target_still_current(bool flagAtFence, bool currentAtFence, int typed)
+    {
+        // The composition's fence is Enabled() && current(): either one false types nothing (a || would type in both refusals).
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        var flag = true;
+        using var lane = Composition(f, flagNow: () => flag);
+        Assert.Equal(LiteKind.Pending, (await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default)).Outcome);
+        var scheduler = lane.Resolve().Scheduler!;
+        flag = flagAtFence; f.FenceCurrent = currentAtFence;
+        await lane.Screens.RefreshAsync(Target);
+        await scheduler.DeliverNextAsync(Target);
+        Assert.Equal(typed, f.Typed.Count);
+    }
+
+    [Fact]
+    public async Task A_journal_write_that_fails_at_offer_still_writes_a_lite_deliver_row()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, open: () => new DeliveryJournal(new byte[32], _ => throw new IOException("disk full"), f.Log.Add));
+        try { await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default); } catch (IOException) { }
+        Assert.Single(f.Log, l => l.StartsWith("lite deliver: from", StringComparison.Ordinal));
+        Assert.Empty(f.Typed);
     }
 
     [Fact]

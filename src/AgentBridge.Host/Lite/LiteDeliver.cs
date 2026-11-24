@@ -51,8 +51,15 @@ public sealed class LiteDeliver(
     {
         var body = envelope.Body;
         var target = body.Target.Session ?? "";
-        var outcome = await DecideAsync(envelope, text, target, ct);
         var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
+        LiteDelivery outcome;
+        // Every delivery writes its row, also when deciding it fails (a journal write at Offer): the exception still goes to the caller.
+        try { outcome = await DecideAsync(envelope, text, target, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: failed ({e.GetType().Name})");
+            throw;
+        }
         log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code ?? outcome.Outcome?.ToString().ToLowerInvariant())}");
         return outcome;
     }
@@ -150,22 +157,22 @@ public sealed class LiteDeliver(
         var peer = Principal(body.Principal);
         if (store is not null)
         {
+            var begin = store.TryBegin(body.Request, peer, id);
             var process = source.ProcessOf(id)?.StartedAt;
             var transcript = source.Files(id)?.Transcript;
-            var begin = store.TryBegin(body.Request, peer, id);
             // A held slot is freed when Claude restarted since (its queue is gone, D2b-2c) or took the prompt after the report (D2b-2b1, #3856).
             if (begin == BusyQueueStore.Begin.Held && (Restarted(store, id, process) || LateTaken(store, id))) { begin = store.TryBegin(body.Request, peer, id); }
+            switch (begin)
+            {
+                case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
+                case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
+            }
             // The store forgets a host restart; the transcript does not (D2b-2c): a relay prompt enqueued since this Claude process started and not
             // taken still holds the slot. With no known process start, rows count from the last hour.
             if (begin == BusyQueueStore.Begin.Started && transcript is not null && ClaudeQueue.Unconsumed(transcript, process ?? time.GetUtcNow() - TimeSpan.FromHours(1)))
             {
                 store.Release(body.Request, peer);
                 return Refused(LiteCodes.QueueHeld);
-            }
-            switch (begin)
-            {
-                case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
-                case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
             store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript), process, peer);
         }

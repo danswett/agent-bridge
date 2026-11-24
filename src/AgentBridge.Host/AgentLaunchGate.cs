@@ -37,7 +37,7 @@ public sealed class AgentLaunchGate(string folder, Func<DateTimeOffset>? clock =
     }
 
     // Host lifecycle API for the ingress/idle-loop composition; never exposed as agent operations.
-    public void LaunchStarted(string origin, string request, string session) => limits.LaunchStarted(origin, request, session);
+    public void LaunchStarted(string origin, string request, string session, bool fleet = false) => limits.LaunchStarted(origin, request, session, fleet);
     public bool LaunchFinished(string origin, string request) => limits.LaunchFinished(origin, request);
     public bool SessionEnded(string session) => limits.SessionEnded(session);
     public bool ObserveSession(string session, DateTimeOffset? idleSince, bool personTyped) =>

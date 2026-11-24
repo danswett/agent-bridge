@@ -35,13 +35,13 @@ public sealed class DeliveryDispatchPumpTests
         public readonly LaneComposition Lane;
         public DeliveryDispatchPump Pump;
         public bool Idle = true, Flag = true, FailWrite;
-        public int Reads, Opens;
+        public int Reads, Opens, SettingsReads;
         public Func<Task> Reading = () => Task.CompletedTask;
         public Func<Task<ReplyResult>> Sending = () => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
         public Fake()
         {
             Gate = new(Clock);
-            Lane = new(() => new AgentMessagingSettings { LaneDelivery = Flag }, () => true, Gate, this,
+            Lane = new(() => { SettingsReads++; return new AgentMessagingSettings { LaneDelivery = Flag }; }, () => true, Gate, this,
                 new LaneScreens(async (_, _) => { Interlocked.Increment(ref Reads); await Reading(); return (Idle, true); }, Clock),
                 "unused", Logs.Add, Clock, () => { Opens++; return new(new byte[32],
                     _ => { if (FailWrite) { throw new IOException("fake disk"); } }, _ => { }); });
@@ -72,6 +72,19 @@ public sealed class DeliveryDispatchPumpTests
             return id;
         }
         public async ValueTask DisposeAsync() { await Pump.DisposeAsync(); Lane.Dispose(); }
+    }
+
+    [Fact]
+    public async Task A_session_change_with_nothing_pending_never_reads_the_settings()
+    {
+        // The flag-off cost: Enabled() re-reads config.json, so the pump asks what is pending first and reads it only when there is work.
+        await using var f = new Fake();
+        f.Sessions.Change("t"); f.Sessions.Change("other");
+        await f.Pump.WhenIdleAsync();
+        Assert.Equal(0, f.SettingsReads);
+        f.Offer();
+        await f.Pump.WhenIdleAsync();
+        Assert.True(f.SettingsReads > 0);
     }
 
     [Fact]
