@@ -493,9 +493,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
-     It runs only when `spikes/` changes, like `spikes` on Windows.
+     job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
+     docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
+   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
+     `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
@@ -536,7 +537,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or not (#4104), as long as main's head, read under the lock, still follows its commit (an
    unreadable or off-main head stops publishing); main's later run publishes its own higher
    version over it. When GitHub numbered a descendant's run lower, that version is refused and
-   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
+   its app change waits for main's next run: delayed, not lost (#938's trade). Releases are
+   spaced 15 minutes apart (owner decision; docs/app-windows.md, "Spacing"): a run inside that
+   publishes nothing and says `deferred=true`; `publish-pending.yml` re-runs that publish job
+   once the window opens, even with main idle, unless a later run publishes first. Quality, on
+   an owner or Chief call, may dispatch `critical-release` with a reason. One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
@@ -607,8 +612,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
-     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     `main_green.jobs` list pins exact display names for ha-integration,
+     light, pwa-ui, pwa-e2e and app (`spikes` and `spikes-linux` left it with S2 piece 4: they are the FULL lane's), including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      Optional `main_green.leg_families` adds lists of exact alternative check names to
@@ -733,9 +738,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
      its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
      not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
-     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
-     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
-     (#1922, #2130); skipped events have unique admission keys.
+     is per pull request and other scoped events' per head, and any newer run of the same key cancels
+     the one in progress (#2577 for a new head; #4104 for every event since). Main sweeps, cron and
+     dispatch have slots of their own and never cancel (#1922, #2130); skipped events have unique
+     admission keys, so they cancel nothing.
      Before joining the writer queue, cron checks for other queued, pending or waiting scoped
      evaluations. It yields only to a positively identified fresh scoped job; a queue at least
      30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
@@ -753,7 +759,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      It is not a resolver job per event. The PR dry run in
      `.github/workflows/weekly-report.yml` and the review relay in
      `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
-     (#2577). All triggers stay unchanged.
+     (#2577). The run backlog (#4104: up to 30 runs queued on one head, 23 on main's tip) is cut
+     three ways. Admission cancels in progress for every run about one pull request or head (never a
+     sweep), so only the newest such run survives; the evaluator posts only
+     verdicts, so a cancelled run leaves the last verdict until the newer run of that key posts. CI
+     starting on main no longer sweeps (main's verdict is its newest completed evidence); finishing
+     still does. A status judges again on any failure, error or pending, but on a success only for
+     independent-review, independent-review-2, Copilot's and CodeQL's contexts; the accepted
+     residual is an unlisted status going pending to success, which waits for the next event or sweep:
+     a slower merge, never a wrong verdict.
      Every admitted writer still waits in the shared `merge-rule` job group with
      `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
      A scoped event cannot displace a sweep or another
@@ -769,7 +783,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      not a quota guarantee: the Nov 10 repair sweep cost 58 points and 17 REST calls. Retaining
      formerly displaced sweeps adds their existing evaluation cost, with no new job, timer,
      token permission or idle runner minutes. A burst admits at most one writer per active head
-     plus one sweep; each head also retains one pending duplicate outside the writer lock.
+     plus one sweep (and one pending sweep), with no pending duplicate per head.
      GitHub's queue cap is 100 pending jobs: additional jobs are cancelled at that cap, not
      promised recovery. The observed 22 open PRs fit, but bursts spanning many obsolete heads
      can exceed that bound. The cron backstop remains best effort; a reliable fleet tick is a
@@ -849,16 +863,18 @@ path-filter extension, the reused-machine rules, the cost figures and the order 
 one project, `Host.Tests`, is 417 s of that, so shards split by **test class** inside the big projects (`Host.Tests`, `App.Tests`), each shard job building
 for itself (build once and hand the output over as an artifact is decided after the artifact transfer is measured). A shard runs `dotnet test --no-build --filter`
 with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
-is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, so classes like
-that are one unit and travel together (3 of Host.Tests' 139). The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
-the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. **No discovery step:** a scan of
-the source missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no shard, and `dotnet test --list-tests` takes 222 s on Host.Tests alone.
-So `quality/test-shards.json` has shards 1 to N-1 **list** their classes per project, and **shard N is the remainder**: it runs everything not listed, by a negated
-filter (`FullyQualifiedName!~Class.` for every listed class, `&`-joined), so a new, renamed or unlisted class lands there and is never dropped. Small projects are listed
-whole in a shard; a project listed nowhere runs whole in the remainder. `agent-bridge-quality shard-filter --plan FILE --project P --shard I` prints `none`, `all` or the
-filter, and `--check` reads the plan alone. **What the plan must keep true, refused when it is read:** no class in two lists, no two classes in different shards whose
-terms match each other's tests (they would run twice), no class name the filter language would misread, and every filter under 24,000 characters (Windows' command line
-is 32 K). **The plan is generated offline, never in CI:** `agent-bridge-quality shard-plan --results DIR --shards 4 --out quality/test-shards.json` reads the TRX files of a run (download the `coverage-windows-latest` artifact), sums seconds per class, bin-packs each project's classes (collision units together) and gives each project's heaviest bin to the lightest shard so far, so the shards' totals even out. A project under 60 s total (`--whole-under`) is listed whole in a shard. The last bin is **not** written down: it is the remainder, so it has tests on the day and takes whatever is new. **Why grouping stays (exact matching cannot work here):** a filter term is a containment match, and it cannot be anchored at the start of a name. About 320 of the 547 test classes are in the global namespace, so their full name is the bare name and `AnswerFlowTests.` is inside `AgentAnswerFlowTests.` (the real pairs include `ReplyFlowTests`/`AgentReplyFlowTests` and `GrowthTests`/`TurnBuilderGrowthTests`). So colliding classes form one unit and land in one shard, and `shard-plan` simulates every known class against the finished plan and writes nothing unless each runs in exactly one shard. A new unlisted class that contains a listed term is not dropped: the same term that keeps it out of the remainder includes it in its own shard, once. First plan, from run 45303208572: 2,836 s of serial Windows test time becomes 707, 707, 709 and 713 s per shard. Refresh is a later piece, as are the shard legs and `quality-gate` failing on a missing or skipped shard.
+is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, and VSTest's
+`~` is a **case-insensitive** contains (`Foo.ATests.` is inside `Foo.aTests.`), so classes like that, by case too, are one unit and travel together (3 of Host.Tests' 175
+classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. The plan is a pure function of
+the classes discovered and their recorded seconds, so every shard job computes the same plan; a class with no recorded time weighs the median of those that have one, so
+a new class is spread rather than piled on. **No discovery step:** a scan of the source missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran
+in no shard, and `dotnet test --list-tests` takes 222 s on Host.Tests alone. So `quality/test-shards.json` has shards 1 to N-1 **list** their classes per project, and
+**shard N is the remainder**: it runs everything not listed, by a negated filter (`FullyQualifiedName!~Class.` for every listed class, `&`-joined), so a new, renamed or
+unlisted class lands there and is never dropped. Small projects are listed whole in a shard; a project listed nowhere runs whole in the remainder.
+`agent-bridge-quality shard-filter --plan FILE --project P --shard I` prints `none`, `all` or the filter, and `--check` reads the plan alone. **An empty shard prints
+`none` and is skipped, never run:** `dotnet test` reads an empty `--filter` as no filter at all, so it would run every test. **What the plan must keep true, refused
+when it is read:** no class in two lists, no two classes in different shards whose terms match each other's tests, case aside (they would run twice), no class name the
+filter language would misread, and every filter under 24,000 characters (Windows' command line is 32 K). **The plan is generated offline, never in CI:** `agent-bridge-quality shard-plan --results DIR --shards 4 --out quality/test-shards.json` reads the TRX files of a run (download the `coverage-windows-latest` artifact), sums seconds per class, bin-packs each project's classes (collision units together) and gives each project's heaviest bin to the lightest shard so far, so the shards' totals even out. A project under 60 s total (`--whole-under`) is listed whole in a shard. The last bin is **not** written down: it is the remainder, so it has tests on the day and takes whatever is new. **Why grouping stays (exact matching cannot work here):** a filter term is a containment match, and it cannot be anchored at the start of a name. About 320 of the 547 test classes are in the global namespace, so their full name is the bare name and `AnswerFlowTests.` is inside `AgentAnswerFlowTests.` (the real pairs include `ReplyFlowTests`/`AgentReplyFlowTests` and `GrowthTests`/`TurnBuilderGrowthTests`). So colliding classes form one unit and land in one shard, and `shard-plan` simulates every known class against the finished plan and writes nothing unless each runs in exactly one shard. A new unlisted class that contains a listed term is not dropped: the same term that keeps it out of the remainder includes it in its own shard, once. First plan, from run 45303208572: 2,836 s of serial Windows test time becomes 707, 707, 709 and 713 s per shard. Refresh is a later piece, as are the shard legs and `quality-gate` failing on a missing or skipped shard.
 
 **What gates main: two lanes (decided, owner, Nov 23, S2, #4104; the design, not yet built: what exists today is one `ci.yml`, whose `app`
 job self-tests and packs, and the pieces below build it, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
@@ -890,8 +906,8 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 * **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
   that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
-  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows; (4) `spikes` and `spikes-linux` to
-  `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single

@@ -26,6 +26,7 @@ public sealed class AuditIncompleteRetentionTests : LaunchFlowFixture
         Assert.True(Writer().Append(entry with { Outcome = "ended", Gate = entry.Gate! with { Phase = "terminal" } }));
         File.WriteAllBytes(head, checkpoint);
         Assert.Contains("audit-incomplete", GateAuditProjection.Read(profile, run).IncompleteReasons);
+        Assert.True(Writer().Append(AgentBridge.Host.Tests.AuditActiveRunRetentionTests.Seal(run)));   // sealed, so retention may take the day (an active run's is never taken, #2971)
         for (var day = 0; day <= AgentAuditLog.KeepDays; day++)
         {
             clock.Advance(TimeSpan.FromDays(1));
