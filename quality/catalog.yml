@@ -614,7 +614,7 @@ suites:
     kind: unit
     ring: 0
     select: affected
-    # The alert for a red FULL lane (S2, #4104): one issue per commit, labelled full-red, with the blocking and the waived (Arm64
+    # The alert for a red FULL lane (S2, #4104): one open issue per red job, labelled full-red, with the blocking and the waived (Arm64
     # self-test, tests, installer) red jobs apart, on a stub gh. Nothing reaches GitHub.
     platforms: [win-x64, linux-x64]
     runner: local

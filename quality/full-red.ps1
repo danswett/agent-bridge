@@ -1,16 +1,18 @@
-# Opens one issue per commit when the FULL lane (full.yml) has a red job: the alert half of the two-lane split (S2, #4104,
-# quality/README.md section 4.7). A red FULL lane never holds a merge; this is how someone hears of it.
+# The alert half of the two-lane split (S2, #4104, quality/README.md section 4.7): one open issue per red FULL job, with a comment for each later commit it is red on.
+# A red FULL lane never holds a merge; this is how someone hears of it.
 #
 #   pwsh quality/full-red.ps1 -RunId <the Full run's id> -Repository owner/name
 #
-# Reads the finished Full run and its latest attempt's jobs, and for a run on main with a failed or timed-out job it opens an issue
-# labelled full-red, or updates the commit's issue (matched by the marker <!-- full-red:<sha> --> in its body; a closed one is reopened
-# with a comment), so a commit never has two. It lists each red job with its link and says which are:
+# Reads a finished Full run of THIS repository on main and its latest attempt's jobs. A fork's run, a branch that is not main, and an event Full does not
+# have (it runs after a CI run, or by hand: workflow_run or workflow_dispatch) are passed over, so nothing from outside can open an issue. For each red
+# job (failure or timed out) it keeps ONE open issue, found by the hidden marker <!-- full-red-job:<name> --> in its body (never by label, which Quality may
+# change), opening it on the first red commit and adding a comment on each later red commit (a re-run of the same commit adds nothing). When the job passes
+# in a later run it comments once that it is green again and leaves the closing to a person. Each issue says whether the job is:
 #   Blocking  the release train will not publish this commit (x64 anything, the Arm64 pack, any other job);
 #   Waived    the Arm64 self-test, tests and installer (owner, #2454): recorded here, publish continues.
-# The aggregates (trigger, full-gate) are never a cause; a red full-gate with no failed job behind it (a job was skipped or cancelled) is
-# reported as its own blocking line. Cancelled runs, other branches and runs with no red job are passed over. No log is read, so no
-# log text reaches an issue. Needs issues: write and actions: read (the workflow's token).
+# The aggregates (trigger, full-gate) are never a cause. A run that failed with no failed job behind it (a startup failure, or a job that was skipped or
+# cancelled) is red as "(whole run)". Names are cut down to a safe alphabet before they reach an issue, no log is read, and the only label is full-red.
+# Needs issues: write and actions: read (the workflow's token). Any API error fails the run; only "the label already exists" (422) is let through.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][long]$RunId,
@@ -23,6 +25,7 @@ $Label = 'full-red'
 # The Arm64 results the owner waived: what RUNS the app on Arm64. Its pack is not here: the package is always required.
 $Waived = 'app (win-arm64)', 'app-selftest (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)'
 $Aggregates = 'trigger', 'full-gate'
+$WholeRun = '(whole run)'
 
 function Invoke-Gh {
     $global:LASTEXITCODE = 0   # unset until a native program runs, and a stub script never sets it
@@ -30,58 +33,72 @@ function Invoke-Gh {
     if ($LASTEXITCODE -ne 0) { throw "gh $($args -join ' ') failed: $((($out | Out-String).Trim()))" }
     ($out | Out-String)
 }
+# A name from a workflow file, cut to a safe alphabet and length: nothing in it can mention a person, open a tag or a link, or end a comment.
+function Get-Safe([string]$name) { $s = $name -replace '[^A-Za-z0-9 ._()/-]', '?'; if ($s.Length -gt 80) { $s.Substring(0, 80) } else { $s } }
 
 $run = Invoke-Gh api "repos/$Repository/actions/runs/$RunId" | ConvertFrom-Json
-if ($run.status -ne 'completed' -or $run.conclusion -in 'cancelled', 'skipped' -or $run.head_branch -ne 'main') {
-    "Passed over: run $RunId is $($run.status)/$($run.conclusion) on $($run.head_branch)."
+$own = $run.head_repository -and $run.head_repository.full_name -ceq $Repository
+if ($run.status -ne 'completed' -or $run.conclusion -in 'cancelled', 'skipped' -or -not $own -or $run.head_branch -cne 'main' -or $run.event -cnotin 'workflow_run', 'workflow_dispatch') {
+    "Passed over: run $RunId is $($run.status)/$($run.conclusion), event $($run.event), on $($run.head_branch) of $($run.head_repository.full_name)."
     return
 }
 $sha = [string]$run.head_sha
 if ($sha -notmatch '^[0-9a-f]{40}$') { throw "run $RunId has no commit sha: '$sha'" }
+$short = $sha.Substring(0, 7)
 
 $pages = Invoke-Gh api "repos/$Repository/actions/runs/$RunId/attempts/$($run.run_attempt)/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
-$red = @($pages | ForEach-Object { $_.jobs } | Where-Object { $_.conclusion -in 'failure', 'timed_out' })
-$causes = @($red | Where-Object { $_.name -notin $Aggregates })
-$blocking = @($causes | Where-Object { $_.name -notin $Waived })
-$waived = @($causes | Where-Object { $_.name -in $Waived })
-$gateOnly = $causes.Count -eq 0 -and @($red | Where-Object { $_.name -eq 'full-gate' }).Count -gt 0
-if ($causes.Count -eq 0 -and -not $gateOnly) { "No red job in run $RunId."; return }
+$jobs = @($pages | ForEach-Object { $_.jobs })
+$red = @($jobs | Where-Object { $_.conclusion -in 'failure', 'timed_out' -and $_.name -notin $Aggregates })
+$causes = @($red | ForEach-Object { [pscustomobject]@{ Key = Get-Safe $_.name; Waived = $_.name -in $Waived; Url = $_.html_url; Result = $_.conclusion; Note = '' } })
+if ($causes.Count -eq 0 -and $run.conclusion -in 'failure', 'timed_out', 'startup_failure') {
+    $causes = @([pscustomobject]@{ Key = $WholeRun; Waived = $false; Url = $run.html_url; Result = $run.conclusion; Note = 'The run failed with no failed job behind it: a startup failure, or a job it needs was skipped or cancelled.' })
+}
+$green = @($jobs | Where-Object { $_.conclusion -eq 'success' } | ForEach-Object { Get-Safe $_.name })
 
-$short = $sha.Substring(0, 7)
+# The open issues carrying a job marker, whatever their labels, and not pull requests.
+$marker = [regex]'<!-- full-red-job:([^>]*?) -->'
+$open = @(Invoke-Gh api "repos/$Repository/issues?state=open&per_page=100" --paginate --slurp | ConvertFrom-Json | ForEach-Object { $_ } |
+    Where-Object { $_.body -and -not $_.PSObject.Properties['pull_request'] -and $marker.IsMatch($_.body) })
+function Get-Issue([string]$key) { $open | Where-Object { $marker.Match($_.body).Groups[1].Value -ceq $key } | Select-Object -First 1 }
+$summary = @()
 $nl = [Environment]::NewLine
-$lines = @("<!-- full-red:$sha -->",
-    "The FULL lane (full.yml) is red for commit [$short](https://github.com/$Repository/commit/$sha): [run $RunId]($($run.html_url)), attempt $($run.run_attempt). A red FULL lane never holds a merge.", '')
-if ($blocking.Count -gt 0 -or $gateOnly) {
-    $lines += '**Blocking: the release train will not publish this commit**'
-    $lines += @($blocking | ForEach-Object { "- [$($_.name)]($($_.html_url)): $($_.conclusion)" })
-    if ($gateOnly) { $lines += '- full-gate failed with no failed job: a job it needs was skipped or cancelled' }
-    $lines += ''
+function New-Body($cause, [string]$state) {
+    $how = if ($cause.Waived) { 'Waived: the Arm64 self-test, tests and installer (owner, #2454). Recorded here, and publish continues.' } else { 'Blocking: the release train will not publish a commit this is red on.' }
+    $lines = @("<!-- full-red-job:$($cause.Key) -->", "<!-- full-red-last:$sha -->", "<!-- full-red-state:$state -->",
+        "FULL lane job **$($cause.Key)** is red: [$($cause.Result)]($($cause.Url)) on commit [$short](https://github.com/$Repository/commit/$sha), run [$RunId]($($run.html_url)).", '', "**$how**")
+    if ($cause.Note) { $lines += @('', $cause.Note) }
+    $lines += @('', 'A red FULL lane never holds a merge. Each later commit it is red on is a comment here; close this when the cause is fixed.')
+    ($lines -join $nl)
 }
-if ($waived.Count -gt 0) {
-    $lines += '**Waived: the Arm64 self-test, tests and installer (owner, #2454). Recorded here, and publish continues**'
-    $lines += @($waived | ForEach-Object { "- [$($_.name)]($($_.html_url)): $($_.conclusion)" })
-}
-$body = ($lines -join $nl).TrimEnd()
-$names = (@($blocking | ForEach-Object { $_.name }) + $(if ($gateOnly) { 'full-gate' })) -join ', '
-$title = if ($blocking.Count -gt 0 -or $gateOnly) { "FULL lane red on ${short}: $names" } else { "FULL lane Arm64 results waived on ${short}: $(@($waived | ForEach-Object { $_.name }) -join ', ')" }
-if ($title.Length -gt 120) { $title = $title.Substring(0, 117) + '...' }
-
-# The commit's issue, by its marker, among the label's issues, open or closed.
-$known = @(Invoke-Gh api "repos/$Repository/issues?labels=$Label&state=all&per_page=100" --paginate --slurp | ConvertFrom-Json | ForEach-Object { $_ })
-$issue = $known | Where-Object { $_.body -and $_.body.Contains("<!-- full-red:$sha -->") } | Select-Object -First 1
-if ($issue) {
-    $edit = @('-f', "title=$title", '-f', "body=$body")
-    if ($issue.state -eq 'closed') { $edit += @('-f', 'state=open') }
-    Invoke-Gh api -X PATCH "repos/$Repository/issues/$($issue.number)" @edit | Out-Null
-    if ($issue.state -eq 'closed') {
-        Invoke-Gh api -X POST "repos/$Repository/issues/$($issue.number)/comments" -f "body=Red again in [run $RunId]($($run.html_url)), attempt $($run.run_attempt)." | Out-Null
+$labelReady = $false
+foreach ($cause in $causes) {
+    $issue = Get-Issue $cause.Key
+    if ($issue) {
+        if ($issue.body.Contains("<!-- full-red-last:$sha -->")) { $summary += "$($cause.Key): already recorded for $short."; continue }
+        Invoke-Gh api -X PATCH "repos/$Repository/issues/$($issue.number)" -f "body=$(New-Body $cause 'red')" | Out-Null
+        Invoke-Gh api -X POST "repos/$Repository/issues/$($issue.number)/comments" -f "body=Red again on [$short](https://github.com/$Repository/commit/$sha): [$($cause.Result)]($($cause.Url)), run [$RunId]($($run.html_url))." | Out-Null
+        $summary += "$($cause.Key): commented on #$($issue.number)."
+        continue
     }
-    "Updated issue #$($issue.number) for $short."
+    if (-not $labelReady) {
+        # The label first; GitHub answers 422 when it exists, which is the usual case. Any other error fails the run.
+        try { Invoke-Gh api -X POST "repos/$Repository/labels" -f "name=$Label" -f color=B60205 -f 'description=The FULL lane (full.yml) is red for a job' | Out-Null }
+        catch { if ($_.Exception.Message -notmatch '422|already_exists') { throw } }
+        $labelReady = $true
+    }
+    $title = if ($cause.Waived) { "FULL lane Arm64 result red (waived): $($cause.Key)" } else { "FULL lane red: $($cause.Key)" }
+    Invoke-Gh api -X POST "repos/$Repository/issues" -f "title=$title" -f "body=$(New-Body $cause 'red')" -f "labels[]=$Label" | Out-Null
+    $summary += "$($cause.Key): opened an issue."
 }
-else {
-    # The label first; GitHub answers 422 when it exists, which is the usual case and no failure.
-    try { Invoke-Gh api -X POST "repos/$Repository/labels" -f "name=$Label" -f color=B60205 -f 'description=The FULL lane (full.yml) is red for a commit' | Out-Null } catch { }
-    Invoke-Gh api -X POST "repos/$Repository/issues" -f "title=$title" -f "body=$body" -f "labels[]=$Label" | Out-Null
-    "Opened an issue for $short."
+# A job that passed this time: one comment on its open issue that it is green again, and a person closes it.
+foreach ($issue in $open) {
+    $key = $marker.Match($issue.body).Groups[1].Value
+    if ($key -cin $green -and $key -cnotin @($causes | ForEach-Object { $_.Key }) -and $issue.body.Contains('<!-- full-red-state:red -->')) {
+        Invoke-Gh api -X PATCH "repos/$Repository/issues/$($issue.number)" -f ('body=' + $issue.body.Replace('<!-- full-red-state:red -->', '<!-- full-red-state:green -->')) | Out-Null
+        Invoke-Gh api -X POST "repos/$Repository/issues/$($issue.number)/comments" -f "body=Green again on [$short](https://github.com/$Repository/commit/$sha), run [$RunId]($($run.html_url)). Close this if the cause is fixed." | Out-Null
+        $summary += "${key}: green again, commented on #$($issue.number)."
+    }
 }
-if ($SummaryFile) { Add-Content -Path $SummaryFile -Value $body }
+if (-not $summary) { $summary = @("No red job in run $RunId.") }
+$summary
+if ($SummaryFile) { Add-Content -Path $SummaryFile -Value ($summary -join $nl) }
