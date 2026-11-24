@@ -168,3 +168,15 @@ for (const pinned of [false, true]) {
     assert.equal(order.unread(key, 'unseen-reply'), true, 'leaving the selected session still cancels its dwell');
   });
 }
+
+test('the sessions search keeps a session whose id the query names even when its name does not match, and the name still matches as before (owner request 09:33 PT Nov 24)', () => {
+  const order = new SessionOrder({ storage: { getItem: () => null, setItem() {} } });
+  const id = '0287fdf0-1a2b-4c3d-8e9f-0123456789ab';
+  const session = { id, title: 'Zebra planning', updatedAt: '2026-11-10T00:00:00Z' };
+  const view = new SessionListView(new Element(), { list: () => [{ hostId: 'h', session }], onChange() {} }, { order, awake: () => true, timers: globalThis });
+  view.render();
+  for (const [query, shown] of [['zebra', true], ['0287fdf0', true], ['0287-FDF0', true], [id, true], ['028', false], ['0287fdf1', false], ['', true]]) {
+    view.setFilter(query);
+    assert.equal(view.matches('h', session), shown, query);
+  }
+});
