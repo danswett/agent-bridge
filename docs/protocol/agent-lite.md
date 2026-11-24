@@ -83,6 +83,14 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a present own host is typed into a session there that is idle (or a working Claude with the proposed flag on), has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
+### Optional `sentAt` (additive, #4435; no version change)
+
+The relay message may carry `sentAt`: the Unix seconds when the sender FIRST asked to send, kept by a tool that retries a busy send.
+It sits beside the envelope, unsigned, and a host that does not know it ignores it. A receiver uses it only to order messages from the
+same authenticated sender to the same session and to print `STALE: sent HH:mm PT, ...` on an older one that arrives after a newer one;
+never for authorization, expiry, dedupe or anything else. It is believed only within two minutes after and a day before the envelope's
+own `issuedAt`; otherwise it is ignored and the header says `send time not given`. Absent, `issuedAt` is used and nothing changes.
+
 ## Receipt lookup for an unconfirmed send (design; slices 1 to 3)
 
 When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
@@ -164,8 +172,8 @@ journal is **memory only, 150 s**: a restart forgets it, and a lookup after one 
 2. Then run `agent-bridge-host agents lite kill [--profile <name>]` (L6) at a machine's own command line; it is
    refused inside an agent session. It turns that machine off at once: it saves a new kill epoch, sets
    `agentMessaging.remote` to `off` and cancels the sends in flight there (they end `unconfirmed`). If the setting
-   cannot be written (another part of `config.json` is invalid), the command exits 1 and the kill record holds the
-   machine off, across restarts, until a start can write the setting off. Within about 5 seconds the running host
+   cannot be written (another part of `config.json` is invalid), the kill record holds the
+   machine off (the command exits 0 when it does; it exits 1 only if messaging is still on afterwards), across restarts, until a start can write the setting off. Within about 5 seconds the running host
    tells each host the relay lists as present on this account, which turns off too; it retries a host that
    answers with an error or has not taken the epoch. A kill is believed only from such a host whose channel key
    matches its device id (no pin), through the push, the epoch on a lite send, or an ack; it only ever turns the

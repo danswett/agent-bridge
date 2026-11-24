@@ -100,7 +100,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         this.reread = reread ?? ProcessChain.Read;
         this.jobs = jobs;
         LaunchGate = new AgentLaunchGate(folder);
-        FleetGrant = new FleetLaunchGrant(folder);
+        FleetGrant = new FleetLaunchGrant(folder, new ProfileDisk(folder, log: log));
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
@@ -410,44 +410,44 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             var fresh = match.ScheduledTask is null || tasks is null ? ancestry
                 : ancestry.Processes is [{ Id: > 0, StartedAt: { } at } self, ..]
                     && reread(self.Id) is { Processes: [var again, ..] } current && again.Id == self.Id && again.StartedAt == at ? current : null;
-            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello"); }
+            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello", ancestry); }
             lock (gate)
             {
                 var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
                     .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
                     .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
                 if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null || AgentAncestry.Find(fresh.Processes, agents) is not null)
-                { return Outside(match, "a script credential cannot be used inside an agent session"); }
+                { return Outside(match, "a script credential cannot be used inside an agent session", ancestry); }
             }
             // Outside the gate (a bound one reads the Scheduler and ACLs); unbound needs the whole chain read.
             var why = match.ScheduledTask is { } binding ? binding.Refusal(fresh, tasks)
                 : !ancestry.Complete || ancestry.Processes.Count == 0 || ancestry.Processes.Any(ScriptTaskBinding.Unread)
                 ? "the script caller's ancestry could not be traced in full" : null;
-            if (why is not null) { return Outside(match, why); }
+            if (why is not null) { return Outside(match, why, ancestry); }
             return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
         }
-        if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
+        if (match.RootPid <= 0) { return Outside(match, "its launch has not started", ancestry); }
         if (!ancestry.Complete)
         {
-            return Outside(match, "the caller's ancestry could only be read in part");
+            return Outside(match, "the caller's ancestry could only be read in part", ancestry);
         }
         var bound = ancestry.Processes.FirstOrDefault(p => p.Id == match.RootPid);
         if (bound is null)
         {
             // A caller whose parent chain no longer reaches the root (a shell whose parent exited) can still be inside the session: it is a member
             // of the job the host made for this launch. Any other caller is refused exactly as before.
-            if (!InSessionJob(matchKey!, match, ancestry)) { return Outside(match, "the session's process isn't among the caller's ancestors"); }
+            if (!InSessionJob(matchKey!, match, ancestry)) { return Outside(match, "the session's process isn't among the caller's ancestors", ancestry); }
         }
         // Both sides must say when it started: an id alone could be a later process given the same one.
         else if (bound.StartedAt is not { } started || (started - match.RootStartUtc).Duration() > StartSlack)
         {
-            return Outside(match, "the process with the session's id is not the one that started it");
+            return Outside(match, "the process with the session's id is not the one that started it", ancestry);
         }
         // The ancestry was read when the pipe connected; the session may have ended since.
         if (!rootAlive(match.RootPid, match.RootStartUtc))
         {
             lock (gate) { Remove(r => r.Credential.Id == match.Id, "its session's process ended"); }
-            return Outside(match, "the session's process has ended");
+            return Outside(match, "the session's process has ended", ancestry);
         }
         return new AgentHelloDecision(match, null);
     }
@@ -476,10 +476,20 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
-    AgentHelloDecision Outside(AgentCredential credential, string why)
+    AgentHelloDecision Outside(AgentCredential credential, string why, ProcessAncestry ancestry)
     {
-        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}; principal {PrincipalOf(credential)}");
+        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}; principal {PrincipalOf(credential)}; caller chain {Chain(ancestry)}");
         return AgentHelloDecision.Refused($"credential presented from outside its session: {why}");
+    }
+
+    // The caller's chain for the log: pids and image file names only (letters, digits and . _ - +, at most 40), never a command line, a
+    // path, an argument or a token; at most 12 processes.
+    static string Chain(ProcessAncestry ancestry)
+    {
+        // Cut at either separator by hand: Path.GetFileName only knows the running OS's, and an image path is whatever the peer's OS wrote.
+        static string File(string image) => image[(image.LastIndexOfAny(['\\', '/']) + 1)..];
+        static string Name(string? image) => image is null ? "?" : new string([.. File(image).Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '+').Take(40)]) is { Length: > 0 } n ? n : "?";
+        return string.Join(" <- ", ancestry.Processes.Take(12).Select(p => $"{p.Id} {Name(p.Image)}")) + (ancestry.Processes.Count > 12 ? " <- ..." : "") + (ancestry.Complete ? "" : " (partial)");
     }
 
     AgentHelloDecision Refused(string why)

@@ -143,8 +143,24 @@ public sealed class UnpushedWorkTests : IDisposable
         {
             ["GIT_DIR"] = Path.Combine(other, ".git"), ["GIT_WORK_TREE"] = other, ["GIT_INDEX_FILE"] = Path.Combine(other, ".git", "index"),
         };
+        var before = inherited.Keys.Select(name => Environment.GetEnvironmentVariable(name)).ToArray();
         Assert.False(UnpushedWork.Pending(Work, inherited));
-        Assert.Null(Environment.GetEnvironmentVariable("GIT_DIR") is { } leaked && leaked.Contains("other") ? leaked : null);
+        // None of the three reached this process, whatever it had before (a CI runner may set its own).
+        Assert.Equal(before, inherited.Keys.Select(name => Environment.GetEnvironmentVariable(name)).ToArray());
+    }
+
+    [Fact]
+    public void The_scrub_keeps_the_no_lock_and_no_prompt_settings_the_check_sets_itself()
+    {
+        // A clean filter reports what git's own environment holds. Inherited values for both are replaced by the check's 0, never kept
+        // and never dropped with the rest of GIT_*: an index lock taken from the agent's own git, or a prompt that waits for a person.
+        var probe = Path.Combine(root, "probe.txt").Replace('\\', '/');
+        File.WriteAllText(Path.Combine(Work, ".gitattributes"), "a.txt filter=envprobe\n");
+        Git(Work, "config", "filter.envprobe.clean", $"printenv GIT_OPTIONAL_LOCKS GIT_TERMINAL_PROMPT > '{probe}'; cat");
+        File.WriteAllText(Path.Combine(Work, "a.txt"), "b");   // same size as the committed "a", so git must hash it and run the filter
+        var inherited = new Dictionary<string, string> { ["GIT_OPTIONAL_LOCKS"] = "1", ["GIT_TERMINAL_PROMPT"] = "1" };
+        Assert.True(UnpushedWork.Pending(Work, inherited));
+        Assert.Equal(["0", "0"], File.ReadAllLines(probe).Select(line => line.Trim()).ToArray());
     }
 
     [Fact]

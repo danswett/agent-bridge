@@ -51,12 +51,13 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        public bool Watch;
         public string? Transcript;
         public SessionFiles? Files(string id) => Transcript is null ? null : new SessionFiles(Agent, Transcript, null);
         BusyQueueStore? busyStore;
         public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
-        public LiteDeliver Build(DeliveryLaneScheduler? lane = null) => new([
+        public LiteDeliver Build(DeliveryLaneScheduler? lane = null, LaneComposition? composition = null) => new([
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -69,7 +70,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
+            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store, Watcher = Watch ? new BusyQueueWatcher(Store, Clock) : null };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -99,6 +100,7 @@ public sealed class AgentLiteDeliveryTests
             OnReply?.Invoke();
             OnWait?.Invoke(request.Text!);
             if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
+            if (request.HandoffText is { } handoff) { request = request with { Text = handoff() }; }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
             if (InjectorStops) { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
@@ -125,6 +127,115 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null, Func<bool>? flagNow = null) => new(
+        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flagNow?.Invoke() ?? flag }, () => true,
+        new DeliveryGate(), f, new LaneScreens((_, _) => Task.FromResult<(bool? Idle, bool? Empty)>((f.Status == SessionStatus.Idle, f.Rows == EmptyBox)), f.Clock),
+        "unused", f.Log.Add, f.Clock, open ?? (() => new DeliveryJournal(new byte[32], _ => { }, f.Log.Add)));
+
+    [Fact]
+    public async Task With_the_lane_flag_off_a_Copilot_send_types_through_the_legacy_path()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, flag: false);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.True(result.Typed);
+        Assert.Single(f.Typed);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_Copilot_send_is_offered_and_the_pump_wakes_and_types_it_once()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        await using var pump = new DeliveryDispatchPump(lane, f, f.Log.Add);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteKind.Pending, result.Outcome);
+        await pump.WhenIdleAsync();
+        Assert.Contains("hi", Assert.Single(f.Typed).Text);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_Claude_send_stays_on_the_legacy_path_and_never_touches_the_lane()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude }; f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        // The legacy path read the composer (the fixture's box is Copilot's layout, so it is not empty to Claude); the lane was never asked.
+        Assert.Equal(LiteCodes.ComposerNotEmpty, result.Code);
+        Assert.Null(result.Outcome);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_one_delivery_writes_exactly_one_lite_deliver_row_and_the_rate_cap_holds()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        var results = new List<LiteDelivery>();
+        for (var i = 0; i < LiteDeliver.MaxPerMinute + 1; i++)
+        { var r = Guid.NewGuid().ToString("D"); results.Add(await deliver.DeliverAsync(Envelope("hi", request: r), "hi", default)); }
+        // Six accepted (pending in the lane), the seventh in the same minute refused busy; one outcome row ("lite deliver: from") per delivery either way.
+        Assert.Equal(LiteDeliver.MaxPerMinute, results.Count(r => r.Outcome == LiteKind.Pending));
+        Assert.Equal(LiteCodes.Busy, results[^1].Code);
+        Assert.Equal(LiteDeliver.MaxPerMinute + 1, f.Log.Count(l => l.StartsWith("lite deliver: from", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(true, true, 1)]
+    [InlineData(false, true, 0)]
+    [InlineData(true, false, 0)]
+    public async Task The_lane_fence_needs_the_flag_and_the_target_still_current(bool flagAtFence, bool currentAtFence, int typed)
+    {
+        // The composition's fence is Enabled() && current(): either one false types nothing (a || would type in both refusals).
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        var flag = true;
+        using var lane = Composition(f, flagNow: () => flag);
+        Assert.Equal(LiteKind.Pending, (await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default)).Outcome);
+        var scheduler = lane.Resolve().Scheduler!;
+        flag = flagAtFence; f.FenceCurrent = currentAtFence;
+        await lane.Screens.RefreshAsync(Target);
+        await scheduler.DeliverNextAsync(Target);
+        Assert.Equal(typed, f.Typed.Count);
+    }
+
+    [Fact]
+    public async Task A_journal_write_that_fails_at_offer_still_writes_a_lite_deliver_row()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, open: () => new DeliveryJournal(new byte[32], _ => throw new IOException("disk full"), f.Log.Add));
+        try { await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default); } catch (IOException) { }
+        Assert.Single(f.Log, l => l.StartsWith("lite deliver: from", StringComparison.Ordinal));
+        Assert.Empty(f.Typed);
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_replay_query_to_a_Claude_target_types_nothing()
+    {
+        // A query is never a send: with the flag on a Claude target has no lane (it keeps the legacy typing path), so a replay is refused as main does.
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        Assert.True((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+        Assert.Single(f.Typed);
+        var replay = await ((ILiteReplayQuery)deliver).QueryAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteReceiver.Replay, replay.Code);
+        Assert.False(replay.Typed);
+        Assert.Single(f.Typed);
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_and_the_journal_refused_a_send_is_refused_busy_and_never_typed_by_the_legacy_path()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, open: () => throw new InvalidDataException("no journal"));
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.False(result.Typed);
+        Assert.Equal(LiteCodes.Busy, result.Code);
+        Assert.Empty(f.Typed);
+    }
     sealed class LaneRig : IDisposable
     {
         public readonly List<byte[]> Disk = [];
@@ -907,6 +1018,34 @@ public sealed class AgentLiteDeliveryTests
         }
         finally { File.Delete(path); }
     }
+    // D2b-2b2 (#3856): with the active watch on, a prompt Claude takes is noticed without another send; a silent one is reported watchEnded and stays held.
+    static async Task Tick(Fixture f, Func<bool> done, TimeSpan limit)
+    {
+        for (var spent = TimeSpan.Zero; spent <= limit && !done(); spent += BusyQueueWatcher.Poll) { f.Clock.Advance(BusyQueueWatcher.Poll); await Task.Delay(5); }
+    }
+    [Fact]
+    public async Task With_the_watch_on_a_taken_prompt_is_noticed_without_another_send_and_a_silent_one_is_reported_watchEnded_and_stays_held()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-watch-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var taken = BusyClaude(ReplyStage.Queued); taken.Watch = true; taken.Transcript = path;
+            Assert.Equal(LiteKind.Queued, (await SendNew(taken.Build())).Outcome);
+            File.AppendAllText(path, TakenRow(Assert.Single(taken.Typed).Text!) + "\n");
+            await Tick(taken, () => taken.Store.Records().Single().State == BusyQueueStore.Delivered, TimeSpan.FromSeconds(30));
+            var done = taken.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Delivered, false), (done.State, done.Held));
+            Assert.False(taken.Store.SlotHeld(Target));
+
+            var silent = BusyClaude(ReplyStage.Queued); silent.Watch = true; silent.Transcript = path + ".none";
+            Assert.Equal(LiteKind.Queued, (await SendNew(silent.Build())).Outcome);
+            await Tick(silent, () => silent.Store.Records().Single().Reason == "watchEnded", TimeSpan.FromSeconds(130));
+            var ended = silent.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded", true), (ended.State, ended.Reason, ended.Held));
+            Assert.True(silent.Store.SlotHeld(Target));
+        }
+        finally { File.Delete(path); }
+    }
     [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()
     {
@@ -1168,5 +1307,87 @@ public sealed class AgentLiteDeliveryTests
         Assert.True((await f.Build().DeliverAsync(Envelope("two", session: "beta"), "two", default)).Typed);
         d.Observe(Shown(3, SessionStatus.Working, f.Typed[1].Text), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
         Assert.Equal((true, "beta on SENDER"), d.PromptSender);
+    }
+    // #4435: an older order that arrives after a newer one from the same sender is typed and marked, never dropped or hidden.
+    // The newest time per sender and target is kept in memory for this host run, so a restart forgets it and marks fewer, never more.
+    const long First = 1_800_000_000;   // 00:00 PT, 2027-01-15
+    const string StaleMark = "STALE: sent {0} PT, a newer message from this sender was delivered first";
+    static string Id(int n) => $"0000000{n}-0000-0000-0000-000000000000";
+    static VerifiedEnvelope Sent(string text, int n, long sentAt, long? issuedAt = null, string session = "sess-9")
+    {
+        var e = Envelope(text, Id(n), session: session) with { SentAt = sentAt };
+        return issuedAt is { } at ? e with { Body = e.Body with { IssuedAt = at } } : e;
+    }
+
+    [Fact]
+    public async Task An_older_message_delivered_after_a_newer_one_from_the_same_sender_is_typed_and_marked_stale()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.True((await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default)).Typed);
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60), "older", default)).Typed);
+
+        Assert.DoesNotContain("STALE", f.Typed[0].Text);
+        Assert.Contains(string.Format(StaleMark, "00:01"), f.Typed[1].Text);
+        Assert.EndsWith("older", f.Typed[1].Text);
+    }
+
+    [Fact]
+    public async Task A_busy_retry_keeps_the_first_request_time_so_a_delayed_old_order_is_still_stale()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.True((await lite.DeliverAsync(Sent("newer", 2, First + 300), "newer", default)).Typed);
+        // The old order was first asked for at First + 60, but only got through after minutes of retries: its envelope is issued later.
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60, issuedAt: First + 900), "older", default)).Typed);
+
+        Assert.Contains(string.Format(StaleMark, "00:01"), f.Typed[1].Text);
+    }
+
+    [Fact]
+    public async Task Equal_times_are_not_stale_and_a_newer_message_is_never_marked()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("one", 1, First + 60), "one", default);
+        await lite.DeliverAsync(Sent("two", 2, First + 60), "two", default);
+        await lite.DeliverAsync(Sent("three", 3, First + 120), "three", default);
+
+        Assert.All(f.Typed, t => Assert.DoesNotContain("STALE", t.Text));
+    }
+
+    [Fact]
+    public async Task Staleness_is_kept_per_sender_and_a_message_with_no_sent_time_uses_its_issued_time()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("alpha", 1, First + 600, session: "alpha"), "alpha", default);
+        await lite.DeliverAsync(Sent("beta", 2, First + 60, session: "beta"), "beta", default);
+        var made = Envelope("late", Id(3), session: "alpha");
+        var plain = made with { Body = made.Body with { IssuedAt = First + 30 } };
+        await lite.DeliverAsync(plain, "late", default);
+
+        Assert.DoesNotContain("STALE", f.Typed[1].Text);
+        Assert.Contains("STALE", f.Typed[2].Text);
+    }
+
+    [Fact]
+    public async Task An_ignored_sent_time_says_so_and_orders_by_the_signed_issued_time_and_nothing_else_changes()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default);
+        await lite.DeliverAsync(Sent("older", 1, First + 60) with { SentAt = null, SentAtIgnored = true }, "older", default);
+        await lite.DeliverAsync(Sent("plain", 3, First + 900) with { SentAt = null }, "plain", default);
+
+        Assert.Contains("send time not given", f.Typed[1].Text);
+        Assert.Contains("STALE", f.Typed[1].Text);   // issuedAt 0 is older than the newer message's time
+        Assert.DoesNotContain("send time not given", f.Typed[2].Text);
+    }
+
+    [Fact]
+    public async Task A_message_that_typed_nothing_does_not_raise_the_newest_time()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.False((await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default)).Typed);
+        f.Status = SessionStatus.Idle;
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60), "older", default)).Typed);
+
+        Assert.DoesNotContain("STALE", Assert.Single(f.Typed).Text);
     }
 }
