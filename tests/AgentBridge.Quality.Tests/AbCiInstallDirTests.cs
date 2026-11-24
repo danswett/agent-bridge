@@ -106,6 +106,7 @@ public class AbCiInstallDirTests
     [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; Grant $r $other 'None'", "1 writable by S-1-5-32-547")]
     [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; Grant $root $other 'None'", "root writable by S-1-5-32-547")]
     [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; New-Item -ItemType Junction (Join-Path $w '_tool') -Target (New-Item -ItemType Directory (Join-Path $env:T 'elsewhere')).FullName | Out-Null", "has a reparse point at")]
+    [InlineData("Remove-Item $w; New-Item -ItemType Junction $w -Target (New-Item -ItemType Directory (Join-Path $env:T 'elsewhere')).FullName | Out-Null; Grant $w $runner 'ContainerInherit, ObjectInherit'", "has a reparse point at")]
     public void Up_to_the_runner_root_only_an_admin_and_the_runners_own_account_may_write(string setup, string problem)
     {
         if (!OperatingSystem.IsWindows()) { return; }

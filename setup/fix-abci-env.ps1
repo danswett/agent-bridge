@@ -22,8 +22,16 @@
   that anyone but an admin or that runner's own account could write (up to -Root), or that the runner account can't
   write (setup/abci-install-dir.ps1), refuses the whole run.
 
+  A value with a newline, ';' or '=' (which would end or split its .env line) refuses the run too. Each runner's
+  .NET folder is printed, also under -WhatIf.
+
   Run elevated (the .env files and services belong to the runner account). -WhatIf shows every change and writes
   nothing; it also runs without elevation, then saying where a file can't be read. Changes nothing else on the machine.
+
+  Tests only (AbCiEnvScriptTests): with AGENT_BRIDGE_ABCI_TEST=1, -Root must be a folder other than C:\ab-ci-runners;
+  its numbered folders are the runners, AGENT_BRIDGE_ABCI_TEST_ACCOUNT (a SID) their account, the caller counts as an
+  admin, AGENT_BRIDGE_ABCI_TEST_PATH ('|'-separated) replaces the tool folders, and no service is touched. Without
+  the flag, any -Root but C:\ab-ci-runners is refused.
 .EXAMPLE
   pwsh -NoProfile -File setup/fix-abci-env.ps1 -WhatIf
   pwsh -NoProfile -File setup/fix-abci-env.ps1
@@ -38,16 +46,29 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'abci-install-dir.ps1')
 
+$realRoot = 'C:\ab-ci-runners'
+$testMode = $env:AGENT_BRIDGE_ABCI_TEST -eq '1'
+$isRealRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\') -eq $realRoot
+if ($testMode -and $isRealRoot) { throw "AGENT_BRIDGE_ABCI_TEST is set: refusing to touch $realRoot." }
+if (-not $testMode -and -not $isRealRoot) { throw "-Root other than $realRoot is for tests only." }
+$Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $elevated -and -not $WhatIfPreference) { throw 'Run this from an elevated PowerShell (or add -WhatIf to see the plan).' }
+if (-not $elevated -and -not $WhatIfPreference -and -not $testMode) { throw 'Run this from an elevated PowerShell (or add -WhatIf to see the plan).' }
+
+# A .env line is NAME=value up to the line end; the runner splits PATH on ';'.
+function Test-EnvValue([string]$Value) { $Value -notmatch '[\r\n;=]' }
 # Runners are found by their services (readable without elevation), each running from <Root>\<N>\bin.
 
 $wanted = @(
     'C:\Program Files\PowerShell\7', 'C:\Program Files\Git\cmd', 'C:\Program Files\Git\bin', 'C:\Program Files\nodejs',
     'C:\Program Files\GitHub CLI', 'C:\Program Files\Python312', 'C:\Program Files\Python312\Scripts',
     'C:\Windows\System32', 'C:\Windows', 'C:\Windows\System32\WindowsPowerShell\v1.0')
+if ($testMode) { $wanted = @("$env:AGENT_BRIDGE_ABCI_TEST_PATH" -split '\|' | Where-Object { $_ }) }
 $path = @($wanted | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
 foreach ($gone in @($wanted | Where-Object { $_ -notin $path })) { Write-Warning "Not on this VM, left out of PATH: $gone" }
+$badValues = @(@($path) + $Mirror | Where-Object { -not (Test-EnvValue $_) })
+if ($badValues) { throw "Refusing, nothing changed: .env values can't hold a newline, ';' or '=':`n  $($badValues -join "`n  ")" }
 
 # #1294 P1: a PATH folder a non-admin can write (or redirect) lets that account plant a program every job then runs.
 # Every folder must be owned by an admin principal, grant no write to anyone else, be no reparse point (nor sit under
@@ -79,19 +100,32 @@ if ($unsafe) { throw "Refusing, nothing changed: PATH folders the runner account
 if ('C:\Program Files\Python312' -notin $path) { Write-Warning 'No machine-wide Python 3.12 here: jobs that need python will still fail.' }
 $managed = '^(PATH|DOTNET_INSTALL_DIR|AGENT_BRIDGE_NUGET_SOURCE|DOTNET_CLI_TELEMETRY_OPTOUT)='
 
-$runners = @(Get-CimInstance Win32_Service -Filter "Name like 'actions.runner.%'" | ForEach-Object {
-        if ($_.PathName -and $_.PathName.Trim('"') -match ('^' + [regex]::Escape($Root) + '\\(\d+)\\bin\\')) { [pscustomobject]@{ FullName = Join-Path $Root $Matches[1]; Name = $Matches[1]; Service = $_.Name; Account = $_.StartName } }
-    } | Sort-Object { [int]$_.Name })
+$runners = if ($testMode) {
+    @(Get-ChildItem -LiteralPath $Root -Directory | Where-Object Name -match '^\d+$' | ForEach-Object {
+            [pscustomobject]@{ FullName = $_.FullName; Name = $_.Name; Service = $null; Account = $null } } | Sort-Object { [int]$_.Name })
+} else {
+    @(Get-CimInstance Win32_Service -Filter "Name like 'actions.runner.%'" | ForEach-Object {
+            if ($_.PathName -and $_.PathName.Trim('"') -match ('^' + [regex]::Escape($Root) + '\\(\d+)\\bin\\')) { [pscustomobject]@{ FullName = Join-Path $Root $Matches[1]; Name = $Matches[1]; Service = $_.Name; Account = $_.StartName } }
+        } | Sort-Object { [int]$_.Name })
+}
 if ($runners.Count -eq 0) { throw "No runner service runs from $Root\<N>\bin on this machine." }
 
 # The account each runner's service runs as, and the .NET folder in its work folder that account must be able to write.
 $refused = @()
 foreach ($runner in $runners) {
-    $account = $runner.Account -replace '^\.\\', "$env:COMPUTERNAME\"
-    $sid = if ($account -eq 'LocalSystem') { 'S-1-5-18' } else { (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier]).Value }
+    $installAdmins = $script:AbCiAdminSids
+    if ($testMode) {
+        $sid = $env:AGENT_BRIDGE_ABCI_TEST_ACCOUNT
+        $installAdmins += [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    } else {
+        $account = $runner.Account -replace '^\.\\', "$env:COMPUTERNAME\"
+        $sid = if ($account -eq 'LocalSystem') { 'S-1-5-18' } else { (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier]).Value }
+    }
     try {
         $runner | Add-Member InstallDir (Get-AbCiInstallDir (Get-AbCiWorkFolder $runner.FullName))
-        foreach ($why in @(Get-AbCiInstallDirProblems $runner.FullName $runner.InstallDir $sid)) { $refused += "$($runner.InstallDir) $why" }
+        Write-Host "Runner $($runner.Name): DOTNET_INSTALL_DIR=$($runner.InstallDir)"
+        if (-not (Test-EnvValue $runner.InstallDir)) { $refused += "$($runner.InstallDir) can't be an .env value: it holds a newline, ';' or '='"; continue }
+        foreach ($why in @(Get-AbCiInstallDirProblems $runner.FullName $runner.InstallDir $sid $installAdmins)) { $refused += "$($runner.InstallDir) $why" }
     } catch [UnauthorizedAccessException] {
         if (-not $WhatIfPreference) { throw }
         $runner | Add-Member InstallDir -Force (Join-Path $runner.FullName '_work\_tool\dotnet')
@@ -117,6 +151,7 @@ foreach ($runner in $runners) {
     if ($PSCmdlet.ShouldProcess($envFile, "set PATH, DOTNET_INSTALL_DIR, AGENT_BRIDGE_NUGET_SOURCE and DOTNET_CLI_TELEMETRY_OPTOUT ($($keep.Count) other line(s) kept)")) {
         Set-Content -LiteralPath $envFile -Value $lines -Encoding utf8NoBOM
     }
+    if (-not $runner.Service) { continue }
     $service = @([pscustomobject]@{ Name = $runner.Service })
     $working = @(Get-CimInstance Win32_Process -Filter "Name = 'Runner.Worker.exe'" |
             Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\", [StringComparison]::OrdinalIgnoreCase) })
