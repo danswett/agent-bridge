@@ -1,6 +1,6 @@
-From 38f241804639cb6fae70dcfa30c7ab23c864c47e Mon Sep 17 00:00:00 2001
+From 4bb0d32b368d2be95602d9710852429c41cc1f0b Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:10:51 -0800
+Date: Mon, 23 Nov 2026 22:21:59 -0800
 Subject: [PATCH] s train-b
 
 ---
@@ -153,7 +153,7 @@ index b853eeff0..028254e07 100644
 +            exit 1
 +          fi
 diff --git a/docs/app-windows.md b/docs/app-windows.md
-index 6805cfc4d..0384f318b 100644
+index 92c84eea3..b1123169f 100644
 --- a/docs/app-windows.md
 +++ b/docs/app-windows.md
 @@ -1294,7 +1294,8 @@ for a later app change either, so a green run publishes its own commit without w
