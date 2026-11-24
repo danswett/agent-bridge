@@ -95,7 +95,7 @@ public class SessionWatchTests
         var w = Watch(null, "s1");
         w.Evaluate([S(SessionStatus.Working, T.AddHours(-3))], T.AddHours(-2));
         w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T.AddHours(-2));
-        Assert.Empty(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T));
+        Assert.DoesNotContain(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T), n => n.Rule == WatchRule.Idle);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class SessionWatchTests
         var w = Watch(null, "s1");
         w.Evaluate([S(before, T.AddHours(-3))], T.AddHours(-3));
         w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T.AddHours(-2));
-        Assert.Empty(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T));
+        Assert.DoesNotContain(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T), n => n.Rule == WatchRule.Idle);
 
         var blank = Watch(null, "s1");
         blank.Evaluate([S(before, T.AddHours(-3))], T.AddHours(-3));
@@ -176,6 +176,91 @@ public class SessionWatchTests
         own.Evaluate([S(SessionStatus.Working, T.AddMinutes(-40))], T.AddMinutes(-30));
         var mainAnswer = delegateOnly with { Own = new OwnActivity { Response = "Done." } };
         Assert.Empty(own.Evaluate([Idle(mainAnswer)], T));
+    }
+
+    // S4b: R4 (delivered, then idle past the limit: an OFFER, the host ends nothing) and R3 (an owned session that vanished unexplained).
+    static SessionWatch WatchEnded(Func<string, bool>? ended, params string[] owned) =>
+        new(new WatchSettings(), id => owned.Contains(id) ? Boss : null, ended);
+
+    static void Delivered(SessionWatch w, string id = "s1")
+    {
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-3), id)], T.AddHours(-3));
+        w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), id, response: "Done.")], T.AddHours(-2));
+    }
+
+    [Fact]
+    public void A_delivered_session_idle_for_thirty_minutes_is_offered_for_ending_and_not_before()
+    {
+        var w = Watch();
+        Delivered(w);
+        Assert.Empty(w.Evaluate([S(SessionStatus.Idle, T.AddMinutes(-29), response: "Done.")], T));
+        var n = Assert.Single(w.Evaluate([S(SessionStatus.Idle, T.AddMinutes(-30), response: "Done.")], T));
+        Assert.Equal((WatchRule.Finished, null), (n.Rule, n.Owner));
+    }
+
+    [Fact]
+    public void A_finished_offer_names_the_owner_when_there_is_one_and_is_not_repeated_within_thirty_minutes()
+    {
+        var w = Watch(null, "s1");
+        Delivered(w);
+        Assert.Equal(Boss, Assert.Single(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-1), response: "Done.")], T)).Owner);
+        Assert.Empty(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-1), response: "Done.")], T.AddMinutes(29)));
+    }
+
+    [Fact]
+    public void A_session_that_never_delivered_or_whose_delivery_is_unknown_is_never_offered_for_ending()
+    {
+        var w = Watch();
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-3))], T.AddHours(-3));
+        Assert.Empty(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2))], T));
+        Assert.Empty(Watch().Evaluate([S(SessionStatus.Idle, T.AddHours(-2), "restarted", response: "Done.")], T));
+    }
+
+    [Fact]
+    public void An_owned_session_that_vanishes_with_no_end_on_record_is_missing_to_its_owner()
+    {
+        var w = WatchEnded(_ => false, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        var n = Assert.Single(w.Evaluate([], T));
+        Assert.Equal((WatchRule.Missing, "s1", Boss), (n.Rule, n.Session, n.Owner));
+        Assert.Empty(w.Evaluate([], T.AddMinutes(1)));
+    }
+
+    [Fact]
+    public void A_session_that_ended_on_purpose_or_has_no_owner_or_has_no_end_source_is_never_missing()
+    {
+        var purposeful = WatchEnded(_ => true, "s1");
+        purposeful.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Empty(purposeful.Evaluate([], T));
+
+        var unowned = WatchEnded(_ => false);
+        unowned.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Empty(unowned.Evaluate([], T));
+
+        var noSource = WatchEnded(null, "s1");
+        noSource.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Empty(noSource.Evaluate([], T));
+    }
+
+    [Fact]
+    public void A_held_pass_does_not_make_a_session_missing_and_one_that_returns_is_forgotten()
+    {
+        var w = WatchEnded(_ => false, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-2));
+        Assert.Empty(w.Evaluate([], T.AddMinutes(-1), held: true));
+        Assert.Single(w.Evaluate([], T));
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(1));
+        Assert.Single(w.Evaluate([], T.AddHours(2)));
+    }
+
+    [Fact]
+    public void A_missing_session_is_forgotten_after_a_day()
+    {
+        var w = WatchEnded(_ => false, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        Assert.Single(w.Evaluate([], T));
+        Assert.Empty(w.Evaluate([], T.AddHours(25)));
+        Assert.Empty(w.Evaluate([], T.AddHours(60)));
     }
 
     [Fact]

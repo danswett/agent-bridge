@@ -28,6 +28,14 @@ public class WatchDigestTests
     }
 
     [Fact]
+    public void Missing_and_finished_sessions_are_counted_in_plain_words_and_finished_is_an_offer_not_an_order()
+    {
+        var d = WatchDigest.Compose([N(WatchRule.Prompt, "a"), N(WatchRule.Missing, "b"), N(WatchRule.Finished, "c"), N(WatchRule.Finished, "d")], Label)!.Value;
+        Assert.Equal("4 sessions need you", d.Title);
+        Assert.Equal("1 waiting at a prompt, 1 missing, 2 finished and idle (end them?): n-a, n-b, n-c, n-d", d.Body);
+    }
+
+    [Fact]
     public void A_final_notice_says_it_is_the_last_reminder_and_a_mixed_digest_says_for_how_many()
     {
         Assert.EndsWith("(last reminder)", WatchDigest.Compose([N(WatchRule.Prompt, "a", final: true)], Label)!.Value.Body);

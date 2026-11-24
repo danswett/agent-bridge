@@ -15,6 +15,11 @@ public static class WatchDigest
         var idle = notices.Count(n => n.Rule == WatchRule.Idle);
         if (prompts > 0) { counts.Add($"{prompts} waiting at a prompt"); }
         if (idle > 0) { counts.Add($"{idle} idle with work"); }
+        var missing = notices.Count(n => n.Rule == WatchRule.Missing);
+        var finished = notices.Count(n => n.Rule == WatchRule.Finished);
+        if (missing > 0) { counts.Add($"{missing} missing"); }
+        // An offer: the host ends nothing, the person or the owner agent decides.
+        if (finished > 0) { counts.Add($"{finished} finished and idle (end them?)"); }
         var names = string.Join(", ", notices.Take(Listed).Select(n => Cut(label(n.Session))));
         var more = notices.Count > Listed ? $" and {notices.Count - Listed} more" : "";
         var finals = notices.Count(n => n.Final);
