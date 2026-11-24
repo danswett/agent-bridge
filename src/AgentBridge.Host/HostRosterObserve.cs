@@ -22,7 +22,7 @@ internal sealed class HostRosterObserve(HostRosterReader reader, Func<string> mo
     public async Task ConnectedAsync(Func<CancellationToken, Task<RelayRoster?>> get, string account, Task closed, CancellationToken ct)
     {
         var current = mode();
-        if (current != SecuritySettings.Observe)
+        if (current is not (SecuritySettings.Observe or SecuritySettings.Enforce))
         {
             var check = await HostRoster.SyncAsync(get, account, clock, ct);
             log($"device roster (security.roster {current}): {check.Summary}");

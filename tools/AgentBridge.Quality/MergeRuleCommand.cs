@@ -772,7 +772,9 @@ static class MergeRuleCommand
                     for (var next = at; next < Math.Min(ordered.Count, at + (at == 0 ? 1 : RunsAtOnce)); next++)
                     {
                         var readRun = ordered[next];
-                        started.Add(ahead[next] = Task.Run(() => ReadRunJobs(session, readRun)));
+                        // A thread of its own: the read blocks on a gh process, and on a busy or small pool it would
+                        // queue behind other work and the reads would not overlap after all.
+                        started.Add(ahead[next] = Task.Factory.StartNew(() => ReadRunJobs(session, readRun), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
                     }
                 var run = ordered[at];
                 var id = run.GetProperty("id").GetInt64();

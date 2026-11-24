@@ -595,62 +595,68 @@ Check "A commit off the latest release's line, or a tag or comparison that can't
 }
 
 $appTail = '{"mode":"partial","jobs":{"ci.yml":{"app":["app-windows"],"product":["product"]}}}'
-Check "An ancestor whose run publishes first stands aside when main has changed the app since, and the descendant's lower version publishes both" {
-    # S -> A -> B: B's run was created first (0.1.600), A's after it (0.1.601). Were A out first,
-    # B's lower version would be refused and B's app changes never released (#938's review).
+Check "A commit publishes even after main's later commits changed the app, and the descendant's later run publishes its own higher version over it" {
+    # S -> A -> B, A's run 0.1.600 and B's 0.1.601. With 40-60 min runs and frequent merges, standing
+    # aside whenever main had moved on with app changes left every run stale (#4104).
     Reset 3
     $global:PpSelect = $appTail
-    $env:GITHUB_ACTIONS = 'true'
-    try { $plan = Invoke-Publish '0.1.601' -Head $descendant -Plan }
-    finally { Remove-Item Env:GITHUB_ACTIONS }
-    Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$commit...$descendant --jq .status") "calls: $($global:PpCalls -join '; ')"
-    Assert ($global:PpCalls -contains "selector select --repo $scratch --ring 1 --base $commit --head $descendant") "calls: $($global:PpCalls -join '; ')"
-    Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "uploads: $(Uploads); deletes: $(Deletes)"
-    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
-    Assert ($plan -like "*main has moved on to $descendant, which changes the app since $commit*") "plan: $plan"
-    Assert ($plan -like "*::warning::*main has moved on to $descendant, which changes the app since $commit; commit $descendant must publish both, not v0.1.601*") 'the green stale-app skip did not annotate the reason, skipped commit and required publish commit'
-    # Then B's run, main's head, publishes its lower version over S's release.
+    $plan = Invoke-Publish '0.1.600' -Head $descendant -Plan
+    Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$commit...$descendant --jq .status") "main's head wasn't checked to follow the commit: $($global:PpCalls -join '; ')"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' })) "the selector was read: $($global:PpCalls -join '; ')"
+    Assert (@(Uploads).Count -eq 2 -and -not (Uploads | Where-Object { $_ -notlike "*--tag v0.1.600 --targetCommitish $commit *" })) "uploads: $(Uploads)"
+    Assert ($plan -notlike '*main has moved on*') "plan: $plan"
+    # Then B's run publishes its higher version over A's release: B follows A's commit.
+    $global:PpTagSha['v0.1.600'] = $commit
     Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
-    $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
-    & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant -MainRepo $scratch 6>$null
-    Assert (@(Uploads).Count -eq 2 -and -not (Uploads | Where-Object { $_ -notlike "*--tag v0.1.600 --targetCommitish $descendant *" })) "uploads: $(Uploads)"
-    Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.601')) 'the ancestor was released'
+    $dirs = @(New-Folder '0.1.601'; New-Folder '0.1.601' -Channel 'win-arm64')
+    & $publishScript -Version '0.1.601' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant -MainRepo $scratch 6>$null
+    $later = @(Uploads | Select-Object -Skip 2)
+    Assert ($later.Count -eq 2 -and -not ($later | Where-Object { $_ -notlike "*--tag v0.1.601 --targetCommitish $descendant *" })) "uploads: $(Uploads)"
 }
 
-Check "A commit whose later commits on main leave the app alone, docs only say, still publishes" {
-    foreach ($select in '{"mode":"partial","jobs":{"ci.yml":{"light":["docs"]}}}', '{"mode":"docs-only","jobs":{}}') {
+Check "A descendant whose run GitHub numbered lower is refused once its ancestor is out: its app change waits for main's next run" {
+    # The accepted trade (#938, #4104): GitHub promises no order between main's runs, so B's run may
+    # have the lower version. Refused as older, B's change is delayed, not lost: main's next run plans
+    # from the latest release and builds it.
+    Reset 3
+    Invoke-Publish '0.1.601' -Head $descendant
+    Assert (@(Uploads).Count -eq 2) "the ancestor's higher version did not publish: $(Uploads)"
+    $global:PpTagSha['v0.1.601'] = $commit
+    Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
+    $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+    $plan = & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant -MainRepo $scratch 6>&1 | Out-String
+    Assert (@(Uploads).Count -eq 2) "the lower version published over the higher: $(Uploads)"
+    Assert ($plan -like '*v0.1.600 is older than the published v0.1.601*') "plan: $plan"
+}
+
+Check "Whatever main's later commits change, the commit publishes without reading main's selector" {
+    foreach ($select in $appTail, '{"mode":"partial","jobs":{"ci.yml":{"light":["docs"]}}}', '{"mode":"docs-only","jobs":{}}', 'fail') {
         Reset 3
         $global:PpSelect = $select
         Invoke-Publish '0.1.600' -Head $descendant
         Assert (@(Uploads).Count -eq 2) "$select; uploads: $(Uploads)"
-        $read = CallIndex 'selector select*'
+        $read = CallIndex "gh api repos/$repo/compare/$commit...$descendant*"
         Assert ($read -ge 0 -and $read -lt (CallIndex 'vpk upload github*')) "$select; main's head wasn't read before uploading: $($global:PpCalls -join '; ')"
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$select; the selector was read: $($global:PpCalls -join '; ')"
     }
-    # And main's head being the commit itself needs no selector.
+    # And main's head being the commit itself needs no comparison.
     Reset 3
-    $global:PpSelect = $appTail
     Invoke-Publish '0.1.600'
     Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
     Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' -or $_ -like "gh api repos/$repo/compare/$commit...*" })) "calls: $($global:PpCalls -join '; ')"
 }
 
-Check "A main head that isn't after the commit, or a selector answer that can't be read, stops publishing" {
+Check "A main head that isn't after the commit, or whose comparison can't be read, stops publishing" {
     # With no release (0), only main's head is compared: the release ancestry check has nothing to read.
     # A compare that can't be read is refused by Invoke-Gh, as gh's nonzero exit, naming that read.
     $unreadable = "gh api repos/$repo/compare/$commit...$descendant failed (1)"
     foreach ($case in @(
-        @{ Name = 'a diverged head'; Head = 'abababababababababababababababababababab'; Releases = 3; Selects = $false; Set = {} },
-        @{ Name = 'a head behind the commit'; Head = $ancestor; Releases = 3; Selects = $false; Set = {} },
-        @{ Name = 'an unknown head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'unknown' } },
-        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'fail' }; Says = $unreadable },
-        @{ Name = 'a failing selector'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = 'fail' } },
-        @{ Name = 'no selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = $null } },
-        @{ Name = 'malformed selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":' } },
-        @{ Name = 'selector output without jobs'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"mode":"partial"}' } },
-        @{ Name = "selector output whose ci.yml jobs aren't a map"; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":{"ci.yml":["app"]}}' } }
+        @{ Name = 'a diverged head'; Head = 'abababababababababababababababababababab'; Releases = 3; Set = {} },
+        @{ Name = 'a head behind the commit'; Head = $ancestor; Releases = 3; Set = {} },
+        @{ Name = 'an unknown head comparison'; Head = $descendant; Releases = 0; Set = { $global:PpAncestry = 'unknown' } },
+        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Set = { $global:PpAncestry = 'fail' }; Says = $unreadable }
     )) {
         Reset $case.Releases
-        $global:PpSelect = $appTail
         & $case.Set
         $said = $null
         try { Invoke-Publish '0.1.600' -Head $case.Head } catch { $said = $_.Exception.Message }
@@ -658,12 +664,12 @@ Check "A main head that isn't after the commit, or a selector answer that can't 
         Assert ($said -clike $says) "$($case.Name) was published past (said: '$said')"
         Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "$($case.Name): uploads: $(Uploads); deletes: $(Deletes)"
         Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "$($case.Name): writes: $($global:PpCalls -join '; ')"
-        Assert ($case.Selects -eq [bool]($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$($case.Name): calls: $($global:PpCalls -join '; ')"
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$($case.Name): calls: $($global:PpCalls -join '; ')"
     }
 }
 
 Check "Publishing without main's head, or with one that isn't a commit, is refused before anything is read" {
-    foreach ($case in @(@{ Name = 'no head'; Args = @{ MainRepo = $scratch } }, @{ Name = 'a branch name'; Args = @{ MainHead = 'main'; MainRepo = $scratch } }, @{ Name = 'no clone'; Args = @{ MainHead = $descendant } })) {
+    foreach ($case in @(@{ Name = 'no head'; Args = @{ MainRepo = $scratch } }, @{ Name = 'a branch name'; Args = @{ MainHead = 'main'; MainRepo = $scratch } })) {
         Reset 3
         $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
         $named = $case.Args
@@ -672,6 +678,11 @@ Check "Publishing without main's head, or with one that isn't a commit, is refus
         Assert $threw "$($case.Name) was not refused"
         Assert ($global:PpCalls.Count -eq 0) "$($case.Name): calls: $($global:PpCalls -join '; ')"
     }
+    # A clone of main is no longer read (#4104): without -MainRepo it publishes.
+    Reset 3
+    $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+    & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $descendant 6>$null
+    Assert (@(Uploads).Count -eq 2) "without -MainRepo: uploads: $(Uploads)"
 }
 
 Check "Only a run that uploads the release tells CI's attest job so, never a re-run or a dry run" {
