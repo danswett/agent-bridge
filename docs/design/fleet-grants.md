@@ -513,6 +513,13 @@ host peer of the same account, over the relay channel, and never on this machine
 accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
 documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse.
 
+Wire operation, end case (G10). `fleet.end` follows the same rules. Its receiver (`FleetRemoteEnd`) takes a required `ILiteMode` (no default) and refuses
+`kill-switch` before any parse or side effect. Nothing is written for a peer whose envelope did not verify; from verification on, every refusal (replay,
+a subject the grant does not name, a revoked or expired grant, a refusal of the shared stop gate) writes one refused audit row for the peer device, through
+the same function and hourly limiter as every other refused stop, and is `audit-unavailable` if that row cannot be written. A remote end always names a grant:
+ending on the host's own launch record alone is local-only. The receiver is dormant until the sender slice wires it; that wiring adds exactly one shared
+instance, reachable from the relay channel only.
+
 Sender gates (G9c2), copied from `AgentLiteSender`, not a new check. The sending host checks `ILiteMode.On` (it reads the `agentMessaging.remote` setting and any
 recorded lite kill, the same switch lite messaging uses) before AND after signing, and rechecks the agent credential after the signer returns, so a kill, the setting
 turned off or a lapsed caller signs and sends nothing. A kill while waiting for the reply, or a cancel, after the send is `unconfirmed` (exit 7), never a refusal and

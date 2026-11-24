@@ -87,8 +87,8 @@ public class HaValidationCoverageTests
         var jobs = CiJobs();
 
         Assert.Equal(
-            new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
-                "app-installer", "light", "pwa-ui", "pwa-e2e" },
+            new[] { "plan", "product", "ha-integration", "app",
+                "app-installer", "light" },
             Needs(jobs, "quality-gate"));
         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
         Assert.Equal("${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}",

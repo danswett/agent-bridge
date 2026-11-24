@@ -11,9 +11,9 @@ namespace AgentBridge.App.Tests;
 // This list is the only place that says which, and it stays small: adding a class is a change to this file, reviewed as one.
 public sealed class QuarantineTests
 {
-    // GrowthTests and SpeedQuadraticControlTests already ran alone (timing needs a quiet machine); WindowsMiniDumpTests is the
-    // suspected hang cause.
-    static readonly string[] Expected = ["GrowthTests", "SpeedQuadraticControlTests", "WindowsMiniDumpTests"];
+    // GrowthTests and SpeedQuadraticControlTests already ran alone (timing needs a quiet machine); WindowsMiniDumpTests is a suspected hang cause.
+    // LifecycleGuardRefusalTests sets the process-wide AGENT_BRIDGE_SESSION variable (#4546), so it runs alone too. RunCompletionTests no longer does (#4447: its caller now reaches the real guard overload, no environment variable).
+    static readonly string[] Expected = ["GrowthTests", "LifecycleGuardRefusalTests", "SpeedQuadraticControlTests", "WindowsMiniDumpTests"];
     const int Largest = 5;
 
     static List<string> RunningAlone()

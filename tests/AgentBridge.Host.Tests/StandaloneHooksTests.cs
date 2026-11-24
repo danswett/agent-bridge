@@ -1276,7 +1276,7 @@ public sealed class StandaloneHooksTests : IDisposable
     {
         switch (reason)
         {
-            case "legacy": Directory.CreateDirectory(Legacy); break;
+            case "legacy": Write(Path.Combine(Legacy, "installation.json"), "{}"); break;
             case "active": active = "probe could not check"; break;
             case "owner": Write(Owner("copilot"), new JsonObject { ["version"] = 1, ["profile"] = Path.Combine(root, "other") }.ToJsonString()); break;
             case "migration": new IntakeState(Path.Combine(Legacy, "runtime"), Legacy, "legacy-id", DateTimeOffset.UtcNow).Save(Profile); break;
@@ -1600,6 +1600,126 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Equal(before, Listing());
     }
 
+    // #3644: a leftover agent-ha-bridge folder no longer blocks Set up for good. A full installation
+    // goes to Migrate, an unused one is renamed aside (never deleted) and recorded, and anything
+    // unclear still refuses.
+    string OldRegistration(string name = "old-session.json")
+    {
+        var path = Path.Combine(Legacy, "runtime", "agent-bridge-codex", name);
+        Write(path, "{}");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-3));
+        return path;
+    }
+    string[] RetiredFolders() => Directory.GetDirectories(root, "legacy.legacy-*");
+    string[] RetiredRecords() => Directory.Exists(Profile) ? Directory.GetFiles(Profile, "legacy-retired-*.json") : [];
+    // No real process scan: a developer machine's own processes must not decide these.
+    StandaloneHooks Idle => SetupWithProcess(null);
+    StandaloneHooks SetupWithProcess(string? holder) => new(Profile, Homes, Source, Legacy, () => active, locator, codex, _ => holder);
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task A_legacy_folder_that_is_a_full_installation_is_never_renamed_and_says_use_Migrate(string agent)
+    {
+        OldRegistration();
+        Write(Path.Combine(Legacy, "installation.json"), "{}");
+        var before = Listing();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Idle.InstallAsync(agent, false, TextWriter.Null));
+        Assert.Equal($"agent-ha-bridge folder at {Legacy}: full installation (installation.json); use Migrate", error.Message);
+        Assert.Equal(before, Listing());
+        Assert.Empty(RetiredFolders());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task An_unused_legacy_folder_is_renamed_aside_recorded_and_setup_completes(string agent)
+    {
+        var registration = OldRegistration();
+        var output = new StringWriter();
+        await Idle.InstallAsync(agent, false, output);
+
+        Assert.False(Directory.Exists(Legacy));
+        var moved = Assert.Single(RetiredFolders());
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(moved, "runtime", "agent-bridge-codex", Path.GetFileName(registration))));
+        var record = Read(Assert.Single(RetiredRecords()));
+        Assert.Equal(Legacy, (string?)record["from"]);
+        Assert.Equal(moved, (string?)record["to"]);
+        Assert.Contains($"Rename-Item -LiteralPath '{moved}' -NewName 'legacy'", (string?)record["rollback"]);
+        Assert.Contains($"renamed '{Legacy}' to '{moved}'", output.ToString());
+        Assert.True((bool?)Read(Owner(agent))["setupCompleted"]);
+    }
+
+    [Theory]
+    [InlineData("process", "a running process uses it: PID 42 agent-bridge-daemon.ps1")]
+    [InlineData("registration", "1 session registration(s) under runtime")]
+    [InlineData("codex-config", "config.toml refers to it")]
+    [InlineData("claude-settings", "settings.json refers to it")]
+    public async Task A_legacy_folder_that_may_still_be_in_use_refuses_and_changes_nothing(string reason, string said)
+    {
+        OldRegistration();
+        string? holder = null;
+        switch (reason)
+        {
+            case "process": holder = "PID 42 agent-bridge-daemon.ps1"; break;
+            case "registration": File.SetLastWriteTimeUtc(OldRegistration("today.json"), DateTime.UtcNow); break;
+            case "codex-config": Write(Path.Combine(Homes.Codex, "config.toml"), $"command = '{Legacy}\\hook.ps1'"); break;
+            case "claude-settings": Write(Path.Combine(Homes.Claude, "settings.json"), $$"""{"note":"{{Legacy.Replace('\\', '/')}}/hook.ps1"}"""); break;
+        }
+        var before = Listing();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => SetupWithProcess(holder).InstallAsync("codex", false, TextWriter.Null));
+        Assert.StartsWith($"agent-ha-bridge folder at {Legacy}: may still be in use (", error.Message);
+        Assert.Contains(said, error.Message);
+        Assert.Equal(before, Listing());
+        Assert.Empty(RetiredFolders());
+    }
+
+    [Fact]
+    public async Task Only_a_real_Set_up_press_renames_an_unused_legacy_folder()
+    {
+        OldRegistration();
+        var before = Listing();
+        var dry = new StringWriter();
+        await Idle.InstallAsync("codex", true, dry);
+        Assert.Contains($"Would rename {Legacy}", dry.ToString());
+        Idle.CheckInstall("codex");
+        var removal = await Assert.ThrowsAsync<InvalidOperationException>(() => Idle.RemoveAsync("codex", false, TextWriter.Null));
+        Assert.Contains("not while removing", removal.Message);
+        Assert.Equal(before, Listing());
+        Assert.True(Directory.Exists(Legacy));
+        Assert.Empty(RetiredRecords());
+    }
+
+    [Fact]
+    public async Task Restoring_a_retired_legacy_folder_renames_it_back_and_drops_the_record()
+    {
+        var registration = OldRegistration();
+        await Idle.InstallAsync("codex", false, TextWriter.Null);
+        var output = new StringWriter();
+        Idle.RestoreLegacy(output);
+
+        Assert.Equal("{}", File.ReadAllText(registration));
+        Assert.Empty(RetiredFolders());
+        Assert.Empty(RetiredRecords());
+        Assert.Contains($"Restored {Legacy}", output.ToString());
+    }
+
+    [Fact]
+    public async Task Restoring_refuses_when_nothing_was_retired_or_the_original_name_is_back()
+    {
+        Assert.Contains("nothing", Assert.Throws<InvalidOperationException>(() => Idle.RestoreLegacy(TextWriter.Null)).Message);
+        OldRegistration();
+        await Idle.InstallAsync("codex", false, TextWriter.Null);
+        Directory.CreateDirectory(Legacy);
+        var before = Listing();
+        Assert.Contains("already exists", Assert.Throws<InvalidOperationException>(() => Idle.RestoreLegacy(TextWriter.Null)).Message);
+        Assert.Equal(before, Listing());
+        Assert.Single(RetiredFolders());
+        Assert.Single(RetiredRecords());
+    }
+
     sealed class Locator : IAgentLocator
     {
         public Func<Launcher, AgentConfig, string?> Locate = (launcher, _) => "fixture-" + launcher.Id;
@@ -1717,7 +1837,8 @@ public sealed class StandaloneHooksTests : IDisposable
     [Fact]
     public async Task An_unmigrated_profile_with_a_legacy_root_still_refuses_Codex()
     {
-        Directory.CreateDirectory(Legacy);
+        // A full installation (installation.json) still refuses; an empty or unused root is retired (#3644).
+        Write(Path.Combine(Legacy, "installation.json"), "{}");
         var before = Listing();
         await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
         Assert.Equal(before, Listing());

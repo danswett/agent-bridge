@@ -27,8 +27,9 @@ static partial class CachePolicy
     {
         // Its trivy archive is SHA-256 checked against the pinned hash before use, so a shipping job may restore it.
         ["./.github/actions/install-trivy"] = "restore",
-        // Its debs are verified against live signed apt indexes before install, so it saves on always().
-        ["./.github/actions/playwright-system-packages"] = "save",
+        // Its debs are verified against live signed apt indexes before install, so the archives it saves are safe to take on always() (ci.yml gates the call on them being ready).
+        // The restore action beside it only restores and takes no exception: a save put back into it is refused like any other action's.
+        ["./.github/actions/playwright-system-packages-save"] = "save",
     };
 
     [GeneratedRegex(@"(^|[/\\*])(obj|bin)([/\\]|$)", RegexOptions.Multiline)]
@@ -51,7 +52,7 @@ static partial class CachePolicy
             foreach (var step in top) { Expand(step, null, readAction, name, steps, problems, 0); }
             foreach (var (step, from) in steps)
             {
-                var action = (Scalar(step, "uses") ?? "").Split('@')[0];
+                var action = Action(step);
                 var with = Child(step, "with") as YamlMappingNode;
                 var (save, restore) = (action is "actions/cache/save" or "buildjet/cache/save", action is "actions/cache/restore" or "buildjet/cache/restore");
                 if (action is "actions/cache" or "buildjet/cache") { problems.Add($"ci.yml job {name} uses {action}, which saves on every event: restore, then save on {MainPush} only"); }
@@ -65,13 +66,13 @@ static partial class CachePolicy
                 if (with is not null && Scalar(with, "path") is { } path && BuildOutput().IsMatch(path)) { problems.Add($"ci.yml job {name} caches build output ({path.Trim()}): obj and bin are never cached"); }
             }
             if (!RunnerRouting.MayRunSelfHosted(job, name, "ci.yml")) { continue; }
-            var caches = steps.Where(s => (Scalar(s.Step, "uses") ?? "").Contains("cache", StringComparison.Ordinal)).Select(s => s.Step).ToList();
+            var caches = steps.Where(s => Action(s.Step).Contains("cache", StringComparison.Ordinal)).Select(s => s.Step).ToList();
             var first = top.FindIndex(s => caches.Contains(s) || Run(s).Contains("dotnet", StringComparison.Ordinal) || (Scalar(s, "uses") ?? "").StartsWith("./", StringComparison.Ordinal));
             var perJob = top.FindIndex(s => PerJob.All(p => Run(s).Contains(p, StringComparison.Ordinal)));
             var clean = top.FindIndex(s => Run(s).Contains("git clean -ffdx", StringComparison.Ordinal));
             var ab = $"ci.yml job {name} can run on a reused ab-ci machine (its runner doesn't resolve to hosted labels only), so";
             if (perJob < 0 || (first >= 0 && perJob > first)) { problems.Add($"{ab} it sets {string.Join(", ", PerJob[..^1])} under RUNNER_TEMP before it restores or builds"); }
-            if (clean < 0 || (first >= 0 && clean > first) || top.Any(s => (Scalar(s, "uses") ?? "").StartsWith("actions/checkout", StringComparison.Ordinal) && Child(s, "with") is YamlMappingNode w && Scalar(w, "clean") == "false"))
+            if (clean < 0 || (first >= 0 && clean > first) || top.Any(s => Action(s) == "actions/checkout" && Child(s, "with") is YamlMappingNode w && Scalar(w, "clean") == "false"))
             {
                 problems.Add($"{ab} it starts from a clean workspace: checkout's clean on, then git clean -ffdx before it restores or builds");
             }
@@ -95,6 +96,14 @@ static partial class CachePolicy
         catch (Exception e) when (e is YamlException or ArgumentException) { action = null; }
         if (action is null || Child(action, "runs") is not YamlMappingNode runs) { problems.Add($"ci.yml job {job} uses {path}, which this check can't read"); return; }
         foreach (var inner in Steps(runs).Where(s => !Never(s))) { Expand(inner, from ?? path, read, job, into, problems, depth + 1); }
+    }
+
+    // A step's action without its ref. GitHub reads a remote action's owner and repository in any case (R8b P2, #4104),
+    // so it is compared lower-cased; a local ./ path keeps its case.
+    static string Action(YamlMappingNode step)
+    {
+        var action = (Scalar(step, "uses") ?? "").Split('@')[0];
+        return action.StartsWith("./", StringComparison.Ordinal) ? action : action.ToLowerInvariant();
     }
 
     static string? Exception(string? from) => from is not null && Exceptions.TryGetValue(from, out var rule) ? rule : null;

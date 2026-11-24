@@ -651,7 +651,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
             // (status, the approval marker) and wins unless a successor is proven. One CLI owns one
             // session. A terminal a thread lock binds to a session is accounted for by it.
-            var locked = CodexLockDiscovery.Find(_options.CodexHome, observed.Processes, _processes.FileHolders, _codexLockHolders, findTranscript, _time.GetUtcNow(), holds)
+            var locked = CodexLockDiscovery.Find(_options.CodexHome, observed.Processes, _processes.FileHolders, _codexLockHolders, findTranscript, _time.GetUtcNow(), holds, _processes.CodexHelperAncestors)
                 .Where(AdmitNative).ToList();
             accounted.UnionWith(locked.Where(s => s.ProcessId is not null).Select(s => s.ProcessId!.Value));
             sessions = [.. sessions, .. locked];
