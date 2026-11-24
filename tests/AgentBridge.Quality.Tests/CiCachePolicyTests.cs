@@ -73,6 +73,11 @@ public sealed class CiCachePolicyTests
     public void A_matrix_the_fixed_resolver_reads_as_the_pool_is_held_to_the_reused_machine_rules(string strategy)
         => Assert.Contains(Check(Ci("product", Checkout, "${{ matrix.os }}", strategy)), v => v.Contains("reused ab-ci machine", StringComparison.Ordinal));
 
+    // R4zzB842 P3: a job that takes keys through a YAML merge key may take its runner that way: held to the reused-machine rules.
+    [Fact]
+    public void A_job_with_a_merge_key_is_held_to_the_reused_machine_rules()
+        => Assert.Contains(Check("x-base: &base { runs-on: windows-latest }\n" + System.Text.RegularExpressions.Regex.Replace(Ci("product", Checkout), @"runs-on: windows-latest(?=\r?\n)", "<<: *base")),
+            v => v.Contains("reused ab-ci machine", StringComparison.Ordinal));
     // R8b P2 (#4104): GitHub reads an action's owner and repository in any case, so every spelling is the same action.
     [Theory]
     [InlineData("product", "Actions/Cache@v4", "saves on every event")]

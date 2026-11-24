@@ -8,7 +8,9 @@
   or $job inside 'foreach ($job in $Jobs)' before the one product-os statement; $lines and the output file appear only
   in the pinned output statements. Writing a variable or file by name (*-Variable, Invoke-Expression, [ref],
   -OutVariable, splatting into a script command, dot-sourcing, redirection, a computed command or key) is refused,
-  and so is every use of these variables the pin doesn't know.
+  and so is every use of these variables the pin doesn't know. So is a function plan.ps1 doesn't own (its nine, each once,
+  ConvertTo-JsonArray as written), a filter, an alias, a module or a type. Its limit: it reads plan.ps1 alone, so another
+  process plan.ps1 starts (& ./x.ps1, pwsh -c, Start-Process) could write the output file; a write by name to it is refused.
 #>using namespace System.Management.Automation.Language
 param([Parameter(Mandatory)] [string] $Plan)
 $ErrorActionPreference = 'Stop'
@@ -28,12 +30,12 @@ function Inside([Ast]$Node, [Ast]$Outer) { for ($p = $Node; $p; $p = $p.Parent) 
 $pinnedText = @(
     'if ($env:GITHUB_OUTPUT) { $lines | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 } else { $lines | Write-Output }',
     'if ($env:GITHUB_STEP_SUMMARY) { $md | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8 } else { $md | Write-Output }',
-    '$lines = $outputs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }')
+    '$lines = $outputs.GetEnumerator() | ForEach-Object { $line = "$($_.Key)=$($_.Value)"; if ($line -match ''[\r\n]'') { throw "plan output $($_.Key) holds a line break, which would write a second output line" }; $line }')
 $pinned = @(Find { param($n) $n -is [StatementAst] -and (Norm $n) -in $pinnedText })
 foreach ($text in $pinnedText) { if (@($pinned | Where-Object { (Norm $_) -eq $text }).Count -ne 1) { $problems.Add("plan.ps1 doesn't have exactly one: $text") } }
 function In-Pinned([Ast]$Node) { foreach ($p in $pinned) { if (Inside $Node $p) { return $true } }; $false }
 # --- Anything that can write a variable by name, or reach the output file another way. ---
-$byName = '^(?i)(Set|New|Clear|Remove|Get)-Variable$|^(?i)(sv|nv|clv|rv|gv|Invoke-Expression|iex|Invoke-Command|icm|Set-Item|si|New-Item|ni|Out-File|Set-Content|sc|Tee-Object|tee|Copy-Item|Move-Item)$'
+$byName = '^(?i)(Set|New|Clear|Remove|Get)-Variable$|^(?i)(Set-Alias|New-Alias|sal|nal|Import-Module|ipmo|Add-Type|Update-TypeData|Update-FormatData|Start-Process|saps|start|Export-Clixml|sv|nv|clv|rv|gv|Invoke-Expression|iex|Invoke-Command|icm|Set-Item|si|New-Item|ni|Out-File|Set-Content|sc|Tee-Object|tee|Copy-Item|Move-Item)$'
 foreach ($c in Find { param($n) $n -is [CommandAst] }) {
     $name = $c.GetCommandName()
     if (-not $name) { Add-Problem $c 'a command whose name is computed'; continue }
@@ -46,6 +48,13 @@ foreach ($c in Find { param($n) $n -is [CommandAst] }) {
     }
 }
 foreach ($r in Find { param($n) $n -is [FileRedirectionAst] }) { Add-Problem $r 'a file redirection' }
+# Only plan.ps1's own functions, each defined once; ConvertTo-JsonArray, which builds the output, exactly as written.
+$owned = 'Select-Suites', 'ConvertTo-JsonArray', 'Test-WholeRing', 'Test-NotOwn', 'Test-OwnReason', 'Cell', 'Text', 'Code', 'Files'
+$defined = @(Find { param($n) $n -is [FunctionDefinitionAst] })
+foreach ($d in $defined) { if ($d.IsFilter -or $d.IsWorkflow -or $d.Name -notin $owned) { Add-Problem $d "a function plan.ps1 doesn't own, which could replace a command" } }
+foreach ($o in $owned) { if (@($defined | Where-Object Name -eq $o).Count -ne 1) { $problems.Add("plan.ps1 must define $o exactly once") } }
+if (@($defined | Where-Object { $_.Name -eq 'ConvertTo-JsonArray' -and (Norm $_) -ne 'function ConvertTo-JsonArray($items) { ConvertTo-Json -InputObject @($items) -Compress }' }).Count) { $problems.Add('plan.ps1 changes ConvertTo-JsonArray, which builds the product-os output') }
+if ($ast.UsingStatements.Count -or $ast.ScriptRequirements.RequiredModules.Count) { $problems.Add('plan.ps1 imports a module (using or #Requires -Modules)') }
 foreach ($t in Find { param($n) $n -is [TypeExpressionAst] -or $n -is [ConvertExpressionAst] -or $n -is [TypeConstraintAst] }) {
     $type = if ($t -is [ConvertExpressionAst]) { $t.Type.TypeName.FullName } else { $t.TypeName.FullName }
     if ($type -match '^(?i)(ref|System\.Management\.Automation\.PSReference|(System\.)?Environment|(System\.)?IO\.(File|FileInfo|StreamWriter|FileStream|Directory)|scriptblock|System\.Management\.Automation\.ScriptBlock|psvariable)$') { Add-Problem $t "[$type]" }

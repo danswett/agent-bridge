@@ -3,8 +3,7 @@ namespace AgentBridge.Quality.Tests;
 // The product-os pin (#4104, R8b on #4306): quality/product-os-pin.ps1 reads plan.ps1 with the PowerShell parser and
 // allow-lists the one safe write; RunnerRouting.ProductOsProblems holds the map to ProductRunners. Each shape below,
 // put into the real plan.ps1, writes product-os, the map or the output file some other way, and must be caught. It
-// starts pwsh, so ring 0 leaves it to ring 1.
-[Trait("Category", "Process")]
+// starts pwsh; it runs in ring 0 too, so a draft's fast ring checks the pin (R4zzB842 P3).
 public class ProductOsPinTests
 {
     const string AfterWrites = "if ($productOs.Count -eq 0 -and $productIds.Count -gt 0)";
@@ -48,6 +47,20 @@ public class ProductOsPinTests
     [InlineData(AfterOutput, "Write-Host ('::set-output name=product' + '-os::[\"ab-ci\"]')")]
     [InlineData(AfterOutput, "$lines += 'x=1'")]
     // R8c (#4306 P2/P3): dot-sourcing, a built GITHUB_OUTPUT line, and an input or environment value as a product-os value.
+    // R4zzB842 P1-A: a function, filter, alias, module or type that replaces a command the write or the output uses.
+    [InlineData(AfterWrites, "function ConvertTo-JsonArray($items) { '[\"ab-ci\"]' }")]
+    [InlineData(AfterWrites, "function ForEach-Object { 'ab-ci' }")]
+    [InlineData(AfterWrites, "function Where-Object { $true }")]
+    [InlineData(AfterWrites, "function ConvertTo-Json { '[\"ab-ci\"]' }")]
+    [InlineData(AfterWrites, "function global:ConvertTo-Json { '[\"ab-ci\"]' }")]
+    [InlineData(AfterWrites, "filter ForEach-Object { 'ab-ci' }")]
+    [InlineData(AfterWrites, "Set-Alias ForEach-Object Write-Output -Force")]
+    [InlineData(AfterWrites, "sal ForEach-Object Write-Output")]
+    [InlineData(AfterWrites, "New-Alias -Name ConvertTo-Json -Value Write-Output -Force")]
+    [InlineData(AfterWrites, "nal ConvertTo-Json Write-Output")]
+    [InlineData(AfterWrites, "Import-Module ./evil.psm1")]
+    [InlineData(AfterWrites, "Add-Type -TypeDefinition 'public static class X { }'")]
+    [InlineData(AfterWrites, "Update-TypeData -TypeName System.String -MemberType ScriptMethod -MemberName X -Value { 'ab-ci' }")]
     [InlineData(AfterWrites, ". ./x.ps1")]
     [InlineData(AfterWrites, ". $PSScriptRoot/x.ps1")]
     [InlineData(AfterOutput, "Add-Content $env:GITHUB_OUTPUT ('product' + '-os=[\"ab-ci\"]')")]
@@ -80,11 +93,39 @@ public class ProductOsPinTests
     [InlineData("Where-Object { -not $platform", "Where-Object { $($productOs = 'ab-ci') -or -not $platform")]
     [InlineData("Where-Object { -not $platform", "Where-Object { (Set-Variable x 1) -or -not $platform")]
     [InlineData("$outputs['product-os'] = ConvertTo-JsonArray $productOs", "$outputs['product-os'] = '[\"ab-ci\"]'")]
+    [InlineData("function ConvertTo-JsonArray($items) { ConvertTo-Json -InputObject @($items) -Compress }", "function ConvertTo-JsonArray($items) { '[\"ab-ci\"]' }")]
+    [InlineData("function Cell(", "function Cel1(")]
     public void A_changed_map_write_or_output_is_caught(string from, string to)
     {
         var plan = Plan().Replace("\r\n", "\n", StringComparison.Ordinal);
         Assert.Contains(from, plan, StringComparison.Ordinal);
         Assert.NotEmpty(Pin(plan.Replace(from, to, StringComparison.Ordinal)));
+    }
+
+    // R4zzB842 P1-B: a line break in any output's value would write a second line, product-os=..., to the output file.
+    // The plan's own $lines statement (the one the pin holds) must refuse it, whatever builds the value.
+    [Theory]
+    [InlineData("$outputs['x'] = \"a`nproduct-\" + 'os=[\"ab-ci\"]'")]
+    [InlineData("$outputs['x'] = \"a`r`nproduct-\" + 'os=[\"ab-ci\"]'")]
+    [InlineData("$outputs['x'] = 'a' + [char]10 + 'product-os=[\"ab-ci\"]'")]
+    [InlineData("$outputs['x'] = 'a{0}product-os=[\"ab-ci\"]' -f [char]10")]
+    [InlineData("$outputs[\"x`nproduct-os\"] = '[\"ab-ci\"]'")]
+    public async Task A_line_break_in_an_output_is_refused_before_the_output_file_is_written(string shape)
+    {
+        // The pin holds this statement whole, so it is one line of plan.ps1.
+        var lines = Plan().Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').Single(l => l.StartsWith("$lines = ", StringComparison.Ordinal));
+
+        var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
+                     "$ErrorActionPreference = 'Stop'; $outputs = [ordered]@{ 'product-os' = '[\"ubuntu-latest\"]' }; " + shape + "; " + lines + "; $lines" })
+            start.ArgumentList.Add(arg);
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var error = process.StandardError.ReadToEndAsync();
+        var output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains("line break", await error);
+        Assert.DoesNotContain("ab-ci", output);
     }
 
     static string Root() => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
