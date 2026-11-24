@@ -1,0 +1,334 @@
+From d100de77659d7c237c9cb0362b16a4cfb431512d Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 20:27:38 -0800
+Subject: [PATCH] CI S2, piece 6a3: FULL installs the packed app per user, and
+ full-gate waives only the Arm64 self-test and installer (additive; Part of
+ #4104)
+
+app-installer (win-x64, win-arm64): the Setup.exe app-pack built in THIS run, run silently per user into its own channel and architecture, the PE
+machines and distribution evidence checked, the installed copy self-tested; the input is refused unless it is this run's own, for the commit under
+test. full-gate gets the owner's one waiver (#2454): quality/arm64-waiver.ps1, now taking a -Waivable list (default unchanged: quality-gate's three),
+reads the run's jobs through the API and waives a failed Arm64 app-selftest or app-installer only when every other job, x64 above all, passed; the
+jobs stay red (full-red's issue names them) and the summary says so. The Arm64 pack is never waivable. The diagnostics staging of ci.yml's job is
+left for a follow-up. Tests first; five breaks caught.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/full.yml                    | 126 +++++++++++++++++-
+ quality/arm64-waiver.ps1                      |  10 +-
+ quality/catalog.yml                           |   4 +-
+ quality/test-arm64-waiver.ps1                 |  16 ++-
+ .../FullWorkflowTests.cs                      |  47 ++++++-
+ 5 files changed, 193 insertions(+), 10 deletions(-)
+
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index cf77b8556..cf7829c48 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -570,18 +570,140 @@ jobs:
+           Write-Output "::error title=app-selftest (win-arm64)::the self-test failed on both attempts (#2026)"
+           exit 1
+ 
++  app-installer:
++    # The packed Windows app installed the way a person installs it (#1766): the Setup.exe app-pack built in THIS run, run silently per user into its own channel and
++    # architecture, then the installed copy self-tested. Never a second build or another run's files. Arm64's failure fails the job and full-gate waives it (owner, #2454), visibly.
++    name: app-installer (${{ matrix.runtime }})
++    needs: [trigger, app-pack]
++    if: needs.trigger.outputs.ok == 'true'
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - runtime: win-x64
++            runner: windows-latest
++            out: out/app
++            artifact: agent-bridge-windows
++          - runtime: win-arm64
++            runner: windows-11-arm
++            out: out/app-arm64
++            artifact: agent-bridge-windows-arm64
++    runs-on: ${{ matrix.runner }}
++    env:
++      APP_VERSION: 0.1.${{ github.event.workflow_run.run_number || inputs.ci_run_number }}
++      SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++      - uses: ./.github/actions/arm64-foreground
++        if: matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
++      - name: The matching tested release files from this run
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
++          path: ${{ matrix.out }}/releases
++      - name: The matching installer notices and identity from this run
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-installer-input-${{ env.APP_VERSION }}
++          path: ${{ runner.temp }}/installer-input
++      - name: Refuse missing, foreign or altered installer input before running it
++        shell: pwsh
++        run: |
++          . ./build/app-installer-input.ps1
++          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Commit $env:SHA -RunId '${{ github.run_id }}' | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
++          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/selftest" | Out-Null
++          Copy-Item "$env:RUNNER_TEMP/installer-input/installer-input.json" "$env:RUNNER_TEMP/selftest/installer-input.json"
++      - name: The installer installs per user, into its own channel and architecture, and the installed app starts
++        # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
++        # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
++        # logon task is registered; the installed copy then runs the same self-test. The channel it
++        # recorded is the feed it will update from, for good (build/app-channels.ps1).
++        shell: pwsh
++        run: |
++          . ./build/app-channels.ps1
++          $target = Get-AppChannel '${{ matrix.runtime }}'
++          $setup = Join-Path '${{ matrix.out }}/releases' (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          New-Item -ItemType Directory -Force $logs | Out-Null
++          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
++          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
++          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $manifest = Get-Content "$root/current/sq.version" -Raw
++          Write-Output $manifest
++          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
++          # x64's Update.exe is the x86 one vpk gives a pack without --runtime, as installed copies have.
++          $expected = [ordered]@{ 'current/AgentBridge.exe' = $target.Machine; 'current/agent-bridge-host.exe' = $target.Machine; 'current/agent-bridge-injector.exe' = $target.Machine; 'current/agent-bridge-host-hook.exe' = $target.Machine; 'Update.exe' = $(if ($target.Machine -eq 'x64') { 'x86' } else { $target.Machine }) }
++          $bad = 0
++          foreach ($file in $expected.Keys) {
++            $machine = Get-PeMachine ([IO.File]::ReadAllBytes((Join-Path $root $file)))
++            Write-Output "${file}: $machine"
++            if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
++          }
++          if ($bad) { exit 1 }
++          . ./build/app-notices.ps1
++          Write-AppDistributionEvidence -Publish "$env:RUNNER_TEMP/installer-input/publish" -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
++          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
++          exit $LASTEXITCODE
++      - name: A failed installed self-test includes the app process exit cause
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
++
+   full-gate:
+     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+     # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
+     # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
+-    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui, app-pack, app-selftest]
++    # One waiver (owner, #2454): what RUNS the app on Arm64, its self-test and installer, may be red; the jobs stay red, full-red's issue names them and the publish
++    # summary carries a notice. The Arm64 PACK is required, as is everything on x64.
++    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui, app-pack, app-selftest, app-installer]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
++    permissions:
++      actions: read # this run's jobs, which `needs` cannot show: a matrix is one result
++      contents: read
+     steps:
+-      - name: Every FULL job passed
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        if: ${{ contains(needs.*.result, 'failure') }}
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++          sparse-checkout: quality
++      - name: Waive the failed Arm64 self-test and installer (owner, #2454)
++        id: waiver
++        if: ${{ contains(needs.*.result, 'failure') }}
+         env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++          RUN_ID: ${{ github.run_id }}
+           NEEDS: ${{ toJSON(needs) }}
++        run: |
++          printf '%s' "$NEEDS" > "$RUNNER_TEMP/needs.json"
++          fetched=
++          for attempt in 1 2 3; do
++            if gh api --paginate --slurp "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/jobs.json"; then
++              fetched=yes
++              break
++            fi
++            sleep $((attempt * 5))
++          done
++          if [ -z "$fetched" ]; then
++            echo "::warning title=full-gate::the jobs API failed 3 times, so no Arm64 result is waived"
++            exit 0
++          fi
++          pwsh -NoProfile -File quality/arm64-waiver.ps1 -NeedsFile "$RUNNER_TEMP/needs.json" -JobsFile "$RUNNER_TEMP/jobs.json" -OutFile "$RUNNER_TEMP/waived.json" -SummaryFile "$GITHUB_STEP_SUMMARY" -Waivable 'app-selftest (win-arm64);app-installer (win-arm64)'
++          waived=$(cat "$RUNNER_TEMP/waived.json")
++          if [ "$waived" != "[]" ]; then
++            effective=$(echo "$NEEDS" | jq -c --argjson w "$waived" 'with_entries(.key as $k | if ($w | any(. == $k)) then .value.result = "success" else . end)')
++            echo "needs=$effective" >> "$GITHUB_OUTPUT"
++          fi
++      - name: Every FULL job passed
++        env:
++          NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
+         run: |
+           if [ "$(echo "$NEEDS" | jq -r '.trigger.result')" != success ]; then
+             echo "::error::the trigger job did not succeed"
+diff --git a/quality/arm64-waiver.ps1 b/quality/arm64-waiver.ps1
+index 9759d180d..d16a0d9a9 100644
+--- a/quality/arm64-waiver.ps1
++++ b/quality/arm64-waiver.ps1
+@@ -12,10 +12,12 @@ param(
+     [string]$SummaryFile = '',
+     # Accepted and ignored: the waiver is permanent (owner, Nov 22, #2454), and the run's older ci.yml still passes them.
+     [string]$Setting = '',
++    # The jobs that may be waived, ';'-separated. Empty is quality-gate's three (below). The FULL lane's full-gate passes its own two (S2, #4104): what runs the app on Arm64.
++    [string]$Waivable = '',
+     [DateTimeOffset]$Now = [DateTimeOffset]::UtcNow
+ )
+ $ErrorActionPreference = 'Stop'
+-$waivable = @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
++$legsWaived = if ($Waivable) { @($Waivable -split ';') } else { @('app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') }
+ $ids = @()
+ $lines = @()
+ try {
+@@ -35,18 +37,18 @@ try {
+         # job's name still stops the waiver. Running jobs (no conclusion yet) say nothing.
+         $stray = @($jobs | Where-Object {
+             $null -ne $_.conclusion -and $_.conclusion -cnotin @('success', 'skipped', 'neutral') -and
+-            -not ($_.conclusion -ceq 'failure' -and $_.name -cin $waivable) })
++            -not ($_.conclusion -ceq 'failure' -and $_.name -cin $legsWaived) })
+         if ($stray.Count -gt 0) {
+             $lines += 'Nothing waived, other jobs did not succeed: ' + (($stray | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join ', ')
+         } else {
+             foreach ($need in $needs.PSObject.Properties) {
+                 if ($need.Value.result -cne 'failure') { continue }
+                 $prefix = "$($need.Name) ("
+-                $hits = @($jobs | Where-Object { $_.conclusion -ceq 'failure' -and $_.name -cin $waivable -and $_.name.StartsWith($prefix, [StringComparison]::Ordinal) })
++                $hits = @($jobs | Where-Object { $_.conclusion -ceq 'failure' -and $_.name -cin $legsWaived -and $_.name.StartsWith($prefix, [StringComparison]::Ordinal) })
+                 if ($hits.Count -eq 0) { continue }
+                 # Every other leg of the job must have passed: a skipped, neutral or unfinished
+                 # sibling (an x64 leg that never ran) is not a pass.
+-                $unpassed = @($jobs | Where-Object { $_.name.StartsWith($prefix, [StringComparison]::Ordinal) -and -not ($_.conclusion -ceq 'success' -or ($_.conclusion -ceq 'failure' -and $_.name -cin $waivable)) })
++                $unpassed = @($jobs | Where-Object { $_.name.StartsWith($prefix, [StringComparison]::Ordinal) -and -not ($_.conclusion -ceq 'success' -or ($_.conclusion -ceq 'failure' -and $_.name -cin $legsWaived)) })
+                 if ($unpassed.Count -gt 0) {
+                     $lines += "Not waived, $($need.Name) has legs that did not succeed: " + (($unpassed | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join ', ')
+                     continue
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 229cfd269..b48bfc8c5 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1199,11 +1199,11 @@ suites:
+     ring: 2
+     select: always
+     # The release train's packages (S2, #4104, piece 6a): FULL publishes, packs (Velopack) and records the installer input and SBOM of the Windows app on both
+-    # architectures at the FAST run's version, for the commit that run passed on, and self-tests the packed publish folder (Arm64 retried once and waived, visibly). Additive: ci.yml's app job still packs and publishes until the cut-over (6b).
++    # architectures at the FAST run's version, for the commit that run passed on, self-tests the packed publish folder (Arm64 retried once) and installs the packed Setup per user; full-gate waives the Arm64 self-test and installer only (owner, #2454; visibly). Additive: ci.yml's app job still packs and publishes until the cut-over (6b).
+     platforms: [win-x64, win-arm64]
+     runner: hosted
+     command: see full.yml app-pack
+-    where: full.yml app-pack, app-selftest
++    where: full.yml app-pack, app-selftest, app-installer
+     lane: full
+     status: exists
+   # ---------------------------------------------------------------- live, on disposable machines
+diff --git a/quality/test-arm64-waiver.ps1 b/quality/test-arm64-waiver.ps1
+index 8aae8addb..ba81c2f66 100644
+--- a/quality/test-arm64-waiver.ps1
++++ b/quality/test-arm64-waiver.ps1
+@@ -10,13 +10,14 @@ function Check([string]$name, [bool]$ok) {
+ }
+ function Leg([string]$name, $conclusion) { @{ name = $name; conclusion = $conclusion; html_url = "https://example.test/$name" } }
+ function Pages($legs, $total = $legs.Count) { ConvertTo-Json -InputObject @(@{ total_count = $total; jobs = @($legs) }) -Depth 5 }
+-function Waived($needs, [string]$jobsJson, [string]$setting = 'on', [string]$now = '2026-11-13T22:00:00Z') {
++function Waived($needs, [string]$jobsJson, [string]$setting = 'on', [string]$now = '2026-11-13T22:00:00Z', [string]$waivable = '') {
+     $n = Join-Path $tmp 'needs.json'; $j = Join-Path $tmp 'jobs.json'; $o = Join-Path $tmp 'out.json'
+     Remove-Item $o -ErrorAction SilentlyContinue
+     ConvertTo-Json -InputObject $needs -Depth 5 | Set-Content $n
+     if ($jobsJson) { Set-Content $j $jobsJson } else { Remove-Item $j -ErrorAction SilentlyContinue }
+     $a = @('-NeedsFile', $n, '-JobsFile', $j, '-OutFile', $o, '-Now', $now)
+     if ($setting) { $a += '-Setting', $setting }
++    if ($waivable) { $a += '-Waivable', $waivable }
+     pwsh -NoProfile -File $script @a | Out-Null
+     (@(Get-Content -Raw $o | ConvertFrom-Json) -join ',')
+ }
+@@ -60,6 +61,19 @@ try {
+     Check 'an answer without a jobs list waives nothing' ((Waived $appFailed '{"message":"Resource not accessible"}') -eq '')
+     Check 'a partial job list waives nothing' ((Waived $appFailed (Pages @((Leg 'app (win-arm64)' 'failure')) 2)) -eq '')
+ 
++    # The FULL lane's gate (S2, #4104) reuses this with its own list: what RUNS the app on Arm64 (self-test, installer) is waived; the Arm64 PACK, the pre-split app job and x64 are not.
++    $full = 'app-selftest (win-arm64);app-installer (win-arm64)'
++    $selftestRed = Pages @((Leg 'app-selftest (win-x64)' 'success'), (Leg 'app-selftest (win-arm64)' 'failure'))
++    Check 'FULL list: a failed app-selftest (win-arm64) is waived' ((Waived @{ 'app-selftest' = @{ result = 'failure' } } $selftestRed 'on' '2026-11-13T22:00:00Z' $full) -eq 'app-selftest')
++    Check 'FULL list: a failed app-installer (win-arm64) is waived' ((Waived @{ 'app-installer' = @{ result = 'failure' } } (Pages @((Leg 'app-installer (win-x64)' 'success'), (Leg 'app-installer (win-arm64)' 'failure'))) 'on' '2026-11-13T22:00:00Z' $full) -eq 'app-installer')
++    Check 'FULL list: the Arm64 PACK is never waived' ((Waived @{ 'app-pack' = @{ result = 'failure' } } (Pages @((Leg 'app-pack (win-x64)' 'success'), (Leg 'app-pack (win-arm64)' 'failure'))) 'on' '2026-11-13T22:00:00Z' $full) -eq '')
++    Check 'FULL list: the pre-split app (win-arm64) job is not waived' ((Waived $appFailed $arm64Red 'on' '2026-11-13T22:00:00Z' $full) -eq '')
++    Check 'FULL list: a failed x64 self-test is never waived' ((Waived @{ 'app-selftest' = @{ result = 'failure' } } (Pages @((Leg 'app-selftest (win-x64)' 'failure'), (Leg 'app-selftest (win-arm64)' 'success'))) 'on' '2026-11-13T22:00:00Z' $full) -eq '')
++    Check 'FULL list: an x64 failure beside the Arm64 one waives nothing' ((Waived @{ 'app-selftest' = @{ result = 'failure' } } (Pages @((Leg 'app-selftest (win-x64)' 'failure'), (Leg 'app-selftest (win-arm64)' 'failure'))) 'on' '2026-11-13T22:00:00Z' $full) -eq '')
++    Check 'FULL list: any other failed job (a pack, a spike) beside it waives nothing' ((Waived @{ 'app-selftest' = @{ result = 'failure' } } (Pages @((Leg 'app-selftest (win-x64)' 'success'), (Leg 'app-selftest (win-arm64)' 'failure'), (Leg 'spikes' 'failure'))) 'on' '2026-11-13T22:00:00Z' $full) -eq '')
++    Check 'the default list does not waive the FULL jobs (ci.yml is unchanged)' ((Waived @{ 'app-selftest' = @{ result = 'failure' } } $selftestRed) -eq '')
++    Check 'the FULL jobs'' names are in a custom list only, never in the default' (-not (Get-Content -Raw $script).Contains("'app-selftest (win-arm64)'"))
++
+     $ci = Get-Content -Raw (Join-Path $PSScriptRoot '..' '.github' 'workflows' 'ci.yml')
+     $code = Get-Content -Raw $script
+     foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index e97446391..4a5f3d8b6 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -28,7 +28,7 @@ public class FullWorkflowTests
+     [Fact]
+     public void Full_yml_has_the_trigger_job_the_spikes_pwa_e2e_and_the_gate_and_ci_yml_no_longer_has_them()
+     {
+-        Assert.Equal(["app-pack", "app-selftest", "full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["app-installer", "app-pack", "app-selftest", "full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+         Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
+     }
+ 
+@@ -221,4 +221,49 @@ public class FullWorkflowTests
+         Assert.Equal("true", Scalar(retry, "continue-on-error"));
+         Assert.Contains("exit 1", Scalar(twice, "run"), StringComparison.Ordinal);
+     }
++
++    [Fact]
++    public void App_installer_installs_this_runs_own_packages_per_user_on_each_architecture()
++    {
++        var job = (YamlMappingNode)Jobs("full.yml")["app-installer"];
++        var include = ((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)job["strategy"])["matrix"])["include"]).Children.ToList();
++        var steps = ((YamlSequenceNode)job["steps"]).Children.OfType<YamlMappingNode>().ToList();
++        var downloads = steps.Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/download-artifact@", StringComparison.Ordinal)).ToList();
++        var packed = ((YamlSequenceNode)((YamlMappingNode)Jobs("full.yml")["app-pack"])["steps"]).Children.OfType<YamlMappingNode>()
++            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/upload-artifact@", StringComparison.Ordinal)).Select(s => Scalar(s["with"], "name")).ToList();
++
++        Assert.Equal(["app-installer (win-arm64)", "app-installer (win-x64)"], include.Select(l => $"app-installer ({Scalar(l, "runtime")})").Order(StringComparer.Ordinal));
++        Assert.Equal(["app-pack", "trigger"], (job["needs"] is YamlSequenceNode n ? n.Children.Select(c => c.ToString()) : [job["needs"].ToString()]).Order(StringComparer.Ordinal));
++        // The files and input app-pack uploaded in THIS run, by the same names, never another run's.
++        Assert.Equal(2, downloads.Count);
++        Assert.All(downloads, d => { Assert.Contains(Scalar(d["with"], "name"), packed); Assert.False(((YamlMappingNode)d["with"]).Children.ContainsKey("run-id")); });
++        var text = AllText(job);
++        Assert.Contains("Assert-AppInstallerInput", text, StringComparison.Ordinal);
++        Assert.Contains("-Commit $env:SHA -RunId '${{ github.run_id }}'", text, StringComparison.Ordinal);
++        Assert.Contains("app-self-test.ps1", text, StringComparison.Ordinal);
++        Assert.DoesNotContain("github.sha", text, StringComparison.Ordinal);
++        Assert.DoesNotContain("github.run_number", text, StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void Full_gate_waives_only_what_runs_the_app_on_Arm64_through_the_jobs_API_and_says_so()
++    {
++        var gate = (YamlMappingNode)Jobs("full.yml")["full-gate"];
++        var steps = ((YamlSequenceNode)gate["steps"]).Children.OfType<YamlMappingNode>().ToList();
++        var waiver = steps.Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "waiver");
++        var script = Scalar(waiver, "run");
++        var verdict = steps.Single(s => s.Children.ContainsKey("name") && Scalar(s, "name").StartsWith("Every FULL job passed", StringComparison.Ordinal));
++        var permissions = ((YamlMappingNode)gate["permissions"]).Children.Select(c => $"{c.Key}: {c.Value}").Order(StringComparer.Ordinal);
++
++        // The waived list is exactly the owner's: the Arm64 self-test and installer. Never the pack, never x64, never the pre-split job.
++        Assert.Contains("-Waivable 'app-selftest (win-arm64);app-installer (win-arm64)'", script, StringComparison.Ordinal);
++        Assert.DoesNotContain("app-pack", script, StringComparison.Ordinal);
++        Assert.Contains("arm64-waiver.ps1", script, StringComparison.Ordinal);
++        Assert.Contains("repos/$REPO/actions/runs/$RUN_ID/jobs", script, StringComparison.Ordinal);
++        // It runs only when something failed, fails closed when the API does (no waiver), and the verdict reads the waiver's needs when there is one.
++        Assert.Contains("contains(needs.*.result, 'failure')", Scalar(waiver, "if"), StringComparison.Ordinal);
++        Assert.Contains("no Arm64 result is waived", script, StringComparison.Ordinal);
++        Assert.Contains("steps.waiver.outputs.needs || toJSON(needs)", Scalar(((YamlMappingNode)verdict["env"]), "NEEDS"), StringComparison.Ordinal);
++        Assert.Equal(["actions: read", "contents: read"], permissions);
++    }
+ }
+-- 
+2.56.1.windows.1
+
