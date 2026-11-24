@@ -355,7 +355,7 @@ public sealed class Deliveries
     // asking how it went. As the PWA's #withProgress does.
     static object AskProgress(object data) => data switch
     {
-        AnswerRequest a when JsonSerializer.SerializeToUtf8Bytes(a with { Progress = true }, ProtocolJson.Options).Length <= Limits.AnswerRequest => a with { Progress = true },
+        AnswerRequest a when JsonSerializer.SerializeToUtf8Bytes(a with { Progress = true, CardTarget = null }, ProtocolJson.Options).Length <= Limits.AnswerRequest => a with { Progress = true },
         ReplyRequest r when Envelope(Ops.SessionReply, r with { Progress = true }) <= ProtocolJson.MaxMessageBytes => r with { Progress = true },
         _ => data,
     };

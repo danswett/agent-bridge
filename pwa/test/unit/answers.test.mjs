@@ -48,6 +48,17 @@ test('a multi choice takes a list with at most one other', () => {
   assert.match(checkAnswer(q, fields({ pick: ['z'] })), /not one of the choices/);
 });
 
+// Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent; an optional one may be empty.
+test('a required multi takes at least one choice and an optional one may be empty', () => {
+  const required = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }], required: true });
+  assert.equal(checkAnswer(required, fields({ pick: [] })), '"pick" needs an answer');
+  assert.equal(checkAnswer(required, fields({ pick: ['a'] })), null);
+  const withOther = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }], allowOther: true, required: true });
+  assert.equal(checkAnswer(withOther, fields({ pick: [{ other: 'c' }] })), null);
+  const optional = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }] });
+  assert.equal(checkAnswer(optional, fields({ pick: [] })), null);
+});
+
 test('booleans, numbers and text must have their own JSON type', () => {
   const q = form({ name: 'ok', type: 'boolean' }, { name: 'n', type: 'number' }, { name: 't', type: 'text' });
   assert.equal(checkAnswer(q, fields({ ok: true, n: 3, t: 'hi' })), null);
@@ -253,14 +264,15 @@ test('a default that is not an option becomes Other text where Other is allowed'
   assert.deepEqual(buildAnswer(q, st).answer.fields, { c: { other: 'something else' }, m: ['a', { other: 'and b' }] });
 });
 
-test('a multi choice with nothing ticked is answered with an empty list, which any number allows', () => {
+test('a multi choice with nothing ticked is built as an empty list: a required one is then refused by the check, an optional one allowed', () => {
   const q = form({ name: 'm', title: 'Areas', type: 'multi', required: true, options: [{ value: 'a' }, { value: 'b' }], default: ['a'] });
   const st = initialState(q);
   st.m.selected = [];
   const { answer } = buildAnswer(q, st);
   assert.deepEqual(answer.fields, { m: [] });
-  assert.equal(checkAnswer(q, answer), null);
-  // Required with nothing ticked and no default: [], since any number is allowed.
+  // A required multi needs at least one choice, for every agent (owner decision, Nov 23): the check names it.
+  assert.equal(checkAnswer(q, answer), '"Areas" needs an answer');
+  // Required with nothing ticked and no default: [] is built, and refused by the same check.
   const req = form({ name: 'm', type: 'multi', required: true, options: [{ value: 'a' }] });
   assert.deepEqual(buildAnswer(req, initialState(req)).answer.fields, { m: [] });
   // Optional: left alone it is unanswered; cleared after ticking it is [].
