@@ -56,7 +56,7 @@ public sealed class AgentLiteDeliveryTests
         BusyQueueStore? busyStore;
         public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
-        public LiteDeliver Build(DeliveryLaneScheduler? lane = null) => new([
+        public LiteDeliver Build(DeliveryLaneScheduler? lane = null, LaneComposition? composition = null) => new([
             new ForcedAskGate(Launches),
             new AllowlistedAllTargetsGate(Launches, () => new AgentMessagingSettings
             {
@@ -69,7 +69,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
+            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -99,6 +99,7 @@ public sealed class AgentLiteDeliveryTests
             OnReply?.Invoke();
             OnWait?.Invoke(request.Text!);
             if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
+            if (request.HandoffText is { } handoff) { request = request with { Text = handoff() }; }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
             if (InjectorStops) { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
@@ -125,6 +126,72 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
+    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null) => new(
+        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flag }, () => true,
+        new DeliveryGate(), f, new LaneScreens((_, _) => Task.FromResult<(bool? Idle, bool? Empty)>((f.Status == SessionStatus.Idle, f.Rows == EmptyBox)), f.Clock),
+        "unused", f.Log.Add, f.Clock, open ?? (() => new DeliveryJournal(new byte[32], _ => { }, f.Log.Add)));
+
+    [Fact]
+    public async Task With_the_lane_flag_off_a_Copilot_send_types_through_the_legacy_path()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, flag: false);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.True(result.Typed);
+        Assert.Single(f.Typed);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_Copilot_send_is_offered_and_the_pump_wakes_and_types_it_once()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        await using var pump = new DeliveryDispatchPump(lane, f, f.Log.Add);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteKind.Pending, result.Outcome);
+        await pump.WhenIdleAsync();
+        Assert.Contains("hi", Assert.Single(f.Typed).Text);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_Claude_send_stays_on_the_legacy_path_and_never_touches_the_lane()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude }; f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        // The legacy path read the composer (the fixture's box is Copilot's layout, so it is not empty to Claude); the lane was never asked.
+        Assert.Equal(LiteCodes.ComposerNotEmpty, result.Code);
+        Assert.Null(result.Outcome);
+        Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_a_replay_query_to_a_Claude_target_types_nothing()
+    {
+        // A query is never a send: with the flag on a Claude target has no lane (it keeps the legacy typing path), so a replay is refused as main does.
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        Assert.True((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+        Assert.Single(f.Typed);
+        var replay = await ((ILiteReplayQuery)deliver).QueryAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteReceiver.Replay, replay.Code);
+        Assert.False(replay.Typed);
+        Assert.Single(f.Typed);
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_and_the_journal_refused_a_send_is_refused_busy_and_never_typed_by_the_legacy_path()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, open: () => throw new InvalidDataException("no journal"));
+        var result = await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default);
+        Assert.False(result.Typed);
+        Assert.Equal(LiteCodes.Busy, result.Code);
+        Assert.Empty(f.Typed);
+    }
     sealed class LaneRig : IDisposable
     {
         public readonly List<byte[]> Disk = [];
