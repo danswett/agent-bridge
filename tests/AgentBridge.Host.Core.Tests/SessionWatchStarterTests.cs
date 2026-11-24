@@ -40,4 +40,23 @@ public class SessionWatchStarterTests
         Assert.Equal("1 session needs you", Assert.Single(sent).Title);
         Assert.Equal(T, handle.Loop.LastPass);
     }
+
+    // docs/design/session-watch.md: "S4 names the exact source for the clean exit before it builds; until then R3 stays off." No source is named yet,
+    // so the started watch must never raise a missing-session notice, even for an owned session that vanishes.
+    [Fact]
+    public async Task R3_is_off_in_the_started_watch_so_an_owned_session_that_vanishes_raises_nothing()
+    {
+        var sent = new List<(string Title, string Body)>();
+        using var cts = new CancellationTokenSource();
+        var passes = 0;
+        var handle = SessionWatchStarter.Start(() => true,
+            () => ++passes == 1 ? [Working("aaaaaaaa-1")] : [], () => false, _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111",
+            (t, b) => sent.Add((t, b)), () => T.AddHours(passes), _ => { }, _ => { if (passes >= 4) { cts.Cancel(); } return Task.CompletedTask; }, cts.Token);
+
+        await handle!.Task;
+        Assert.True(passes >= 4);
+        Assert.Empty(sent);
+    }
+
+    static Session Working(string id) => Stuck(id) with { Status = SessionStatus.Working, StatusSince = T.AddHours(-1) };
 }
