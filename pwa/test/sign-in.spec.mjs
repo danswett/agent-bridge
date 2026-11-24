@@ -426,6 +426,8 @@ test('a press whose wait was cancelled leaves the next press still waiting for t
 
 for (const attempt of ['retry', 'start']) {
   test(`${attempt} given up while its cancel finishes drops early codes while hidden and sends nothing`, async ({ page }) => {
+    // QUARANTINE (24 h, until Nov 25 12:00 PT, owner pre-approved Nov 17 23:49 PT, tracking issue #4572): the retry leg failed once on main (expect.poll(signInCodesHeld) got 0 after 5000 ms). Remove this line when the test is made deterministic.
+    test.fixme(attempt === 'retry', 'flaky on main, quarantined for 24 h: #4572');
     await page.clock.install();
     await openDemo(page);
     await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
