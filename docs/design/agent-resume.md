@@ -29,8 +29,8 @@ a folder-trust question waiting, the folder still approved, one launch at a time
 ## Who is a coordinator (by recorded role, never by name)
 
 The host keeps no coordinator marker today: the launch record keeps no launcher principal and no role, and a name is
-display text. This change records, at launch, the launch's `role` (the validated role name the request already carries, in
-`LaunchProvenance`), and adds a person-set host setting `agents.resume.roles` (the role names that count as coordinators on
+display text. This change records, at launch, the launch's coordinator role (the optional `coordinatorRole` request field a person's launch
+carries, in `LaunchProvenance`; the worker `role` is a different thing, it narrows MCP servers and is not recorded), and adds a person-set host setting `agents.resume.roles` (the role names that count as coordinators on
 this machine). A caller is a coordinator only when its own session's recorded role is in that list. The default is an empty
 list, so resume is off until the person lists the roles (fail closed; setting `agents.resume.roles` is the owner's step); a caller with no recorded role, or one launched by a
 person without a role, is refused. No name, title or fleet-name lookup is ever used.
@@ -44,6 +44,65 @@ reboot restore). A session can never set or raise its own role. Each is a test.
 
 **Known limit:** sessions launched before this ships have NO recorded role, so nobody can resume them by this op (fail
 closed) until they are relaunched; the owner resumes those by hand meanwhile.
+
+## Which callers count as a coordinator, and how the host knows
+
+The host decides from facts it recorded itself, never from a name, a title or what the caller says. A caller must (1) reach the
+agent's local pipe and present its own session token through `agent.hello` (the host binds the channel to that credential; a
+script, the app, the host CLI and any relay peer cannot reach `fleet.resume`), (2) hold a live **session** credential with
+`read+reply+launch` scope at depth 0 that was not adopted (the same standing check `fleet.end` and a granted launch use), and
+(3) have its **own session's recorded launch role** listed in the person's `agents.resume.roles`.
+
+| Caller | Coordinator? | Why |
+|---|---|---|
+| A session a person launched with a role the person listed, with launch scope (`agents.issue.launched` is `read+reply+launch`) | **Yes** | The role was recorded by a person's launch; this is the only way a role is recorded |
+| The same, with no role recorded, or a role not listed | No (`policy`) | Pre-ship sessions have no role; an empty list means resume is off |
+| A fleet worker or builder (read+reply credential, depth 1, launched by an agent or the dispatcher) | No | An agent's launch records no role (owner decision, item 2) |
+| A session launched through `fleet launch` by a script, including a lead the dispatcher starts | No | Same: it records no role. Coordinators are started by a person (the owner) |
+| An adopted session, a script credential, the app, the host CLI | No | Wrong credential kind, or not on this op; a person resumes with the app's own Launch |
+| Another machine | No | `fleet.resume` is on the local pipe only; nothing crosses machines or people |
+
+**How a coordinator gets its role (slice 3, agent-bridge #4433):** the app's Launch screen has a Role box, which sends the new
+`coordinatorRole` request field. It is separate from the worker `role` (which narrows MCP servers and would strip a coordinator's tools). Only
+a person's launch records it; an agent's or a script's launch carrying it is refused, and it is for a new session only. `fleet.resume` reads it
+from the launch record (tested). Until the owner lists a role in `agents.resume.roles` and launches a coordinator with this box, resume stays off
+(fail closed). The PWA launch box sends no role yet.
+
+## How it relates to kill-aware messaging (#4403) and the launch caps
+
+- **Kill switches.** Resume obeys the agent and launch switches (`agents.enabled`, `launch.enabled`, not read-only), refusing
+  `kill-switch`, as a launch does. It does not read the messaging kill (`agentMessaging`, `LiteKill`): resuming a session is not
+  messaging. A resumed worker is then an ordinary session under #4403: after a recorded kill it sends nothing unless
+  `LiteKill.IsOn` says messaging is on, and no resume path turns messaging on or changes the kill record.
+- **Caps.** A resume takes **no** slot under the host's live agent-launch limit and is not counted by the hourly launch caps yet (that
+  gate is bound to the person-launch policy); this is the known limit above and slice 4. What prevents a pile-up meanwhile: a running
+  session refuses (`running`), one start per session, one request id resumes once, the host's one-launch-at-a-time start turn, and the
+  shared builder cap (26), which is the dispatcher's and counts sessions, not launches. A resumed session is the same session id, so
+  it replaces the ended one rather than adding a seat.
+
+## When the session's folder or credential is gone
+
+Nothing is created, guessed or widened; the receipt is `refused` (the host log says why) and the session's launch record is left as it was.
+- **Worktree or folder gone** (finished idle worktrees are reclaimed by the host's own rules, docs/host-launch.md): the existing resume path
+  refuses with "the original directory must exist and be an approved workspace". Resume never makes a new worktree: that would be a new
+  session, which needs a person. The owner relaunches.
+- **Credential gone or unissuable:** an old credential is never reused (it was tied to the old process). A fresh read+reply fleet worker
+  credential is minted for the new process; if the credential store cannot issue one, the resume refuses with "a read+reply fleet worker
+  credential could not be issued" and nothing starts (probe-tested), the old record intact.
+- **Recorded launch settings gone:** refuses (`policy`); the machine's defaults are never used (Allow all is never guessed).
+- **Agent signed out or account refused:** the launcher's own pre-start refusal (Copilot account check) comes back as `refused`.
+
+## Slices (each under 400 whole lines, tests first)
+
+| # | What | State |
+|---|---|---|
+| 1 | Launch record keeps the role; `WasFleetLaunched`, `RoleOf`, role guards (#4325) | built, armed |
+| 2a | `ResumeFleetAsync` in place, settings restored, `agents.resume.roles`, record superseded (#4325) | built, armed |
+| 2b | `fleet.resume` op, audit, pipe wiring, role carried, no role on a child launch (#4360) | built, stacked on #4325; closes #4318 |
+| 3 | `coordinatorRole` on the launch request and a Role box in the app; the resume reads it from the record (#4433) | built, stacked on #4360 |
+| 4 | Take a slot under the live-launch limit; a durable intent row | to do (known limits) |
+| 5 | MCP tool `resume_agent_session`, a thin wrapper over `fleet.resume` (`{session_id, request?}` returning `{id, request, outcome, reason?}`), offered with the `sessions.launch` capability, after the .NET MCP port | after the port |
+| later | A combined restart flag (end then resume) only if wanted after the beta | not built by design |
 
 ## Rules (each is a test)
 
@@ -81,6 +140,7 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
   running, which refuses. Not an op the gate audit knows; a follow-up if Quality wants it.
 - **Sessions launched before this ships have no recorded role,** so nobody can resume them by this op (fail closed) until
   they are relaunched by a person; the owner resumes those by hand meanwhile.
+- **A resumed Copilot worker is not narrowed to its role's `launch.workerMcp` list.** Resume restores the recorded launch settings (profile, model, effort, context, permissions) and the worker `role` is not part of them, so a resumed worker keeps the MCP servers its profile gives it, not the narrower set its original role chose. Follow-up if the owner wants it narrowed.
 - **`agents.resume.roles` is the owner's step:** empty (the default) means resume is off.
 - **No new coordinators:** a coordinator session is only ever started by a person (owner decision, item 2).
 

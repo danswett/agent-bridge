@@ -621,7 +621,7 @@ Each has a recommended default; the summary's list is the same.
 5. Cross-machine: this machine only until #55, with a central dispatcher and a launcher on
    each machine for the fleet **(recommended)**; or extend the temporary own-account mode to
    launch now.
-6. Sessions agents start: read only, no launch, agents cannot resume **(recommended)**.
+6. Sessions agents start: read only, no launch, agents cannot resume **(recommended)**, with one exception: a coordinator (a session a person launched with a `coordinatorRole` the person listed in `agents.resume.roles`) resumes a fleet worker in place with `fleet.resume` ([agent-resume.md](agent-resume.md)).
 7. Audit: launches in their own file, 30 days or 16 MiB per machine, no prompt text
    **(recommended)**; or keep prompts too.
 8. Ask-only in v1 means no bypass flag, no extra arguments, no Agency and no agent project

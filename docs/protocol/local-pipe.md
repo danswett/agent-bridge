@@ -347,6 +347,10 @@ one that expired, one never sent) is refused. A pipe launch that was launching w
 is `failed` with code `restarted`, and one still queued is `failed` with code `unconfirmed`
 (`AgentPipeLaunch.Restore`, at host start), so neither is ever launched again.
 
+### `fleet.resume` (#4318)
+
+`{ version: 1, request: <uuid>, session: <session id> }` on a connection that has passed `agent.hello` with a live session credential of `read+reply+launch` scope at depth 0 (not adopted). The caller's own recorded launch role must be listed in `agents.resume.roles` (off while empty; [host-config.md](../host-config.md)). Resumes an ended fleet worker in place with its recorded launch settings; a running session is refused, never restarted. Receipt `{ request, outcome, reason?, sessionId? }`: `resumed`, `refused` or `unconfirmed`. Closed reasons: `scope` (not a resumable fleet worker, the caller's own session, excluded session, fleet name or workspace, or a workspace not approved), `policy` (caller not a coordinator, bad credential, unreadable settings or record), `kill-switch`, `bad-argument`, `running`, `busy` (try again), `audit-unavailable`. A repeat of a request id returns its first answer, except `busy`. Every request is audited. Design: [agent-resume.md](../design/agent-resume.md).
+
 ### `fleet.list` and `fleet.find`
 
 Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).
