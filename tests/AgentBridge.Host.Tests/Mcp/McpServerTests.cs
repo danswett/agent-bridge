@@ -67,7 +67,7 @@ public sealed class McpServerTests
         var unattributed = await RunAsync(With(new Conn(null, "sessions.read", "sessions.reply", "sessions.launch", "usage")), List);
         Assert.Equal(["list_agent_sessions", "read_agent_session"], Names(unattributed[0]));
         var agent = await RunAsync(With(new Conn("agent:m/s", "sessions.read", "sessions.reply", "sessions.launch", "usage")), List);
-        Assert.Equal(["list_agent_sessions", "read_agent_session", "reply_to_agent_session", "launch_agent_session", "read_launch_result", "get_launch_options", "read_agent_usage"], Names(agent[0]));
+        Assert.Equal(["list_agent_sessions", "read_agent_session", "reply_to_agent_session", "launch_agent_session", "read_launch_result", "get_launch_options", "read_agent_usage", "end_agent_session"], Names(agent[0]));
         var readOnly = await RunAsync(With(new Conn("agent:m/s", "sessions.read")), List);
         Assert.Equal(["list_agent_sessions", "read_agent_session"], Names(readOnly[0]));
     }
@@ -91,6 +91,9 @@ public sealed class McpServerTests
     [InlineData("launch_agent_session", """{"request":"has space"}""")]
     [InlineData("read_launch_result", "{}")]
     [InlineData("read_agent_usage", """{"x":1}""")]
+    [InlineData("end_agent_session", "{}")]
+    [InlineData("end_agent_session", """{"session_id":"0123456789abcdef"}""")]
+    [InlineData("end_agent_session", """{"session_id":"11111111-1111-4111-8111-111111111111","request":"not-a-uuid"}""")]
     public async Task Bad_arguments_are_refused_before_anything_is_sent_to_the_host(string tool, string args)
     {
         var conn = new Conn("agent:m/s", "sessions.read", "sessions.reply", "sessions.launch", "usage");
@@ -233,8 +236,8 @@ public sealed class McpServerTests
     {
         var conn = new Conn("agent:m/s", "sessions.read", "sessions.reply", "sessions.launch", "usage");
         await RunAsync(With(conn), Call(1, "list_agent_sessions"), Call(2, "read_agent_session", """{"session_id":"s"}"""), Call(3, "reply_to_agent_session", """{"session_id":"s","text":"x"}"""),
-            Call(4, "launch_agent_session", "{}"), Call(5, "get_launch_options"), Call(6, "read_agent_usage"), Call(7, "host.stop"), Call(8, "session.stop"), Call(9, "read_agent_session", """{"session_id":"host.stop"}"""));
-        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "agent.send"];
+            Call(4, "launch_agent_session", "{}"), Call(5, "get_launch_options"), Call(6, "read_agent_usage"), Call(7, "host.stop"), Call(8, "session.stop"), Call(9, "read_agent_session", """{"session_id":"host.stop"}"""), Call(10, "end_agent_session", """{"session_id":"11111111-1111-4111-8111-111111111111"}"""));
+        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "agent.send", "fleet.end"];
         Assert.All(conn.Ops, op => Assert.Contains(op, allowed));
     }
 }
