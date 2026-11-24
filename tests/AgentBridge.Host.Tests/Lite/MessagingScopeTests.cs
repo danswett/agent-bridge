@@ -103,6 +103,27 @@ public sealed class MessagingScopeTests
         finally { Directory.Delete(root, true); }
     }
 
+    // docs/design/beta-messaging.md section 3: a kill writes remote "off"; the documented re-enable is remote own-account, and a scope
+    // of same-person alone does not undo it (off from either key wins).
+    [Fact]
+    public void After_a_kill_only_an_explicit_remote_own_account_turns_messaging_back_on()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scope-kill-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], root, TextWriter.Null, TextWriter.Null));
+            new LiteKill(root).Kill();
+            Assert.False(HostSettings.CurrentAgentMessaging(root).RemoteEnabled);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.scope", "same-person"], root, TextWriter.Null, TextWriter.Null));
+            Assert.Equal(AgentMessagingSettings.Off, HostSettings.CurrentAgentMessaging(root).Scope);
+            Assert.False(new LiteKill(root).On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], root, TextWriter.Null, TextWriter.Null));
+            Assert.Equal(AgentMessagingSettings.SamePerson, HostSettings.CurrentAgentMessaging(root).Scope);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void An_upgrade_default_is_not_an_explicit_on()
     {
