@@ -94,7 +94,7 @@ slice after parity is shown, not in the same one.
 | `read_launch_result` | `launch.status` | |
 | `get_launch_options` | `launch.options` | |
 | `read_agent_usage` | `usage.get` | only with the exact `usage` capability |
-| `end_agent_session` | the host's stop op | **Added to the Node server by C4-LaunchStop; the .NET server must carry it too.** Its contract cases come from that slice; PR6 to PR8 take them when they land, and coordinate with its owner |
+| `end_agent_session` | `fleet.end`, sending `{version: 1, request, grant: all-zero UUID, session}`; never `session.stop` | **Added to the Node server by C4-LaunchStop (agent-bridge PR 4286; spec in `mcp/README.md`); the .NET server must carry it too.** Input `{session_id: full UUID, request?: UUID}`; a fresh random UUID `request` by default. Needs the `sessions.launch` capability and an agent principal; not listed without a principal. Local refusals, with no pipe call: `session_id` missing or not a full UUID (16-hex short ids refused), a `request` that is not a UUID. Output `{id, request, outcome, reason?}`, `outcome` one of `ended`, `refused`, `unknown`. `unknown` (pipe unavailable, or the host reports unconfirmed) means resend the SAME `request`, never a new one. Host reasons, as `refused` plus `reason`: scope, policy (dirty or unpushed git), kill-switch, bad-argument, duplicate-id, audit-unavailable. All rules are the host's. PR6 to PR8 take its contract cases from PR 4286 |
 
 Port size: see section 6. Its PRs come before PR3's registration step and are sent to the Engineering Lead as their own estimate.
 
