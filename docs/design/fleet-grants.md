@@ -516,8 +516,8 @@ documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the sw
 Sender gates (G9c2), copied from `AgentLiteSender`, not a new check. The sending host checks `ILiteMode.On` (it reads the `agentMessaging.remote` setting and any
 recorded lite kill, the same switch lite messaging uses) before AND after signing, and rechecks the agent credential after the signer returns, so a kill, the setting
 turned off or a lapsed caller signs and sends nothing. A kill while waiting for the reply, or a cancel, after the send is `unconfirmed` (exit 7), never a refusal and
-never a resend. The source host audits its own refusals before anything is sent, with the same row and hourly limiter as every other refused launch (the caller is the local agent principal; the receiver writes the same row for a verified peer, #4170), and the refusal is
-`audit-unavailable` if it cannot be written). The peer's receipt is rebuilt from fixed fields only: a reason outside the CLI refusal table becomes the one generic code `policy`, and no free-text reason, peer cwd or trust question is shown.
+never a resend. The source host audits its own refusals before anything is sent, with the same row and hourly limiter as every other refused launch (the caller is the local agent principal; the receiver's own refusal row belongs to #4170, not this slice), and the refusal is
+`audit-unavailable` if it cannot be written. The peer's receipt is rebuilt from fixed fields only: a reason outside the CLI refusal table becomes the one generic code `policy`, and no free-text reason, peer cwd or trust question is shown.
 
 Receiver order:
 

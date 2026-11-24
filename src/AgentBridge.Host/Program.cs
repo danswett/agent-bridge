@@ -1010,6 +1010,8 @@ async Task<int> ServeAsync(HostHandover handover)
         grantPipe = new AgentPipeLaunch(identity.Folder, grantCredentials, service, agentAudit, grantRequests, grantRequestsProblem,
             fleetGrants: new FleetGrantLaunch(identity.Folder, identity.Key, () => identity.Account?.AccountId,
                 Wire.DeviceId(identity.Key.Public), grantCredentials, launcher));
+        // Serve fleet.launch from another host of this account: ONE receiver per host (shared replay cache and warm-up), gated by the same lite kill.
+        FleetRemoteLaunch.Wire(service, grantPipe, new AgentBridge.Host.Fleet.Grants.GrantStore(identity.Folder, identity.Key, new(identity.Folder), new([], [], [], [], [], [], [], [])), liteKill);
         if (homeAssistant is not null && !ReferenceEquals(grantPipe.Requests, homeAssistant.LaunchRequests))
         { throw new InvalidOperationException("HA and grant launches must share one request-store writer."); }
         launcher.RequestRegistered += (id, session) => grantPipe.Registered(id, session);

@@ -818,9 +818,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(grantKey: key, grantOnly: true);
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
-        var mode = on is { } o ? new Mode(o) : null;
-        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null, mode: mode), channel, grant,
-            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode: mode)) { Request = request };
+        var mode = new Mode(on ?? true);
+        return new(new FleetRemoteLaunch(pipe.Launch, store, mode, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode)) { Request = request };
     }
 
     [Fact]
@@ -925,6 +925,41 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    // G9c2 (review P1): the receiver must be constructed in production. Program calls FleetRemoteLaunch.Wire once, after grantPipe, with liteKill;
+    // this runs that same method on a real SessionService and a real pipeline, and reads Program.cs to prove the one call and its order.
+    [Fact]
+    public async Task The_host_wires_one_shared_receiver_into_the_session_service_gated_by_the_lite_kill()
+    {
+        using var key = P256KeyPair.Generate();
+        var pipe = Open(grantKey: key, grantOnly: true);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        var mode = new Mode(false);
+        var sessions = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        Assert.Null(sessions.FleetRemoteLaunch);
+        var wired = FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, mode);
+        Assert.Same(wired, sessions.FleetRemoteLaunch);
+        Assert.Same(wired, FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, mode));
+        Assert.Throws<ArgumentNullException>(() => FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, null!));
+        var channel = new LiteChannel(Wire.DeviceId(RandomNumberGenerator.GetBytes(32)), "host", RandomNumberGenerator.GetBytes(32), new string('a', 32), "123", true);
+        Assert.Equal("kill-switch", (await wired.ReceiveAsync(channel, default)).Reason);
+        mode.On = true;
+        Assert.NotEqual("kill-switch", (await wired.ReceiveAsync(channel, default)).Reason); // past the kill gate (a fresh receiver then refuses on its own rules)
+        Assert.Equal(0, launcher.Launches);
+
+        var program = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "AgentBridge.Host", "Program.cs"));
+        var call = System.Text.RegularExpressions.Regex.Matches(program, @"FleetRemoteLaunch\.Wire\(service, grantPipe, [^;]*\bliteKill\);");
+        Assert.Single(call);
+        Assert.True(call[0].Index > program.IndexOf("grantPipe = new AgentPipeLaunch(", StringComparison.Ordinal), "the receiver is wired after grantPipe is built");
+        Assert.Empty(System.Text.RegularExpressions.Regex.Matches(program, @"new FleetRemoteLaunch\(")); // only Wire constructs it
+    }
+
+    static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        return root.FullName;
+    }
+
     [Fact]
     public async Task A_freshly_started_receiver_refuses_every_envelope_until_the_replay_warm_up_has_passed()
     {
@@ -987,7 +1022,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
         Assert.True(new GrantStore(folder, key, new(folder), scope).Issue(grant).Usable);
         var receiverStore = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
-        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore, startedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
+        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore, new Mode(true), startedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
         var channel = new LiteChannel(self, "host", statik, new('a', 32), "123", true);
         var sign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var q = sign.ExportParameters(false).Q;

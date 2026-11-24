@@ -210,7 +210,8 @@ public sealed class SessionService
     public Lite.LiteReceiver? LiteReceiver { get; init; }
     public Lite.LiteKill? LiteKill { get; init; }
     // G9: fleet.launch from another host of this account, through the relay only (never this machine's pipe).
-    public FleetRemoteLaunch? FleetRemoteLaunch { get; init; }
+    // Set once by FleetRemoteLaunch.Wire after the launch pipeline exists (the service is built before it).
+    public FleetRemoteLaunch? FleetRemoteLaunch { get; internal set; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
