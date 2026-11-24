@@ -18,7 +18,6 @@ public sealed class StandaloneHooks(
 {
     const string OwnerFile = "agent-bridge-owner.json";
     const string Marketplace = "agent-bridge";
-    static readonly JsonSerializerOptions Pretty = new() { WriteIndented = true };
     string HookFolder => Path.Combine(profile, "hooks");
     // Set by Preflight, which every install and removal runs first.
     MigrationRecord.HookRecord? adopted;
@@ -65,16 +64,14 @@ public sealed class StandaloneHooks(
         _ => throw new ArgumentException("Choose copilot (also Agency), claude or codex."),
     };
 
-    static JsonObject Read(string path) => Parse(path, File.ReadAllBytes(path));
+    static JsonObject Read(string path) => CliSettingsEditor.Read(path);
 
-    static JsonObject Parse(string path, byte[] bytes) => JsonNode.Parse(Registrations.Decode(bytes),
-        documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
-        ?? throw new InvalidDataException($"{path} is not a JSON object; it was left alone");
+    static JsonObject Parse(string path, byte[] bytes) => CliSettingsEditor.Parse(path, bytes);
 
     static bool HasCurrentOwnerVersion(JsonObject record) =>
         record["version"] is JsonValue value && value.TryGetValue<int>(out var version) && version == 1;
 
-    static byte[] Bytes(JsonNode value) => Encoding.UTF8.GetBytes(value.ToJsonString(Pretty) + Environment.NewLine);
+    static byte[] Bytes(JsonNode value) => CliSettingsEditor.Bytes(value);
 
     static void Write(string path, JsonNode value) => DurableFile.Replace(path, Bytes(value), MigrationRecord.Hash(path));
 
@@ -260,13 +257,9 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         // Shown to the person (owner decision, Nov 23 about 23:05 PT): what is added, where, that only this product's own entries are touched, and the way back.
-        if (agent == "claude") { output.WriteLine($"{(dryRun ? "Would change" : "Changing")} {path}: adds this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd) and nothing else; your other settings and hooks are not touched. The original is kept once at {Path.Combine(HookFolder, "backups", "claude-settings.json")}. Remove restores it, taking out only these entries. No token is written."); }
+        if (agent == "claude") { output.WriteLine(CliSettingsEditor.Notice(dryRun, path, "this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd)", Path.Combine(HookFolder, "backups", "claude-settings.json"))); }
         if (dryRun) { return; }
-        if (agent == "claude" && before is not null)
-        {
-            var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
-            if (!File.Exists(backup)) { DurableFile.Replace(backup, File.ReadAllBytes(path), null); }
-        }
+        if (agent == "claude") { CliSettingsEditor.BackupOnce(Path.Combine(HookFolder, "backups", "claude-settings.json"), path); }
         // Save ownership first: an interrupted install can be safely retried or removed. The
         // record is rewritten without setupCompleted, so an earlier completed setup cannot
         // outlive a repair that fails below; readiness reports this record as incomplete.
@@ -364,31 +357,8 @@ public sealed class StandaloneHooks(
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }
 
-    // The first original settings, byte for byte (comments and formatting included), when
-    // the settings without our hooks still parse to exactly what they held; otherwise null,
-    // and removal rewrites the current settings without our hooks. A missing backup is not
-    // proof that setup created the file, so the file is never deleted. Only a backup that
-    // is actually absent is skipped quietly: File.Exists is also false for a directory or
-    // a path it may not inspect, which must warn like any other unreadable backup.
-    byte[]? ClaudeOriginal(JsonObject remaining, TextWriter output)
-    {
-        var backup = Path.Combine(HookFolder, "backups", "claude-settings.json");
-        try
-        {
-            var original = File.ReadAllBytes(backup);
-            return JsonNode.DeepEquals(Parse(backup, original), remaining) ? original : null;
-        }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return null;
-        }
-        // ArgumentException: duplicate property names parse but throw when DeepEquals reads them.
-        catch (Exception e) when (e is JsonException or InvalidDataException or ArgumentException or IOException or UnauthorizedAccessException)
-        {
-            output.WriteLine($"Warning: {backup} is unreadable ({e.Message}); the original settings cannot be restored, so only the owned hooks are removed from the current settings.");
-            return null;
-        }
-    }
+    byte[]? ClaudeOriginal(JsonObject remaining, TextWriter output) =>
+        CliSettingsEditor.Original(Path.Combine(HookFolder, "backups", "claude-settings.json"), remaining, output, "hooks");
 
     static FileStream Lock(string profile)
     {
