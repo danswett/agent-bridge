@@ -1,4 +1,4 @@
-From 2005565ecf39643f68e68974243a7251dd861ec0 Mon Sep 17 00:00:00 2001
+From 62c7e049c6b03bb0d5d2074305454e7a52352f25 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 17:47:07 -0800
 Subject: [PATCH] CI S2, piece 5c: pwa-ui moves to full.yml with the
@@ -280,7 +280,7 @@ index 7e00b4d2f..f8c5a457b 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index be539ee51..269754f91 100644
+index b5023117e..dcaca6ade 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -309,7 +309,7 @@ index be539ee51..269754f91 100644
    contents: read
 @@ -36,6 +40,38 @@ jobs:
      outputs:
-       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
      steps:
 +      # A run by hand is one of two things, and anything else fails here before a job runs. Its checks land on the commit it runs
 +      # (the merge rule reads the latest run per head), so: a normal run, for a commit on main (the release train, or a person), is on
@@ -586,7 +586,7 @@ index a3e331bc6..df8fcb596 100644
          var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
          Assert.Equal(new[] { "plan", "app" },
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 04d110e0f..3525f2296 100644
+index 20ade2d3c..d0304f7e1 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -600,7 +600,7 @@ index 04d110e0f..3525f2296 100644
      }
  
      [Fact]
-@@ -112,4 +112,37 @@ public class FullWorkflowTests
+@@ -116,4 +116,37 @@ public class FullWorkflowTests
  
          Assert.Empty(missing);
      }
