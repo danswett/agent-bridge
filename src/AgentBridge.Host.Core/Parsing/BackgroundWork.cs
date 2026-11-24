@@ -520,12 +520,14 @@ internal sealed class BackgroundWork
     public bool ShellEnded(string? id)
     {
         if (id is null || !_shells.Remove(id)) { return false; }
+        _aged.Remove(id);
         Version++;
         return true;
     }
 
     public void ForgetShells()
     {
+        // _aged is kept: what a shell is judged by is its id and its mark, and one seen again in the window with the same mark is the same shell.
         var any = _shells.Count > 0;
         _shells.Clear();
         foreach (var a in _agents.Values.Where(a => a.Shells.Count > 0)) { a.Shells.Clear(); any = true; }
@@ -547,6 +549,7 @@ internal sealed class BackgroundWork
     {
         var any = _shells.Count > 0;
         _shells.Clear();
+        _aged.Clear();
         foreach (var a in _agents.Values)
         {
             if (a.Working) { Stop(a, at, SubagentOutcome.Failed); any = true; }
@@ -581,9 +584,36 @@ internal sealed class BackgroundWork
     bool CountsShell(string id, DateTimeOffset? since, TimeProvider? time)
     {
         if (time is null || since is not { } mark) { return true; }
+        var wall = time.GetUtcNow() - mark;
+        // Judged old by a host that watched it for the whole limit, maybe an earlier run of this one (#4571): that watch is not
+        // started again by a restart, so only the wall clock is asked now, as it is of any shell. A newer mark is another shell.
+        if (_aged.TryGetValue(id, out var agedAt)) { if (agedAt == mark) { return wall < Limits.BackgroundShellStale; } _aged.Remove(id); }
         var stamp = time.GetTimestamp();
         if (!_shellSeen.TryGetValue(id, out var seen) || seen.Mark != mark) { _shellSeen[id] = (mark, stamp); return true; }
-        return time.GetUtcNow() - mark < Limits.BackgroundShellStale || time.GetElapsedTime(seen.Seen, stamp) < Limits.BackgroundShellStale;
+        if (wall < Limits.BackgroundShellStale || time.GetElapsedTime(seen.Seen, stamp) < Limits.BackgroundShellStale) { return true; }
+        _aged[id] = mark;
+        return false;
+    }
+
+    // The shells judged older than Limits.BackgroundShellStale, by the mark they were judged at, kept across a host restart:
+    // the host's own clock starts again with it, so without this every old shell that never reported back counted for
+    // another full limit after an update, and its idle session read "shell" for hours (#4571).
+    readonly Dictionary<string, DateTimeOffset> _aged = new(StringComparer.Ordinal);
+
+    // At most this many are kept for the next start, and a shell id longer than this is never kept: what is read back is not trusted.
+    public const int KeepAged = 32;
+    public const int MaxAgedId = 128;
+
+    public IReadOnlyDictionary<string, DateTimeOffset> AgedShells => _aged;
+
+    // What an earlier run judged, read from the host's state file, before the transcript is read. A shell that is not in the
+    // transcript, or whose mark is another, is never touched by it.
+    public void RestoreAged(IEnumerable<KeyValuePair<string, DateTimeOffset>> aged)
+    {
+        foreach (var (id, mark) in aged.Take(KeepAged))
+        {
+            if (id.Length is > 0 and <= MaxAgedId) { _aged[id] = mark; }
+        }
     }
 
     // The entries as listed: running first (newest start first), then the most recently

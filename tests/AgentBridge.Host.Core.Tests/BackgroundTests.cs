@@ -464,4 +464,99 @@ public class BackgroundTests
 
         Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
     }
+
+    // #4571: a host's own clock decides when a shell is old, and that clock started again with the host, so an update
+    // restart made every old shell that never reported back count for another full limit (ghost "shell" sessions).
+    const string Started = "<command started in background with shellId: ci>";
+    const string StillRunning = "<command with shellId: ci is still running after 30 seconds. The command is still running. You will be automatically notified when it completes.>";
+    static string StatePath(Fixture f) => Path.Combine(f.Root, "profile", "sessions-listed.json");
+
+    [Fact]
+    public async Task A_shell_that_aged_out_stays_aged_after_a_host_restart_instead_of_counting_for_another_limit()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using (var before = f.Source(stateFile: StatePath(f)))
+        {
+            Fixture.Append(events, [Copilot.ToolResult("c1", Started, 8)]);
+            await before.RefreshAsync();
+            Assert.Equal(new Background { Shells = 1 }, before.Get(Id)!.Activity.Background);
+            f.Time.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(10));
+            await before.RefreshAsync();
+            Assert.Null(before.Get(Id)!.Activity.Background);
+        }
+
+        // The host restarts: a new source with no memory, the same transcript, process and clock.
+        await using var after = f.Source(stateFile: StatePath(f));
+        await after.RefreshAsync();
+
+        Assert.Null(after.Get(Id)!.Activity.Background);
+        Assert.Equal(SessionStatus.Idle, after.Get(Id)!.Status);
+    }
+
+    [Fact]
+    public async Task A_shell_not_yet_aged_before_a_restart_still_counts_until_the_new_host_has_watched_the_limit_itself()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using (var before = f.Source(stateFile: StatePath(f)))
+        {
+            Fixture.Append(events, [Copilot.ToolResult("c1", Started, 8)]);
+            await before.RefreshAsync();
+            f.Time.Advance(Limits.BackgroundShellStale - TimeSpan.FromMinutes(10));
+            await before.RefreshAsync();
+            Assert.Equal(new Background { Shells = 1 }, before.Get(Id)!.Activity.Background);
+        }
+
+        await using var after = f.Source(stateFile: StatePath(f));
+        await after.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, after.Get(Id)!.Activity.Background);
+
+        // The wall clock says the limit has passed, but this host has watched only twenty minutes of it: still counted, as before.
+        f.Time.Advance(TimeSpan.FromMinutes(20));
+        await after.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, after.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_shell_that_aged_out_counts_again_after_a_restart_when_its_command_says_it_is_still_running()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using (var before = f.Source(stateFile: StatePath(f)))
+        {
+            Fixture.Append(events, [Copilot.ToolResult("c1", Started, 8)]);
+            await before.RefreshAsync();
+            f.Time.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(10));
+            await before.RefreshAsync();
+            Assert.Null(before.Get(Id)!.Activity.Background);
+        }
+
+        // Now is hour 5 and ten minutes of the fixture's clock (it started at hour 1).
+        Fixture.Append(events, [Copilot.ToolResult("c2", StillRunning, 5 * 3600 + 590)]);
+        await using var after = f.Source(stateFile: StatePath(f));
+        await after.RefreshAsync();
+
+        Assert.Equal(new Background { Shells = 1 }, after.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_state_file_with_a_malformed_aged_shell_list_is_ignored_and_the_shell_counts_as_before()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        Fixture.Append(events, [Copilot.ToolResult("c1", Started, 8)]);
+        f.Time.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(10));
+        Directory.CreateDirectory(Path.GetDirectoryName(StatePath(f))!);
+        File.WriteAllText(StatePath(f), "{\"sessions\":[{\"id\":\"" + Id + "\",\"agent\":\"copilot\",\"agedShells\":\"nope\"},{\"id\":\"" + Id + "x\",\"agent\":\"copilot\",\"agedShells\":[{\"shell\":7,\"mark\":\"not a time\"}]}]}");
+        await using var source = f.Source(stateFile: StatePath(f));
+
+        await source.RefreshAsync();
+
+        Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
+    }
 }

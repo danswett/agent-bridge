@@ -63,6 +63,11 @@ internal sealed class SessionTracker
     internal TranscriptTail? Tail => _tail;
     internal SessionState State => _state;
 
+    // The shells judged older than the stale limit, by id and the mark they were judged at, which the source keeps in its
+    // state file so a host restart does not start their watch again (#4571).
+    internal IReadOnlyDictionary<string, DateTimeOffset> AgedShells => _state.Background.AgedShells;
+    internal void RestoreAgedShells(IEnumerable<KeyValuePair<string, DateTimeOffset>> aged) => _state.Background.RestoreAged(aged);
+
     public Session Update(DiscoveredSession discovered)
     {
         // What Build reads: the parsed transcript, its nested agents, discovery's view and the
