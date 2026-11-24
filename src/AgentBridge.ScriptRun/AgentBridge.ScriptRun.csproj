@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- script-run: the admin-locked launcher a scheduled task runs (docs/design/script-credentials-run.md). This slice (S1b-1) is its CORE: the command rules,
+       the order of admission, token and child, the child's environment and the exit codes, behind small ports. The executable's entry point and the real ports
+       (the local pipe, the DPAPI file, CreateProcessW) are the next slice, so nothing here reads a credential or starts a process on its own. -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>AgentBridge.ScriptRun</RootNamespace>
+    <AssemblyName>AgentBridge.ScriptRun</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>
