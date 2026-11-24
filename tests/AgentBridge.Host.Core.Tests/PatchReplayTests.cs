@@ -95,7 +95,28 @@ public class PatchReplayTests(ITestOutputHelper output)
                 new JsonObject { ["seq"] = 2, ["synced"] = new JsonObject { ["revision"] = 1, ["handles"] = new JsonObject { ["s1"] = 1 } } },
                 new JsonObject { ["seq"] = 3, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Next(before, 1, after, 2, handle: 1), ProtocolJson.Options), ["session"] = after }),
         });
-        return new JsonObject
+        // #4245: a reply the host cannot place in history has no responseId but still has a responseRef, and the next reply has another. The patch carries the
+        // id going away and the ref changing; a client with no id uses the ref to tell a new reply from an update.
+        JsonObject Said(string? id, string reference, string text) => new()
+        {
+            ["id"] = "s1",
+            ["activity"] = new JsonObject
+            {
+                ["turn"] = "Tn01aBcDeFgHiJkL", ["responseTurn"] = "Tn01aBcDeFgHiJkL",
+                ["responseId"] = id, ["responseRef"] = reference, ["response"] = text,
+            },
+        };
+        var first = Said("Rc01aBcDeFgHiJkL.0", "Rc01aBcDeFgHiJkL.0", "First reply");
+        var second = Said(null, "Rc02mNoPqRsTuVwX.0", "Second reply, no id");
+        var grown = Said(null, "Rc02mNoPqRsTuVwX.0", "Second reply, no id, grown");
+        sequences.Add(new JsonObject
+        {
+            ["name"] = "id-less-reply-ref", ["recording"] = "synthetic",
+            ["events"] = new JsonArray(
+                new JsonObject { ["seq"] = 1, ["upsert"] = first.DeepClone() },
+                new JsonObject { ["seq"] = 2, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Next(first, 1, second, 2), ProtocolJson.Options), ["session"] = second.DeepClone() },
+                new JsonObject { ["seq"] = 3, ["patch"] = JsonSerializer.SerializeToNode(SessionPatches.Next(second, 2, grown, 3), ProtocolJson.Options), ["session"] = grown.DeepClone() }),
+        });        return new JsonObject
         {
             ["about"] = "Recorded sessions as a subscriber that asked for patches is sent them, a change every 250 ms at most: the snapshot's upsert, then session.patch events, each with the session the client then holds.",
             ["spec"] = "v1-sessions.md#patches-sessionpatch",
