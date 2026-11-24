@@ -738,9 +738,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
      its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
      not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
-     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
-     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
-     (#1922, #2130); skipped events have unique admission keys.
+     is per pull request and other scoped events' per head, and any newer run of the same key cancels
+     the one in progress (#2577 for a new head; #4104 for every event since). Main sweeps, cron and
+     dispatch have slots of their own and never cancel (#1922, #2130); skipped events have unique
+     admission keys, so they cancel nothing.
      Before joining the writer queue, cron checks for other queued, pending or waiting scoped
      evaluations. It yields only to a positively identified fresh scoped job; a queue at least
      30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run

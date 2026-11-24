@@ -1915,8 +1915,12 @@ public class MergeRuleTests
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
             // Only the newest run per pull request or head survives: a newer run of the same key cancels an older one,
             // waiting or judging, and judges that key itself. A sweep never cancels; the kill switch turns it all off.
+            // A boolean for every event, not an operand: A && B || C returns B or C, and a head's sha there (#4374's P1)
+            // would be no boolean GitHub's cancel-in-progress takes.
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
             if (runs) { Assert.Equal(sweep is null, IfExpression.Evaluate(cancel, github)); }
             github["vars.FLEET_MERGERULE"] = "off";
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
             Assert.False(IfExpression.Evaluate(cancel, github));
             github["vars.FLEET_MERGERULE"] = null;
             var name = Scalar(job, "name");
@@ -2133,7 +2137,9 @@ public class MergeRuleTests
                 {
                     var equal = tokens[position++] == "==";
                     var right = Primary();
-                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase) : left is null && right is null;
+                    // GitHub's loose equality: a value that isn't there (null) equals '' as well as null.
+                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase)
+                        : left is null or "" && right is null or "";
                     return equal == same;
                 }
                 return left;
