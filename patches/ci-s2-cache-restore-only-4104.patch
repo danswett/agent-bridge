@@ -1,0 +1,133 @@
+From 7e43ce8cad7f4b34c4e866ef961165b82caf6c63 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 22:09:48 -0800
+Subject: [PATCH] CI S2: FULL never writes a cache (CodeQL cache-poisoning
+ alerts on #4254)
+
+full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test, so a cache written there could be poisoned by that
+code. FULL now only restores: the two cache saves in the spikes jobs go, and the Playwright system-packages action gets a save input (default true,
+so ci.yml is unchanged) that full.yml sets to false. Cache keys are unchanged. Test: full.yml has no cache save and calls the action with save false.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../playwright-system-packages/action.yml     |  8 +++++-
+ .github/workflows/full.yml                    | 16 +++---------
+ .../FullWorkflowTests.cs                      | 26 ++++++++++++++++++-
+ 3 files changed, 35 insertions(+), 15 deletions(-)
+
+diff --git a/.github/actions/playwright-system-packages/action.yml b/.github/actions/playwright-system-packages/action.yml
+index 0b94d2bdf..207625413 100644
+--- a/.github/actions/playwright-system-packages/action.yml
++++ b/.github/actions/playwright-system-packages/action.yml
+@@ -19,6 +19,12 @@ inputs:
+       Anything else downloads as before.
+     required: false
+     default: 'false'
++  save:
++    description: >
++      'false' in full.yml, which runs in the default branch's context on a workflow_run and so never writes a cache (only restores);
++      ci.yml leaves it true.
++    required: false
++    default: 'true'
+ 
+ runs:
+   using: composite
+@@ -53,7 +59,7 @@ runs:
+       run: |
+         read -ra browsers <<< "$BROWSERS"
+         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
+-    - if: always() && steps.packages.outputs.cache-ready == 'true'
++    - if: always() && steps.packages.outputs.cache-ready == 'true' && inputs.save == 'true'
+       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+       with:
+         path: ~/.cache/playwright-apt-debs
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index fe432bc54..91c2fb68c 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -67,12 +67,6 @@ jobs:
+             dotnet build $p.FullName -c Release --nologo
+             if ($LASTEXITCODE) { exit $LASTEXITCODE }
+           }
+-      - name: Save NuGet packages to main's cache
+-        if: github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.nuget/packages
+-          key: ${{ steps.nuget.outputs.cache-primary-key }}
+       - name: Parse spike scripts
+         shell: pwsh
+         run: |
+@@ -147,7 +141,7 @@ jobs:
+         id: playwright
+         working-directory: spikes/s4-relay
+         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
++      # Playwright's browsers come from a cache only ci.yml's runs on main write, keyed by the Playwright version
+       # npm ci installed (#459). The install below still runs every time: it fetches the browsers
+       # on a miss and installs their system packages either way.
+       - name: Playwright's browsers from main's cache
+@@ -163,23 +157,19 @@ jobs:
+         with:
+           browsers: chromium webkit
+           working-directory: spikes/s2-noise-interop
++          save: 'false'
+       - name: Download Playwright's system packages, S4
+         uses: ./.github/actions/playwright-system-packages
+         with:
+           browsers: chromium webkit
+           working-directory: spikes/s4-relay
++          save: 'false'
+       # In each spike, so a spike that moves to another Playwright still gets its own browsers;
+       # the second is quick while they agree.
+       - name: Playwright's browsers, for both
+         run: |
+           (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
+           (cd spikes/s4-relay && npx playwright install chromium webkit)
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+       - name: S2 in Chromium and WebKit
+         working-directory: spikes/s2-noise-interop
+         run: node js/test-browsers.mjs
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index 03dc1bc5b..21bcdfc0d 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -112,4 +112,28 @@ public class FullWorkflowTests
+ 
+         Assert.Empty(missing);
+     }
+-}
++
++    /// <summary>
++    /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written from there could be
++    /// poisoned by that code (CodeQL's cache-poisoning alerts on #4254), so FULL only restores: no job saves a cache, and the system-package
++    /// action, which saves by default for ci.yml, is told not to.
++    /// </summary>
++    [Fact]
++    public void Full_yml_never_writes_a_cache_it_only_restores_and_tells_the_package_action_not_to_save()
++    {
++        var text = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml"));
++        var steps = ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Values
++            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>()).ToList();
++        var packageCalls = steps.Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
++
++        Assert.DoesNotContain("actions/cache/save", text, StringComparison.Ordinal);
++        Assert.DoesNotContain("actions/cache@", text, StringComparison.Ordinal);
++        Assert.NotEmpty(packageCalls);
++        Assert.All(packageCalls, s => Assert.Equal("false", Scalar(s["with"], "save")));
++        var action = Load(".github/actions/playwright-system-packages/action.yml");
++        Assert.Equal("true", Scalar(((YamlMappingNode)action["inputs"])["save"], "default"));
++        var save = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>()
++            .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
++        Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
++    }
++}
+\ No newline at end of file
+-- 
+2.56.1.windows.1
+
