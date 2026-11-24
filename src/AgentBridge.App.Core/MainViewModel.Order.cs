@@ -210,6 +210,8 @@ public sealed partial class MainViewModel
 public sealed record EndedRow(string Key, string Title, string Meta);
 
 // What a card's menu, keyboard and drag do to its place in the list (#164).
+public sealed record GroupChoice(string Id, string Name, int Count, bool Current);
+
 public sealed class RowActions(MainViewModel main, SessionCardViewModel card)
 {
     public string Key => main.KeyOf(card);
@@ -219,5 +221,35 @@ public sealed class RowActions(MainViewModel main, SessionCardViewModel card)
     public bool MoveUp() => main.Move(card, -1);
     public bool MoveDown() => main.Move(card, 1);
     public void TogglePin() => main.SetPinned(card, !card.Pinned);
+
+    // The row menu's groups (G5b): every group with its count and whether this row is in it.
+    public IReadOnlyList<GroupChoice> GroupChoices
+    {
+        get
+        {
+            var mine = main.Order.Groups.GroupOf(Key);
+            var counts = main.GroupCounts;
+            return [.. main.Groups.Select(g => new GroupChoice(g.Id, g.Name, counts.GetValueOrDefault(g.Id), g.Id == mine))];
+        }
+    }
+    public bool InGroup => main.Order.Groups.GroupOf(Key) is not null;
+    public bool CanRemoveFromGroup => InGroup;
+    public void MoveToGroup(string id) => main.MoveToGroup(card, id);
+    public void RemoveFromGroup() => main.RemoveFromGroup(card);
+    // Why a new group can't be made with this name, in words for the dialog; null when it can.
+    public string? NewGroupProblem(string name)
+    {
+        if (main.Groups.Count >= 32) { return "At most 32 groups can be kept."; }
+        try { main.Order.Groups.ValidateName(name); return null; }
+        catch (ArgumentException e) { return e.Message; }
+    }
+    // Makes the group and moves this session into it; throws ArgumentException for a name NewGroupProblem refuses.
+    public string NewGroup(string name)
+    {
+        if (NewGroupProblem(name) is { } problem) { throw new ArgumentException(problem, nameof(name)); }
+        var id = main.CreateGroup(name);
+        main.MoveToGroup(card, id);
+        return id;
+    }
     public bool Drop(string dragged, bool after) => main.Place(dragged, card, after);
 }

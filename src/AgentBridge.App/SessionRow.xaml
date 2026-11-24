@@ -63,6 +63,9 @@
                 <MenuFlyoutItem x:Name="MoveUpItem" Text="Move up" Click="OnMoveUp" AutomationProperties.AutomationId="MoveUp" />
                 <MenuFlyoutItem x:Name="MoveDownItem" Text="Move down" Click="OnMoveDown" AutomationProperties.AutomationId="MoveDown" />
                 <MenuFlyoutItem x:Name="PinItem" Text="Pin" Click="OnPin" AutomationProperties.AutomationId="Pin" />
+                    <!-- The groups, with their counts, and New group... (G5b); filled when the menu opens. -->
+                    <MenuFlyoutSubItem x:Name="GroupItem" Text="Move to group" AutomationProperties.AutomationId="MoveToGroup" AutomationProperties.Name="Move to group" />
+                    <MenuFlyoutItem x:Name="RemoveFromGroupItem" Text="Remove from group" Click="OnRemoveFromGroup" AutomationProperties.AutomationId="RemoveFromGroup" AutomationProperties.Name="Remove from group" />
             </MenuFlyout>
         </Grid.ContextFlyout>
 
