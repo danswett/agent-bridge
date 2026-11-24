@@ -904,6 +904,91 @@ public sealed class ConversationEndPinTests
             $"offset after each notch: {string.Join(", ", offsets)} (end {extent}, worst move back {back})");
     }
 
+    // #4243, the bounce the end re-pin does not reach: the view arrives at the end mid-gesture, before the gesture's final
+    // view change could re-pin it, so the wheel's release still stands when the last rows realise (a tall tool row over its
+    // estimate) and the list lands one viewport (about four notches) short of the new end. The undo of that move needed the
+    // pin the wheel had just released, and the pointer over the conversation holds the end, so nothing put the view back.
+    // Whole notches, and a trackpad's sub-notch deltas with an inertial tail that outlasts the 250 ms start window.
+    [Theory]
+    [InlineData(120)]
+    [InlineData(20)]
+    public void The_layout_landing_one_viewport_short_of_the_end_mid_gesture_is_undone_though_the_wheel_released_the_pin(int delta)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.FollowState.PointerOver(7);
+        view.Scroller.Wheel(); view.Moved(47712, final: false); view.Moved(47424);
+        var offset = 47424.0;
+        while (offset < 48000)
+        {
+            view.Scroller.Wheel(-delta);
+            offset = Math.Min(offset + delta * 144.0 / 120, 48000);
+            view.Moved(offset, final: false);
+        }
+        Assert.False(view.Pinned);
+        // Outside our own layout wrapper: the framework's measure, as the owner's machine runs it.
+        view.Scroller.ScrollableHeight = 48112;
+        view.Moved(47512, final: false);
+        for (var tail = 0; tail < 3; tail++) { view.LapseWheelForProbe(); view.Scroller.Wheel(-4); }
+        view.Moved(47512);
+        view.LapseWheelForProbe();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == 48112, $"not put back at the end: {view.PinState()}");
+    }
+
+    // The same landing under a trackpad pan (DirectManipulation), which holds the view and released the pin when it began.
+    [Fact]
+    public void The_layout_landing_one_viewport_short_of_the_end_under_a_pan_is_undone_when_the_pan_ends()
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.FollowState.PointerOver(7);
+        view.FollowState.PanStarted();
+        view.ReleasePin();
+        view.GestureForProbe("pan");
+        foreach (var offset in new[] { 47500.0, 47800, 48000 }) { view.Moved(offset, final: false); }
+        view.Scroller.ScrollableHeight = 48112;
+        view.Moved(47512, final: false);
+        view.GestureForProbe("none");
+        view.FollowState.PanEnded();
+        view.Moved(47512);
+        view.DrainForProbe();
+        view.Follow();
+        Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == 48112, $"not put back at the end: {view.PinState()}");
+    }
+
+    // The person's own moves back from the end are never undone: a wheel up while a reply grows, a page back with the
+    // extent remeasured, and a wheel up after the layout's move had been undone.
+    [Theory]
+    [InlineData("wheel", 48100.0, 47856.0)]
+    [InlineData("page", 48112.0, 47400.0)]
+    [InlineData("up-after-landing", 48112.0, 47368.0)]
+    public void A_reader_moving_back_from_the_end_is_not_undone(string how, double extent, double to)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.FollowState.PointerOver(7);
+        if (how == "up-after-landing")
+        {
+            view.Scroller.Wheel(); view.Moved(47712, final: false); view.Moved(48000, final: false);
+            view.Scroller.ScrollableHeight = extent; view.Moved(47512, final: false);
+            view.Scroller.Wheel(120);
+        }
+        else if (how == "wheel") { view.Scroller.Wheel(120); }
+        view.Scroller.ScrollableHeight = extent;
+        view.Moved(to, final: false);
+        view.Moved(to);
+        view.LapseWheelForProbe();
+        view.DrainForProbe();
+        view.Follow();
+        Assert.Empty(view.Scroller.Targets);
+        Assert.False(view.Pinned);
+    }
+
     // A wheel event that raises no view change (another scroller took it, or a zero delta): its hold lapses by
     // itself, and only the latest notch's lapse lets go.
     [Fact]
