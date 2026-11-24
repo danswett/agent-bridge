@@ -189,5 +189,8 @@ ExpectFence 'a resume then a newer rollback' (Fence @($resumeRun, ($rollbackRun.
 ExpectFence 'unreadable history' (Fence @() -Unreadable) $true 'rollback-history-unavailable' $true
 ExpectFence 'truncated history with no rollback in what was read' (Fence @($old) 101) $true 'rollback-history-truncated' $true
 if ((Fence @($rollbackRun) 101).reason -ne 'rollback-active') { Write-Host 'FAIL: a rollback in a truncated history is still an active rollback'; $failures++ }
+$missingTotal = & $rollbackScript -Runs @()
+if (-not ($missingTotal.held -eq $true -and $missingTotal.loud -eq $true -and $missingTotal.reason -ceq 'rollback-history-unavailable')) { Write-Host "FAIL: a missing TotalCount must hold loudly -> held $($missingTotal.held), $($missingTotal.reason), loud $($missingTotal.loud)"; $failures++ }
 
-$1
+if ($failures) { exit 1 }
+Write-Host 'pages gate: ok'
