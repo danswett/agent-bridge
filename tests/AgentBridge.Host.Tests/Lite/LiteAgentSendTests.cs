@@ -33,6 +33,23 @@ public sealed class LiteAgentSendTests : IDisposable
     const string Device = "33333333333333333333333333333333";
     const string Body = """{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
 
+    // #4435: a tool that retries a busy send passes the time of its first request; it must be Unix seconds, not future, at most a day old.
+    [Fact]
+    public async Task The_first_request_time_is_passed_on_and_a_bad_one_is_refused_before_audit_or_sender()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await Send(hello, $$"""{"machine":"{{Device}}","session":"{{Sess}}","text":"hi","sentAt":{{now - 600}}}""");
+        Assert.Equal(now - 600, Assert.Single(sender.Calls).Input.SentAt);
+
+        foreach (var bad in new[] { (now + 3600).ToString(), (now - 90_000).ToString(), "\"soon\"", "1.5" })
+        {
+            var refused = await Assert.ThrowsAsync<ArgumentException>(() =>
+                Send(hello, $$"""{"machine":"{{Device}}","session":"{{Sess}}","text":"hi","sentAt":{{bad}}}"""));
+            Assert.Contains("badSentAt", refused.Message);
+        }
+        Assert.Single(sender.Calls);
+    }
+
     [Theory, InlineData("m2"), InlineData("m"), InlineData("33333333")]
     public async Task A_name_or_fragment_is_refused_with_its_id_before_audit_or_sender(string machine)
     {

@@ -53,7 +53,9 @@ public sealed class UnverifiedEnvelope
     }
 }
 
-public sealed record VerifiedEnvelope(EnvelopeBody Body, byte[] BodyBytes);
+// SentAt: when the sender first asked to send, in Unix seconds, as the relay message carried it (never part of the
+// signed body, whose lifetime is at most two minutes). Null means "use IssuedAt". The receiver sets it only after checking it.
+public sealed record VerifiedEnvelope(EnvelopeBody Body, byte[] BodyBytes, long? SentAt = null);
 
 public static class Envelope
 {

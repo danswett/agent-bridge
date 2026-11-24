@@ -113,6 +113,33 @@ public class AgentLiteSenderTests
         Assert.Equal(0, r.Link.Opened);
     }
 
+    // #4435: the time of the FIRST request travels beside the envelope (whose signed lifetime is two minutes), so a busy retry minutes
+    // later still says when the order was first asked for. Unsigned, so the receiver believes it only within a day before issuedAt.
+    [Fact]
+    public async Task The_first_request_time_reaches_the_receiver_and_defaults_to_the_issued_time()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var asked = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 300;
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", asked), default);
+        Assert.Equal(asked, r.Deliver.Envelope!.SentAt);
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
+        Assert.Equal(r.Deliver.Envelope!.Body.IssuedAt, r.Deliver.Envelope.SentAt);
+    }
+
+    [Fact]
+    public async Task A_first_request_time_over_a_day_before_the_envelope_is_not_believed()
+    {
+        using var r = new Rig();
+        Receiving(r);
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 90_000), default);
+
+        Assert.Null(r.Deliver.Envelope!.SentAt);
+    }
+
     // Answers as the real receiver does, so the sealed envelope is checked end to end rather than assumed.
     static void Receiving(Rig r, LiteDelivery? result = null, string? target = null)
     {

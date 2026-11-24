@@ -13,8 +13,9 @@ public static partial class LiteAgentSend
 {
     public const string Op = "agent.send";
     public const int MaxText = 4096;
+    public const long MaxSentAge = 86400;
 
-    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
+    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null, TimeProvider? clock = null)
     {
         credentials?.CheckScriptOperation(channel, Op);
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
@@ -30,6 +31,18 @@ public static partial class LiteAgentSend
         var machine = Field(data, "machine");
         var session = Field(data, "session");
         var text = Field(data, "text");
+        // Each agent.send is a new sealed envelope (signed lifetime at most two minutes), so a tool that retries a busy send over
+        // minutes passes the time of its FIRST request here and every retry keeps it (#4435). Unix seconds, not future, at most a day old.
+        long? sentAt = null;
+        if (data.TryGetProperty("sentAt", out var sent) && sent.ValueKind != JsonValueKind.Null)
+        {
+            var now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+            if (sent.ValueKind != JsonValueKind.Number || !sent.TryGetInt64(out var at) || at > now + 5 || at < now - MaxSentAge)
+            {
+                throw new ArgumentException($"refused: badSentAt: sentAt is the Unix seconds of the first request, at most {MaxSentAge / 3600} hours old");
+            }
+            sentAt = at;
+        }
         if (machine is null || !Wire.IsDeviceId(machine)) { throw new ArgumentException(AgentLiteSender.MachineRefusal(machine, AgentLiteSender.BadMachine, "must be an exact device ID; names never route")); }
         if (session is null || !SessionPattern().IsMatch(session)) { throw new ArgumentException("refused: badSession: session is agent_bridge_ and 16 lowercase hex digits"); }
         if (text is null || text.Length == 0) { throw new ArgumentException("refused: badText: text is required"); }
@@ -46,7 +59,7 @@ public static partial class LiteAgentSend
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
         LiteOutcome outcome;
-        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text, sentAt), ct); }
         catch (Exception)
         {
             AppendTerminal("unconfirmed");

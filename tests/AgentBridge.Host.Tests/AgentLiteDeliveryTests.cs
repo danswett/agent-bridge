@@ -1169,4 +1169,73 @@ public sealed class AgentLiteDeliveryTests
         d.Observe(Shown(3, SessionStatus.Working, f.Typed[1].Text), DateTimeOffset.UnixEpoch, f.Drivers.Arm);
         Assert.Equal((true, "beta on SENDER"), d.PromptSender);
     }
+    // #4435: an older order that arrives after a newer one from the same sender is typed and marked, never dropped or hidden.
+    // The newest time per sender and target is kept in memory for this host run, so a restart forgets it and marks fewer, never more.
+    const long First = 1_800_000_000;   // 00:00 PT, 2027-01-15
+    const string StaleMark = "STALE: sent {0} PT, a newer message from this sender was delivered first";
+    static string Id(int n) => $"0000000{n}-0000-0000-0000-000000000000";
+    static VerifiedEnvelope Sent(string text, int n, long sentAt, long? issuedAt = null, string session = "sess-9")
+    {
+        var e = Envelope(text, Id(n), session: session) with { SentAt = sentAt };
+        return issuedAt is { } at ? e with { Body = e.Body with { IssuedAt = at } } : e;
+    }
+
+    [Fact]
+    public async Task An_older_message_delivered_after_a_newer_one_from_the_same_sender_is_typed_and_marked_stale()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.True((await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default)).Typed);
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60), "older", default)).Typed);
+
+        Assert.DoesNotContain("STALE", f.Typed[0].Text);
+        Assert.Contains(string.Format(StaleMark, "00:01"), f.Typed[1].Text);
+        Assert.EndsWith("older", f.Typed[1].Text);
+    }
+
+    [Fact]
+    public async Task A_busy_retry_keeps_the_first_request_time_so_a_delayed_old_order_is_still_stale()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.True((await lite.DeliverAsync(Sent("newer", 2, First + 300), "newer", default)).Typed);
+        // The old order was first asked for at First + 60, but only got through after minutes of retries: its envelope is issued later.
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60, issuedAt: First + 900), "older", default)).Typed);
+
+        Assert.Contains(string.Format(StaleMark, "00:01"), f.Typed[1].Text);
+    }
+
+    [Fact]
+    public async Task Equal_times_are_not_stale_and_a_newer_message_is_never_marked()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("one", 1, First + 60), "one", default);
+        await lite.DeliverAsync(Sent("two", 2, First + 60), "two", default);
+        await lite.DeliverAsync(Sent("three", 3, First + 120), "three", default);
+
+        Assert.All(f.Typed, t => Assert.DoesNotContain("STALE", t.Text));
+    }
+
+    [Fact]
+    public async Task Staleness_is_kept_per_sender_and_a_message_with_no_sent_time_uses_its_issued_time()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("alpha", 1, First + 600, session: "alpha"), "alpha", default);
+        await lite.DeliverAsync(Sent("beta", 2, First + 60, session: "beta"), "beta", default);
+        var made = Envelope("late", Id(3), session: "alpha");
+        var plain = made with { Body = made.Body with { IssuedAt = First + 30 } };
+        await lite.DeliverAsync(plain, "late", default);
+
+        Assert.DoesNotContain("STALE", f.Typed[1].Text);
+        Assert.Contains("STALE", f.Typed[2].Text);
+    }
+
+    [Fact]
+    public async Task A_message_that_typed_nothing_does_not_raise_the_newest_time()
+    {
+        var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        Assert.False((await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default)).Typed);
+        f.Status = SessionStatus.Idle;
+        Assert.True((await lite.DeliverAsync(Sent("older", 1, First + 60), "older", default)).Typed);
+
+        Assert.DoesNotContain("STALE", Assert.Single(f.Typed).Text);
+    }
 }
