@@ -106,12 +106,11 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
    re-reads all of these inside the activation commit, so a grant revoked while a succession is quiescing cannot activate
    it: the role stays `quiescing(E)` and needs section 3's fresh person assignment. No new state is introduced.
 5. **Bounded in time and count.** `expiresAt` AND `maxUses` are both required; a grant without both is refused when it
-   is signed. The ceiling is the owner's answer (S1.4), "30 days / 20 uses (Recommended)", which the record gives with no unit
-   (the Chief's relay reads it as per role). **Design proposal (not an owner decision):** each grant is at most 30 days and 20 uses
-   and names exactly one role (check 2), and a role has at most ONE active grant: committing a grant with a higher `grantVersion`
-   ends the previous one in the same step, so a role has at most 20 uses available at a time; a new grant is a new person
-   signature that starts its own count, never something an agent or a host can raise. **Open owner question:** per role (a count
-   kept across grants) or per grant? Time uses
+   is signed. The ceiling is the owner's answer (S1.4), "30 days / 20 uses (Recommended)", which the record gives with no unit.
+   **Design proposal (not an owner decision):** a role has at most ONE live grant, and it is at most 30 days and 20 uses for
+   that role: committing a grant with a higher `grantVersion` revokes the previous one in the same step, and what was left of its
+   count is forfeited. With one live grant per role, "per role" and "per grant" mean the same thing, so there is nothing to
+   ask. A new grant is a new person signature, never something an agent or a host can raise. Time uses
    `now = max(local wall clock, durable highWater)`. The consumed count is persisted in the ledger and checked, then
    incremented, in the admission step; a count at `maxUses`, or an `expiresAt` in the past at admission or at
    activation, refuses.
@@ -199,7 +198,7 @@ the only way out is an explicit ABORT.
 ### S1.4 The owner's answers (Nov 23, 23:45 PT, recorded in slipgates-fleet #1351)
 
 1. **Who may use it:** "Current lead only (Recommended)": check 9.
-2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses; the record gives no unit, see check 5.
+2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses for the role's one live grant (check 5).
 3. **The residual risk:** "Accept, with visible audit (Recommended)": accepted on the condition of check 7.
 4. **Defaults that stand:** a grant never carries `presentation: inherit`; no drain starts before the grant check.
 
