@@ -188,6 +188,16 @@ public sealed partial class SessionView
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 
+    // After a layout under a still view, the block across the top edge back where it was (ui.md §6.4).
+    // Not while the person pans, holds a scrollbar part or a scroll is under way, nor while a correction of ours
+    // is on its way: a thumb drag's steps are final view changes, and a ChangeView under it bounced the bar (#1756).
+    void KeepAnchoredBlock()
+    {
+        if (panning || scrolling || scrollbarPointers.Count > 0 || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
+            || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
+        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+    }
+
     // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
     internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released=[{string.Join(" | ", pinReleased)}] requests=[{string.Join(" | ", pinRequests)}]";
 

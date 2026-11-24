@@ -225,9 +225,9 @@ The host accepts it only if all of these hold:
 2. **The caller is positively inside that session**, or the request is refused. It fails closed:
    * **Windows:** the pipe's ancestry read (local-pipe.md:101-112) finds the credential's bound
      process (`rootPid` with `rootStartUtc`) among the caller's ancestors, read **in full**.
-     Alternatively, and better, the caller's process is in the **Job object** the host created for
-     that launch (`IsProcessInJob`), without breakaway. That holds even for a process started
-     detached from its parent, which ancestry can't follow.
+     Or the caller's process is a member of the **session job** the host made for that launch (see
+     *Session job* below): that holds for a shell whose parent has exited, which ancestry can't follow.
+     The ancestor rule is unchanged, and membership is only ever a second way in for the same credential.
    * **An ancestry read only in part is a refusal**, not a fallback. `AGENT_BRIDGE_SESSION` is
      never proof: any process of the user can set it. It only *names* the session the caller
      claims, which step 2 then has to prove.
@@ -295,6 +295,34 @@ local-pipe.md:93-98).
   other acting op.
 * This is a protocol change, shipped in AP8.
 
+**Session job (Windows).** *Why:* the ancestor rule needs the session's root process in the caller's parent-pid chain. Windows records
+a process's parent id and nothing more, so once an intermediate parent has exited the walk ends there ("parent gone") and a valid
+credential is refused with `credential presented from outside its session`. A long-lived tool shell host, or any detached or orphaned
+shell, loses fleet messaging until the session is relaunched, with an error that does not say why.
+
+*What:* when the host binds a credential to a launch's root process (`Bind`) it puts that process in a Job object, and `Check`
+accepts a caller that is a member of that job when the chain does not reach the root. Children inherit membership, so an orphan stays in.
+* **No name, no DACL to get wrong.** The job is unnamed and the host keeps the only handle, in memory, keyed by the credential's hash. A
+  named job vanishes from its namespace when the last handle closes (a host restart), and any process of the user can open, squat or
+  guess a name. With no name there is nothing another session can open, join or trust; the only ways in are this handle and inheriting
+  membership from a process already in the job. A job is never believed by name.
+* **Believed only with the recorded root in it.** `Contains` asks about this credential's own job and requires the recorded root
+  (`rootPid` with `rootStartUtc`) to be in it, and the caller by pid *and* start time, and neither to have exited. A recycled id, a
+  missing start time, a partial ancestry read, a dead root, or another credential's job each refuse. A job never overrides step 2's
+  "read in full" rule or the root-alive check; it replaces only "the root is among the ancestors".
+* **Limits.** Only permission to break away: never kill-on-close, so a host restart cannot end a session. A child that breaks away
+  still starts, outside the job, and has the ancestor rule alone (it is a foreign caller as far as the job is concerned).
+* **Nested jobs.** The agent CLI may already run its children in a job of its own. Windows 8 and later nest jobs, so our job is made
+  the root's job as well, and `IsProcessInJob` is true for the root and for anything in a descendant job. If the root cannot be enrolled
+  (access denied, a job that does not nest, a process that has gone) nothing fails: the launch is still bound and the ancestor rule alone
+  applies; one line says so, never the token.
+* **Restart.** Handles die with the host, and a job with no handle and no name cannot be reached again. At start the host enrols each
+  live bound root again in a new job, so what that session starts from then on is a member. Shells that were already running before
+  the restart, and sessions launched before this shipped, keep the ancestor rule alone until the session is resumed or relaunched.
+  The handle is let go when the credential is removed (ended, revoked, replaced by a resume, expired); the job itself lives on while
+  its processes do and nothing is ended.
+* **Foreign callers.** A process in neither the chain nor the job is refused exactly as before, with the same log line. Another
+  session's job does not admit a caller to this one. Adopted sessions and macOS/Linux are unchanged (no job, ancestor rule).
 **macOS and Linux.** See step 2: no agent credentials there until peer identification and
 ancestry exist. That is a prerequisite for launched and adopted sessions alike.
 

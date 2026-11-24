@@ -134,10 +134,11 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
     [Trait("Category", "Network")]
     public async Task A_real_held_file_that_releases_is_rechecked_before_the_host_stops_and_the_update_continues()
     {
-        var clock = new FakeTimeProvider(Make.T0);
+        var clock = new ArmedTimerClock(Make.T0);
         var file = Path.Combine(app, "runtime.dll");
         using var holder = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
         var probes = 0;
+        var probed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         string? Probe()
         {
             string? reason;
@@ -152,16 +153,60 @@ public sealed class InstallReleaseWaitTests : IAsyncLifetime
         host.Start();
         var begun = false;
         var applied = false;
-        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true, _ => Probe());
-        await Wait.UntilAsync(() => Volatile.Read(ref probes) > 0, "the held file being checked");
+        // Signalled only from the update's own probe call, after the pre-call above, so it cannot be
+        // satisfied before the update has seen the held file; the wait keeps the helper's patience as its bound.
+        var update = Manager(clock).StopAndApplyAsync(() => begun = true, () => applied = true,
+            _ => { var reason = Probe(); probed.TrySetResult(); return reason; });
+        await probed.Task.WaitAsync(FakeHost.Patience);
         Assert.Empty(host.Sent(HostOps.Stop));
         holder.Dispose();
 
-        await FinishAsync(update, () => !begun, clock);
+        // The fake clock moves only while the update has a timer armed to move: a tick that lands between
+        // two of its waits moves nothing and used up one of FinishAsync's 250 pauses (#2558). FinishAsync's
+        // own bound stays, as the watchdog.
+        await FinishAsync(update, () => !begun && clock.TimersArmed > 0, clock);
 
         Assert.True(probes > 1);
         Assert.True(applied);
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Equal("the old install", File.ReadAllText(file));
+    }
+
+    // A fake clock that knows how many wait timers are armed (created and not yet disposed), so a test can
+    // advance it only when something is waiting on it. A timer due after the whole two-minute release
+    // wait is a scan's own deadline (CancellationTokenSource(ReleaseWait, Time)), armed for the length of
+    // every probe, so it says nothing about the update waiting: it is not counted.
+    sealed class ArmedTimerClock(DateTimeOffset start) : FakeTimeProvider(start)
+    {
+        int armed;
+
+        public int TimersArmed => Volatile.Read(ref armed);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var inner = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime >= InstallationFiles.ReleaseWait) { return inner; }
+            Interlocked.Increment(ref armed);
+            return new Counted(inner, () => Interlocked.Decrement(ref armed));
+        }
+
+        sealed class Counted(ITimer inner, Action disposed) : ITimer
+        {
+            int done;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => inner.Change(dueTime, period);
+
+            public void Dispose()
+            {
+                inner.Dispose();
+                if (Interlocked.Exchange(ref done, 1) == 0) { disposed(); }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 }

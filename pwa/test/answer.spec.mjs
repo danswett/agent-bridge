@@ -356,7 +356,8 @@ test.describe('on a phone', () => {
     expect((await log(page))[0].fields).toEqual({ os: ['win', 'linux', { other: 'FreeBSD' }] });
   });
 
-  test('a required multi choice can be answered with nothing ticked, as an empty list', async ({ page }) => {
+  // Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent.
+  test('a required multi choice with nothing ticked is not sent and says it needs an answer; one ticked goes', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, {
       id: 'q-none', message: 'Which of these broke?',
@@ -365,8 +366,12 @@ test.describe('on a phone', () => {
     await expect(q.getByRole('checkbox', { name: 'A' })).toBeChecked();
     await q.getByRole('checkbox', { name: 'A' }).uncheck();
     await q.getByRole('button', { name: 'Send answer' }).tap();
+    await expect(q.locator('.answer-error')).toHaveText('"Broken" needs an answer.');
+    expect(await log(page)).toEqual([]);
+    await q.getByRole('checkbox', { name: 'B' }).check();
+    await q.getByRole('button', { name: 'Send answer' }).tap();
     await expect(q).toHaveCount(0);
-    expect((await log(page))[0].fields).toEqual({ broke: [] });
+    expect((await log(page))[0].fields).toEqual({ broke: ['b'] });
   });
 
   test('a yes-or-no is two buttons, and required means one of them', async ({ page }) => {

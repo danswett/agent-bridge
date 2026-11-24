@@ -248,6 +248,9 @@ public sealed partial class ReplyService : ISessionReplier
         public Action? Watch(Action? keysGoing) => keysGoing is null ? null : () => { KeysGoingFired = true; keysGoing(); };
     }
 
+    // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
+    sealed class KeyTrack { public bool MayHaveBeenSent; }
+
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
         var track = new KeyTrack();
@@ -685,9 +688,9 @@ public sealed partial class ReplyService : ISessionReplier
         catch (Exception e)
         {
             log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
-            return Active() ? null : FirstReplyWords.WaitingToStart;
+            return Active() ? null : FirstReplyWords.ScreenUnreadable;
         }
-        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.WaitingToStart; }
+        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.ScreenUnreadable; }
         switch (StartupQuestions.Read(rows))
         {
             case StartupQuestion.None: break;
@@ -696,7 +699,7 @@ public sealed partial class ReplyService : ISessionReplier
         }
         // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
         // is named by the check that types, which comes next.
-        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.WaitingToStart;
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.NoInputBox;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed

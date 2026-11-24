@@ -6,8 +6,12 @@ namespace AgentBridge.Host.Delivery;
 // Creative's (#1018, PR #1048 comment 6695650655), kept here so a swap is one line each.
 public static class FirstReplyWords
 {
-    // The bridge cannot tell yet: the window is not drawn, or cannot be read. Nothing is typed.
-    public const string WaitingToStart = "the session is still starting, so it can't take a reply yet. Send it again in a moment";
+    // The bridge cannot tell yet, and says which check failed (#3538), so a sender or a person can act. Nothing is typed.
+    // The window cannot be read:
+    public const string ScreenUnreadable = "the machine could not read the session's screen to tell it is ready for a reply. Send it again in a moment";
+
+    // The window is read but the prompt's box and footer are not drawn:
+    public const string NoInputBox = "the machine does not see the session's input box yet, so it can't take a reply. Send it again in a moment";
 
     // A launch the bridge follows, not yet seen ready. It names Needs you only where the session
     // will appear there with a way to answer (remote folder trust on, a device approved): a reason
@@ -19,6 +23,11 @@ public static class FirstReplyWords
     // Followed until the bridge gave up, and never seen ready. Its own activity after launch,
     // or the agent exiting, releases it (LaunchService.HeldForReply).
     public static string NotSeenReady(string label) => $"{label} never showed it was ready for a reply and may be asking something in its window. Answer it on that machine, or start a new session";
+
+    // The session is working (its own transcript shows activity since this launch) and has a question or permission
+    // request open, so a reply could answer it: not "starting" (#3538), which a working session was told for minutes.
+    public static string WaitingForAnAnswer(string label) =>
+        $"{label} is waiting for an answer to a question or permission request, so it can't take a reply yet. Answer that first, then send this again";
 
     // The folder-trust question is showing. Answered from the phone (#947) where the bridge allows
     // that for this session, else only at the machine.
