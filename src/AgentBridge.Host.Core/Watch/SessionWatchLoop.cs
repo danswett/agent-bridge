@@ -12,13 +12,16 @@ public sealed class SessionWatchLoop(Func<IReadOnlyList<Session>> snapshot, Func
     static readonly TimeSpan Window = TimeSpan.FromHours(1);
     readonly List<DateTimeOffset> failures = [];
 
-    public DateTimeOffset? LastPass { get; private set; }
+    long lastPassTicks;
+
+    // Read from other threads (host health), so the ticks are written and read volatile. UTC; 0 means no pass yet.
+    public DateTimeOffset? LastPass => Volatile.Read(ref lastPassTicks) is var t and not 0 ? new DateTimeOffset(t, TimeSpan.Zero) : null;
 
     public void Pass()
     {
         var notices = watch.Evaluate(snapshot(), now(), held());
         if (WatchDigest.Compose(notices, Label) is { } digest) { notify(digest.Title, digest.Body); }
-        LastPass = now();
+        Volatile.Write(ref lastPassTicks, now().UtcTicks);
     }
 
     // A short session id only: never a title, which can come from what someone typed.
@@ -29,7 +32,8 @@ public sealed class SessionWatchLoop(Func<IReadOnlyList<Session>> snapshot, Func
         while (!ct.IsCancellationRequested)
         {
             try { Pass(); }
-            catch (Exception e) when (e is not OperationCanceledException)
+            catch (OperationCanceledException) { return; }
+            catch (Exception e)
             {
                 var at = now();
                 failures.RemoveAll(f => at - f > Window);
@@ -44,6 +48,7 @@ public sealed class SessionWatchLoop(Func<IReadOnlyList<Session>> snapshot, Func
             }
             try { await wait(ct); }
             catch (OperationCanceledException) { return; }
+            catch (Exception e) { log($"session watch: waiting for the next pass failed ({e.GetType().Name})"); return; }
         }
     }
 }

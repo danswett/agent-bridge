@@ -21,7 +21,8 @@ public class SessionWatchLoopTests
         public DateTimeOffset Now = T;
         public Func<IReadOnlyList<Session>> Snapshot = () => [];
         public bool Held;
-        public SessionWatchLoop Loop => new(() => Snapshot(), () => Held, new SessionWatch(new WatchSettings(), _ => null),
+        SessionWatchLoop? loop;
+        public SessionWatchLoop Loop => loop ??= new(() => Snapshot(), () => Held, new SessionWatch(new WatchSettings(), _ => null),
             (t, b) => Sent.Add((t, b)), () => Now, Logged.Add);
     }
 
@@ -100,6 +101,39 @@ public class SessionWatchLoopTests
         var calls = 0;
         rig.Snapshot = () => { rig.Now = T.AddHours(calls * 2); return ++calls <= 2 ? throw new InvalidOperationException("boom") : []; };
         await Run(rig.Loop, 4);
+        Assert.Empty(rig.Sent);
+        Assert.Equal(4, calls);
+        Assert.NotNull(rig.Loop.LastPass);
+    }
+
+    [Fact]
+    public async Task Two_failures_exactly_one_hour_apart_count_as_inside_the_hour()
+    {
+        var rig = new Rig();
+        var calls = 0;
+        rig.Snapshot = () => { rig.Now = T.AddHours(calls++); throw new InvalidOperationException("boom"); };
+        await Run(rig.Loop, 10);
+        Assert.Equal("Session watch stopped", Assert.Single(rig.Sent).Title);
+    }
+
+    [Fact]
+    public async Task A_failing_pass_does_not_move_the_heartbeat()
+    {
+        var rig = new Rig();
+        var loop = rig.Loop;
+        loop.Pass();
+        rig.Snapshot = () => throw new InvalidOperationException("boom");
+        rig.Now = T.AddMinutes(5);
+        await Run(loop, 1);
+        Assert.Equal(T, loop.LastPass);
+    }
+
+    [Fact]
+    public async Task A_wait_that_throws_ends_the_loop_with_a_log_line_and_no_exception()
+    {
+        var rig = new Rig();
+        await rig.Loop.RunAsync(_ => throw new IOException("timer"), CancellationToken.None);
+        Assert.Contains(rig.Logged, l => l.Contains("IOException"));
         Assert.Empty(rig.Sent);
     }
 }
