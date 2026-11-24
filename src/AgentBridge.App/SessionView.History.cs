@@ -236,7 +236,9 @@ public sealed partial class SessionView
                 {
                     UpdateConversationLayout(HistoryColumn);
                     if (!Current()) { return; }
-                    target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
+                    // For a prepend, from where the view is going when an earlier correction is still on its way: this offset is the animation's, and counting from it loses that correction's height.
+                    var from = earlierExtent is not null ? ConversationKeep.PrependBaseline(anchoring, scroll.VerticalOffset) : scroll.VerticalOffset;
+                    target = Math.Clamp(from + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
             var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;
