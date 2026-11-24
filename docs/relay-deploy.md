@@ -280,7 +280,7 @@ Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
 
-New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, and the Apple app's default (`BridgeStore.swift`) with it, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
+New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, and the Apple app's default (`BridgeStore.swift`) with it, with both names live. The owner made `relay.slipgates.com` canonical on Nov 19, 11:30 PT (fleet `docs/owner-decisions.md`): every machine moves off `relay.bad-duck.com`. Removing the `relay.bad-duck.com` binding itself still follows the retirement steps in this document.
 
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
@@ -422,6 +422,20 @@ notifications off and on again; hosts drop the old subscriptions when the push s
 answers 410. Accounts and tokens are unaffected.
 
 Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only the smoke test.
+
+## Who approves a production deploy
+
+The owner decided on Nov 23, typing to Chief: "Deploying never needs me". Production deploys, for example the `production`
+environment approval for `relay.yml`, no longer need the owner. This supersedes any per-deploy owner approval elsewhere on
+this page. The conditions, in Chief's wording as recorded in fleet `docs/owner-decisions.md` (Nov 23):
+
+> SRE approves them through the per-command danswett route, after the normal gates (the change is merged on main through
+> Quality, the staging deploy and smoke test are green, only the newest run is approved, a health check follows, the runbook
+> rollback is used if the deploy is bad, and SRE reports to Chief).
+
+Where the environment's required reviewer is danswett, the owner answered "OK: SRE approves via my account".
+
+> It does NOT cover turning on enforce flags, kill switches, repository settings or variables, or credentials.
 
 ## Rollback
 

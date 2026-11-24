@@ -35,3 +35,31 @@ test('an earlier prompt an agent sent is collapsed with its title and a preview,
   await expect(prompt.locator('.prompt-full')).toHaveText('Demo prompt 1');
   await expect(prompt.locator('.prompt-preview')).toBeHidden();
 });
+
+test('verified history uses the host sender, legacy is explicitly unverified, and owner-literal envelopes stay unchanged', async ({ page }) => {
+  await page.goto('/?demo=1&static=1');
+  await page.waitForSelector('html[data-demo-ready]');
+  const envelope = '[Slipgates \u00b7 from an agent on BUILD-HOST-A \u00b7 session s-9 \u00b7 request r-1 \u00b7 not typed by your user] ';
+  const report = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of the report.`).join('\n');
+  const drawn = await page.evaluate(async ({ envelope, report }) => {
+    const { turnView } = await import('/js/ui/history-view.js');
+    const out = {};
+    for (const [name, prompt] of [['agent', { text: envelope + report, from: 'agent', label: 'Verified host sender' }], ['absent', { text: envelope + report }], ['person', { text: envelope + report, from: 'person' }], ['own', { text: 'Please rebase.', from: 'person' }]]) {
+      const el = turnView({ id: name, at: null, prompt, parts: [] });
+      out[name] = { bubble: !!el.querySelector('.history-bubble'), facts: el.querySelector('.prompt-facts')?.textContent ?? null, full: el.querySelector('.prompt-full')?.textContent ?? null, text: el.querySelector('.history-bubble .plain')?.textContent ?? el.textContent, name: el.querySelector('.prompt-toggle')?.getAttribute('aria-label') };
+    }
+    return out;
+  }, { envelope, report });
+  expect(drawn.agent.bubble).toBe(false);
+  expect(drawn.agent.facts).toBe('From: Verified host sender');
+  expect(drawn.agent.full).toBe(report);
+  expect(drawn.absent.bubble).toBe(false);
+  expect(drawn.absent.facts).toBe('Unverified sender: s-9 on BUILD-HOST-A');
+  expect(drawn.absent.name).toContain('Unverified');
+  expect(drawn.absent.full).toBe(envelope + report);
+  expect(drawn.person.bubble).toBe(true);
+  expect(drawn.person.facts).toBeNull();
+  expect(drawn.person.text).toBe(envelope + report);
+  expect(drawn.own.bubble).toBe(true);
+  expect(drawn.own.facts).toBeNull();
+});

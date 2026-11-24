@@ -36,10 +36,10 @@ function originView(origin, at = null) {
   const words = h('span', null, 'Show prompt');
   const toggle = h('button', { type: 'button', class: 'prompt-toggle', 'aria-expanded': 'false', 'aria-controls': full.id, 'aria-label': disclosureName(origin, false) },
     designIcon('chevron', { size: 16, cls: 'prompt-chevron' }), words);
-  const facts = h('span', { class: 'prompt-facts' });
+  const facts = h('span', { class: 'prompt-facts', title: origin.from === 'unverified' ? origin.spoken : '' });
   setFacts(facts, origin.facts);
   const root = h('div', { class: 'prompt-origin', dataset: { from: origin.from } },
-    h('p', { class: 'prompt-label' }, h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()), facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
+    h('p', { class: 'prompt-label' }, origin.icon ? h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()) : null, facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
     h('p', { class: 'prompt-preview' }, origin.preview), toggle, full);
   toggle.addEventListener('click', () => {
     const open = toggle.getAttribute('aria-expanded') !== 'true';
@@ -132,17 +132,35 @@ function part(p, inline = null) {
 // A turn only activity has told has no stored parts yet: its reply, the words activity gave it while it
 // was the live turn, stays drawn under it until a page brings the stored ones.
 export function shownParts(t) {
+  if (t.live?.responseId && t.live.response && !t.parts.some((p) => p.id === t.live.responseId)) {
+    return [...t.parts, { id: t.live.responseId, kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+  }
   if (t.parts.some((p) => p.kind === 'response' && p.text) || !t.live?.response) { return t.parts; }
   return [...t.parts, { kind: 'response', text: t.live.response, truncated: t.live.responseTruncated === true }];
+}
+
+export function currentReply(snapshot, session) {
+  const voice = liveVoice(session);
+  if (!voice.response) { return ''; }
+  const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
+  if (!turn) { return voice.response; }
+  // Replies kept as parts by id read together. With no id (#3649) they read together only up to the last id-less live part the store held: a stored
+  // part after it is deferred, and a lone id-less reply is just the live words.
+  if (session.activity.responseId) { return shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n'); }
+  const live = turn.parts.findLastIndex((p) => p.live);
+  return live < 0 ? voice.response : turn.parts.slice(0, live + 1).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n');
 }
 
 export function turnView(t, inline = null) {
   if (t.unreadable) { return h('section', { class: 'history-turn', dataset: { turn: t.id } }, h('p', { class: 'history-meta' }, WORDS.unreadable)); }
   const from = t.kind === 'notification' ? 'notification' : t.kind === 'scheduled' ? 'schedule' : t.prompt?.from ?? 'person';
+  // A relay message is stored as the person's, so the origin is read before the layout is chosen.
+  const origin = t.prompt ? historyPromptOrigin(t.prompt, t.kind) : null;
   const prompt = !t.prompt ? null
-    : from === 'person'
-      ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
-      : (() => { const o = historyPromptOrigin(t.prompt, t.kind); return o ? originView(o, t.at) : null; })();
+    : origin ? originView(origin, t.at)
+      : from === 'person'
+        ? h('div', { class: 'history-prompt' }, sentMessage(t.prompt.text ?? '', 'history-bubble'), timeRow(t.at, 'msg-time-owner'))
+        : null;
   return h('section', { class: 'history-turn', dataset: { turn: t.id } }, prompt, shownParts(t).map((p) => part(p, inline)), t.truncated ? h('p', { class: 'history-meta history-cut' }, WORDS.cut) : null);
 }
 

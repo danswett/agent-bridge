@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { Fold } from '../../js/ui/collapse-header.js';
 import { toEnd, footParts, copyOf, footCovers, resync, CollapsingFoot } from '../../js/ui/collapse-foot.js';
 
-const ROOM = 25; // the reply area at rest (73) less the 48 bar
+const ROOM = 25; // arithmetic only: a reply area of 73 less the 48 bar (a phone's is now 121 at rest, room 73)
 const MAX = 2000;
 
 // The fold scrolled so the conversation is `e` from its end, as one scroll event.

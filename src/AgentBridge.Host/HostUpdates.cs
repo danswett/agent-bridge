@@ -121,12 +121,16 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         }
     }
 
-    public async Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken)
+    public Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken) => CheckAsync(cancellationToken, pressed: false);
+
+    public async Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken, bool pressed)
     {
         // Off the caller's thread before anything else: reading the feed and the preferences, and
         // whatever Velopack does before its first await, would otherwise run on the connector's
         // pass, where the heartbeat waits for it and no timeout reaches it.
         await Task.Yield();
+        // Flows into this check alone: set inside this async method, it is undone when it returns.
+        DiscoveredGithubSource.Pressed.Value = pressed;
         var m = Manager();
         var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
         if (info is null) { return null; }

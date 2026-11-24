@@ -47,6 +47,17 @@ public static class RosterFixture
         return d;
     }
 
+    // A v3 person (devices.md "Version and descriptor"): capSign, its algorithm and proof before kind.
+    public static JsonObject PersonV3(TestKey dh, TestKey sign, TestKey capSign, string kind, string platform, string name, string presence)
+    {
+        var d = Person(dh, sign, kind, platform, name, presence);
+        var at = d.IndexOf("kind");
+        d.Insert(at, "capSignProof", Codec.Base64Url(capSign.Sign(CapSignKey.Binding(Account, Generation, dh.Public))));
+        d.Insert(at, "capSignAlg", EntryBody.SignAlgorithm);
+        d.Insert(at, "capSign", Codec.Base64Url(capSign.Public));
+        return d;
+    }
+
     public static JsonObject Credential(bool backupEligible = false) => new()
     {
         ["rpId"] = RpId,

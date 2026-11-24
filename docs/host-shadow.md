@@ -96,13 +96,13 @@ own token. Enforced in code (`Shadow/HaReader.cs`), and tested:
   The same goes for a place where this machine's daemon has **no** reading and the host has
   one, matched on the host's account: typically a further Copilot login the host is given
   (`usage.copilotAccounts`) and this machine's agent-ha-bridge is not, because another
-  machine reads it. Found as `usage.missingOnDaemon` on `copilot_2` for hours on DEV-VM1
-  (2026-10-30), while DSWETT-HOME, the daemon's dashboard writer, read that login. With no
+  machine reads it. Found as `usage.missingOnDaemon` on `copilot_2` for hours on a dev VM
+  (2026-10-30), while the daemon's dashboard writer read that login. With no
   named machine reading it, the daemon has no reading, and that is still a mismatch.
   If the only reader of that login has itself stopped reading (its figure lapsed), its
   figure is what the daemon's machines show, and it is **not compared**, as a lapsed figure of
-  this daemon's own is not. Taking it as no reading at all counted a mismatch on DEV-VM1 on
-  2026-10-30, 22:40 PT, while DSWETT-HOME went 35 minutes without reading the login.
+  this daemon's own is not. Taking it as no reading at all counted a mismatch on a dev VM on
+  2026-10-30, 22:40 PT, while the dashboard writer went 35 minutes without reading the login.
 * **The token.** `homeAssistant.baseUrl` and `homeAssistant.token` are read from
   `~/.agent-ha-bridge/config.json` at the moment of each read (so a rotated token is the one
   used), sent in that request's `Authorization` header, and dropped. Never logged, written
@@ -144,7 +144,7 @@ agent-bridge-host shadow summary [--days 7] [--gate] [--json]
 
 ## Running it
 
-On the machine being cut over (DSWETT-DEV-VM1 first), as the user agent-ha-bridge runs for,
+On the machine being cut over (a dev VM first), as the user agent-ha-bridge runs for,
 from a checkout of the commit to be compared, in PowerShell 7, not elevated, and from an ordinary terminal: inside an agent session agent-bridge-host refuses to change its own config (#44), and the install stops saying so:
 
 ```powershell
@@ -216,7 +216,7 @@ were running, without re-registering them. With no install to update (either tas
 build missing), it refuses and changes nothing. It also leaves the profile as it was, so
 re-run `-Install` from an ordinary terminal after agent-ha-bridge's workspaces or logins
 change, or to change this script's options (`-Relay`, `-Interval`, `-Grace`). Added after
-the 2026-10-30 redeploy on DEV-VM1 had to be a binary swap done by hand.
+the 2026-10-30 redeploy on the dev VM had to be a binary swap done by hand.
 `pwsh build/test-shadow-week.ps1` checks each of those against stand-ins for the tasks,
 `dotnet` and the host, and CI runs it on Windows. `-WhatIf` shows the whole plan and changes
 nothing.
@@ -261,7 +261,7 @@ others, read-only:
   `AGENT_BRIDGE_RELAY`, else the one the profile used before, else the app's own profile's,
   else the relay the phone's app uses: `S4_RELAY` in `.github/workflows/pages.yml`, which the
   Pages build bakes into the PWA, read from the checkout. So on a machine without the app
-  (DEV-VM1) `-Install -Relay` needs no `-RelayUrl`.
+  (a dev VM) `-Install -Relay` needs no `-RelayUrl`.
   The task names the relay that issued the profile's account (`--relay`), so the host never
   sends that account's token to another relay, `AGENT_BRIDGE_RELAY` included. A profile already
   signed in keeps its relay; a different `-RelayUrl` stops the install until it is signed in
@@ -295,15 +295,19 @@ reports, the `shadow` profile and the published folder stay until deleted by han
 
 ## A scripted soak on the rehearsal VMs
 
-Organic use fills the gate slowly, and on DEV-VM1 it had no Claude or Codex sessions at all.
+Organic use fills the gate slowly, and on the dev VM it had no Claude or Codex sessions at all.
 `build/shadow-soak-vm.ps1` fills it on the Azure rehearsal VMs instead
 ([parity-checklist.md](parity-checklist.md), "VM-M in Azure"): VM-M runs agent-ha-bridge with
-the shadow host beside it, installed by `shadow-week.ps1` as on DEV-VM1, and a driver drives
+the shadow host beside it, installed by `shadow-week.ps1` as on the dev VM, and a driver drives
 agent-ha-bridge through VM-W's disposable Home Assistant the way a person does from its
 dashboard. Never the owner's Home Assistant: the driver refuses any address but VM-M's loopback,
 which the tunnel forwards to VM-W. Everything in the VMs goes through `az vm run-command`
 (`rehearsal-azure-vmw.ps1 -InvokeScript`), so it runs as a scheduled task of the VM's user, not
 from an agent session, and the #67 guard does not stand in its way.
+
+Both scripts refuse unless `az` is signed in as the account the rehearsal belongs to: set the
+`AGENT_BRIDGE_REHEARSAL_AZURE_USER` user environment variable once, in Windows settings
+([parity-checklist.md](parity-checklist.md), VM-W in Azure).
 
 ```powershell
 ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start; ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -Start
@@ -482,7 +486,7 @@ comparing:
 
 ### Known daemon bugs
 
-The first live runs, on DSWETT-DEV-VM1 against agent-ha-bridge 1.33.32, turned up six
+The first live runs, on a dev VM against agent-ha-bridge 1.33.32, turned up six
 places where the daemon is wrong and the host right, each checked against the transcript
 and, for shells, against the processes actually running under the session's CLI. Each is
 filed against agent-ha-bridge and left there.
@@ -499,7 +503,7 @@ exactly: the daemon's, less what the signatures explain (plus, for #276, the res
 dropped), must equal the host's. Anything
 else, an id with no signature or a count left over, keeps the difference a mismatch. A
 difference that matches is a **known difference**: tallied in the day's `known`, by kind and
-issue, and never a mismatch. The first minutes of the live run on DEV-VM1 showed three of the
+issue, and never a mismatch. The first minutes of the live run on the dev VM showed three of the
 five, and the comparison now classifies each as below.
 
 **Sub-agents, entry by entry (#175).** Since S1 (#173) the host lists the agents behind its
@@ -554,6 +558,7 @@ which is #261 below, unchanged.
 | `background.shells`, daemon higher | Every start of each extra id since its last end is in a subagent's tool result | agent-ha-bridge#261 |
 | `background.shells`, daemon higher | Each extra id's only start of the session's own is an "is still running" line that is not its tool result's last line | agent-ha-bridge#262 |
 | `background.shells`, daemon lower | Each shell the host counts and the daemon does not list ended (an end the host takes: the session's own result's last line, a whole stop, or `shell_completed`) and was then started again under the same id by the session, in a start both take. The end and the restart are both before the daemon's `Offset`; since the restart there is no end the host takes, none the daemon has read, and no `session.shutdown` | agent-ha-bridge#276 |
+| `background.shells`, daemon higher, a session idle for hours | The shell's latest start or "still running" mark is over `Limits.BackgroundShellStale` (4 h) old, so the host no longer counts it in the shown `background` while the daemon counts it until a completion line it may never get; the host keeps it unaged for an agent's End. The shadow has NO classifier for this yet: it reports a `background.shells` mismatch, to be read by hand as the host's own limit (#1396), not as a daemon bug or a host fault | #1396 |
 | `question.missingOnHost`, and `status` daemon `waiting` | The daemon's question is the `ask_user` its marker names (by call id, else the one started within 10 s of the marker being armed); that `ask_user` has completed in the transcript, and its start lies more than 4 MiB before the end of the line that completed it. For `status`, the daemon's own status must also be the host's; when it is not, the mismatch stands and names the two statuses | agent-ha-bridge#259 (filed as #263, closed as its duplicate) |
 | `resumable.count`, `resumable.missingOnHost`, `resumable.missingOnDaemon` | Every Copilot session in the host's list from Copilot's own store (not Agency's) whose `workspace.yaml` has a `name:` and no `summary:` is relabelled as the daemon labels it: by its first prompt, read from the first and last 128 KiB of `events.jsonl` (the daemon's `Read-BridgeFileEnds`), or left out when those hold none. The host's label must be the one its own rule makes from the name, and the labels are told apart again as the host tells them apart. A label the host told apart with an id suffix is freed only when its namesake is earlier in the same list; one reserved by a session not offered (a live one) leaves the list unexplained. When a session left out was the only one of its kind, the agent names come off, as the daemon would drop them for a single-kind list, unless the host has a live session of another kind, which leaves the list unexplained. So does any title in the rebuilt list that a live session not in it could hold (its summary or first prompt, in its folder), a transcript or `workspace.yaml` that is there but cannot be read, or any live session of another agent when the list does not name agents. At least one must have been relabelled, and the result must then be the daemon's list exactly, in count and in labels. The whole list is explained together or not at all: any other difference in it keeps every resume-list difference a mismatch | agent-ha-bridge#278 |
 | `compactions`, daemon 0, Codex sessions only | The rollout the daemon's own registration for the session names (`runtime/agent-bridge-codex/<id>.json`, a `rollout-*-<id>.jsonl` of that session) holds exactly as many top-level `"type":"compacted"` lines as the host counts, read from where it was last read unless it shrank or the bytes before that point changed. Claude's and Copilot's compactions, a daemon counting any, or a host count the rollout does not hold, stay mismatches | agent-ha-bridge#279 |
@@ -576,7 +581,7 @@ What each bug does:
 | `session.missingOnHost`, Claude | Counts a Claude registration live whenever its `ProcessId` is any running Claude process (`Get-ClaudeSessions`), with no check that the process started before the registration was written, and keeps an ended session's registration. A new Claude process that Windows gave an ended session's pid brought that session back, idle, for as long as the new one ran (12 minutes on VM-M, 2026-11-02) | agent-ha-bridge#289 |
 | `status` (`waiting` against `idle`) and `model` (`haiku` against `claude-haiku-5-5`), resumed Claude sessions | After an answer it injected into a resumed Claude session, it logged "answer unconfirmed" each pass and kept the question armed for 53 to 70 s, though the transcript had the answer and a finished turn; meanwhile its model was the launch's alias, not the transcript's. Twice on VM-M, 2026-11-02 | agent-ha-bridge#290 |
 
-**The first minutes on DEV-VM1**, classified:
+**The first minutes on the dev VM**, classified:
 
 | Seen | What it was |
 |---|---|
@@ -593,7 +598,7 @@ What each bug does:
 |---|---|
 | `status` daemon `working`, host `waiting`, four episodes from 00:58 to 09:30 PT (6 h 45 min the longest), on the busy session | The same question pending all night, compared by a build from before the normalization above (#82). The host was right. These stay mismatches in that report: `gate.json` can explain them with `through` (below), or they stop failing the gate 24 hours after they ended |
 | `question.missingOnHost` and `status` daemon `waiting`, host `working` or `idle`, from 09:37 PT on, same session | That question, answered at 09:32, kept by the daemon (agent-ha-bridge#259; filed as #263). The host was right; now classified |
-| `usageReadings` 0 events, with usage "compared" in nearly every sample | Another machine (DSWETT-HOME) was reading the account's Copilot usage, so this machine's daemon had stood down (agent-ha-bridge's `Test-BridgeUsageCovered`), and its sensor held an 11-hour-old figure. No pair of readings was ever close enough to count, and none should have been called compared. The comparison now takes the account reader's figure ("Home Assistant reads"), and, with none current, does not compare usage |
+| `usageReadings` 0 events, with usage "compared" in nearly every sample | Another machine (the dashboard writer) was reading the account's Copilot usage, so this machine's daemon had stood down (agent-ha-bridge's `Test-BridgeUsageCovered`), and its sensor held an 11-hour-old figure. No pair of readings was ever close enough to count, and none should have been called compared. The comparison now takes the account reader's figure ("Home Assistant reads"), and, with none current, does not compare usage |
 
 ### Fixed in the host
 
@@ -670,7 +675,7 @@ only the compared samples where the difference showed. If no compared sample has
 hours does not stretch it. A compared sample without the difference still ends it at once.
 
 A count that turns the other way (the daemon's higher, then the host's) is two disagreements,
-each judged against the grace on its own. On DEV-VM1 a shell ended and was started again a
+each judged against the grace on its own. On the dev VM a shell ended and was started again a
 minute later, with the daemon a pass behind each time. Two opposite lags, each shorter than
 the grace, had run on as one 60 s mismatch. This applies to the kinds compared as two counts
 (`background.*`, `compactions`, `resumable.count`); a count that moves the same way stays one
@@ -706,7 +711,7 @@ exact Clopper-Pearson bound. Mismatches count only from when that kind's events 
 those past a day's cap (`overflow`) count as unexplained.
 
 **Counting starts** with the first sample a release with coverage writes; reports from before
-it (written by 30ef3a7, which DEV-VM1 started on 2026-10-29) have no `coverage`. What they do
+it (written by 30ef3a7, which the dev VM started on 2026-10-29) have no `coverage`. What they do
 hold still counts: the sessions they list (agent `unknown` unless a later report names it),
 a side going down and coming back (a `machine.*` disagreement that ended, counted as
 `sideDownAndBack`, also for the part of the redeploy's day before it), the time compared,

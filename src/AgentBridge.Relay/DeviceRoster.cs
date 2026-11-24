@@ -10,13 +10,20 @@ namespace AgentBridge.Relay;
 // signed by the account's own devices. The relay is an untrusted store (design §3.6): it keeps an
 // entry only if it is valid against its own copy, so a stranger cannot fill the log, but a host
 // verifies what it is given for itself and never takes the relay's word. Nothing here decides who
-// may connect; mode is "observe" and the relay serves every account the same.
+// may connect while an account is in "observe" (the start). "enforce" (#1359 R2) is set only by an active person's device on its
+// own connection, never moves back, and tags each socket approved, pending or removed (Admission): defense in depth only.
 //
 // Kept apart from MachineRoster (the last-seen list of offline machines): that one is disposable
 // and expires, this one is what an account's trust rests on.
 public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<DeviceRoster> log, IRosterStore? store)
 {
-    public const string Mode = "observe";
+    public const string Observe = "observe";
+    public const string Enforce = "enforce";
+    // Unavailable: the store could not answer for an account latched in enforce. Never Open: enforce does not fail open.
+    public enum Admission { Open, Approved, Pending, Removed, Unavailable }
+    // Accounts seen in enforce, in memory only: the mode moves one way, so for one of these a store error, a body that does not
+    // read, a missing roster or a mode gone back is Unavailable, never Open.
+    readonly ConcurrentDictionary<string, bool> latched = new();
     // One append carries a few entries (an add, its confirmation), never a whole history.
     public const int MaxPerAppend = 16;
     // The whole stored log: the library's own entry cap, in canonical form, bounded again by bytes.
@@ -55,7 +62,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     string NameOf(string accountId) =>
         "v1/" + Convert.ToHexStringLower(HMACSHA256.HashData(nameKey, Encoding.UTF8.GetBytes(accountId))) + ".json";
 
-    sealed record Stored(int V, string Generation, List<string> Entries);
+    sealed record Stored(int V, string Generation, List<string> Entries, string? Mode = null);
 
     public sealed record Snapshot(string Mode, string? Generation, IReadOnlyList<string> Entries);
     public sealed record Result(string Hash, string Verdict, string? Reason);
@@ -69,7 +76,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             var read = await store.ReadAsync(NameOf(accountId), cts.Token);
             var s = Decode(read);
             metrics.Roster("devices-get", "ok");
-            return new Snapshot(Mode, s?.Generation, s?.Entries ?? []);
+            return new Snapshot(s?.Mode == Enforce ? Enforce : Observe, s?.Generation, s?.Entries ?? []);
         }
         catch (Exception e)
         {
@@ -244,7 +251,71 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 aside.Add((index, entry));
             }
         }
-        return (results, changed ? new Stored(1, generation, kept) : null);
+        return (results, changed ? new Stored(1, generation, kept, stored?.Mode) : null);
+    }
+
+    // Where a device stands. Open: observe, no roster, or an outage for an account not latched. In enforce: Approved when the key is
+    // active, Removed when an add of it was revoked, else Pending.
+    public async Task<Admission> AdmissionAsync(string accountId, string deviceId)
+    {
+        if (store is null) { return Admission.Open; }
+        try
+        {
+            using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
+            if (Decode(await store.ReadAsync(NameOf(accountId), cts.Token)) is not { Mode: Enforce } s)
+            {
+                return latched.ContainsKey(accountId) ? Admission.Unavailable : Admission.Open;
+            }
+            latched[accountId] = true;
+            var verifier = Replay(accountId, s);
+            if (verifier.State.Active.ContainsKey(deviceId)) { return Admission.Approved; }
+            for (var i = 0; i < verifier.Graph.Count; i++)
+            {
+                if (verifier.Graph[i].IsAdd && verifier.Graph[i].DeviceId == deviceId && verifier.State.IsRevoked(i)) { return Admission.Removed; }
+            }
+            return Admission.Pending;
+        }
+        catch (Exception e)
+        {
+            metrics.Roster("devices-admission", "error");
+            log.LogWarning(e, "device roster admission read failed");
+            return latched.ContainsKey(accountId) ? Admission.Unavailable : Admission.Open;
+        }
+    }
+
+    RosterVerifier Replay(string accountId, Stored s)
+    {
+        var verifier = new RosterVerifier(accountId, s.Generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
+        verifier.Offer(s.Entries.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList());
+        return verifier;
+    }
+
+    // Moves the account to enforce, one way, when the asker is an active person device. False if not, there is no roster, or the
+    // store cannot be written.
+    public async Task<bool> EnforceAsync(string accountId, string deviceId)
+    {
+        if (store is null) { return false; }
+        var gate = locks.GetOrAdd(accountId, _ => new Gate());
+        await gate.Lock.WaitAsync();
+        try
+        {
+            using var cts = new CancellationTokenSource(o.Roster.StoreTimeout);
+            var read = await store.ReadAsync(NameOf(accountId), cts.Token);
+            if (Decode(read) is not { } s) { return false; }
+            if (s.Mode == Enforce) { latched[accountId] = true; return true; }
+            if (!Replay(accountId, s).State.PersonDevices.Contains(deviceId)) { return false; }
+            var body = JsonSerializer.SerializeToUtf8Bytes(s with { Mode = Enforce }, Json);
+            var written = await store.WriteAsync(NameOf(accountId), body, read?.ETag, cts.Token) is not null;
+            if (written) { latched[accountId] = true; }
+            return written;
+        }
+        catch (Exception e)
+        {
+            metrics.Roster("devices-enforce", "error");
+            log.LogWarning(e, "device roster enforce failed");
+            return false;
+        }
+        finally { gate.Lock.Release(); }
     }
 
     static List<Result> Refuse(List<Result> results, List<(int Index, Entry Entry)> parsed, string reason)

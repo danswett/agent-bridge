@@ -62,6 +62,8 @@ public sealed class HostControlOptions
     // just before it stops the host for an install a device asked for.
     public Func<string?> ReadOnly { get; init; } = () => null;
     public Func<string?>? ReadOnlyNow { get; init; }
+    // HostStatus.Disk: what ProfileDisk says of the profile's disk; null when fine.
+    public Func<string?> Disk { get; init; } = () => null;
     public AgentReadinessService? Agents { get; init; }
     public AgentSetupService? AgentSetup { get; init; }
     public AgentInstallService? AgentInstall { get; init; }
@@ -69,6 +71,13 @@ public sealed class HostControlOptions
     public LifecycleCoordinator? Lifecycle { get; init; }
     public AgentVerificationService? AgentVerification { get; init; }
     public AgentCliSignInService? AgentSignIn { get; init; }
+    // Approve-gesture enrollment's descriptor and attempt state (HostEnrollment), app-only on the pipe.
+    public Func<(string? Descriptor, string? Refusal)>? EnrollDescribe { get; init; }
+    public Func<string>? EnrollStatus { get; init; }
+    // Code 1 to show, code 2 as typed, and the pin once the approver's add is in the relay's chain (brief 184b).
+    public Func<(string? Code, DateTimeOffset? Expires, string? Peer)>? EnrollShown { get; init; }
+    public Func<string, string>? EnrollCode { get; init; }
+    public Func<Task<string>>? EnrollFinish { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -84,6 +93,11 @@ public sealed class HostControl
     internal object WorkspaceFleetWorkers(JsonElement data)
     {
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
+    }
+
+    internal object WorkspaceAdd(JsonElement data)
+    {
+        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
     }
 
     readonly Action<string> log;
@@ -179,6 +193,7 @@ public sealed class HostControl
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
+            Disk = options.Disk(),
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
@@ -257,11 +272,12 @@ public sealed class HostControl
                 {
                     throw new InvalidOperationException("a delivery or typing is still in progress; the host was not stopped, try again later");
                 }
-                ServedRequest.Current?.OnResponded(sent => { if (!sent) { prepared?.Dispose(); } });
-                return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; });
+                // Accepted: the host stops once this is answered, or even if the answer cannot be sent (RunsIfUnsent, #4134), so the stop lease taken above
+                // is never given back here: a Stop the client did not hear is still a Stop.
+                return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; }, RunsIfUnsent: true);
             case HostOps.Restart:
                 log("restarting: asked by the app");
-                return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
+                return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; }, RunsIfUnsent: true);
             case HostOps.UpdateReport when options.Updates is not null:
                 return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
             case HostOps.UpdateDepart when options.Updates is not null:
@@ -269,6 +285,16 @@ public sealed class HostControl
                     ?? throw new ArgumentException($"{HostOps.UpdateDepart} needs the press's request"));
             case HostOps.ProbeHold:
                 return options.HoldProbes() is { } why ? new ProbeHoldResult(true, why) : new ProbeHoldResult(false);
+            case HostOps.EnrollDescribe when options.EnrollDescribe is not null:
+                var (descriptor, refusal) = options.EnrollDescribe();
+                return new { device = descriptor is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(descriptor), refusal };
+            case HostOps.EnrollStatus when options.EnrollStatus is not null:
+                var shown = options.EnrollShown?.Invoke() ?? default;
+                return new { state = options.EnrollStatus(), code = shown.Code, expires = shown.Expires, peer = shown.Peer };
+            case HostOps.EnrollCode when options.EnrollCode is not null:
+                return new { result = options.EnrollCode(data.ValueKind == JsonValueKind.Object && data.TryGetProperty("code", out var code) ? code.GetString() ?? "" : "") };
+            case HostOps.EnrollFinish when options.EnrollFinish is not null:
+                return new { state = await options.EnrollFinish() };
             default:
                 return null;
         }

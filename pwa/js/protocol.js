@@ -53,11 +53,11 @@ export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'nu
 // Who drives the session's turn. Absent, and anything unknown, is the person: a wrong purple
 // edge is worse than none.
 export const readDriver = tolerant(['person', 'agent'], 'person');
-// Who sent activity.userMessage (#489). Absent (or null) is the person, as from a host before the
-// field; any other text this client doesn't know is still a sender the host says isn't the
+// Who sent activity.userMessage (#489). Preserve absence for the unverified legacy hint;
+// the views otherwise default it to person. Unknown text is still a sender the host says isn't the
 // person, so it is never drawn as theirs. A value that isn't text at all is refused with the whole
 // activity (readActivity): strict under v1-sessions.md, as the host's reader has it.
-export const readUserMessageFrom = (v) => (v === undefined || v === null ? 'person' : tolerant(['person', 'schedule', 'agent', 'other', 'notification'], 'other')(v));
+export const readUserMessageFrom = (v) => (v === undefined || v === null ? null : tolerant(['person', 'schedule', 'agent', 'other', 'notification'], 'other')(v));
 export const readTurnKind = tolerant(['user', 'notification', 'scheduled', 'unknown'], 'unknown');
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
@@ -103,7 +103,7 @@ function readNotice(raw) {
   if (!t) { return null; }
   const kind = t.kind ?? 'unknown';
   const from = kind === 'notification' ? 'notification' : kind === 'scheduled' ? 'schedule' : 'other';
-  const prompt = t.prompt?.from === 'person' ? { ...t.prompt, from } : t.prompt;
+  const prompt = t.prompt && (t.prompt.from == null || t.prompt.from === 'person') ? { ...t.prompt, from } : t.prompt;
   // The live contract carries only response parts; it cannot introduce tools or approvals.
   const parts = (Array.isArray(raw.parts) ? raw.parts : []).filter((p) => obj(p) && str(p.id)
     && p.kind === 'response' && (p.outcome === undefined || p.outcome === null || typeof p.outcome === 'string'))
@@ -276,6 +276,7 @@ export function readActivity(raw) {
     turn: str(a.turn),
     // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
     responseTurn: str(a.responseTurn),
+    responseId: str(a.responseId),
     ...(a.kind === undefined || a.kind === null ? {} : { kind: readTurnKind(a.kind) }),
     notice: readNotice(a.notice),
     turnCount: num(a.turnCount),
@@ -288,12 +289,24 @@ export function readActivity(raw) {
   };
 }
 
+function readSessionEvidence(raw, field, read) {
+  const e = obj(raw);
+  if (!e) { return null; }
+  const state = e.state === 'known' || e.state === 'none' ? e.state : 'unknown';
+  const value = read(e[field]);
+  return { state, ...(value === null ? {} : { [field]: value }) };
+}
+
 // A Session as the views use it, or null if it has no id to file it under.
 export function readSession(raw) {
   const s = obj(raw);
-  if (!s || !str(s.id)) { return null; }
+  if (!s || !str(s.id) || (s.machine != null && typeof s.machine !== 'string')) { return null; }
   return {
     id: s.id,
+    ...(s.machine == null ? {} : { machine: s.machine }),
+    ...(s.owner == null ? {} : { owner: readSessionEvidence(s.owner, 'principal', str) }),
+    ...(s.pr == null ? {} : { pr: readSessionEvidence(s.pr, 'number', num) }),
+    ...(s.finished == null ? {} : { finished: readSessionEvidence(s.finished, 'value', (v) => typeof v === 'boolean' ? v : null) }),
     agent: readAgent(s.agent),
     title: str(s.title),
     cwd: str(s.cwd),

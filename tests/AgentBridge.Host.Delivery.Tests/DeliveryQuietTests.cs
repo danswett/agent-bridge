@@ -1,4 +1,5 @@
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Windows;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -6,6 +7,47 @@ public sealed class DeliveryQuietTests
 {
     // Real time is only ever a failure bound: a starved CI pool must not decide the result.
     static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Proven_worker_exit_restores_quiet_acquisition_and_departure_commits(bool delayed)
+    {
+        var gate = new DeliveryGate();
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!delayed) { exited.SetResult(); }
+        var injector = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new OperationCanceledException(), exited.Task)), gate);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => injector.InjectAsync(100, null!));
+        if (delayed)
+        {
+            Assert.Null(gate.TryExclude(TimeSpan.FromSeconds(30), out _));
+            exited.SetResult();
+        }
+        using var quiet = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
+        Assert.NotNull(quiet);
+        Assert.True(quiet.TryBeginCommit(out _));
+        Assert.True(quiet.TryCommit(new DepartureConnection(), 0, false, 0, out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancellation_with_buffered_unread_announcements_is_never_safe_to_retry(bool wrote)
+    {
+        using var output = new StringReader("writing 1\nwriting 2\n");
+        if (wrote) { Assert.Equal("writing 1", await output.ReadLineAsync()); }
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => output.ReadLineAsync(cancel.Token).AsTask());
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new OperationCanceledException(cancel.Token);
+        var unknown = Assert.Throws<InjectorWorkerException>(() => WorkerInjector.Cancelled(cancelled, exited.Task));
+        Assert.Same(exited.Task, unknown.Exited);
+        exited.SetResult();
+        Assert.Equal(InjectionStatus.Interrupted,
+            WorkerInjector.Cancelled(cancelled, exited.Task).Status);
+        Assert.Equal(wrote ? "writing 2" : "writing 1", await output.ReadLineAsync());
+    }
 
     [Fact]
     public async Task Planned_stop_waits_through_confirmation_and_resends_get_the_original_outcome()
@@ -41,6 +83,7 @@ public sealed class DeliveryQuietTests
     public async Task A_recovery_stop_is_granted_after_a_journal_uncertainty_once_nothing_is_in_flight_and_the_failed_worker_is_proven_gone()
     {
         var gate = new DeliveryGate();
+        gate.MarkJournalUncertain();
         var delivery = gate.TryEnterDelivery();
         Assert.NotNull(delivery);
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -54,6 +97,8 @@ public sealed class DeliveryQuietTests
         using var lease = await stop.WaitAsync(Bound);
         Assert.NotNull(lease);
         Assert.Null(gate.TryEnterDelivery());
+        Assert.Null(gate.TryExclude(TimeSpan.FromSeconds(30), out var why));
+        Assert.Equal(DeliveryGate.Blocker.JournalUncertain, why);
     }
 
     [Fact]

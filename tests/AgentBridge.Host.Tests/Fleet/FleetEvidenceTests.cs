@@ -12,6 +12,20 @@ public sealed partial class FleetListTests
     public void Dangling_fraction_fails_the_evidence_read(string field) =>
         Assert.Throws<InvalidDataException>(() => SessionEvidence.Read(Body($$"""{"{{field}}":"2026-11-07T12:00:00.Z"}"""), futureAttention: true));
 
+    // The relay checks with this same read, so each of these refuses the whole registry record.
+    [Theory]
+    [InlineData("""{"owner":{"state":"known"}}""")]
+    [InlineData("""{"owner":{"state":"unknown","principal":"agent:x/y"}}""")]
+    [InlineData("""{"owner":{"state":"known","principal":"bad\nline"}}""")]
+    [InlineData("""{"owner":{"state":"none"}}""")]
+    [InlineData("""{"pr":{"state":"known","number":0}}""")]
+    [InlineData("""{"pr":{"state":"none","number":1}}""")]
+    [InlineData("""{"pr":{"state":"maybe"}}""")]
+    [InlineData("""{"finished":{"state":"known","value":"yes"}}""")]
+    [InlineData("""{"finished":"unknown"}""")]
+    public void Malformed_owner_pr_or_finished_fails_the_evidence_read(string evidence) =>
+        Assert.Throws<InvalidDataException>(() => SessionEvidence.Read(Body(evidence)));
+
     async Task<JsonElement> EvidenceRow(string evidence)
     {
         var session = JsonNode.Parse("""{"node":"fixture","state":"idle","since":"2026-11-07T12:00:00Z"}""")!.AsObject();

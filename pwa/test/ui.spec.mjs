@@ -47,15 +47,15 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(copilot.locator('.session-title')).toHaveText('Plan Migration to Windows App');
   await expect(row(page, COPILOT).locator('.row-title')).toHaveText('Plan Migration to Windows App');
   // The header's one meta line: status, machine, repository (ui.md §6.2); the rest is in Details.
-  await expect(copilot.locator('.status-line')).toHaveText('Waiting on you · Demo machine · danswett/agent-ha-bridge');
+  await expect(copilot.locator('.status-line')).toHaveText('Waiting on you · compacted once · Demo machine · danswett/agent-ha-bridge');
   await expect(copilot.locator('.facts')).toContainText('Copilot');
   await expect(copilot.locator('.facts')).toContainText('danswett/agent-ha-bridge');
   await expect(copilot.locator('.facts')).toContainText('detached@5e59309');
   await expect(copilot.locator('.facts')).toContainText('claude-opus-5.5');
-  await expect(copilot.locator('.status-text')).toHaveText('Waiting on you');
+  await expect(copilot.locator('.status-text')).toHaveText('Waiting on you · compacted once');
   await expect(copilot.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
-  await expect(copilot.locator('.facts')).toContainText('1 compaction');
+  await expect(copilot.locator('.facts')).toContainText('compacted once');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
   await expect(copilot.locator('details.reasoning')).toBeVisible();
   await expect(copilot.locator('.user-message')).toBeVisible();
@@ -82,7 +82,7 @@ test('demo mode shows every session from the worked example, with every field', 
 
   const claude = await open(page, CLAUDE);
   await expect(claude).toHaveAttribute('data-status', 'working');
-  await expect(claude.locator('.status-text')).toHaveText('Working');
+  await expect(claude.locator('.status-text')).toHaveText('Cogitating');
   await expect(claude.locator('.tool-line')).toBeVisible();
   await expect(claude.locator('.tool-line .tool-name')).toHaveText('Bash');
   await expect(claude.locator('.tool-line .tool-summary')).toHaveText('dotnet test');
@@ -224,7 +224,7 @@ test('an idle session still waiting on background work is delegating: its own gl
   // A session working on its own turn is working, whatever it has in the background.
   await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });
   await expect(c).toHaveAttribute('data-view', 'working');
-  await expect(c.locator('.status-text')).toHaveText('Working');
+  await expect(c.locator('.status-text')).toHaveText('Slithering');
   await expect(c.locator('.facts')).toContainText('1 background agent');
 });
 
@@ -235,7 +235,7 @@ test('a delegate\'s question and a foreground task are named in the status words
     status: 'working', statusSince: later(), updatedAt: later(),
     subagents: [{ id: 't1', kind: 'task', name: 'Bisect RestartAfterResume', status: 'working' }],
   });
-  await expect(c.locator('.status-text')).toHaveText('Working · task: Delegate Bisect RestartAfterResume');
+  await expect(c.locator('.status-text')).toHaveText('Marinating · task: Delegate Bisect RestartAfterResume');
   await upsert(page, CODEX, {
     status: 'waiting', statusSince: later(), updatedAt: later(), waitingOn: 'b1',
     subagents: [{ id: 'b1', kind: 'background', name: 'Check ubuntu CI failure', status: 'waiting' }],
@@ -536,7 +536,7 @@ test('a permission prompt only the machine can answer shows no buttons and says 
   });
   const c = card(page, COPILOT);
   const q = c.locator('.question:not(.resolved)[data-question="perm-1"]');
-  await expect(c.locator('.status-text')).toHaveText('Waiting on you · answer at the machine');
+  await expect(c.locator('.status-text')).toHaveText('Waiting on you · answer at the machine · compacted once');
   await expect(q).toHaveAttribute('data-answerable', 'false');
   // Who asks, in the stream (ui.md §6.4).
   await expect(q.locator('.question-head')).toHaveText('Main agent asks');

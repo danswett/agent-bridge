@@ -29,7 +29,7 @@ public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadO
 
     // The words as they read mid-sentence: a delegate's name and a number keep their case. Built
     // from the facts, each with no comma of its own: Label joins with ", ", and a name of "x,
-    // idle, DEV-VM2" would read as facts to a screen reader (#303's security review).
+    // idle, Laptop" would read as facts to a screen reader (#303's security review).
     public string Spoken
     {
         get
@@ -40,7 +40,7 @@ public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadO
     }
 
     // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
-    // agents, DEV-VM1", with the driver said in words, since the diamond is only a shape.
+    // agents, Laptop", with the driver said in words, since the diamond is only a shape.
     public string Label(string? title, string? machine) =>
         string.Join(", ", new[] { string.IsNullOrEmpty(title) ? "Untitled session" : DelegateLabel.Aloud(title), Spoken, Driven ? "driven by an agent" : null, machine }.Where(s => !string.IsNullOrEmpty(s)));
 }

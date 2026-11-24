@@ -96,6 +96,15 @@ public sealed class World
         return Put(label, b, by);
     }
 
+    public Signed AddV3(string label, string by, string device, string parent, TestKey capSign)
+    {
+        var b = Body("add", by, [parent]);
+        Id(device);
+        (b["v"], b["device"]) = (3, PersonV3(Keys(device).Dh, Keys(device).Sign, capSign, "app", "windows", device, Presence.Key));
+        b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
+        return Put(label, b, by);
+    }
+
     public Signed Remove(string label, string by, string targetAdd, string parent, string[]? keep = null, string? cosigner = null, string? signAs = null, string? cosignAs = null)
     {
         var b = Body("remove", by, [parent]);

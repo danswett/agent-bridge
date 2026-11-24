@@ -92,6 +92,8 @@ public sealed partial class MainWindow : Window
         };
         UsagePane.ViewModel = viewModel.Usage;
         LaunchPane.ViewModel = launch;
+        GrantsPane.ViewModel = new GrantListViewModel();
+        GrantsPane.BackRequested += () => { GrantsPane.Visibility = Visibility.Collapsed; MachinesPage.Visibility = Visibility.Visible; FleetGrantsButton.Focus(FocusState.Programmatic); };
         if (viewModel.Settings is { } s)
         {
             SettingsPane.ViewModel = s;
@@ -201,6 +203,7 @@ public sealed partial class MainWindow : Window
 
     internal SessionsPage Sessions => SessionsView;
     internal SettingsView SettingsPage => SettingsPane;
+    internal GrantListView GrantsPage => GrantsPane;
     internal FrameworkElement RootElement => Root;
     internal NavigationView Rail => Nav;
     internal TitleBar Bar => AppTitleBar;
@@ -258,8 +261,16 @@ public sealed partial class MainWindow : Window
         finally { feedbackDialogOpen = false; }
     }
 
+    void OnGrants(object sender, RoutedEventArgs e)
+    {
+        MachinesPage.Visibility = Visibility.Collapsed;
+        GrantsPane.Visibility = Visibility.Visible;
+        GrantsPane.Opened();
+    }
+
     void OnNavigate(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        GrantsPane.Visibility = Visibility.Collapsed;
         var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
         SessionsView.Visibility = Ui.Show(tag == "sessions");
         SyncSessionsOnScreen();

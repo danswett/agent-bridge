@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Microsoft.Win32.SafeHandles;
 
@@ -26,7 +27,7 @@ internal sealed record HistoryBudgets
 // the transcript does not mark.
 internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegates, IReadOnlyDictionary<string, string> Calls)
 {
-    public IReadOnlySet<string> AgentTurns { get; init; } = new HashSet<string>();
+    public IReadOnlyDictionary<string, string?> AgentTurns { get; init; } = new Dictionary<string, string?>();
 
     // Who made the delegates' calls the session keeps (BackgroundWork.CallOwners): a permission
     // prompt or a nested start naming a call made on an older page is still that delegate's.
@@ -43,8 +44,8 @@ internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegate
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
 // cursor (or the end) to the prompts that start the page's turns, by byte search, parsing only the
-// lines that search picks; then forwards through each turn, parsing only the lines its dialect
-// wants. Read-only and shared, as the tail reads: the agent keeps writing meanwhile, and only
+// lines that search picks; then forwards through each turn. Codex also validates ignored records
+// so unreadable gaps invalidate reply identity. Read-only and shared, as the tail reads: only
 // whole lines before where this read began are read.
 internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
 {
@@ -85,11 +86,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
     sealed record Start(long Offset, long End, byte[] Id, HistoryPrompt? Prompt, DateTimeOffset? At)
     {
         public long From { get; set; } = End;
+        public CodexReplyKey Reply { get; init; }
         public bool Unknown { get; set; }
         public bool Queued { get; set; }
     }
 
-    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlySet<string> agentTurns, CancellationToken cancellation)
+    sealed class Pass(HistoryReader reader, SafeFileHandle file, string sessionId, HistoryDialect dialect, HistoryContext context, IReadOnlyDictionary<string, string?> agentTurns, CancellationToken cancellation)
     {
         delegate bool DroppedLine(ReadOnlySpan<byte> head, long offset);
 
@@ -483,10 +485,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             ReadAt(line, start);
             using var doc = Parse(line);
             HistoryPrompt? prompt = null;
+            CodexReplyKey reply = default;
             DateTimeOffset? at = null;
             if (doc is null || !Decoding(() =>
             {
                 prompt = dialect.Start(doc.RootElement);
+                if (prompt is not null && dialect is CodexHistory) { reply = CodexReplyIds.Read(doc.RootElement); }
                 at = prompt is null ? null : Json.Time(doc.RootElement, "timestamp");
             }))
             {
@@ -509,7 +513,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             }
             if (prompt is not null)
             {
-                if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at)); }
+                if (starts.Count < want) { starts.Add(new Start(start, end, TurnIds.Raw(line), prompt, at) { Reply = reply }); }
                 else { skipped = true; }
             }
             return true;
@@ -592,9 +596,12 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         TurnBuilder Builder(Start s)
         {
             var id = Attachments.Base64Url(s.Id);
-            // A prompt the host knew an agent sent (#489) is the agent's here too, as it was live.
-            var prompt = s.Prompt is { From: null } p && agentTurns.Contains(id) ? p with { From = UserMessageFrom.Agent } : s.Prompt;
-            return new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
+            // The send's display-only label stays with its prompt, never a later driver.
+            var prompt = s.Prompt is { From: null or UserMessageFrom.Agent } p && agentTurns.TryGetValue(id, out var label)
+                ? p with { From = UserMessageFrom.Agent, Label = label } : s.Prompt;
+            var turn = new TurnBuilder(id, s.At ?? DateTimeOffset.UnixEpoch, prompt) { Unreadable = s.Prompt is null, Truncated = s.Unknown };
+            if (dialect is CodexHistory) { turn.ReplyScope(s.Prompt is not null && !s.Unknown && !s.Reply.Ambiguous, s.Reply.Turn); }
+            return turn;
         }
 
         IEnumerable<long> Gaps(long from, long to) => cycleGaps.GetViewBetween(from, Math.Max(from, to));
@@ -619,22 +626,27 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             context.TurnBegins();
             dialect.TurnBegins();
             var at = s.At;
+            var codex = dialect is CodexHistory;
             Forward(from, spanEnd, (line, _) =>
             {
-                if (!dialect.Wants(line.Span)) { return true; }
+                var wants = dialect.Wants(line.Span);
+                if (!wants && !codex) { return true; }
                 using var doc = Parse(line);
-                if (doc is null)
+                if (doc is null || codex && doc.RootElement.ValueKind != JsonValueKind.Object)
                 {
                     turn.Truncated = true;
+                    if (codex) { into.ReplyScope(false); }
                     return true;
                 }
+                if (!wants) { into.ValidateReplyScope(CodexReplyIds.Read(doc.RootElement)); return true; }
                 at = Json.Time(doc.RootElement, "timestamp") ?? at;
                 // A turn whose own start could not be read is placed by the first time after it.
                 if (s.At is null && at is { } first && turn.At == DateTimeOffset.UnixEpoch) { turn.At = first; }
                 into.Record(Attachments.Base64Url(TurnIds.Raw(line.Span)));
                 if (!Decoding(() => dialect.Apply(doc.RootElement, at ?? DateTimeOffset.UnixEpoch, into, context))) { turn.Truncated = true; }
                 return true;
-            }, aligned: from == s.End || AfterNewline(from));
+            }, aligned: from == s.End || AfterNewline(from),
+                dropped: codex ? (_, _) => { turn.Truncated = true; into.ReplyScope(false); return true; } : null);
         }
 
         // Whether a record starts at pos: a window cut exactly at one has no fragment to drop, and

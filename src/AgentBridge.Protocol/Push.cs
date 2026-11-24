@@ -10,13 +10,40 @@ using System.Text.Json.Serialization;
 namespace AgentBridge.Protocol;
 
 // push.subscribe. Endpoint and keys are exactly what the browser's PushSubscription.toJSON()
-// gives; App is where a tap opens the client; Device names this device in push.list.
+// gives; App is where a tap opens the client; Device names this device in push.list; Notify is this
+// device's notification filters (null: no filtering, as before).
 public sealed record PushSubscribeRequest
 {
     public required string Endpoint { get; init; }
     public required PushKeys Keys { get; init; }
     public required string App { get; init; }
     public string? Device { get; init; }
+    public PushNotify? Notify { get; init; }
+}
+
+// Per-device notification filters (docs/protocol/v1-sessions.md, "Notification filters"), kept with the
+// device's subscription so the host filters when it sends. PinnedSessions is the device's pinned set of
+// session ids (no order), at most MaxPinned. DeliveryFailures is read and kept; a host sends nothing for it yet.
+public sealed record PushNotify
+{
+    public const int MaxPinned = 300;
+    public const int MaxIdChars = 128;
+    public bool Questions { get; init; } = true;
+    public bool Pinned { get; init; } = true;
+    public bool All { get; init; }
+    public bool DeliveryFailures { get; init; }
+    public IReadOnlyList<string> PinnedSessions { get; init; } = [];
+
+    // Whether a notice of this kind about this session is wanted. Questions, finished turns and failures are
+    // filtered (a group is questions); resolved follows the question it withdraws, and every other kind is always wanted.
+    public bool Wants(NoticeKind kind, string session) => kind switch
+    {
+        NoticeKind.Question or NoticeKind.Group => Questions,
+        // Off unless the device turned it on, whatever its other flags say (v1-sessions.md, Notification filters).
+        NoticeKind.Failures => DeliveryFailures,
+        NoticeKind.Finished => All || (Pinned && PinnedSessions.Contains(session)),
+        _ => true,
+    };
 }
 
 public sealed record PushKeys(string P256dh, string Auth);
@@ -43,7 +70,9 @@ public sealed record PushDevice(string Device, string Name, string Service, Date
 // that opens Needs you. It names no session or question, so an older client, which reads it as a
 // question, shows its words and opens the machine, with nothing to answer.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group }
+// Failures: a count of messages this machine's delivery lane could not deliver, over one window (S2b of the
+// push filters). It names no session, id or text, and an older client reads it as a question, which opens the machine.
+public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group, Failures }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,
@@ -86,6 +115,8 @@ public sealed record PushNoticeData
     // Group: how many sessions it stands for.
     public AgentKind? Agent { get; init; }
     public int? Sessions { get; init; }
+    // Failures: how many messages the lane could not deliver in the window.
+    public int? Failures { get; init; }
     // The notice's tier (#913), as session.class: NeedsYou for a question, a sign-in and a crash's
     // restored notice, Done for finished (never NeedsYou). Absent on resolved, which withdraws a
     // notice rather than being one, on a reboot's restored, and from an older host. An unknown one
@@ -114,6 +145,9 @@ public static class PushNotice
     // replaces on the device) and a topic (the undelivered push it replaces at the push
     // service), so the device only ever shows the latest state of a session.
     public static string Tag(string machine, string session) => $"{machine}:{session}";
+
+    // The failures notice's own key in place of a session id, for its tag and topic: one per machine.
+    public const string FailuresKey = "~failures";
 
     // 24 bytes of SHA-256, which base64url-encodes to 32 characters: RFC 8030's maximum,
     // and a length Apple accepts (spike S5 finding 6).

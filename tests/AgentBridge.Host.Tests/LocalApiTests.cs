@@ -242,6 +242,43 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Local_answers_keep_local_audit_attribution_despite_payload_claims()
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        var auditProfile = Path.Combine(profile, "answer");
+        Directory.CreateDirectory(auditProfile);
+        var endpoint = LocalEndpoint.For(auditProfile);
+        await using var answerServer = LocalServer.Start(endpoint, LocalApi.Handler(
+            new SessionService(source, new MachineInfo("host-id", "Host", "windows", "0.1.0"), answers: answers),
+            control, callers, audit: new AgentAuditLog(auditProfile)));
+        await using var channel = await LocalClient.ConnectAsync(endpoint, Patience);
+
+        var result = await channel.CallAsync<AnswerResult>(Ops.SessionAnswer, new
+        {
+            id = Id, question = "q1", request = Guid.NewGuid().ToString(), text = "yes",
+            principal = "person:forged", actor = "person:forged", source = "relay", origin = "relay", path = "relay",
+        });
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(1, answers.Deliveries);
+        var (rows, complete) = GateAuditProjection.Load(auditProfile);
+        Assert.True(complete);
+        Assert.Equal(new[] { "intent", "terminal" }, rows.Select(r => r.Gate!.Phase));
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(Ops.SessionAnswer, row.Action);
+            Assert.Equal("person:local", row.Principal);
+            Assert.Equal("local", row.Direction);
+            Assert.Equal("local", row.Gate!.Path);
+            Assert.Equal("person-client", row.Gate.ActorKind);
+        });
+        Assert.Equal("delivered", rows[1].Outcome);
+        Assert.False(PhoneApprovalEvidence.Read(auditProfile, ["forged"]).Passed);
+    }
+
+    [Fact]
     public async Task Web_push_registration_is_refused_on_the_pipe()
     {
         var ch = await ConnectAsync();
@@ -281,6 +318,19 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.All(pushed.Agents, a => Assert.Equal(ReadinessState.Missing, a.Installation.State));
         Assert.All(pushed.Agents, a => Assert.Equal(HookSetupState.NotSetUp, a.HookSetup));
         Assert.Contains("\"hookSetup\":\"notSetUp\"", JsonSerializer.Serialize(pushed, ProtocolJson.Options));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App, true)]
+    [InlineData(CallerKind.Agent, false)]
+    [InlineData(CallerKind.Other, false)]
+    [InlineData(CallerKind.HostCli, false)]
+    public async Task Only_the_app_is_told_it_can_approve_a_folder(CallerKind kind, bool told)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+
+        Assert.Equal(told, (await ch.HelloAsync()).Capabilities.Contains(HostOps.WorkspacesCapability));
     }
 
     [Theory]
@@ -804,6 +854,34 @@ public sealed class LocalApiTests : IAsyncLifetime
         var restarting = await ch.CallAsync(HostOps.Restart);
         Assert.True(restarting.GetProperty("restarting").GetBoolean());
         await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+    }
+
+    // #4134: the action a client asked for and the host accepted does not depend on the client hearing the answer. The client hangs up while the
+    // host is still preparing its stop, so the answer cannot be sent; the host stops all the same.
+    [Fact]
+    public async Task A_stop_the_host_accepted_stops_it_though_the_client_hung_up_before_the_answer()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        prepareStop = async () => { entered.TrySetResult(); await release.Task; return new CancellationTokenSource(); };
+        var ch = await ConnectAsync();
+
+        var asked = ch.RequestAsync(HostOps.Stop);
+        await entered.Task.WaitAsync(Patience);
+        await ch.DisposeAsync();
+        release.SetResult();
+        try { await asked; } catch (IOException) { }
+
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop the client never heard the answer to", Patience);
+    }
+
+    [Fact]
+    public async Task A_restart_and_a_stop_are_actions_that_run_even_if_their_answer_is_not_sent()
+    {
+        var ch = await ConnectAsync();
+
+        Assert.True(Assert.IsType<ChannelReply>(await control.HandleAsync(ch, HostOps.Restart, default)).RunsIfUnsent);
+        Assert.True(Assert.IsType<ChannelReply>(await control.HandleAsync(ch, HostOps.Stop, default)).RunsIfUnsent);
     }
 
     [Fact]

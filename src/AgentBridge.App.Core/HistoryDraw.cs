@@ -27,7 +27,7 @@ public sealed class HistoryDisclosure(PromptOrigin origin) : Observable
     bool open;
 
     public PromptOrigin Origin { get; } = origin;
-    public bool IsDriven => !Origin.Schedule;
+    public bool IsDriven => !Origin.Schedule && !Origin.Unverified;
     public bool HasBy => Origin.By is not null;
 
     public bool Open
@@ -106,7 +106,7 @@ public static class HistoryDraw
         }
         // A prompt has no time of its own and takes its turn's; a reply takes its first part's.
         var times = new HistoryTimes(turn.Prompt is null || turn.At == default ? null : clock.Stamp(turn.At), replyAt is { } at ? clock.Stamp(at) : null);
-        if (PromptOrigin.OfHistory(turn.Prompt) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times) { Items = items }; }
+        if (PromptOrigin.OfHistory(turn.Prompt, turn.Kind is not (TurnKind.Notification or TurnKind.Scheduled)) is not { } origin) { return new(turn.Id, null, turn.Prompt?.Text, blocks, cut ? CutShort : null, times) { Items = items }; }
         if (kept is null || !kept.TryGetValue(turn.Id, out var disclosure) || disclosure.Origin.Text != origin.Text || disclosure.Origin.Label != origin.Label)
         {
             disclosure = new HistoryDisclosure(origin);
@@ -117,8 +117,10 @@ public static class HistoryDraw
 
     // The one meta line above the stored turns: what the history holds, or why it holds nothing.
     // Turns held are always drawn, so a machine that has gone offline still shows what the store has.
-    public static string? Line(HistoryLoad state, int drawn, bool hasLivePrompt, HistoryStart? start) => state switch
+    // The start line is the top of what is drawn, so it waits while held turns above the drawn ones are not yet (#1593).
+    public static string? Line(HistoryLoad state, int drawn, bool hasLivePrompt, HistoryStart? start, bool earlierUndrawn = false) => state switch
     {
+        HistoryLoad.StartReached when earlierUndrawn => null,
         HistoryLoad.Loading when drawn == 0 => Loading,
         HistoryLoad.Failed => Failed,
         HistoryLoad.NoHistory => NoHistory,

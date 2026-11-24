@@ -119,6 +119,21 @@ public sealed class EnrollmentExchangeTests
         Assert.Equal(CodeResult.Ended, n.EnterCode2("000 000"));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(10)]
+    public void A_joiner_deadline_never_exceeds_either_window_even_after_a_code_match(int advertisedMinutes)
+    {
+        var a = new EnrollmentApprover(Account, H, "P", ApproverLimits(), Now);
+        var n = new EnrollmentJoiner(Account, H, JoinerLimits(), Now, NN, Now().AddMinutes(advertisedMinutes));
+        Assert.True(a.OnReveal(n.OnOffer(a.OnCommit(n.Commit()!, NA)!)!));
+        Assert.Equal(CodeResult.Match, a.EnterCode1(n.Code1Shown!));
+        var code = a.Code2Shown!;
+        Assert.Equal(CodeResult.Match, n.EnterCode2(code));
+        _now += advertisedMinutes < 5 ? TimeSpan.FromMinutes(advertisedMinutes) : EnrollmentLockout.AttemptLifetime;
+        Assert.Equal(CodeResult.Ended, n.EnterCode2(code));
+    }
+
     [Fact]
     public void Three_ended_attempts_lock_the_joiner_and_it_stops_committing()
     {

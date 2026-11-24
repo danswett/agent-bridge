@@ -132,6 +132,15 @@ internal sealed class SessionTracker
         {
             changed = true;
         }
+        // A shell that never reported back stops counting once it is older than Limits.BackgroundShellStale (#1108):
+        // the clock alone changes the answer, with nothing written to the transcript, so ask again with what the
+        // last build SHOWED, as for Stalled above. Against what is shown, not only when something is: a shell dropped for
+        // age counts again if the wall clock is put back, and nothing shown would ask for it.
+        if (!changed && _built is { } shown
+            && _state.Background.Running(Discovered.ProcessStartedAt, _time).Shells != (shown.Activity.Background?.Shells ?? 0))
+        {
+            changed = true;
+        }
         // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
         // shows as asked (#780), though nothing it reads did.
         // The hook status a restored Claude session's registration carries when the boundary is
@@ -206,6 +215,18 @@ internal sealed class SessionTracker
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    static Question? HookQuestion(AskMarker ask, DateTimeOffset fallback)
+    {
+        try
+        {
+            using var input = JsonDocument.Parse(ask.InputJson);
+            // Only a real AskUserQuestion input: a non-empty questions array.
+            if (!input.RootElement.TryGetProperty("questions", out var questions) || questions.ValueKind != JsonValueKind.Array || questions.GetArrayLength() == 0) { return null; }
+            return QuestionMapper.FromClaudeAskUserQuestion(ask.ToolUseId, input.RootElement, ask.Created ?? fallback) with { AnswerAtMachine = true, AnswerAtMachineReason = "hook" };
+        }
+        catch (JsonException) { return null; }
+    }
+
     Session Build()
     {
         var d = Discovered;
@@ -217,7 +238,7 @@ internal sealed class SessionTracker
         var pending = _state.Asking;
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
-        var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
+        var question = _state.ShownQuestion;
         // Copilot asks a permission for each of a batch of parallel tool calls at once, and its
         // one dialog shows them one at a time; seen answered at the machine in the order asked
         // (#690). Listing the newest offered Approve once for a request the screen was not
@@ -252,6 +273,16 @@ internal sealed class SessionTracker
             question = question with { AnswerAtMachine = true };
         }
         DateTimeOffset? hintAt = null;
+
+        // A Claude AskUserQuestion the transcript has not written yet (#3838): Claude Code writes it only once it is
+        // answered when parallel tool calls follow it, but the claude/ask hook recorded it when it fired. It is shown
+        // at the machine, never typed into (the spool is not authenticated), and the transcript's own copy, which
+        // takes its place by id, is what can be answered. A session that waits on a question is never not responding.
+        if (d.Agent == AgentKind.Claude && question is null && reg?.Ask is { } ask && !_state.Knows(ask.ToolUseId) && HookQuestion(ask, reg.Updated ?? now) is { } hookQuestion)
+        {
+            question = hookQuestion;
+            hintAt = question.AskedAt;
+        }
 
         if (d.Agent == AgentKind.Claude && reg?.HookStatusAt is { } hookAt && (_state.LastActivityAt is not { } last || hookAt > last))
         {
@@ -325,7 +356,7 @@ internal sealed class SessionTracker
         };
         var (response, responseCut) = Limits.KeepEnd(_state.Response, Limits.Response);
         var history = _state.Tools.Count > 0 ? _state.Tools.Latest(Limits.History) : null;
-        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt);
+        var (agents, shells) = _state.Background.Running(d.ProcessStartedAt, _time);
         var (subagents, more) = _state.Background.Entries(d.ProcessStartedAt, Waiting());
         var source = _state.ResponseBy is null && _state.ReasoningBy is null ? null
             : new ActivitySource { Response = _state.ResponseBy, Reasoning = _state.ReasoningBy };
@@ -341,9 +372,16 @@ internal sealed class SessionTracker
         var background = agents + shells > 0;
         _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
+        // What an agent's End must still see (StopService): the shells counted without the stale limit, only when it dropped one.
+        var rawShells = _state.Background.Running(d.ProcessStartedAt).Shells;
         return new Session
         {
+            BackgroundUnaged = rawShells != shells ? Protocol.Background.Of(agents, rawShells) : null,
             Id = d.Id,
+            Machine = _hostId,
+            Owner = _hostId is null ? null : new(),
+            Pr = _hostId is null ? null : new(),
+            Finished = _hostId is null ? null : new(),
             Agent = d.Agent,
             Title = Text.Title(title),
             Cwd = ws?.Cwd ?? _state.Cwd ?? reg?.WorkingDirectory,
@@ -354,7 +392,6 @@ internal sealed class SessionTracker
             Context = Text.NonBlank(_state.Context),
             Status = effective,
             StatusSince = since,
-            StartedAt = ws?.CreatedAt ?? _state.StartedAt,
             UpdatedAt = _state.UpdatedAt ?? reg?.Updated ?? ws?.UpdatedAt ?? _firstSeen,
             ProcessId = d.ProcessId,
             TranscriptBytes = _transcriptSize?.Bytes,
@@ -380,6 +417,7 @@ internal sealed class SessionTracker
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
                 Turn = _state.TurnId,
                 ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
+                ResponseId = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseId,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

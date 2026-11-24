@@ -49,6 +49,14 @@ internal sealed class DurableInbox
         return Load().Find(m => m.Node == node && m.DeliveredAt is null);
     }
 
+    public InboxMessage? Find(string node, string rid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(node);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rid);
+        using var held = Lock();
+        return Load().Find(m => m.Node == node && m.Rid == rid);
+    }
+
     public InboxMessage Deliver(string node, string rid, DateTimeOffset at)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(node);

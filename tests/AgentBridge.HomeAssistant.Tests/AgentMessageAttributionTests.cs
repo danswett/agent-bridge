@@ -19,7 +19,11 @@ public sealed class AgentMessageAttributionTests
     [Fact]
     public Task Host_armed_reply_card_does_not_claim_two_matching_prompts_read_together() => AssertReply(true);
 
-    static async Task AssertReply(bool multiple, string sender = "SG Sender", string expectedPrincipal = "SG Sender")
+    [Fact]
+    public Task Host_armed_reply_history_reload_keeps_the_sender_after_the_driver_and_prompt_change() =>
+        AssertReply(false, historyReload: true);
+
+    static async Task AssertReply(bool multiple, string sender = "SG Sender", string expectedPrincipal = "SG Sender", bool historyReload = false)
     {
         using var f = new Fixture();
         var id = Guid.NewGuid().ToString();
@@ -68,6 +72,23 @@ public sealed class AgentMessageAttributionTests
             Assert.Equal(UserMessageFrom.Agent, live.Activity.UserMessageFrom);
             Assert.Equal(DriverKind.Agent, live.Driver);
             Assert.Equal(expectedPrincipal, live.DriverPrincipal);
+            var expectedLabel = Limits.KeepStart(expectedPrincipal, Limits.UserMessageLabel);
+            if (!historyReload) { Assert.Equal(expectedLabel, live.Activity.UserMessageLabel); }
+            else
+            {
+                var first = await source.HistoryAsync(id, null, 20);
+                Assert.Equal(expectedLabel, Assert.Single(first.Turns!, turn => turn.Prompt?.Text == "Agent message").Prompt!.Label);
+                drivers.For(id).Answered(SessionDrivers.Agent, "Later driver");
+                await source.RefreshAsync();
+                Assert.Equal(expectedLabel, source.Get(id)!.Activity.UserMessageLabel);
+                Fixture.Append(events, Copilot.User("Owner's later prompt", 30), Copilot.TurnStart(31), Copilot.TurnEnd(32));
+                await source.RefreshAsync();
+                var reloaded = await source.HistoryAsync(id, null, 20);
+                var recorded = Assert.Single(reloaded.Turns!, turn => turn.Prompt?.Text == "Agent message").Prompt!;
+                Assert.Equal(UserMessageFrom.Agent, recorded.From);
+                Assert.Equal(expectedLabel, recorded.Label);
+                Assert.Null(Assert.Single(reloaded.Turns!, turn => turn.Prompt?.Text == "Owner's later prompt").Prompt!.Label);
+            }
         }
     }
 }

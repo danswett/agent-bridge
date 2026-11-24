@@ -13,8 +13,9 @@ public static partial class LiteAgentSend
 {
     public const string Op = "agent.send";
     public const int MaxText = 4096;
+    public const long MaxSentAge = 86400, SentAtSkew = 120;
 
-    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null)
+    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null, Func<AgentAuditEntry, string?, bool>? appendAttempt = null, TimeProvider? clock = null)
     {
         credentials?.CheckScriptOperation(channel, Op);
         if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
@@ -30,7 +31,16 @@ public static partial class LiteAgentSend
         var machine = Field(data, "machine");
         var session = Field(data, "session");
         var text = Field(data, "text");
-        if (machine is null || !MachinePattern().IsMatch(machine)) { throw new ArgumentException("refused: badMachine: machine is 1 to 64 letters, digits, '.', '_' or '-'"); }
+        // Each agent.send is a new sealed envelope (signed lifetime at most two minutes), so a tool that retries a busy send over
+        // minutes may pass the time of its FIRST request and keep it on every retry (#4435). Optional, additive, and only for ordering
+        // and display: Unix seconds, at most two minutes ahead and a day old, else ignored (the send goes as if none was given).
+        long? sentAt = null;
+        if (data.TryGetProperty("sentAt", out var sent) && sent.ValueKind == JsonValueKind.Number && sent.TryGetInt64(out var at))
+        {
+            var now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+            if (at <= now + SentAtSkew && at >= now - MaxSentAge) { sentAt = at; }
+        }
+        if (machine is null || !Wire.IsDeviceId(machine)) { throw new ArgumentException(AgentLiteSender.MachineRefusal(machine, AgentLiteSender.BadMachine, "must be an exact device ID; names never route")); }
         if (session is null || !SessionPattern().IsMatch(session)) { throw new ArgumentException("refused: badSession: session is agent_bridge_ and 16 lowercase hex digits"); }
         if (text is null || text.Length == 0) { throw new ArgumentException("refused: badText: text is required"); }
         if (text.Length > MaxText) { throw new ArgumentException($"refused: textTooLong: text is over {MaxText} characters"); }
@@ -46,7 +56,7 @@ public static partial class LiteAgentSend
         catch (Exception) { throw AuditUnavailable(); }
         if (!written) { throw AuditUnavailable(); }
         LiteOutcome outcome;
-        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct); }
+        try { outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text, sentAt), ct); }
         catch (Exception)
         {
             AppendTerminal("unconfirmed");
@@ -71,17 +81,13 @@ public static partial class LiteAgentSend
     static InvalidOperationException TerminalAuditUnavailable() =>
         new("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent");
 
-    [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
-    private static partial Regex MachinePattern();
-
     [GeneratedRegex(@"^agent_bridge_[0-9a-f]{16}\z")]
     private static partial Regex SessionPattern();
 
     static string? Field(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
-// Stands in until L3's sender is wired: with nothing to send through the mode is off, so the
-// caller falls back to Home Assistant at once.
+// An unwired sender reports off; the host never falls back to another transport or target.
 public sealed class LiteOffSender : ILiteSender
 {
     public Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct) =>

@@ -93,6 +93,7 @@ public sealed partial class SettingsViewModel : Observable
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true)
     {
         this.host = host;
+        ScriptCredentials = new ScriptCredentialsModel(host);
         this.manager = manager;
         this.updater = updater;
         this.appAtSignIn = appAtSignIn;
@@ -129,6 +130,9 @@ public sealed partial class SettingsViewModel : Observable
     public string InstalledText => updater.InstalledVersion is { } v ? $"Installed version {v}" : "Not installed (a development copy): updates are off";
     HostStatus? Status => host.Status;
 
+    // Settings > Script credentials (see ScriptCredentialsModel); the page reads it, the host decides.
+    public ScriptCredentialsModel ScriptCredentials { get; private set; } = null!;
+
     public string HostState => host.State switch
     {
         LinkState.Connected => $"Running (pid {Status?.ProcessId}, since {Status?.StartedAt.ToLocalTime():g})",
@@ -142,7 +146,15 @@ public sealed partial class SettingsViewModel : Observable
     public string Profile => manager.Layout.Profile;
     public string? AgentHaBridge => Status?.AgentHaBridge;
     public bool HasAgentHaBridge => !string.IsNullOrEmpty(Status?.AgentHaBridge);
-    public string? HomeAssistantRefused => Status?.HomeAssistant;
+    public string? HomeAssistantRefused
+    {
+        get
+        {
+            const string command = """& "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe" ha token set""";
+            return Status?.HomeAssistant?.Replace("`agent-bridge-host ha token set`",
+                $"`{command}` (or pipe it: `Get-Clipboard | {command}`)", StringComparison.Ordinal);
+        }
+    }
     public bool HasHomeAssistantRefused => !string.IsNullOrEmpty(Status?.HomeAssistant);
     public bool RestartRequired => Status?.RestartRequired == true;
     public bool ElevatedWarning => Status?.Elevated == true;

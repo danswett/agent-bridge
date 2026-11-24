@@ -64,7 +64,7 @@ public static class DelegateLabel
     static string Unquoted(string s) => Replaced(s, r => IsQuote(r) ? "'" : null);
 
     // Commas and what is drawn like them. A label read aloud (ui.md §9) joins its facts with ", ",
-    // so a name of "x, idle, DEV-VM2" would read as facts of its own to a screen reader (#303's
+    // so a name of "x, idle, Laptop" would read as facts of its own to a screen reader (#303's
     // security review).
     static readonly HashSet<int> Commas =
     [

@@ -57,6 +57,19 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
         Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("launch")]
+    [InlineData("end")]
+    public async Task Cli_fleet_verbs_dispatch_to_their_own_command_and_launch_still_reaches_the_launch_cli(string verb)
+    {
+        using var fixture = new Fixture();
+        var result = await RunCli(fixture, ["fleet", verb], addRoot: false);
+        Assert.Equal(2, result.ExitCode);
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.Equal(verb, json.RootElement.GetProperty("action").GetString());
+        Assert.Contains($"fleet {verb}:", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Cli_process_tests_start_the_product_host_executable_not_the_rehearsal_parser()
     {

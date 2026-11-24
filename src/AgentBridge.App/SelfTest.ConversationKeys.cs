@@ -52,12 +52,12 @@ static partial class SelfTest
                 await Still(scroll);
                 var focused = FocusManager.GetFocusedElement(list.XamlRoot);
                 var from = scroll.VerticalOffset;
-                var target = PostedInputTarget(window).Detail;
-                var method = Press(window.Handle, key, foreground: true);
+                var (target, method) = NativeInputSetup.PressWithTarget(
+                    () => PostedInputTarget(window).Detail, () => Press(window.Handle, key, foreground: true));
                 if (!await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2)) && method == "SendInput")
                 {
-                    target = PostedInputTarget(window).Detail;
-                    method = Press(window.Handle, key, foreground: false);
+                    (target, method) = NativeInputSetup.PressWithTarget(
+                        () => PostedInputTarget(window).Detail, () => Press(window.Handle, key, foreground: false));
                     await Until(() => seen.Contains(key), TimeSpan.FromSeconds(2));
                 }
                 methods.Add($"{key} by {method}");

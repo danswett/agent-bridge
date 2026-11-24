@@ -60,7 +60,7 @@ was then locked, and the host asked from its own machine (`ask.txt`), as an agen
 | Time (PT) | What happened |
 |---|---|
 | 20:04:51 | Host asks; the relay forwards the encrypted push; Apple answers 201 |
-| (lock screen) | The notification is shown on the locked phone: "DSWETT-DEV-VM1 asks", with the question |
+| (lock screen) | The notification is shown on the locked phone: "Laptop asks", with the question |
 | 20:04:59 | Tapped: the PWA opens, connects to the relay and opens a channel to the asking host by itself |
 | 20:05:01 | The answer, tapped in the app, reaches the host |
 

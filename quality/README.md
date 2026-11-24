@@ -278,16 +278,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
    `quality/plan.ps1`: ring 1 on a pull request and on `main`, and on a draft the fast ring
-   (`-FastRing`: ring 0, Linux only, §2).
+   (`-FastRing`: ring 0, Linux only, §2). Its `tiers` output and the summary's Tier column give
+   each gated job's tier, blocking or post-merge, and each post-merge leg by exact name (item 9).
 
-   **Main: first attempts coalesce, re-runs run apart.** First attempts of pushes to `main` share
-   the concurrency group `ci-main`, which never cancels a run in progress: at most one of them
-   runs and one waits, and a newer waiting push run cancels the one waiting before it starts. A
-   re-run (attempt 2 on) never joins `ci-main` but gets its own run-id group, like a run by hand,
-   so it runs beside them and can't take a waiting push run's place and leave that push's commit
-   untested (#938's review). GitHub promises no
-   order between push runs: the merge rule ignores cancelled runs and unfinished product
-   evidence, judging the newest usable named-job result (item 9).
+   **Main: every push runs, nothing is cancelled.** Each push to `main` has the concurrency group
+   `ci-main-<sha>`, which never cancels a run in progress, so every merge gets its full run (a single
+   shared group kept one running and one waiting run, and a newer push cancelled the one waiting:
+   3 of 10 main runs on Nov 22). A re-run (attempt 2 on) gets its own run-id group, like a run by hand,
+   so it runs beside the first attempt and can't take its place (#938's review). GitHub promises no
+   order between push runs: the merge rule inspects cancelled runs' job steps (item 9), passes
+   over unfinished product evidence, and judges the newest usable named-job result.
    So a main run's change is everything since the last commit main's CI
    passed on: the plan reads `ci.yml`'s passed push runs on `main` (the newest 100, through the
    `actions: read` token), takes the newest whose commit is an ancestor of this one, fetches
@@ -295,6 +295,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or went red, are tested with this one. A base older than needed only tests more; none found,
    or the runs unreadable, runs the whole ring, never "no change". A docs-only push to `main`
    runs what docs select (`light`'s link check, say), not the app or the product's builds.
+   Main also reads the highest-version **published** release (never drafts or orphaned tags).
+   Its base is the common ancestor of that release's commit and the passed CI commit.
+   Thus green CI that skipped publishing cannot erase unpaid app changes: the next main
+   head builds, tests and publishes them through the existing serialized, ordered publish path.
+   Missing, unreadable or non-ancestor release evidence runs the whole ring with packaging.
    Pull requests keep cancelling a superseded run, and a run by hand its own group.
    Known docs/ordinary-test-only main changes also skip `product` through its plan output.
    The selector proves test-source ownership through the project graph: files linked into or
@@ -307,8 +312,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
    packages or installers. App source and dependencies, packaging inputs, shared build roots,
    ci.yml's packaging/SBOM steps and `install-trivy` still select both jobs. Selection covers
-   the entire range since the last green main commit when that base is known, so an earlier
-   untested app change still builds. If no passed ancestor is found or the run list is
+   the entire range since the CI/released common ancestor when that base is known, so earlier
+   untested or unpaid app changes still build. If no proven ancestor is found or the evidence is
    unreadable, main runs the whole ring without narrowing: the HEAD^1 fallback cannot prove
    that earlier app changes were packaged. Main keeps the `windows-11-arm` product leg;
    manual whole-ring runs remain un-narrowed. A proven docs-only range skips packaging
@@ -348,7 +353,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (its own output, and it runs in the whole ring whatever the plan says, except `app` and
    `app-installer`, which always require their own output to be true: the whole ring alone
    brings neither job to a pull request or main push, and a pull request's whole ring leaves the
-   `windows-11-arm` product leg to `main`, #1249); the plan
+   `windows-11-arm` product leg to `main`, #1249; a job whose every leg is post-merge puts
+   `github.event_name != 'pull_request' &&` before it, #3209); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to
@@ -373,7 +379,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the build scripts, the relay container) and inside `light`: when the whole ring runs,
      every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
-     `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
+     `dotnet-coverage` with TRX, `--blame-crash` and the existing `--blame-hang` watchdog.
+     The shared quality command builder also adds crash blame locally. Public crash diagnostics
+     remain execution-sequence XML only; private crash-dump upload is deferred.
+     Windows retries only failed cases once after checking complete TRX evidence.
+     xUnit's run-level `[FAIL]` error diagnostic is accepted only when its exact name
+     matches a failed result with error details; other run errors still fail closed.
+     Definitions are indexed by test ID, preserving missing/duplicate identity rejection.
+     When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
@@ -382,6 +395,21 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
+   - `app`'s published-app self-test is sharded (#1755, Part of #2454): `AgentBridge.exe --self-test <result.json>
+     --self-test-shard i/n` runs the common start (display, the demo's rows) and then only shard `i` of `n`'s stages. The
+     stages are named and run in a fixed order (`SelfTestStages.All`: layout, launch, approve, themes, signin, progress,
+     contrast, resize); n is 1, 2 or 3, each shard takes a contiguous run of them, and without the option the one run
+     does them all, as before. A pure function in `AgentBridge.App.Core` assigns them, so its tests (every stage in exactly
+     one shard for every n, in order) run on every pull request. The result records `shard`, the `stages` it ran and
+     `stagesAll`; `build/app-self-test.ps1 -Shard i/n` passes the option, and `build/app-self-test-join.ps1` fails a run
+     whose shards are missing, doubled, of another count, or whose stages do not add up to `stagesAll`, or whose
+     result names a failure. Target for three shards: the `app` check from about 12 to about 7 minutes. The CI side
+     (the shard matrix, the join, the pinned check names in `catalog.yml` and `merge-rule.yml`) is Quality's to push, in two
+     steps: shard jobs first run beside the whole self-test, which `app` still runs and which still decides, until three main
+     runs of every shard agree with it (a shard that left out state a later stage needs, such as the launched session or
+     the approval, shows there, not in a merge); then `app` stops running the whole self-test and joins the shards instead.
+     The names `app (win-x64)` and `app (win-arm64)`, the one `needs.app.result` that `quality-gate` reads and the arm64
+     waiver names do not change at either step. Live resize stays last of its shard and measures only what its shard drew (#765).
    - `app-installer` keeps its x64 and Arm64 check names and the full install, architecture,
      distribution-notice and installed-app self-test checks. It waits for `app`, downloads that
      run's existing architecture/version release artifact and a small notice/identity artifact,
@@ -402,33 +430,48 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      together the seven run every spec. The one PWA job these replace took a median of 15
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
-     Network attempts have a 60-second bound; an Azure timeout switches to the runner's Canonical fallback,
+     Update attempts have a 60-second bound; downloads get 180 seconds on Azure and 600 on
+     Canonical per attempt, allowing cold WebKit/e2e downloads. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or
      download also switches without backoff. An update timeout now switches rather than
-     repeating the same mirror. Classified connection/5xx failures and Canonical timeouts get three attempts,
-     waiting 5 then 20 seconds, before switching. Canonical gets the same bounded network
+     repeating the same mirror. Downloads get three attempts with 5/20-second backoff.
+     Updates get an initial attempt plus three retries with 15/30/60-second backoff for
+     classified network errors and HTTP 429; this also admits transient errors from the
+     runner's existing `https://packages.microsoft.com/` feed, only during updates.
+     Exhausted throttling or Microsoft-feed errors fail closed, even with cached debs,
+     without switching Ubuntu mirrors. Mixed signature, hash, lock or other fatal errors
+     still fail immediately. Canonical gets the same bounded network
      retries, then fails loudly with the attempt log; it never switches back to Azure.
-     A non-forced debs cache hit uses 20-second attempts within a two-minute whole-update
-     budget. Only classified network exhaustion or a timeout without other errors warns
-     and skips the network download, then requires `apt-get install --no-download`;
-     offline install failure is fatal, without a network fallback. After failed updates only,
-     the hit restores its matching signed indexes with sudo before installing; successful
-     updates keep their fresh indexes. Debs without indexes count as a miss. The versioned
-     paired key includes the runner image, Playwright lockfile and browsers. Only successful
-     cold runs save indexes and debs, on any ref; PR entries are scoped to that PR, and main
-     must seed its own entry. Cold seeding needs one successful Ubuntu update. Failed-update
-     restoration is proven offline; hosted proof needs a real failed update meeting a hit.
+     Archives only: cached apt lists are never restored. Every run requires live signed
+     `apt-get update` with runner keys, including Microsoft's feed; failed updates never install.
+     On non-forced hits, apt `--print-uris` with SHA256 and an empty archive directory supplies
+     authenticated sizes/hashes. Verify ALL required debs, then copy ONLY those for `apt-get install --no-download`.
+     Missing/invalid archives, weak hashes or planning failure discard the cache for authenticated downloads.
+     Install failure stays fatal. Successful cold downloads stage debs before install and save even on later failure.
+     Keys include OS, arch, image, exact dry-run package-list hash and ref hash; restores share only image/list matches.
+     PR entries stay PR-scoped; main seeds its own. Bad exact keys cannot be overwritten: `gh cache delete <key>`.
+     Invalid exact-key hits still require authenticated redownloads, but use apt `-qq` to suppress
+     repeated progress, not errors; one warning explains the immutable key and deletion recovery.
+     Prefix-hit downloads and forced fallback proof keep their normal output.
+     Fakes model the trusted Release/index/archive chain; hosted Linux cache-hit proof is still required.
      The four subsequent browser
      installs omit `--with-deps`, so they cannot trigger another apt update.
      Missing, corrupt or unrecognized errors fail at once, even alongside network errors
      (#2025; outage runs 43039845647 and 43039976393). A healthy but slow cold update
      now has less time per attempt than the old five-minute limit. Forced-proof checks
      below are unchanged.
-     Each of those jobs gets 35 minutes, so a
-     fallback download still leaves time for the tests; the browsers' own download, on a cache
-     miss, is unchanged. To prove that fallback once without waiting for a slow mirror, once this
+     **Retry budget versus the 35-minute job cap:** limits apply per attempt and per mirror,
+     not to the total step. Conservatively including the 30-second kill grace on every attempt,
+     Canonical updates allow `4 * (60 + 30) + 15 + 30 + 60 = 465 s` (7m45s), and downloads
+     allow `3 * (600 + 30) + 5 + 20 = 1915 s` (31m55s). Combined, `2380 s` (39m40s)
+     already exceeds the job's `2100 s`; earlier Azure attempts and its up-to-seven-second
+     DNS probe can add more. The job timeout is the final bound, not a guarantee of test
+     headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
+     outside these network retry budgets; dpkg is deliberately not wrapped in the network
+     timeout. These fakes establish bounds/branches, not hosted cold-run success.
+     To prove that fallback once without waiting for a slow mirror, once this
      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
      `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
@@ -450,14 +493,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the paired apt cache above may be saved.
-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
-     It runs only when `spikes/` changes, like `spikes` on Windows.
+     job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
+     docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
+   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
+     `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
      `pwa-e2e`, keyed by Playwright's version. Only `main` saves these caches; a pull request
-     restores main's, and the nearest older NuGet key when its projects differ. The paired
+     restores main's, and the nearest older NuGet key when its projects differ. The archives-only
      apt cache above is the exception, and a PR's entry cannot seed what main restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
@@ -468,9 +512,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
      push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
-     never cancel a run in progress either, but a first attempt still waiting can be replaced in
-     `ci-main` (item 7). A cancelled named test job on main's current push holds
-     merge-rule's main_green check until it succeeds (item 9).
+     never cancel a run in progress either, and none is replaced: each has its own group
+     `ci-main-<sha>` (item 7). A named test job cancelled after its tests or build started holds
+     merge-rule's main_green check until it succeeds; one cancelled earlier is infra-only (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
@@ -489,11 +533,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `publish-prerelease.ps1` publishes each version (the run number) once, never one older
    than any published, and never from a commit that doesn't hold the latest release's commit
    (a run number says nothing of commit order; behind it publishes nothing, and diverged or
-   unreadable stops publishing). So a run publishes even after `main` has moved on (an app
-   change followed by a docs-only commit is released by the first's run), unless main's head,
-   read under the lock, has since changed the app by main's own ring-1 selector: then main's
-   later run publishes both, since publishing the older first could leave the newer's lower run
-   number refused (an unreadable or off-main head stops publishing). One reaching
+   unreadable stops publishing). So a run publishes even after `main` has moved on, app changes
+   or not (#4104), as long as main's head, read under the lock, still follows its commit (an
+   unreadable or off-main head stops publishing); main's later run publishes its own higher
+   version over it. When GitHub numbered a descendant's run lower, that version is refused and
+   its app change waits for main's next run: delayed, not lost (#938's trade). Releases are
+   spaced 15 minutes apart (owner decision; docs/app-windows.md, "Spacing"): a run inside that
+   publishes nothing and says `deferred=true`; `publish-pending.yml` re-runs that publish job
+   once the window opens, even with main idle, unless a later run publishes first. Quality, on
+   an owner or Chief call, may dispatch `critical-release` with a reason. One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
@@ -520,7 +568,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    **Reader enforcement is STALE:** the current evaluator/config can accept one
    independent receipt plus completed Copilot instead of the required second family.
    Before arming or permitting merge, Quality MUST manually verify authorized
-   posters and Quality-only posting; actual approved model/effort (or approved
+   posters and that each reader posted its own receipt and status (owner decision
+   2026-11-21, option A; Quality spot-checks); actual approved model/effort (or approved
    retained continuity); successful receipts backed by linked CLEAN review verdicts explicitly
    naming the PR's current full head SHA; reviewer independence/non-authorship;
    and completed required whole/security reads. Ordinary PRs need one required
@@ -547,13 +596,24 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - Main must be green, since auto-merge doesn't pause while main's CI is red and would keep
      landing pull requests on a broken main, which makes the breakage hard to untangle. Each run
-     walks main's `ci.yml` push runs newest first, across up to 100 runs. A cancelled run never
-     counts. A candidate needs a successful completed plan and completed product instances;
-     queued, in-progress or cancelled named jobs pass the run over. A failed plan or a
+     walks main's `ci.yml` push runs newest first, across up to 100 runs.
+     **A run whose jobs cannot be read is passed over only after 15 minutes, and only if it is not a failure.** The API can answer 404, a 5xx,
+     or an empty or cut-short body for a main run's jobs (a zombie run it never serves took every pull request's merge-rule to `error` for as
+     long as it sat newest). Such a run is skipped, and the status says `skipped unreadable run <id>` (first among the alerts, and in the
+     failure when nothing readable is left), only when all of these hold: it was created over 15 minutes ago (a fresh run can 404 briefly, and
+     until then the judge errors as it always has); it is not completed, or ended `cancelled`, `success`, `neutral`, `skipped`, `stale` or
+     `action_required` (an ALLOW-list: a failure, a conclusion GitHub doesn't document, a completed run with none, and a run with no status are
+     never skipped, so the unexpected fails closed); and a second read of its jobs, 3 seconds after the first, also failed. There is no memory
+     between evaluations, so a run unreadable on both reads of one evaluation is skipped even if the outage was brief: that is the limit.
+     A run with no creation time is never skipped. The newest readable run is then judged, so a newer readable failed run still blocks.
+     The gh call itself asks once more when gh reports a truncated response ("unexpected end of JSON input") or an empty body, and a
+     failure says what gh said and how often it was asked; a 404 or other clean status, and every status post, are asked once.
+     A candidate needs a successful completed plan and completed product instances;
+     queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
-     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     `main_green.jobs` list pins exact display names for ha-integration,
+     light, pwa-ui, pwa-e2e and app (`spikes` and `spikes-linux` left it with S2 piece 4: they are the FULL lane's), including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      Optional `main_green.leg_families` adds lists of exact alternative check names to
@@ -565,17 +625,53 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      The aggregate quality-gate is excluded because it waits on installer. The plan job must
      succeed. Completed `skipped` siblings count as green, including GitHub's unexpanded
      matrix-family entry; a skipped product family is not product evidence. Every named job
-     that ran must succeed: a failed product or sibling holds main red, even beside skipped
+     that ran must succeed or have an infra-only failure: a test/build failure holds main red, even beside skipped
      siblings. Missing, renamed or neutral named jobs never grant green.
      Jobs are paged across all attempts, then judged by their own latest attempt (and job id
      within an attempt), so rerunning only failed jobs can free main without discarding earlier
      successful jobs. Installer, signing and publishing results do not hold, even if red or
      pending; the evaluator prints them as non-gating jobs for Quality's main-red log.
-     Unreadable history, plan or product data fails closed without fallback. No usable run in
+     Owner decision Nov 18 15:05 PT: `main_green.infra_steps` lists case-sensitive infra step
+     names/globs per exact job or matrix family: checkout, setup, cache and job plumbing only,
+     never source-dependent installs such as `npm ci`, Playwright's pin or its system-packages
+     action. Those names only locate a failure: annotations don't name their step, so a job with
+     more than one failed step holds, and the job's failure annotations (one extra read) must all
+     show a network or runner cause, such as exit
+     code 124 or a timeout, HTTP 429/5xx, a connection reset, DNS failure or a lost runner. Unknown
+     failures and missing/empty step data hold. Cancellation needs evidence no test/build step
+     started, and a step that failed before it is judged like any other; a never-assigned runner
+     also needs a nonempty step manifest. Cancelled runs are
+     inspected rather than hiding a test failure behind older green evidence; a cancelled run
+     with no jobs (cancelled before it started: only runs from before per-commit groups) is passed over.
+     An infra-only failure never holds. On a first attempt it adds `ALERT infra-only` to the
+     merge-rule description (after any blocking reason, compacted) and to the detailed log;
+     [S2](https://github.com/danswett/agent-bridge/pull/3079) is not on main: flag `rerun needed
+     (once)` rather than dispatching another rerun path. Once the rerun is used it adds
+     `INFRA-PERSISTENT <job>` instead (listed first), and the F5 guardian or Quality opens the
+     issue. A test/build failure in any attempt holds until a later attempt of that job
+     succeeds, even if a later attempt or newer run of that job is only infra-only or a skipped
+     retry: older runs are read back to its last real result, and a success there (or earlier in the
+     same run) stops the lookup. The arm64 waiver applies to that result as to the latest one.
+     Unreadable history, plan or product data fails closed without fallback, with one exception: a main run whose jobs stay unreadable past
+     the grace and aren't a failure is skipped and named (above). No usable run in
      the bounded history also holds with an explicit reason. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from Quality, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
+   - Tiers (#3208): a catalog suite with `tier: post-merge` names exact ci.yml job display names
+     in `tier_jobs` (Arm64 packaging and product's `windows-11-arm` leg, both installers, pwa-ui's
+     WebKit shards and pwa-e2e). The merge rule reads `catalog.yml` beside its rules and counts
+     only blocking jobs: on main a post-merge job never holds, alerts or keeps evidence unusable,
+     and the log marks it `[post-merge]`; on a pull request's CI run a post-merge job that
+     failed or is running counts as passed and the description adds `post-merge, not counted:`.
+     Any other tier, a renamed job, or a missing or unreadable catalog blocks. The arm64 waiver
+     applies first, so a waived job still needs its receipt. ci.yml runs post-merge jobs on main
+     and manual runs only (#3209): a pull request leaves out app's and pwa-ui's post-merge legs
+     (their matrix include adds them only when the event isn't `pull_request`), skips a job whose
+     every leg is post-merge (`github.event_name != 'pull_request' &&` before its gate shape) and
+     its quality-gate doesn't count those jobs as selected (the check step's `PR_OFF`). The catalog
+     check holds all three to the catalog's `tier_jobs`. Required checks still run on every pull
+     request, so the ruleset needs no change; main's quality-gate still needs every leg to publish.
    - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
      Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
      success independent-review receipt on its head from a listed poster and no Copilot review,
@@ -626,19 +722,26 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      When the open list itself stops partway, no head gets success from that run: a held pull
      request on it could be among the unread.
    - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
-     about one point per page of the open list plus one per pull request that isn't already
+     about one point per page of the open list (twenty-five to a page; a scoped run reads it light,
+     a number and a head each, a hundred to a page) plus one per pull request that isn't already
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), plus one REST call for
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
      Below 200 points left, a run warns in its log.
+   - Reads are made together where they don't depend on each other: once main's newest CI run has not
+     answered, the runs below it are read four at a time (the newest alone: a read is a point); and a
+     sweep reads four heads' pull requests at a time. The answers are used in order, so the verdicts
+     and what is posted are what reading one after another gave: a sweep of about 110 pull requests
+     took 205 s one call at a time and 70 s this way, for the same points and calls (2026-11-23).
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
      its source, and built (then saved) only when main changed it. With `FLEET_MERGERULE`
      not `off`, `pull_request_target` admission in `.github/workflows/merge-rule.yml`
-     is per pull request, and a new head cancels that pull request's in-progress run (#2577).
-     Other scoped events coalesce per head, separately from main sweeps, cron and dispatch
-     (#1922, #2130); skipped events have unique admission keys.
+     is per pull request and other scoped events' per head, and any newer run of the same key cancels
+     the one in progress (#2577 for a new head; #4104 for every event since). Main sweeps, cron and
+     dispatch have slots of their own and never cancel (#1922, #2130); skipped events have unique
+     admission keys, so they cancel nothing.
      Before joining the writer queue, cron checks for other queued, pending or waiting scoped
      evaluations. It yields only to a positively identified fresh scoped job; a queue at least
      30 minutes old, unreadable/incomplete API data, or an unknown queued job name lets it run
@@ -656,7 +759,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      It is not a resolver job per event. The PR dry run in
      `.github/workflows/weekly-report.yml` and the review relay in
      `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
-     (#2577). All triggers stay unchanged.
+     (#2577). The run backlog (#4104: up to 30 runs queued on one head, 23 on main's tip) is cut
+     three ways. Admission cancels in progress for every run about one pull request or head (never a
+     sweep), so only the newest such run survives; the evaluator posts only
+     verdicts, so a cancelled run leaves the last verdict until the newer run of that key posts. CI
+     starting on main no longer sweeps (main's verdict is its newest completed evidence); finishing
+     still does. A status judges again on any failure, error or pending, but on a success only for
+     independent-review, independent-review-2, Copilot's and CodeQL's contexts; the accepted
+     residual is an unlisted status going pending to success, which waits for the next event or sweep:
+     a slower merge, never a wrong verdict.
      Every admitted writer still waits in the shared `merge-rule` job group with
      `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
      A scoped event cannot displace a sweep or another
@@ -664,14 +775,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      green judges every open pull request, as `--all` does, so a sweep displaced while main turns
      red can't leave another pull request's success standing (about 15 points, only while main is
      red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
-     (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
+     plus one per hundred open pull requests (the light open list, which finds the pull requests
+     on the head; those pull requests, each read in full; a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
      CI, up to 15 points each with 25 pull requests open, 315). Those are historical estimates,
      not a quota guarantee: the Nov 10 repair sweep cost 58 points and 17 REST calls. Retaining
      formerly displaced sweeps adds their existing evaluation cost, with no new job, timer,
      token permission or idle runner minutes. A burst admits at most one writer per active head
-     plus one sweep; each head also retains one pending duplicate outside the writer lock.
+     plus one sweep (and one pending sweep), with no pending duplicate per head.
      GitHub's queue cap is 100 pending jobs: additional jobs are cancelled at that cap, not
      promised recovery. The observed 22 open PRs fit, but bursts spanning many obsolete heads
      can exceed that bound. The cron backstop remains best effort; a reliable fleet tick is a
@@ -725,6 +837,188 @@ uses that file: the selector's build and each suite's. NuGet's vulnerability aud
 reads the mirror. Overriding only the package sources (`--source`) isn't enough: audit still
 tries nuget.org from `nuget.config`, and its NU1900 warning is an error here. Unset, nothing
 changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
+
+### CI: speed, runners and what gates main
+
+Owner decisions of Nov 22 and 23, 2026 (recorded on #2454 by the Chief; Part of #2454 and #2225). The target is a pull
+request and a main push **green in about 5 to 6 minutes**. The numbers below are measured from the 20 runs of Nov 22
+(10 main pushes, 10 pull-request runs, read once); a projection is marked *estimate*.
+
+**What sets the time today.**
+
+| | Pull request | Main push |
+|---|---|---|
+| Run wall time | 8 to 14 min (a docs-only PR 0.9 min: the catalog already skips .NET) | 26 to 35 min, one at 55 |
+| Critical path | `app (win-x64)` 12.1 min (UI self-test 7.5, publish and pack 3) or `product (windows-latest)` 6 to 13 | `app` 13.6 (p90 22) then `app-installer` 8.9 then `publish` 2.6, serial; the installer starts about 23 min in |
+| Queue wait before the first job | 0.6 min | 2.5 min |
+| Job-minutes per run | 32 on average (58 at most) | 101 on average (160 at most) |
+| Runs cancelled | 3 of 10 pull-request runs (a newer push to the same PR: by design) | **3 of 10 main runs**: a merge replaces the queued run in the one `ci-main` group |
+
+**Status.** *Decided* (owner, relayed by Chief and Eng R8, Nov 22 and 23): the 5 to 6 minute target; main green on build and
+test only; per-commit main concurrency; the `ab-ci` labels behind `AB_CI_SELF_HOSTED` with the fork guard; Linux, Arm64 and
+the app UI self-test jobs hosted. *Proposed* (not yet recorded as decisions, marked below): the cache policy, the shards, the
+path-filter extension, the reused-machine rules, the cost figures and the order of work.
+
+**Test shards (S4, #4104; approved as option A, built in pieces; the planner is the first).** The `product` job's tests are 472 s of its 641 s, and
+one project, `Host.Tests`, is 417 s of that, so shards split by **test class** inside the big projects (`Host.Tests`, `App.Tests`), each shard job building
+for itself (build once and hand the output over as an artifact is decided after the artifact transfer is measured). A shard runs `dotnet test --no-build --filter`
+with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
+is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, and VSTest's
+`~` is a **case-insensitive** contains (`Foo.ATests.` is inside `Foo.aTests.`), so classes like that, by case too, are one unit and travel together (3 of Host.Tests' 175
+classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. An empty shard's filter is empty text,
+which `dotnet test` reads as no filter, so a caller skips an empty shard. The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
+the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. Discovery must be the **built
+assembly's, by reflection**, never a scan of the source: the spike's source scan missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no
+shard. `dotnet test --list-tests` is not an option either (222 s on Host.Tests alone). A class name the filter language would misread is refused, never dropped. The
+shard legs, the discovery command, the weights file and `quality-gate` failing on a missing or skipped shard are later pieces.
+
+**What gates main: two lanes (decided, owner, Nov 23, S2, #4104; the design, not yet built: what exists today is one `ci.yml`, whose `app`
+job self-tests and packs, and the pieces below build it, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
+one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on
+Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it compiles; it neither self-tests nor packs). **No `pwa-ui` or
+`pwa-e2e` is to be in it:** the owner's decision A moved WebKit and `pwa-ui` off the merge path. A second workflow, `full.yml` (to be written), is to be the
+**FULL lane**, which never gates a merge: the x64 app self-test (sharded), `app-pack` and `app-installer` for x64 and Arm64,
+`app (win-arm64)`, `product (windows-11-arm)`, `pwa-ui` and `pwa-e2e` (Chromium and WebKit), `spikes` and `spikes-linux`, and an aggregate
+`full-gate` that, like `quality-gate`, fails when a job it selected was skipped (so a FULL run whose WebKit lane did not run is not a pass).
+* **When FULL is to run.** After each push to `main` whose FAST run passed (a `workflow_run` of `CI`, so it packs as
+  `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); a newer push
+  cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
+  with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
+* **A red FULL lane is to open an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
+  **never holds a merge**: merges continue.
+* **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
+  suites `lane: full` with their `full.yml` job names (the validators then read both workflows). The ruleset keeps requiring only
+  `quality-gate` and the merge-rule status.
+* **The release train is to gate publish on FULL** (docs/app-windows.md, "The release train"), and its selector already does
+  (`build/select-release-commit.ps1`, fixtures in `build/test-select-release-commit.ps1`, piece 1 and 2): it takes the newest `main` commit whose FAST
+  lane **and** FULL lane are green, and publishes FULL's packages, never rebuilding. FULL must show, all succeeded: `full-gate`; the x64 self-test, pack and installer; the
+  **Arm64 pack**. **What runs the app on Arm64 is waived** (owner, #2454 and "ship now"): its self-test, its tests and its installer (which installs and
+  starts the app, so it is the Arm64 self-test; #4159), **but never silently**: the train's publish summary carries a notice listing every waived Arm64 result
+  (`Format-WaivedNotice`), and `full-red.yml`'s alert (to be written) opens for a red Arm64 job too while publish continues. **x64 stays strict:** its self-test,
+  pack, installer and SBOM are each required, and an absent, skipped or cancelled x64 job is no pass. The Arm64 package is never optional,
+  and the packages and both SBOMs (the Arm64 one is what attestation needs) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
+  commit's `head_sha`, never by branch. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, "Releases and updates" in docs/app-windows.md
+  describes what runs.
+* **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
+  that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
+* **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
+  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
+**Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
+`cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
+`ci-main` group holds one running and one waiting run, and a newer arrival replaces the waiting one: that is how 3 of 10
+were cancelled.) Pull requests keep one group per PR with `cancel-in-progress: true`. A re-run keeps its own group, as
+now. Release order no longer rests on `ci.yml`: the release train orders releases.
+
+**Where jobs run.** The Windows x64 build-and-test jobs (`product (windows-latest)`, and the `app` job's build) run on
+the **`ab-ci` pool**, labels `[self-hosted, windows, x64, ab-ci]`, ephemeral repo-level runners that SRE R4 registers on
+SRE-owned machines (tools: git, pwsh 7, the .NET SDK from `global.json`, Node 20, Visual Studio Build Tools and the
+Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Windows on Arm, and the app's UI self-test jobs
+(they need a desktop).
+
+* **The routing guard is required** (the repository is public and the runners persist). A job takes `ab-ci` only for a
+  `push` or a pull request whose head is this repository:
+  `vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)`,
+  and falls back to the hosted label otherwise. A fork pull request, and anything run by `pull_request_target`, never
+  reaches a self-hosted runner (the owner also set fork-PR approval to every external contributor). The repository
+  variable `AB_CI_SELF_HOSTED` flips the whole pool back to hosted runners without a workflow change. **Capacity first
+(proposed):** with a run per commit on main (item 4), every merge runs in full, about 101 job-minutes today and about 55 once
+pack, installer and `sign` are off the gate, and the pool is first-come first-served. Before `AB_CI_SELF_HOSTED` is set to
+`true`, SRE R4 checks the pool's queue (runners registered against the jobs a busy hour sends it) and sets it only while jobs
+start within about a minute; a queue that grows is the signal to add runners or flip it back.
+  `tools/AgentBridge.Quality/RunnerRouting.cs` parses each `runs-on` (and each caller's `with:` input naming the pool) as an
+  expression: the pool is reachable only through `<guard> && <self-hosted label> || <hosted label>`, other `&&` conditions
+  only narrowing. A swapped or chained fallback, a negated or widened guard, a label only tested, a runner group, a bare
+  self-hosted label, a runner from a variable, input or event field, an unparseable file, and a self-hosted job where
+  `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It
+  fails closed: a runner is hosted only when every value it can take is on the hosted allowlist (`ubuntu-*`,
+  `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a literal, and the one runtime
+  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. This lint
+  passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  **The one alternative to the guard: a run by hand on main.** `(<guard>) || github.event_name == 'workflow_dispatch' &&
+  github.ref == 'refs/heads/main' && inputs.use_ab_ci` may also reach the pool, to try it before `AB_CI_SELF_HOSTED` flips.
+  `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
+  fails a workflow that reads it otherwise, since a string `'false'` is non-empty and so true. Only people with write
+  access can dispatch, and only main's workflow file runs.
+  **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
+  lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
+  neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork
+  run after reading its changes; that approval is the boundary. In this repository's own files the guard's
+  same-repository test sends every fork run that is approved to hosted runners.
+* **A reused machine must give the same answer as a fresh one.** A job starts from a clean workspace (checkout with
+  `clean: true`, then `git clean -ffdx`), keeps nothing between jobs (a cache comes back only through `actions/cache`, below), writes only under
+  `RUNNER_TEMP` and the workspace, runs one job per runner process, and reads no credential that lives on the machine
+  (those machines also run fleet sessions: a runner uses its own account with none of theirs, and a job that needs a secret gets
+  it from the workflow, as now). Tests that bind a fixed port, a named pipe or a machine-wide mutex name must take a
+  per-job name: a clash there is a bug this move exposes, not one to retry.
+* **NuGet on an ab-ci leg goes through the runner's mirror, and only nuget.org's signed bytes.** The ab-ci machines
+  can't reach nuget.org. Each runner's `.env` names `AGENT_BRIDGE_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json`
+  (set, with the PATH the jobs need, by the owner's `setup/fix-abci-env.ps1`, #4104). On a self-hosted leg only,
+  `ci.yml`'s product writes its restore config with `New-AbCiNuGetConfig` (`quality/nuget-mirror.ps1`,
+  `NuGetMirrorTests`, `CiNuGetMirrorTests`):
+  - that host alone, https, with no user info, port or query, as the only package and audit source;
+  - no fallback folder;
+  - every package required to carry nuget.org's repository signature (its current and two earlier certificates).
+
+  A missing or other mirror, a mirror that is down, or a package nuget.org didn't sign fails the leg; nothing falls
+  back to another source. A hosted leg restores from nuget.org as before. Only product runs on ab-ci: `app` (vpk,
+  publish) has no mirror config and would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
+  an `ab-ci-` part, so it never shares packages with the hosted Windows leg.
+
+**Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
+(`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on
+the lock files and the SDK version, and **only a push to `main` saves a cache**: a pull request restores, never saves, so
+it cannot plant an entry a later job trusts. The `app` and `publish`-side jobs (what ships) restore from the package feeds
+only, never from a cache. `obj/` and `bin/` are never cached (a stale build output is cross-job state). Behind a firewall
+that blocks `api.nuget.org`, restore through the internal feed: `dotnet restore --source
+https://packagefeedproxy.microsoft.io/nuget/v3/index.json`, with `-p:NuGetAudit=false` on a local command only (CI keeps
+the audit and `nuget.config`).
+
+**Shards (proposed).** *The app self-test first:* it is one process running 46 `Check...` sections in a row (7.5 min), and is the
+critical path. Add `--self-test-sections <names>`, default all, so a shard runs the shared setup and only its sections; a
+matrix of three covers a fixed partition by section (balanced by their timings in `result.json`), each writing its own
+result file, and a final step merges them, failing if a section ran twice or not at all. A section that depends on state an
+earlier one left must be fixed or kept with that one: a "each section alone" job proves it before sharding turns on.
+*Product tests* shard by test project into three groups of about equal time (`dotnet test` per project, the build done once
+per runner). Every shard is still a full assertion run: none is skipped or loosened to save time.
+**A shard keeps the names other things read:** the required checks `app (win-x64)` and `app (win-arm64)` (the selector, `main_green`
+and the release train select on them) and `product`'s matrix names stay as they are; shard jobs run under other names and the
+`app` job, or an aggregate that keeps its name, waits for them.
+
+**Path filters (proposed extension).** The catalog's selector already skips what a change cannot affect (`no_test_paths`, `triggers`): a
+docs-only PR runs nothing .NET (0.9 min). Extend it so a PWA-only change runs `pwa-ui` and `pwa-e2e` only (about 6 min
+against 12), and a relay-only one the relay and its image.
+
+**Expected minutes** (*estimates*, from the one read; the warm-cache gain is not yet measured).
+
+| Lever | Pull request | Main (build and test gate) |
+|---|---|---|
+| Today | 8 to 14 | about 14 (p90 22), then 12 to 20 more for installer and publish |
+| Per-SHA main concurrency | none | none; no merge cancelled |
+| Pack, installer, sign, attest non-required; `publish` the train's | none | the gate no longer waits for 3 + 9 + 3 min |
+| Warm caches on `ab-ci` | -1.5 to -2 (build 130 s to about 50 s; no queue) | the same |
+| Test shards (app self-test x3, product x3) | app 12 to about 5, product windows 6.4 to about 4.5 | the same |
+| Path filters | docs-only about 1; PWA-only about 6 | the same |
+| **All together** | **about 5 to 6** | **about 5 to 6**; the release train adds about 15 after the merge |
+
+**Cost (estimate).** Hosted minutes on a public repository are free, so what is spent is machines: the `ab-ci` pool on SRE-owned
+machines (SRE R4 prices extra VMs; the owner has approved adding more). Sharding spends more job-minutes to save wall time (about
+6 more per run for each extra setup and build); moving pack, installer and publish out of the gate takes about 40 to 50
+job-minutes off every main run. Net (estimate), main falls from 101 to about 55 job-minutes on average; a pull request stays near 35.
+
+**Order of work (proposed).** (1) The per-SHA concurrency line, and the test that pins `ci.yml`'s concurrency (`CiPlanTests`) with it:
+no risk, stops the cancelling. (2) The routing guard and its lint, with `ab-ci` off (`AB_CI_SELF_HOSTED` unset). (3) The
+runners registered, then `AB_CI_SELF_HOSTED=true`, **only after these have landed** (they are what makes a reused machine
+safe): per-job `NUGET_PACKAGES`, `DOTNET_CLI_HOME` and MSBuild state under `RUNNER_TEMP`; tools installed to a per-job path
+(`dotnet tool install --tool-path` under `RUNNER_TEMP`, not `dotnet tool install -g vpk`, which persists on the machine); a clean
+workspace each job; and the stronger routing lint of #3824. (4) The app self-test sections option, the each-section-alone job, then
+the shards. (5) Product shards, the PWA filters. (6) Pack, installer, `sign` and `attest` become non-required jobs in `ci.yml`; `publish` moves to the train, and the train installing
+and self-testing their bytes before it publishes is a separate proposed change (#3769, merged, is the selector only). Quality alone
+pushes `ci.yml` and the merge rule: this document is the design, step (1) is written as a patch (`docs/design/proposals/ci-per-sha-main-concurrency.diff` on
+branch `sg-ci-gate-diff`: `ci.yml`, the plan's pinned concurrency expression in `tools/AgentBridge.Quality/CiPlan.cs`,
+`CiPlanTests` and the text that named the old group; `git apply` it, the Quality tests pass with it), and step (2)'s `runs-on` is
+the CI builder's: it must have the whole shape above, which `RunnerRouting` checks; that passing gates step (3).
 
 ### Independent review depth
 
@@ -794,6 +1088,16 @@ request is otherwise reviewed.
   `independent-review-2` from two different model families, the depth table above applies, and a
   security-subject document is read in full by both reviewers, whichever entitlement ran them.
   Each receipt's description names its model, so a failover is visible afterwards.
+- **Codex outage: the owner waiver (owner decision, #2454, Nov 22 15:25).** While Codex is down, a second receipt
+  (`independent-review-2`) whose description is **exactly** `owner-waiver (Nov 22 15:25)` (the whole description, case-sensitive; one
+  that merely contains it does not count) stands in for the second model family on a sensitive change, next to a successful
+  first receipt (`independent-review`) on the exact head that names a model family (a clean Sonnet FULL review). It never stands
+  in for the first receipt, only an allowed poster's counts, and the merge-rule status says `One model family's review and the
+  owner waiver (owner-waiver (Nov 22 15:25))` when it was used. **Off switch:** the repository variable `CODEX_WAIVER` must be
+  exactly `on`; unset is off and the rule is as before (`codex_waiver` in `quality/merge-rule.yml`; `merge-rule.yml` passes the
+  variable, as it does `ARM64_WAIVER`). **Revert when Codex returns:** delete the `codex_waiver` block, or unset the variable.
+  The existing independence rule is unchanged: reviewer independence comes from Quality's separate reader sessions, which each
+  receipt names, not from a comparison of the poster with the PR's author (every receipt and PR here is posted through `danswett`).
 - **The EMU token** (`COPILOT_GITHUB_TOKEN`, a fine-grained PAT) lasts 8 days. When it expires,
   EMU reviews return 401 and the fallback above moves to the `danswett` entitlement until the
   owner renews it. Never `/login` per session: EMU sign-ins revoke each other.
@@ -804,7 +1108,11 @@ Receipts count only from `independent_review.posters` in `quality/merge-rule.yml
 and the receipts GitHub App `agent-bridge-receipts`, written as GraphQL names it, without REST's
 `[bot]`. The App holds Commit statuses (write), Pull requests (read) and Metadata (read), and
 nothing else; its key stays on the authorized receipt host. It has its own rate pool, so danswett's quota running out
-doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down.
+doesn't stop receipts. danswett stays a poster as the fallback for when the App's machine is down,
+and since 2026-11-21 (owner decision, option A) it is also the identity reviewer readers post as:
+each reader posts its own receipt comment (naming its model family) and sets its own
+`independent-review` or `independent-review-2` status on the exact head, through the approved
+per-command route. Quality spot-checks them and alone gates, arms and merges.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
 ## 5. Coverage, timing, flakes and reports
@@ -890,6 +1198,61 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   in the retry run's summary, before posting issue comments. GitHub retains the next attempt
   on the source run. Attempt 2 is never re-run, so repeated timeouts or failures remain red.
   Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
+- **Main-red detection** ([issue 3074](https://github.com/danswett/agent-bridge/issues/3074)):
+  `main-red.yml` handles completed CI push runs on main using main's trusted script, with no polling.
+  Failure, timeout and startup failure open or update one bot-authored `main-red` issue; success
+  closes it, including reruns. Every detector applies the newest decisive (red or green) attempt across
+  main's recent push runs and all their attempts, whichever event started it: cancelled, skipped and
+  still-running attempts are neither a verdict nor a hold, and writes only move past the newest recorded
+  attempt, so every delivery order converges. The completed event preserves its attempt and verdict
+  if a retry has already started; job evidence comes from that exact attempt. Duplicate evidence,
+  including a recovered incident, is not reposted; a recovery whose close failed is closed on redelivery.
+  An intervening successful attempt resets consecutive failures and quarantine-request state even when its
+  event is delayed; retained evidence from a recovered attempt cannot generate a quarantine request.
+  Historical entries remain, and a newer red verdict keeps the incident open.
+  Older-run red evidence is not backfilled across a newer decisive run; output explains this explicitly.
+  A missing old-run entry still leaves automatic revert fail-safe, with no change to its evidence requirements.
+  Evidence contains capped, mention-neutralised job/test names, never raw logs; unreadable logs are noted.
+  GitHub issues and the label are the only alert channel: no assignee, owner mention or phone notification.
+  Tiered gating B3 ([issue 3210](https://github.com/danswett/agent-bridge/issues/3210)): a failed job named
+  in a `tier: post-merge` suite's `tier_jobs` in `catalog.yml` is listed as `Job (post-merge-tier)`. When
+  only such jobs failed (the `quality-gate` aggregate aside), the entry says so: an alert that never feeds
+  a pull request's merge verdict. The issue stays open until main's CI is green. Missing or unreadable tier data
+  means blocking (an unreadable catalog warns; it never loses the alert). If a later entry has a blocking
+  failure, a post-merge-only issue title is promoted to the ordinary main-red title before that entry is posted.
+  B3b: when two entries in a row (no green between) name the same single test, and every failed job in
+  each but `quality-gate` is post-merge tier, the second entry adds one `quarantine-request: test=<name>`
+  line, once per unrecovered streak, with the [S3b generator](https://github.com/danswett/agent-bridge/pull/3078)
+  command. `main-red.ps1` then calls `quarantine-pr.ps1` by path (24 h expiry, draft `fixes-main` PR), but
+  only while `MAIN_RED_QUARANTINE` is exactly `on` in its environment and the script exists (until PR 3078
+  lands, the request is only recorded). The generator keeps its own fences: the repository variable rechecked
+  before each write, and only attempt 2 of one failed run; a refusal is a warning, never a failed detection.
+  The first request reserves the one opportunity for that test across the unrecovered streak, not one
+  per distinct test. The intent line is written to the alert before the generator runs, so a failed write
+  runs nothing. A successful generator invocation then adds `quarantine-completed: test=<name> run=<id>
+  attempt=<n>` in its own comment, naming the attempt that requested it; a refusal, nonzero exit, missing
+  script, disabled switch or failed completion write leaves the intent pending. Later eligible entries for
+  the requested test may try again until completion; duplicate events still do nothing. A completion is
+  bound to its streak: it suppresses that unrecovered streak only (a change of the latest failing test alone
+  is not a new streak), never a fresh streak after a recovery. A legacy completion without `run=` applies
+  only to the streak open when GitHub recorded the comment (`createdAt`), which ends at the next recovery. If
+  a completion comment is malformed, lacks a timestamp, or shares its second with entries on both sides of a
+  recovery, that entry's evaluation fails before its own write or any generator call rather than guess (a
+  retained earlier entry published by the same detection is independent evidence and may already be recorded).
+  Nothing here posts a status, check or label, so no merge verdict reads it.
+  Offline test: `quality/test-main-red.ps1` (catalog suite `main-red`).
+- **Culprit auto-revert** ([issue 3211](https://github.com/danswett/agent-bridge/issues/3211)):
+  `pwsh quality/revert-culprit.ps1 -Repository <owner/repo>` acts once main has been red for 15 minutes
+  (`red-minutes.ps1`'s rule) and the `main-red` issue's entry for the newest run names a failed test with no
+  open `quarantined` issue. Failures that name no test (infra, setup, build) do nothing. If one such test failed in
+  the current attempt of every red run since the spell's first (a run with no entry leaves the culprit unknown),
+  and exactly one commit, from exactly one merged PR, separates the last
+  green run from that first red run, it pushes a revert to its own `revert-culprit/<sha>` branch (never main)
+  and opens one PR linking the `main-red` issue and the culprit PR. Otherwise, including a revert that conflicts
+  or a leftover branch with no PR, it opens one `revert-culprit` issue. Both carry the `revert-culprit` label; once
+  either exists for that culprit or `main-red` issue, later runs do nothing. It refuses to revert from a shallow history. It never arms or merges: Quality gates the revert like
+  any PR. It runs in a GitHub Actions job, so no machine owns it; its state is the branch, PR and issue on GitHub.
+  Offline test: `quality/test-revert-culprit.ps1`.
 - **Red minutes on main** (owner target, 2026-11-09): `pwsh quality/red-minutes.ps1` prints how long
   main's CI was red over the last 24 h, the same way the main guardian counts it (a spell runs from a
   failed push run of `ci.yml` to the next success; cancelled and running runs say nothing). Target:
@@ -898,19 +1261,47 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
-- **The win-arm64 waiver** (#2564, owner decision 2026-11-13, until **2026-11-20 00:00 PT**, 08:00 UTC):
-  while the repository variable `ARM64_WAIVER` is exactly `on` (off or unset waives nothing; the owner
-  sets it), `quality-gate` counts a failed needed job as success when its only failures are
-  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly,
-  on main and PRs, and every other leg of that job succeeded. The warning and summary identify
-  each waived job, its run and the expiry.
-  [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is one
-  result in `needs`, and compares the clock with the expiry itself, so the waiver ends with no edit.
-  Any API error, any other job that did not succeed (x64 included), and a cancelled, timed-out or
-  skipped leg waive nothing. The Arm64 jobs still run and stay red, and `publish-gate` still reads
-  `app`'s raw result, so main doesn't publish while app legs fail. Remove it (script, test, catalog suite,
-  the gate's two steps) once #2563 and the self-test fix are on main and three main push runs in a
-  row show all three jobs green; extending it needs a new owner decision.
+- **CI speed on main** (#4104): `pwsh quality/ci-speed.ps1 [-Runs 100] [-Csv runs.csv] [-DaysCsv days.csv]` measures, for the last N
+  `ci.yml` push runs on main, the merge gate's wall time **from the run's created_at** (what a merger waits, queue included) and
+  **from run_started_at** (labelled apart), the full run, the longest wait of a gate job for a runner, and the red rate per Pacific
+  day (labelled with the year). The gate is the jobs matching `-GatePattern` (default `product` and `quality-gate`, which needs every
+  other job; give the fast lane's job names once it is split out), and the summary line names the gate jobs it matched. Cancelled
+  and skipped runs and runs still going are left out of every median and counted apart, other conclusions are counted as "other",
+  and red is the red-minutes rule. A median is the nearest-rank (lower) one, and an empty window says "no data". **Re-runs:** a
+  re-run keeps its first created_at but restarts run_started_at, so its gate-from-created figure includes the earlier attempt and
+  the first failed attempt is invisible to the red rate (it undercounts, like red-minutes); re-runs are counted on the line and in
+  the CSV (attempt). It prints one summary line (median and p90) and writes the CSVs. Read-only (GET only), and **it fails closed
+  on the rate limit**: it reads the budget from `gh api rate_limit` (free) before its first call and from every response's
+  `x-ratelimit-*` headers before each run page and each batch of at most six job reads, and makes only the calls that keep the
+  remaining budget above 10 % of the limit; a header that is missing, not a number, or zero stops it, and the line then says
+  "STOPPED EARLY" and the figures cover only the runs read. Reads use an ETag cache (a 304 is free). Offline test:
+  `quality/test-ci-speed.ps1` (catalog suite `ci-speed-script`, `planned` until `ci.yml` runs it: the step is
+  `patches/ci-speed-step-4104.patch`, for Quality to apply).
+
+- **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
+  [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
+  Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are
+  `app (win-arm64)`, `app-installer (win-arm64)` or `product (windows-11-arm)`, matched exactly (no
+  pattern), on main and PRs, and every other leg of that job succeeded. Once the workflow change lands (a separate patch: until then `ci.yml` still guards its waiver step with `vars.ARM64_WAIVER` and the date), there is no switch and no
+  expiry: `ARM64_WAIVER` and the date are ignored. A leftover `until:` or `switch:`
+  in `merge-rule.yml`'s `arm64_waiver` block fails the config load (the block takes only `jobs`). The warning and
+  summary identify each waived job and
+  its run. [arm64-waiver.ps1](arm64-waiver.ps1) reads the run's jobs from the API, because a matrix is
+  one result in `needs`. Any API error, any other failed job (x64, `relay-image-sarif`, `pwa-e2e`,
+  `product (ubuntu-latest)`, any), and a cancelled, timed-out or skipped Arm64 leg waive nothing, in the
+  merge rule and in `main_green` alike. The Arm64 jobs still run and stay red. This change does not touch
+  publishing: `publish-gate` still reads `app`'s raw result, so a red Arm64 leg still blocks a release
+  until the separate workflow change (#2454) lands, which makes it need both architectures' package
+  artifacts instead. This is not proof of Arm64 runtime correctness or landing authorization.
+  **Should win-arm64 gate publishing? Yes** (B3b, #3210): a release ships and signs both architectures
+  whole, and the Arm64 package is uploaded only after its own self-test passes, so publishing without
+  it would ship nothing, or an untested build, to Arm64 copies. But one self-test flake (#2026) should not
+  hold a release: the smallest safe change, proposed to Quality in the B3b PR, retries only that step,
+  once, on win-arm64, with a warning naming #2026. `publish-gate` is unchanged; two failures still block.
+  A crash can leave high contrast on, so the retry would skip the contrast transition: on CI,
+  `build/app-self-test.ps1` records the setting before the first attempt, and a later attempt stops
+  what is left of the app, puts the setting back and refuses to run if it cannot
+  (`build/test-app-self-test-desktop.ps1`, fake boundaries).
   Offline test: `quality/test-arm64-waiver.ps1` (catalog suite `arm64-waiver-script`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00

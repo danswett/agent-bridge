@@ -10,9 +10,9 @@ public static class UserLock
 {
     // The open file while this process holds it; null while another one does. Throws when the
     // lock cannot be had at all (any other IOException, UnauthorizedAccessException).
-    public static FileStream? TryTake(string path)
+    public static FileStream? TryTake(string path, bool deleteOnClose = false)
     {
-        try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, deleteOnClose ? FileOptions.DeleteOnClose : FileOptions.None); }
         catch (IOException e) when (Held(e)) { return null; }
     }
 

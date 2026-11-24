@@ -281,43 +281,33 @@ public sealed class RetryEpisodeTests
     {
         var h = new Harness { Pending = new() };
         h.Time.Advance(TimeSpan.FromSeconds(30));
-        using var releaseFirst = new ManualResetEventSlim();
-        using var releaseSecond = new ManualResetEventSlim();
-        TaskCompletionSource[] entered = [new(TaskCreationOptions.RunContinuationsAsynchronously), new(TaskCreationOptions.RunContinuationsAsynchronously)];
+        Task<bool>? first = null;
         var reads = 0;
-        Action park = () =>
+        Action overlap = () =>
         {
-            var index = Interlocked.Increment(ref reads) - 1;
-            entered[index].SetResult();
-            Assert.True((index == 0 ? releaseFirst : releaseSecond).Wait(TimeSpan.FromSeconds(10)));
+            // Both callers pass the initial slot check before either reserves it.
+            // Nest the winning read so no parked reader depends on a timed continuation.
+            if (++reads == 1)
+                first = h.Episode.TryAsync(1, Guid.NewGuid(), RetryReason.Auto);
         };
-        h.OnObservation = availability ? null : park;
-        h.OnAvailability = availability ? park : null;
-        // Both callbacks block synchronously: their rendezvous must not depend on
-        // thread-pool injection while the rest of the product suite is running.
-        Task<bool> StartAttempt(int expected, RetryReason reason) =>
-            Task.Factory.StartNew(() => h.Episode.TryAsync(expected, Guid.NewGuid(), reason),
-                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
-        var first = StartAttempt(1, RetryReason.Auto);
+        h.OnObservation = availability ? null : overlap;
+        h.OnAvailability = availability ? overlap : null;
         Task<bool>? second = null;
         try
         {
-            await entered[0].Task.WaitAsync(TimeSpan.FromSeconds(10));
-            second = StartAttempt(next, RetryReason.Owner);
-            await entered[1].Task.WaitAsync(TimeSpan.FromSeconds(10));
-            releaseFirst.Set();
-            await h.Sent.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            releaseSecond.Set();
-            Assert.False(await second.WaitAsync(TimeSpan.FromSeconds(10)));
+            second = h.Episode.TryAsync(next, Guid.NewGuid(), RetryReason.Owner);
+            Assert.NotNull(first);
+            Assert.Equal(2, reads);
+            Assert.True(second.IsCompleted);
+            Assert.False(await second);
             Assert.Single(h.Episode.Attempts);
             Assert.Single(h.Requests);
             Assert.False(first.IsCompleted);
         }
         finally
         {
-            releaseFirst.Set(); releaseSecond.Set();
             h.Pending.TrySetResult(new(AnswerOutcome.Delivered));
-            await first;
+            if (first is not null) { await first; }
             if (second is not null) { await second; }
         }
     }
@@ -348,7 +338,6 @@ public sealed class RetryEpisodeTests
         public RetryObservation? Current;
         public readonly RetryEpisode Episode;
         public readonly List<ReplyRequest> Requests = [];
-        public readonly TaskCompletionSource Sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly List<string> Log = [];
         bool available = true;
         public TimeSpan ObservationDelay, AvailabilityDelay;
@@ -367,7 +356,6 @@ public sealed class RetryEpisodeTests
         public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
             Requests.Add(request);
-            Sent.TrySetResult();
             return Failure is { } failure ? Task.FromException<ReplyResult>(failure) : Pending?.Task ?? Task.FromResult(Outcome);
         }
     }

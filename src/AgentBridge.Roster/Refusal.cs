@@ -44,10 +44,18 @@ public static class Refusal
     public const string Signer = "signer";
     // A v2 host add whose hostSignProof is not hostSign's signature over the binding (V1).
     public const string HostProof = "host-proof";
+    // A v3 person whose well-formed capSignProof is not capSign's signature over its binding.
+    public const string CapProof = "cap-proof";
     // cosig and uv's members not matching the body's cosigner.
     public const string Cosigner = "cosigner";
     // Over 46 KiB for a removal, or 8 KiB for anything else, of fixed content.
     public const string Size = "size";
+    // Role claims (docs/design/role-ids.md): not a canonical lowercase UUIDv4; not the one encoding;
+    // a role GUID equal to its session GUID or not the role asked for; framing under another purpose.
+    public const string Uuid = "uuid";
+    public const string NonCanonical = "non-canonical";
+    public const string Role = "role";
+    public const string Purpose = "purpose";
 
     // WebAuthn assertion checks (§4.6), in the order they run.
     public const string UvAuthenticatorData = "uv-authenticator-data";

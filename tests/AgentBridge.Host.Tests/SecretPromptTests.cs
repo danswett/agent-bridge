@@ -21,6 +21,37 @@ public sealed class SecretPromptTests : IDisposable
     public void Dispose() => Directory.Delete(root, true);
 
     [Theory]
+    [InlineData("enter")]
+    [InlineData("backspace")]
+    [InlineData("pipe")]
+    public void Empty_input_explains_how_to_paste_without_checking_JWT_shape_or_changing_credentials(string input)
+    {
+        HaTokenStore.Save(Folder, Token);
+        var record = HaAuthGuard.FileFor(Folder);
+        File.WriteAllText(record, "unchanged refusal record");
+        var keys = new Queue<ConsoleKeyInfo>();
+        if (input == "backspace")
+        {
+            keys.Enqueue(new('x', ConsoleKey.X, false, false, false));
+            keys.Enqueue(new('\b', ConsoleKey.Backspace, false, false, false));
+        }
+        keys.Enqueue(new('\r', ConsoleKey.Enter, false, false, false));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        Assert.Equal(1, HaCommands.Run(["ha", "token", "set"], Folder,
+            () => input == "pipe" ? "" : HaCommands.ReadSecret(error, () => keys.Dequeue()), output, error, false, null,
+            confirm: () => throw new InvalidOperationException("Empty input must not ask for consent")));
+
+        Assert.EndsWith("Nothing was entered (0 characters). Paste the token and press Enter, or pipe it: Get-Clipboard | agent-bridge-host ha token set" + Environment.NewLine,
+            error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("JWT", error.ToString(), StringComparison.Ordinal);
+        Assert.Empty(output.ToString());
+        Assert.Equal(Token, HaTokenStore.Load(Folder));
+        Assert.Equal("unchanged refusal record", File.ReadAllText(record));
+    }
+
+    [Theory]
     [InlineData("not-a-token", "prefix")]
     [InlineData("eyJ.a.b", "length")]
     [InlineData(Token + " ", "whitespace")]

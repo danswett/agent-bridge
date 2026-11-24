@@ -55,6 +55,21 @@ public class DriverTests
     }
 
     [Fact]
+    public void Restoring_an_arm_invalidates_the_prompt_awaiting_the_replaced_word_match()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm, "k1", 1);
+        var before = d.Save();
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, "Original sender", words: "original prompt");
+        d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm, "k1", 2);
+        d.Restore(before);
+        d.Observe(At(1, SessionStatus.Working, "different prompt"), Fixture.T0, drivers.Arm, "k2", 2);
+        Assert.False(d.PromptSender.IsAgent);
+        Assert.Null(d.PromptSender.Label);
+    }
+
+    [Fact]
     public void A_launch_whose_opening_turn_a_listening_source_already_has_spends_its_arm_on_it()
     {
         var drivers = new SessionDrivers();

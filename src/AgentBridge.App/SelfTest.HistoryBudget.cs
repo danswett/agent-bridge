@@ -105,10 +105,20 @@ static partial class SelfTest
             var method = "none";
             var openedAtBottom = false;
             var done = new TaskCompletionSource<bool>();
+            LatestInputStamp? firstScrollInput = null, fillingScrollInput = null;
+            LatestInputReceipt? firstScrollReceipt = null, fillingScrollReceipt = null;
             var heard = new KeyEventHandler((_, e) =>
             {
-                if (e.Key == VirtualKey.PageUp && from is not null) { receivedMs ??= watch.Elapsed.TotalMilliseconds; }
-                if (e.Key == VirtualKey.PageUp && fillingStartedMs is { } sent) { fillingInputMs ??= watch.Elapsed.TotalMilliseconds - sent; }
+                if (e.Key == VirtualKey.PageUp && from is not null)
+                {
+                    receivedMs ??= watch.Elapsed.TotalMilliseconds;
+                    if (firstScrollInput is { } firstInput) { firstScrollReceipt ??= away.StampLatestNativeInput(firstInput, scroll); }
+                }
+                if (e.Key == VirtualKey.PageUp && fillingStartedMs is { } sent)
+                {
+                    fillingInputMs ??= watch.Elapsed.TotalMilliseconds - sent;
+                    if (fillingScrollInput is { } fillingInput) { fillingScrollReceipt ??= away.StampLatestNativeInput(fillingInput, scroll); }
+                }
             });
             void Changed(object? sender, ScrollViewerViewChangedEventArgs e)
             {
@@ -128,6 +138,7 @@ static partial class SelfTest
                 openedAtBottom = true;
                 if (!list.Focus(FocusState.Programmatic)) { return; }
                 from = scroll.VerticalOffset;
+                firstScrollInput = away.BeginLatestNativeInput();
                 try { method = Press(window.Handle, VirtualKey.PageUp, foreground: false); }
                 catch (InvalidOperationException e) { done.TrySetException(e); }
             };
@@ -143,10 +154,13 @@ static partial class SelfTest
                 if (done.Task.IsCompleted && ById<ItemsRepeater>(away, "History") is { } historyRows)
                 {
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes the first native scroll");
+                    CheckLatestNativeReceipt(away, firstScrollReceipt, check);
                     fillingStartedMs = watch.Elapsed.TotalMilliseconds;
+                    fillingScrollInput = away.BeginLatestNativeInput();
                     Press(window.Handle, VirtualKey.PageUp, foreground: false);
                     await Until(() => fillingInputMs is not null, TimeSpan.FromSeconds(2));
                     check(await Until(() => !moving, TimeSpan.FromSeconds(2)), "finishes native scrolling during older drawing");
+                    CheckLatestNativeReceipt(away, fillingScrollReceipt, check);
                     if (Enumerable.Range(0, historyRows.ItemsSourceView?.Count ?? 0).Select(i => historyRows.TryGetElement(i)).OfType<FrameworkElement>()
                         .FirstOrDefault(row => row.TransformToVisual(scroll).TransformPoint(default).Y + row.ActualHeight > 0 && row.TransformToVisual(scroll).TransformPoint(default).Y < scroll.ViewportHeight) is { } anchor)
                     {
@@ -189,8 +203,23 @@ static partial class SelfTest
             await CheckPostedInput(window, check, result);
             // #2483: hosted ARM64 can lose activation to the Microsoft account popup.
             AcquireNativeForeground(window.Handle);
+            bool FocusInLane()
+            {
+                for (DependencyObject? focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) as UIElement;
+                    focused is not null; focused = VisualTreeHelper.GetParent(focused))
+                {
+                    if (ReferenceEquals(focused, window.Sessions.Rows)) { return true; }
+                }
+                return false;
+            }
+            // Choose changes selection, not focus. Replacing history under inherited MessageTime
+            // focus asks WinUI to bring it into view and releases the end pin (#2018).
+            var laneFocusedBeforeReopen = window.Sessions.Rows.Focus(FocusState.Programmatic) && FocusInLane();
+            var focusBeforeReopen = FocusedName(window);
             Away(window, main);
             var pinnedView = await Choose(window, main, id, "Response");
+            check(laneFocusedBeforeReopen && FocusInLane(),
+                $"reopens pinned history from the session lane without inherited conversation focus (before: {focusBeforeReopen}; after: {FocusedName(window)})");
             Button? pinnedPin = null, pinnedDetails = null;
             var controlsUnavailable = false;
             try { pinnedPin = ById<Button>(away, "HeaderPin"); pinnedDetails = ById<Button>(away, "Details"); }
@@ -220,6 +249,7 @@ static partial class SelfTest
                 var pinnedFill = new { drawn = ById<ItemsRepeater>(away, "History")?.ItemsSourceView?.Count, offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, pinned };
                 ObservePinned(pinnedObserver, pinnedSamples, GrowthStage.PinnedAfter, pinnedFill.drawn, pinned, pinnedFill.offset, pinnedFill.extent);
                 result["historyPinnedFill"] = pinnedFill;
+                result["historyPinnedReopen"] = new { laneFocusedBeforeReopen, focusBeforeReopen, laneFocusedAfterFill = FocusInLane(), focusAfterFill = FocusedName(window) };
                 const string pinnedMessage = "finishes older drawing at the end before focus moves away";
                 var foregroundMatches = GetForegroundWindow() == window.Handle;
                 var hostedArm64 = Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true"
@@ -238,6 +268,9 @@ static partial class SelfTest
                 }
                 else
                 {
+                    var openingPin = pinnedObserver.Trace.Snapshots.LastOrDefault();
+                    check(laneFocusedBeforeReopen && FocusInLane() && openingPin is { PinEnd: true, PinReleasesDelta: 0 },
+                        $"keeps lane focus and the opening pin while older history draws (focus: {FocusedName(window)}; pin: {openingPin?.PinEnd}; releases: {openingPin?.PinReleasesDelta})");
                     check(pinned, pinned ? pinnedMessage
                         : $"{pinnedMessage} (history: {pinnedFill.drawn}/{turns}; count500: {pinnedFill.drawn == turns}; at-end: {pinnedFill.offset >= pinnedFill.extent - 1.5}; offset: {pinnedFill.offset:0.###}; extent: {pinnedFill.extent:0.###}; {PostedInputTarget(window).Detail})");
                 }
@@ -357,8 +390,14 @@ static partial class SelfTest
             int? wheelReceivedCount = null;
             var wheelMoving = false;
             var wheelEvents = 0;
+            LatestInputStamp? wheelInput = null;
+            LatestInputReceipt? wheelReceipt = null;
             void WheelChanged(object? sender, ScrollViewerViewChangedEventArgs e) { wheelMoving = e.IsIntermediate; if (observerDiagnostics) { wheelEvents++; } }
-            var heardWheel = new PointerEventHandler((_, _) => wheelReceivedCount ??= WheelHistoryCount());
+            var heardWheel = new PointerEventHandler((_, _) =>
+            {
+                wheelReceivedCount ??= WheelHistoryCount();
+                if (wheelInput is { } input) { wheelReceipt ??= away.StampLatestNativeInput(input, scroll); }
+            });
             scroll.ViewChanged += WheelChanged;
             scroll.AddHandler(UIElement.PointerWheelChangedEvent, heardWheel, true);
             try
@@ -372,8 +411,14 @@ static partial class SelfTest
                         && scroll.VerticalOffset >= scroll.ScrollableHeight - 1.5;
                 }, TimeSpan.FromSeconds(10));
                 var wheelTarget = PostedInputTarget(window).Detail;
-                Wheel(window, list);
-                var wheeled = await Until(() => wheelReceivedCount is not null
+                // A real OS wheel moves the cursor and needs the foreground: only on a CI runner (#3982). Elsewhere the check is skipped, and says so.
+                var skipped = RealWheelSkip();
+                if (skipped is null)
+                {
+                    wheelInput = away.BeginLatestNativeInput();
+                    Wheel(window, list);
+                }
+                var wheeled = skipped is null && await Until(() => wheelReceivedCount is not null
                     && scroll.VerticalOffset < scroll.ScrollableHeight - 1.5, TimeSpan.FromSeconds(3));
                 const string tookMessage = "a native wheel takes the view away from the latest";
                 var drawn = await Until(() => WheelHistoryCount() == turns, TimeSpan.FromSeconds(30));
@@ -399,7 +444,7 @@ static partial class SelfTest
                     : "wheel not received (issues 2471, 2476; quarantine requires missing canary before 2026-11-20T08:00:00Z)";
                 var ok = wheelReady && wheeled && drawn && kept && count500 && !snapshot.Intermediate && belowEnd && snapshot.Stable;
                 const string keptMessage = "keeps the view taken by a native wheel while older turns draw";
-                var quarantined = wheelReceivedCount is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
+                var quarantined = wheelReceivedCount is null && skipped is null && QuarantinePostedInput(result, check, "native wheel (2471)", new
                 {
                     wheelReady, wheeled, drawn, kept, count500, belowEnd, receipt,
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
@@ -412,6 +457,8 @@ static partial class SelfTest
                     historyCount = snapshot.Count, intermediate = snapshot.Intermediate,
                     offset = snapshot.Offset, extent = snapshot.Extent, stable = snapshot.Stable,
                     target = wheelTarget,
+                    // #3982: where the posted wheel was aimed and what took it, every run (diagnosis only).
+                    wheelDiagnosis = WheelDiagnosisNow(wheelReceivedCount), skipped,
                 };
                 if (observerDiagnostics)
                 {
@@ -424,16 +471,27 @@ static partial class SelfTest
                 }
                 if (!quarantined)
                 {
+                  if (skipped is not null)
+                  {
+                    // Skipped is not passed: neither check is recorded as a pass or a failure; the result lists them as skipped, with why.
+                    result["skippedChecks"] = new { reason = skipped, checks = new[] { tookMessage, keptMessage } };
+                    AppLog.Write($"self-test: SKIPPED (not counted as a pass): {tookMessage}; {keptMessage}: {skipped}");
+                  }
+                  else
+                  {
+                    CheckLatestNativeReceipt(away, wheelReceipt, check);
                     check(wheelReady && wheeled, wheelReady && wheeled ? tookMessage
                         : $"{tookMessage} ({(wheelReceivedCount is null ? receipt : "wheel received")}; ready: {wheelReady}; moved: {wheeled}; {wheelTarget})");
                     check(ok, ok ? keptMessage
                         : $"{keptMessage} (history: {snapshot.Count}/{turns}; count500: {count500}; intermediate: {snapshot.Intermediate}; below-end: {belowEnd}; stable: {snapshot.Stable}; offset: {snapshot.Offset:0.###}; extent: {snapshot.Extent:0.###}; wheel receipt: {receipt}; ready: {wheelReady}; wheeled: {wheeled}; drawn: {drawn}; kept: {kept}; {wheelTarget})");
+                  }
                 }
             }
             finally
             {
                 scroll.ViewChanged -= WheelChanged;
                 scroll.RemoveHandler(UIElement.PointerWheelChangedEvent, heardWheel);
+                StopWatchingWheel();
             }
         }
         finally
@@ -913,7 +971,11 @@ static partial class SelfTest
         var scale = list.XamlRoot.RasterizationScale;
         var mouse = new WheelPoint { X = (int)(point.X * scale), Y = (int)(point.Y * scale) };
         if (ClientToScreen(window.Handle, ref mouse) == 0) { throw new InvalidOperationException("The wheel target could not be located."); }
-        if (!PostNativeInput(window.Handle, 0x020A, (nint)(120 << 16), (mouse.Y << 16) | (mouse.X & 0xffff))) { throw new InvalidOperationException("The native wheel message could not be posted."); }
+        // #3982: a real OS wheel at the list centre, as a person's goes (the posted ones never reached the app on Arm64); watched: which window
+        // this thread takes it for, and (WheelDiagnosisNow) whether the app heard it. The cursor goes back in StopWatchingWheel.
+        WatchWheel();
+        SendRealWheel(window.Handle, mouse.X, mouse.Y);
+        DiagnoseWheel(window.Handle, mouse.X, mouse.Y);
     }
 
     struct WheelPoint { public int X, Y; }

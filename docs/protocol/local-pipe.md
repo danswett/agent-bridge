@@ -74,6 +74,9 @@ devices that reach the host through the relay (`push` is not in hello's capabili
 here). Hello's capabilities on the pipe add `host.manage` for the app, and are cut to
 reading for a process inside an agent session ([below](#who-may-manage-the-host)).
 
+`load.get` `{}` answers only what launch admission reads (#2982): `state`, `ageMs`, `runQueueAvg` and `staleAfterMs` ([MachineLoadFigures](v1-machine-load.md#the-local-pipes-load)). No session list, nothing per session, no CPU or memory totals and no sample time: the full [MachineLoad](v1-machine-load.md#machineload) stays on the relay, where the owner cleared it (#1150). A stale or unavailable sample has no `runQueueAvg`, never a 0. It is read-only, like `sessions.list`, and is served only when `load.enabled` is on. Every caller the pipe admits gets exactly these figures (the app, the host's command line, a process inside an agent session, and anything else of the user's); a script credential is refused it, as it is every op but `fleet.list`, `fleet.find`, `agent.send` and the fleet launch. `load.subscribe`,
+`load.unsubscribe`, `load.update` and the `load` capability remain relay-only.
+
 Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
 the relay nothing, so hello offers `sessions.attach.direct` with `sessions.attach`, and
 `attachment.chunk` takes files up to 100 MiB, not 256 KiB. The host writes one over
@@ -90,6 +93,15 @@ the connection closes:
 
 ## Who may manage the host
 
+`launches.status`: exactly `{ "request": "<guid>" }`; `launches.list`: optional
+`{ "since": <minutes> }` (default 15; integer 0-43200). Pipe-only reads, agents included;
+script-credential restrictions are unchanged. Result: one row or at most 128 rows with
+`request`, `outcome` (`started`, `starting`, `unconfirmed`, `failed`, `refused`, `busy`,
+`unknown`), `session` (16 lowercase hex or null), `permissions` (`ask`, `allowAll` or null),
+`registered` (ordinal live full-ID match only), `time` (UTC ISO). No launch, stop or approval.
+A UUID retained for multiple principals reads unknown, never another principal's first match.
+See [host CLI status](../host-launch.md#host-cli-read-launch-status).
+
 `host.workspace.fleetWorkers` reads or changes the stored fleet-worker tick for one
 approved workspace. Its data is `{ "workspace": "<approved absolute path>" }`, with
 optional `"fleetWorkers": true` or `false` to set it. No other keys are accepted.
@@ -102,6 +114,32 @@ Every call requires a freshly classified local app on the pipe, without an agent
 credential. Agents, other processes (including the host CLI) and remote channels
 are refused with a reason. This slice adds no app view or launch-policy enforcement.
 
+`host.workspace.add` approves a folder for launching, so the app needs no terminal; it is the
+same check as `agent-bridge-host workspace add` (`WorkspaceApproval`). Its data is exactly
+`{ "path": "<absolute path>", "label": "<optional>" }`: the exact folder only. The result is
+`{ "result": "added", "label", "path", "restartRequired": true }` or `{ "result": "refused", "code" }`,
+the code one of `not-a-path`, `missing`, `system-folder`, `not-git`, `already-approved`,
+`label-in-use`, `too-many`, `unwritable`, `not-local` (a network share, or a drive that is not a
+fixed one of this machine), `busy` (the config file was being changed elsewhere for 10 seconds; try
+again), `invalid-request` or `config-unreadable`; no text from the
+request comes back. Workspaces are read when the host starts, so a new one applies after a restart.
+It is a person's act: a freshly classified local app without an agent credential. An agent, another
+process (the host CLI included), a script credential or a remote channel is refused with
+`person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
+
+`host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
+"genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
+`{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
+`genesis-mismatch`, `heads-missing`, `not-person-device`, ...). Null values and malformed shapes
+return `invalid-request` before any fetch. The same caller rule applies: a freshly classified
+App on a LocalChannel without agent or script credentials; everything else is refused before any read.
+An existing pin refuses before the relay is asked. Account replacement invalidates pending handoffs
+and shares a gate with the final account check and pin commit. In observe mode, success immediately
+populates the serving reader from the fetched, verified roster without a restart; in off mode,
+it writes the pin without feeding the reader or activating roster-based fleet membership. A failed observe-mode
+readback returns `pin-readback`, including later handoffs while the reader's latest pin verification
+remains failed. The writer's capSign gate still applies.
+
 Design §6.3 invariant 13: no session the bridge launched, nor any agent process, may stop or
 restart its host. On 2026-10-15 an agent ran `agent-ha-bridge restart`. The new daemon took
 that agent for an unaccounted process, held discovery, and every resumable session vanished
@@ -110,10 +148,10 @@ host also asks *which* process each request comes from, op by op:
 
 | The caller | How the host tells | May |
 |---|---|---|
-| **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
-| **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included, except the host-CLI-only `scripts.add` and `scripts.revoke` |
+| **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `load.get` (the four figures only, [v1-machine-load.md](v1-machine-load.md#the-local-pipes-load)), `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
+| **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included; the script credential ops (`scripts.add`, `scripts.revoke`, `scripts.grant-fleet`, `scripts.revoke-fleet`, `scripts.list`, `scripts.confirm`) only with the confirmation `scripts.confirm` issued on this connection (below) |
 | **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.launch`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
-| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `load.get` (the four figures only); `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 `session.launch` checks caller classification afresh. An untraceable caller is refused
 with `untraceableCaller` and audited as `unknown:local`, without trusting identity fields
@@ -134,7 +172,7 @@ in, or migrate the machine or roll it back (not a dry run), refuse in the same c
 full (fail closed). Every session a launch starts has `AGENT_BRIDGE_SESSION` in its environment
 too, which survives a process started detached from its parent
 ([host-config.md](../host-config.md#approving-a-workspace-at-the-machine)).
-The same person-only CLI guard applies to `scripts add|revoke`.
+The same person-only guard applies to the script credential ops: from the host command line, or from the app with the host's confirmation (below).
 
 The app does not go round this. Asked to stop or restart a host that answers no, it reports the
 refusal and ends nothing (it ends a host only when the host does not answer at all). Its install,
@@ -205,15 +243,19 @@ the app Rename entry remains follow-on work on #1777. The local app backend may 
 Registry publication, launch-time `fleetName` and host-linked resume carry-over are also follow-ons;
 setting a name here does not yet make it discoverable through `fleet.find`.
 
-## Script credential management (`scripts.add`, `scripts.revoke`)
+## Script credential management (`scripts.add`, `scripts.revoke`, `scripts.grant-fleet`, `scripts.revoke-fleet`, `scripts.list`, `scripts.confirm`)
 
-Host CLI only, with fresh ancestry checks; a same-user safety rail, not a security boundary.
-An agent or credentialed connection, including a revoked one, is never person authority.
-Both take `{ "name": "<script name>" }`; see [host-config.md](../host-config.md#script-credentials-at-the-machine)
-for names, limits and exit codes. Add returns `{ "id", "principal", "scope", "expiresAt", "path" }`,
-never a token. Revoke returns `{ "name", "revoked": true }` after removing both rotations from
-the running and persisted store; an unknown name is an error. An `attempted` audit entry
-precedes each mutation; an audit failure refuses it. Neither op is offered over relay or to the app.
+The host command line, or the local app with the host's confirmation; fresh ancestry checks; a same-user safety rail, not a
+security boundary. An agent or credentialed connection, including a revoked one, is never person authority.
+`scripts.add|revoke|grant-fleet|revoke-fleet` take `{ "name": "<script name>" }`; from the app they also take `"confirm"`, the value
+`scripts.confirm` (`{ "op", "name" }`) returned on the same connection: random, used once, good for two minutes on the monotonic clock,
+one outstanding per script, voided by any change to the script's credentials (see
+[script-credentials.md](../design/script-credentials.md) section 5). `scripts.list` returns each script's name, scope, latest expiry,
+live count, `launch:fleet` tick and, when it has authenticated since the host started, `lastUse`; never a token, hash, path or id.
+See [host-config.md](../host-config.md#script-credentials-at-the-machine) for names, limits and exit codes. Add returns
+`{ "id", "principal", "scope", "expiresAt", "path" }`, never a token. Revoke returns `{ "name", "revoked": true }` after removing both
+rotations from the running and persisted store; an unknown name is an error. An `attempted` audit entry precedes each accepted press;
+an audit failure refuses it. None of these ops is offered over relay.
 
 ## Agent principals: `agent.hello`
 
@@ -233,6 +275,14 @@ caller's ancestry was read in full, and the credential's root process, with the 
 is among the caller's ancestors. Anything else is refused, and a token presented from outside its
 session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
 never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
+
+A script credential (`kind` `script`) refuses an agent in its caller's ancestry. Unbound, it needs
+that ancestry read in full, so a scheduled task (SYSTEM service host) is refused. Minted with
+`--task`, it needs the Scheduler-reported engine of a running instance of that task (same pid and
+start) among the ancestors, read in full up to it, and the task and files unchanged and writable
+only elevated; that chain is read again at `agent.hello`, not taken from connect
+([design/script-credentials.md §6](../design/script-credentials.md#6-limits-and-what-holds-them), rule 3).
+Until the Windows Scheduler reader and `--task` land, every bound credential is refused.
 
 This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
 session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
@@ -285,6 +335,18 @@ Adopting again, or revoking, ends the earlier credential and its open connection
 Adoption alone never makes a manual session a reply target. Known gap: a session nested inside
 an adopted one is covered by the same adoption and can claim it during the window.
 
+### `launch.status` (#3237)
+
+After `agent.hello`, `launch.status` `{ "request": UUID }` reads the outcome of the caller's own pipe
+`session.launch` by its `request` id: `{ request, state (queued|launching|launched|refused|failed),
+session, code, queuedAt, changedAt, keptUntil }`. `launched` is a started session; `queued` and
+`launching` are pending. A finished record is kept 15 minutes (`keptUntil`). It needs a live
+credential with `read+reply+launch` scope; otherwise, a request id that is not a UUID, a damaged or
+unavailable launch request record, or an id this caller has no kept record of (another caller's id,
+one that expired, one never sent) is refused. A pipe launch that was launching when the host stopped
+is `failed` with code `restarted`, and one still queued is `failed` with code `unconfirmed`
+(`AgentPipeLaunch.Restore`, at host start), so neither is ever launched again.
+
 ### `fleet.list` and `fleet.find`
 
 Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).
@@ -292,15 +354,20 @@ Agent-only reads of the account's cross-machine session list, on a connection th
 ### `agent.send` (AP5-lite)
 
 Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other
-caller (a plain pipe client, a connector, the HTTP MCP server, a script) is refused with
-`refused: agent.send is for an agent connection that has passed agent.hello`. The sender is
-always the connection's credential (a non-Windows host, or one without agent credentials, answers
+caller (a plain pipe client, a connector, the HTTP MCP server, an unauthenticated script) is refused with
+`refused: agent.send is for an agent connection that has passed agent.hello`. An authenticated
+script credential may use this op as `script:<machine>/<name>` with `read+reply` scope.
+Its only other allowed ops are `fleet.list` and `fleet.find`; direct `session.reply`,
+answers, settings changes, credential/scope changes and unknown ops are refused with a reason.
+Launch still requires the separate explicit fleet grant. A script cannot authorize its own grant,
+reauthenticate to widen scope, or fall back to person authority after expiry or revocation.
+The sender is always the connection's credential (a non-Windows host, or one without agent credentials, answers
 `refused: agent.send isn't available on this host`; with the mode off or no sender wired, an agent
 connection gets the `off` outcome below): any `principal` or other extra field in the request is
 ignored.
 
 ```json
-{ "id": 2, "op": "agent.send", "data": { "machine": "<machine>", "session": "<session id>", "text": "..." } }
+{ "id": 2, "op": "agent.send", "data": { "machine": "<device ID>", "session": "<session node>", "text": "..." } }
 ```
 
 All three are required strings, checked before anything is sent; a bad request is refused with a
@@ -308,22 +375,30 @@ code in the message:
 
 | Field | Rule | Code |
 |---|---|---|
-| `machine` | 1 to 64 of letters, digits, `.`, `_`, `-` | `badMachine` |
+| `machine` | exact present host device ID: 32 hex digits, canonical publishers lowercase, ordinal comparison; never a display name or fragment | `badMachine` |
 | `session` | the receiver's roster node id: `agent_bridge_` and exactly 16 lowercase hex digits | `badSession` |
 | `text` | not empty, not blank, no control characters except tab, CR and LF | `badText` |
 | `text` | at most 4096 characters (UTF-16 code units, not bytes) | `textTooLong` |
 
-A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
+A body that isn't an object is refused with `badRequest`. Unknown or offline device IDs return
+`refused` with `noSuchMachine`, naming the ID, before signing or opening a channel. Invalid
+machine diagnostics are escaped and bounded. Neither selector retries, resolves a name or falls
+back to HA. There is no sender-side session-roster acquisition in this cut; receiver session-ID
+and final-effect fences are unchanged. The host hands the request to the AP5-lite
 sender, which answers
 `{ "outcome", "code", "request" }`:
 
-| `outcome` | Meaning | Caller |
+| `outcome` | Meaning | Legacy fleet caller policy (not implemented by the host) |
 |---|---|---|
 | `delivered` | the target host typed it into the session | done |
-| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is outcome `refused` with code `rate`: it is final, with no Home Assistant fallback | fall back to Home Assistant on `notReplyTarget` or `busy` only |
+| `refused` | the target or device selector refused; identity diagnostics name the ID, other receiver reasons include `notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ... | identity or rate refusal is final, no HA fallback; legacy fallback on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
-| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
-| `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
+| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived, and a queued prompt may still be taken later | terminal: never resent, no Home Assistant fallback (docs/message-delivery.md, "Busy sends to Claude") |
+| `off` | the mode is off, killed, or no sender is wired; no channel was opened | legacy fallback to Home Assistant |
+
+A script's credential is checked against the host's stable machine ID even while the
+relay is detached. A live, correctly bound script sending to a pinned peer then receives
+`undeliverable`, not `refused/credential`; expired, revoked or misbound credentials remain refused.
 
 `request` is the sender's request id.
 
@@ -353,7 +428,7 @@ of its own session, so its ancestry includes the credential's root process. It k
 agent-ha-bridge's tool names (`list_agent_sessions`, `read_agent_session`,
 `reply_to_agent_session`, `launch_agent_session`, `read_launch_result`, `get_launch_options`) and
 maps them to `sessions.list`, `session.get`, `session.reply`, `session.launch` and
-`launch.options`. It finds the host from `AGENT_BRIDGE_PIPE` (a pipe name or path) or, on
+`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (the rule that follows is the .NET MCP server's (`McpEndpoint`); the Node server `mcp/src/server.mjs`, until it is retired, still accepts any name or path; on Windows one local pipe name, or `\\.\pipe\` plus one, with no separator, colon, `..` or trailing dot; elsewhere an absolute socket path with no `..` or control character) or, on
 Windows, as above from the user's SID and the profile folder (`AGENT_BRIDGE_ROOT`, then
 `AGENT_BRIDGE_PROFILE`, default `default`). `AGENT_BRIDGE_TOKEN` is the credential, sent in
 `agent.hello`. It lists only the tools whose capability `hello` names, and none when no host
@@ -388,6 +463,10 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request], "carriesUpdateNow"?: bool }`: what the app's updater is doing, the presses in `updateAsks` it has taken on, and whether it can carry out an Update now (#1159; absent from an older app, whose machine then offers none, `updateNowWhy` `old-app`) ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. `canUpdateNow`, `updateNowWhy`, `updateNowAt` and `busy` are the host's own, and dropped from what the app reports. Refused to anything but the app: `only the Slipgates app beside this host reports its updates, and takes other devices' presses of Install` |
 | `host.update.depart` | `{ "request": UUID }`: an Update now's press (#1159) the app is carrying, its download checked and its probe hold over | `{ "outcome": "committed" \| "waiting" \| "refused", "code"?, "transition"? }` ([v1-update.md](v1-update.md#going-the-lease-and-the-departure), step 3). The host takes #805's quiet lease as purpose `Update`, compares what is busy with what the person confirmed, announces and commits: `committed` (the host refuses new deliveries until it exits; the app then stops it with `host.stop` and installs), `waiting` (`code` is `turn-running`, `question-waiting` or `unknown`; the app keeps the download for the next quiet moment) or `refused` (`code` says why; the host serves on). An unknown outcome reads as `refused`. A request that isn't a UUID is an error. This is #870's departure step, wired minimally until that lane lands it. Refused to anything but the app, as `host.update.report` is; an older host answers `unknown op`, and the press ends refused |
+| `host.enroll.describe` | none | `{ "device"?: object, "refusal"?: string }`: this host's enrollment descriptor for an approve gesture ([devices.md](devices.md#host-descriptor-foundation-2289)), a v1 host while host-sign v2 is off, opening the profile's one 5-minute attempt; or a closed refusal code (`attempt-already-open`, `account`, `signed-out`, ...). Writes no pin. Refused to anything but the app; never reached through the relay |
+| `host.enroll.status` | none | `{ "state": "not-enrolled" \| "pending" \| "enrolled", "code"?: string, "expires"?: string, "peer"?: string }` for the open attempt: code 1 to show once the approver's offer arrived (A4: the host is the joiner), the attempt's expiry (ISO 8601), and the bound peer's relay-asserted name. Refused to anything but the app |
+| `host.enroll.code` | `{ "code": string }` | `{ "result": "match" \| "wrong" \| "ended" \| "locked" \| "no-exchange" }`: code 2 as the person typed it here (`EnterCode2`); three wrong entries or the 5-minute expiry end the attempt. Each wrong entry is persisted before it is answered and is the only thing charged to the lockout (three in an hour lock joining for 15 minutes); `attempt-store` if it cannot be persisted. Refused to anything but the app |
+| `host.enroll.finish` | none | `{ "state": string }`: `pinned`, or a closed refusal (`no-attempt`, `account-changed`, `expired`, `not-matched`, `no-genesis`, `no-roster`, `chain-invalid`, `genesis-mismatch`, `not-added`, `approver-probation`, or the pin writer's own codes). Reads the roster over the serving relay connection and pins only through `HostRosterPinWriter` ([devices.md](devices.md#host-descriptor-foundation-2289)). Refused to anything but the app |
 
 `HostStatus`:
 
@@ -406,6 +485,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake, escapedApproval?, escapedApprovalDevices?, phoneSignIn }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, `devBox.keepAwake`, `permissions.phoneSignIn` (#972, applied at the next start), and `permissions.escapedApproval` and `permissions.escapedApprovalDevices`, the latter absent while it inherits the folder-trust devices, which confirm only while folder trust is on; #803). The app's Settings shows which devices may confirm an escaped approval |
 | `restartRequired` | `config.json` differs from what the running host read, or agent setup has been attempted in this host run and may have changed registrations. A partial failure also conservatively requests restart; this is not evidence that setup completed |
 | `log` | Path of the host's log file |
+| `disk` | The profile's disk for fleet launches: `diskLow: ...` under 1 GiB free (the fleet grant and fleet launches are refused), `disk unknown` when free space cannot be read (launches still allowed), absent when fine (#2771). |
 | `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
 | `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at, now? }]`, `by` naming the device (`"pwa 1a2b3c4d"`). `now`, on an Install that is an Update now (#1159): `{ release, accept?, until }`, the release the person was shown, what they confirmed it may go over (`UpdateBusy`), and when the press's 15 minutes end. Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes (an Update now's at `until`, if sooner). The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 | `devBox` | The Dev Box keep-awake ([host-config.md](../host-config.md#dev-box-keep-awake)), present only when this machine is a Microsoft Dev Box (the Dev Box agent is installed, its settings usable or not): `{ keepAwake, intervalMinutes, last?: { at, outcome, detail, alarming }, nextAt?, problem? }`. `keepAwake` is whether passes run now; `outcome` is `skipped`, `delayed`, `safe`, `no-action`, `blocked`, `failed`, `stood-back`, `busy` or `not-a-devbox`; `alarming` (`failed`, `blocked`, or `stood-back` with the scheduler unreadable) says the Dev Box may hibernate. `nextAt` while on. `problem`: why the agent's settings could not be used, so it cannot be kept awake |
@@ -510,6 +590,13 @@ or ownership records, or another profile's record). Unknown future values read a
 With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
 `hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
 With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
+
+`hookMigrated` (optional boolean; absent reads as `false`; owner-approved additive field, #783) is
+`true` when `hookSetup` is `completed` because agent-ha-bridge's migration re-pointed this
+agent's hooks in this agent home (recorded in `migration.json`), not because this profile
+wrote an ownership record. Such an agent is Not tested yet until a hook is handled; clients
+offer neither Set up nor Remove for it, since the host has no owned record to remove. Older
+hosts omit it.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.
