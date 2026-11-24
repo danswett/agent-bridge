@@ -64,6 +64,9 @@ One person-held setting replaces owner-only AP5-lite as the thing a person sees 
   `own-account` at that machine.** `agentMessaging.scope` (even `"same-person"`), an absent key and `config unset agentMessaging.remote`
   never do, in any order. Off from either key still wins. Before any kill, an explicit `scope: "same-person"` counts as the explicit on that
   `allowAllTargets`, `allowAllTargetSessions`, `allowAllLaunchedTargets`, `laneDelivery` and `claudeBusyQueue` need.
+  The commands that read the mode once, outside a running host (the `peers` commands and the kill's own post-check), ask the same question
+  as the host (`LiteKill.IsOn`), never the setting alone: after a recorded kill an explicit scope, or the default, does not make them act as if
+  messaging were on, and an unreadable, held or non-file kill record reads as off.
 - **Who may change it:** a person at this machine, through the app (slice PR4) or `config set` run by a person. "Never an agent" is the #67
   refusal inside an agent session (`security.roster` has the same), which is a safety rail and not a security boundary
   ([local-pipe.md](../protocol/local-pipe.md)). The setting is safe because **no value wider than `same-person` exists**: a later, wider value

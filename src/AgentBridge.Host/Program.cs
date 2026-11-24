@@ -397,7 +397,7 @@ switch (command)
             if (OwnPeerCommands.Writes(rest) && Refused("change the pinned own-peers")) { return 4; }
             var identity = LoadIdentity();
             var local = new OwnPeerCommands.Local(Wire.DeviceId(identity.Key.Public), identity.Account?.AccountId);
-            return OwnPeerCommands.Run(rest, identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, local, Console.In.ReadLine, Console.Out, Console.Error);
+            return OwnPeerCommands.Run(rest, identity.Folder, local, Console.In.ReadLine, Console.Out, Console.Error);
         }
     case "hooks" when arguments.ElementAtOrDefault(1) == "status":
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
