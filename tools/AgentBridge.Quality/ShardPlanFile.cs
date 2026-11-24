@@ -32,6 +32,9 @@ internal sealed class ShardPlanFile
 
     public int Shards { get; }
 
+    /// <summary>The projects the plan names, by class or whole.</summary>
+    public IEnumerable<string> Projects => projects.Keys.Concat(whole.SelectMany(l => l)).Distinct(StringComparer.Ordinal);
+
     static List<string>[] NewLists(int shards) => [.. Enumerable.Range(0, Math.Max(shards - 1, 0)).Select(_ => new List<string>())];
 
     public static ShardPlanFile Parse(string json)
@@ -94,7 +97,7 @@ internal sealed class ShardPlanFile
             // "X." also matches "FakeX.": two such classes in different shards would both run in both.
             foreach (var x in owner)
             {
-                foreach (var y in owner.Where(y => y.Value != x.Value && (y.Key + ".").Contains(x.Key + ".", StringComparison.Ordinal)))
+                foreach (var y in owner.Where(y => y.Value != x.Value && (y.Key + ".").Contains(x.Key + ".", StringComparison.OrdinalIgnoreCase)))
                     throw new ArgumentException($"In {project}, class {y.Key} (shard {y.Value}) matches the tests of {x.Key} (shard {x.Value}) and would run twice.");
             }
         }
@@ -128,8 +131,8 @@ internal sealed class ShardPlanFile
             {
                 ShardRun.All => true,
                 ShardRun.None => false,
-                _ when choice.Filter!.StartsWith("FullyQualifiedName!~", StringComparison.Ordinal) => choice.Filter.Split('&').All(t => !testFullName.Contains(t["FullyQualifiedName!~".Length..], StringComparison.Ordinal)),
-                _ => choice.Filter.Split('|').Any(t => testFullName.Contains(t["FullyQualifiedName~".Length..], StringComparison.Ordinal)),
+                _ when choice.Filter!.StartsWith("FullyQualifiedName!~", StringComparison.Ordinal) => choice.Filter.Split('&').All(t => !testFullName.Contains(t["FullyQualifiedName!~".Length..], StringComparison.OrdinalIgnoreCase)),
+                _ => choice.Filter.Split('|').Any(t => testFullName.Contains(t["FullyQualifiedName~".Length..], StringComparison.OrdinalIgnoreCase)),
             };
             if (runs) { yield return shard; }
         }

@@ -29,6 +29,11 @@ static class Program
           shard-plan --results DIR --shards N --out FILE [--whole-under SECONDS]
               Generates a shard plan (quality/test-shards.json) offline from CI's TRX files (the
               coverage-<os> artifact): per-class seconds, balanced; the last shard is the remainder.
+          shard-verify --plan FILE --dll TESTS.dll [--dll ...] [--max-seconds N]
+              The verify-only CI gate for the shards: reads each built test assembly's methods from
+              metadata alone (no test code runs) and fails unless every one runs in exactly one shard
+              under VSTest's containment rule; also fails on an unreadable plan or assembly, an assembly
+              with no tests, or none given. Names the offending methods.
           shard-filter --plan FILE (--check | --project NAME --shard N)
               What test shard N of a plan (quality/test-shards.json) runs of a project: prints none,
               all, or the dotnet test --filter to use. Shard N of N is the remainder: it runs what
@@ -75,6 +80,10 @@ static class Program
             return ShardFilter(options, output);
         if (args[0] == "shard-plan")
             return ShardPlan(options, output);
+        if (args[0] == "shard-verify")
+            return ShardVerify.Run(options.GetValueOrDefault("plan") ?? throw new ArgumentException("shard-verify needs --plan."),
+                (options.GetValueOrDefault("dll") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries), output,
+                TimeSpan.FromSeconds(int.Parse(options.GetValueOrDefault("max-seconds") ?? "120", System.Globalization.CultureInfo.InvariantCulture)));
         var root = options.GetValueOrDefault("repo") ?? ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var catalog = Catalog.Load(Path.Combine(root, "quality", "catalog.yml"));
         var graph = ProjectGraph.Load(root);
@@ -131,7 +140,7 @@ static class Program
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run", "check" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner",
-        "runners", "jobs", "max-queued", "max-wait", "min-online", "now", "project", "shard", "shards", "out", "whole-under" };
+        "runners", "jobs", "max-queued", "max-wait", "min-online", "now", "project", "shard", "shards", "out", "whole-under", "dll", "max-seconds" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX

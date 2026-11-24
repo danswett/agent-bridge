@@ -16,7 +16,7 @@ internal sealed record ShardPlan(IReadOnlyList<IReadOnlyList<string>> Shards)
     {
         for (var i = 0; i < Shards.Count; i++)
         {
-            if (Shards[i].Any(c => testFullName.Contains(c + ".", StringComparison.Ordinal))) { yield return i; }
+            if (Shards[i].Any(c => testFullName.Contains(c + ".", StringComparison.OrdinalIgnoreCase))) { yield return i; }
         }
     }
 }
@@ -58,7 +58,7 @@ internal static class ShardPlanner
         {
             foreach (var y in names)
             {
-                if (x != y && (y + ".").Contains(x + ".", StringComparison.Ordinal))
+                if (x != y && (y + ".").Contains(x + ".", StringComparison.OrdinalIgnoreCase))
                 {
                     var (a, b) = (Find(x), Find(y));
                     if (a != b) { parent[string.CompareOrdinal(a, b) < 0 ? b : a] = string.CompareOrdinal(a, b) < 0 ? a : b; }
