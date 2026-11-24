@@ -37,13 +37,13 @@ public class FullWorkflowTests
     {
         var on = (YamlMappingNode)Load(".github/workflows/full.yml")["on"];
         var run = (YamlMappingNode)on["workflow_run"];
-        var dispatch = (YamlMappingNode)on["workflow_dispatch"];
+        var dispatch = on["workflow_dispatch"];
 
         Assert.Equal(["workflow_dispatch", "workflow_run"], on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
         Assert.Equal(["CI"], ((YamlSequenceNode)run["workflows"]).Children.Select(c => c.ToString()));
         Assert.Equal(["completed"], ((YamlSequenceNode)run["types"]).Children.Select(c => c.ToString()));
         Assert.Equal(["main"], ((YamlSequenceNode)run["branches"]).Children.Select(c => c.ToString()));
-        Assert.Equal("true", Scalar(((YamlMappingNode)dispatch["inputs"])["sha"], "required"));
+        Assert.False(dispatch is YamlMappingNode withInputs && withInputs.Children.ContainsKey("inputs")); // a run by hand names no commit (see A_run_by_hand_takes_no_input...)
     }
 
     [Theory]
@@ -95,7 +95,7 @@ public class FullWorkflowTests
         var concurrency = (YamlMappingNode)Load(".github/workflows/full.yml")["concurrency"];
 
         var run = MergeRuleTests.IfExpression.Value(Expression(Scalar(concurrency, "group")), new Dictionary<string, string?> { ["github.event_name"] = "workflow_run" });
-        var hand = MergeRuleTests.IfExpression.Value(Expression(Scalar(concurrency, "group")), new Dictionary<string, string?> { ["github.event_name"] = "workflow_dispatch", ["inputs.sha"] = "abc123" });
+        var hand = MergeRuleTests.IfExpression.Value(Expression(Scalar(concurrency, "group")), new Dictionary<string, string?> { ["github.event_name"] = "workflow_dispatch", ["github.sha"] = "abc123" });
 
         Assert.Equal("full-main", run);
         Assert.Equal("full-abc123", hand);
@@ -128,11 +128,75 @@ public class FullWorkflowTests
 
         Assert.Equal("${{ steps.commit.outputs.sha }}", Scalar(trigger["outputs"], "sha"));
         Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
-        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\" --jq .head_sha", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
+        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
     }
 
+    // The trigger's commit step, run for real under bash with a stub gh, as CriticalReleaseTests does for ci.yml's guard.
+    static (int Code, string Output, string Log) RunCommitStep(string eventName, string refSha, string? runLine = null, bool ghFails = false)
+    {
+        var bash = OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe") : "/bin/bash";
+        var step = ((YamlSequenceNode)((YamlMappingNode)Jobs("full.yml")["trigger"])["steps"]).Children.OfType<YamlMappingNode>()
+            .Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "commit");
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"trigger-{Guid.NewGuid():N}")).FullName;
+        var script = "gh() { echo \"gh $*\" >> \"$GH_LOG\"; [ -z \"$GH_FAILS\" ] || return 1; printf '%s\\n' \"$GH_RUN\"; }\n" + Scalar(step, "run");
+        var start = new System.Diagnostics.ProcessStartInfo(bash, ["-c", script]) { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var (key, value) in new[] { ("EVENT", eventName), ("RUN_ID", eventName == "workflow_run" ? "4242" : ""), ("REF_SHA", refSha), ("REPO", "danswett/agent-bridge"), ("GH_TOKEN", "x"),
+                     ("GH_LOG", Path.Combine(dir, "gh.log")), ("GH_RUN", runLine ?? ""), ("GH_FAILS", ghFails ? "1" : ""),
+                     ("GITHUB_OUTPUT", Path.Combine(dir, "out")), ("GITHUB_STEP_SUMMARY", Path.Combine(dir, "summary")) })
+            start.Environment[key] = value;
+        using var p = System.Diagnostics.Process.Start(start)!;
+        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        var outFile = Path.Combine(dir, "out"); var log = Path.Combine(dir, "gh.log");
+        return (p.ExitCode, output + (File.Exists(outFile) ? File.ReadAllText(outFile) : ""), File.Exists(log) ? File.ReadAllText(log) : "");
+    }
+
+    static readonly string Tip = new('c', 40), RunSha = new('a', 40);
+
+    /// <summary>
+    /// CodeQL followed the by-hand sha INPUT through the trigger job into every checkout and, seeing cache restores and npm ci in the same privileged job, raised cache-poisoning
+    /// alerts on #4254. A static analyser cannot see an on-main check, so no input names a commit at all: a run by hand tests the tip of the ref it was dispatched on, and a
+    /// workflow_run's commit comes only from the API read of the CI run, for a push to main. Every checkout uses the trigger's output and nothing else.
+    /// </summary>
+    [Fact]
+    public void A_run_by_hand_takes_no_input_and_no_checkout_derives_from_one()
+    {
+        var text = string.Join("\n", File.ReadAllLines(Path.Combine(Root, ".github", "workflows", "full.yml")).Where(l => !l.TrimStart().StartsWith('#')));
+        var trigger = (YamlMappingNode)Jobs("full.yml")["trigger"];
+        var step = ((YamlSequenceNode)trigger["steps"]).Children.OfType<YamlMappingNode>().Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "commit");
+        var on = (YamlMappingNode)Load(".github/workflows/full.yml")["on"];
+
+        Assert.False(on["workflow_dispatch"] is YamlMappingNode m && m.Children.ContainsKey("inputs") && ((YamlMappingNode)m["inputs"]).Children.ContainsKey("sha"));
+        Assert.DoesNotContain("inputs.sha", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("inputs.", Scalar(step, "run") + string.Join("", ((YamlMappingNode)step["env"]).Children.Select(c => c.Value.ToString())), StringComparison.Ordinal);
+        Assert.Equal("${{ github.sha }}", Scalar(step["env"], "REF_SHA"));
+        foreach (var job in ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Where(j => j.Key.ToString() != "trigger"))
+            foreach (var checkout in ((YamlSequenceNode)((YamlMappingNode)job.Value)["steps"]).Children.OfType<YamlMappingNode>()
+                         .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal)))
+                Assert.Equal("${{ needs.trigger.outputs.sha }}", Scalar(checkout["with"], "ref"));
+    }
+
+    [Fact]
+    public void The_trigger_takes_a_workflow_runs_commit_only_from_the_API_read_of_a_push_to_main_and_a_run_by_hand_the_tip_it_runs_on()
+    {
+        var push = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpush");
+        var elsewhere = RunCommitStep("workflow_run", Tip, $"{RunSha}\ttopic\tpush");
+        var pull = RunCommitStep("workflow_run", Tip, $"{RunSha}\tmain\tpull_request");
+        var garbage = RunCommitStep("workflow_run", Tip, "not-a-sha\tmain\tpush");
+        var unreadable = RunCommitStep("workflow_run", Tip, ghFails: true);
+        var byHand = RunCommitStep("workflow_dispatch", Tip);
+        var badTip = RunCommitStep("workflow_dispatch", "main");
+
+        Assert.Equal(0, push.Code);
+        Assert.Contains($"sha={RunSha}", push.Output, StringComparison.Ordinal);
+        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("sha=", r.Output, StringComparison.Ordinal); });
+        Assert.Equal(0, byHand.Code);
+        Assert.Contains($"sha={Tip}", byHand.Output, StringComparison.Ordinal);
+        Assert.Equal("", byHand.Log); // a run by hand makes no API call at all: nothing to follow
+        Assert.NotEqual(0, badTip.Code);
+    }
     /// <summary>
     /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written there could be poisoned by that code
     /// (CodeQL's cache-poisoning alerts on #4254), and CodeQL cannot see through an input that gates a save. So FULL has no save at all: it uses only the system-packages
@@ -165,5 +229,65 @@ public class FullWorkflowTests
         var saves = ci.Where(s => Uses(s, Save)).ToList();
         Assert.Equal(ci.Count(s => Uses(s, Restore)), saves.Count);
         Assert.All(saves, s => Assert.Equal("always() && steps.system-packages.outputs.cache-ready == 'true'", Scalar(s, "if")));
+
+        // P2: every local action full.yml reaches, through any depth of composites, writes no cache either, so a later `uses: ./.github/actions/install-trivy` is read too, not only
+        // the one named above. An action this cannot read (no action.yml, no composite steps) fails: what it writes would be unknown.
+        static bool WritesCache(YamlMappingNode s)
+        {
+            if (!s.Children.ContainsKey("uses")) return false;
+            var uses = Scalar(s, "uses");
+            return uses.StartsWith("actions/cache@", StringComparison.Ordinal) || uses.StartsWith("actions/cache/save@", StringComparison.Ordinal)
+                || (uses.StartsWith("actions/setup-", StringComparison.Ordinal) && s.Children.TryGetValue("with", out var with) && with is YamlMappingNode m && m.Children.ContainsKey("cache"));
+        }
+        static bool IsLocal(YamlMappingNode s) => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./", StringComparison.Ordinal);
+        Assert.All(StepsOf("full.yml"), s => Assert.False(WritesCache(s), "a full.yml step writes a cache"));
+        var queue = new Queue<string>(StepsOf("full.yml").Where(IsLocal).Select(s => Scalar(s, "uses")));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (queue.Count > 0)
+        {
+            var local = queue.Dequeue();
+            if (!seen.Add(local)) continue;
+            var file = Path.Combine(Root, local[2..].Replace('/', Path.DirectorySeparatorChar), "action.yml");
+            Assert.True(File.Exists(file), $"{local} has no action.yml to read, so what it writes is unknown");
+            var stream = new YamlStream();
+            stream.Load(new StringReader(File.ReadAllText(file)));
+            var runs = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)["runs"];
+            Assert.True(runs.Children.ContainsKey("steps"), $"{local} is not a composite action this can read through");
+            foreach (var step in ((YamlSequenceNode)runs["steps"]).Children.OfType<YamlMappingNode>())
+            {
+                Assert.False(WritesCache(step), $"{local} writes a cache, and full.yml reaches it");
+                if (IsLocal(step)) queue.Enqueue(Scalar(step, "uses"));
+            }
+        }
+        Assert.Contains("./.github/actions/playwright-system-packages", seen);
+    }
+
+    /// <summary>
+    /// P3 (Q10): ci.yml's save step is gated on the restore action's cache-ready OUTPUT, and a real warm run only shows it skipped. So the chain that makes it true on a cold run is
+    /// pinned: download.sh writes cache-ready=true to GITHUB_OUTPUT, the step that runs it has the id the action maps, the action's cache-ready output is that step's, and every
+    /// ci.yml save step reads that output through the id of the restore step right before it.
+    /// </summary>
+    [Fact]
+    public void The_save_step_reads_the_restore_actions_cache_ready_output_through_ids_that_exist()
+    {
+        var action = Load(".github/actions/playwright-system-packages/action.yml");
+        var steps = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>().ToList();
+        var download = File.ReadAllText(Path.Combine(Root, ".github", "actions", "playwright-system-packages", "download.sh"));
+
+        Assert.Contains("cache-ready=true' >> \"$GITHUB_OUTPUT\"", download, StringComparison.Ordinal);
+        Assert.Contains(steps, s => s.Children.ContainsKey("id") && Scalar(s, "id") == "packages" && Scalar(s, "run").Contains("download.sh", StringComparison.Ordinal));
+        Assert.Equal("${{ steps.packages.outputs.cache-ready }}", Scalar(((YamlMappingNode)action["outputs"])["cache-ready"], "value"));
+        Assert.Equal("${{ steps.debs.outputs.cache-primary-key }}", Scalar(((YamlMappingNode)action["outputs"])["cache-key"], "value"));
+        var ci = ((YamlMappingNode)Load(".github/workflows/ci.yml")["jobs"]).Children.Values
+            .Select(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>().ToList()).ToList();
+        foreach (var job in ci)
+            for (var i = 0; i < job.Count; i++)
+                if (job[i].Children.ContainsKey("uses") && Scalar(job[i], "uses") == "./.github/actions/playwright-system-packages-save")
+                {
+                    var restore = job[i - 1];
+                    Assert.Equal("./.github/actions/playwright-system-packages", Scalar(restore, "uses"));
+                    Assert.Equal("system-packages", Scalar(restore, "id"));
+                    Assert.Equal("${{ steps.system-packages.outputs.cache-key }}", Scalar(job[i]["with"], "key"));
+                }
     }
 }
