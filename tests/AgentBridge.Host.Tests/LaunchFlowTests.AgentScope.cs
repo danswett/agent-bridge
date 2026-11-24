@@ -117,7 +117,7 @@ public sealed partial class LaunchFlowTests
     public async Task The_scope_is_on_both_audit_rows_of_a_persons_launch_and_not_on_one_without_the_tick()
     {
         var profile = Path.Combine(f.Root, "audit-scope", "default");
-        var launcher = Launcher(Config(), agentLaunchOn: true);
+        var launcher = Launcher(Config(), credentials: new AgentCredentials(Directory.CreateDirectory(Path.Combine(f.Root, "audit-scope-cred")).FullName, "machine"), agentLaunchOn: true);
         var ingress = new GateLaunchIngress("local", "person-client", "person:local", null);
         await GateLaunchAudit.LaunchAsync(launcher, new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "go",
             AgentScope = AgentProtocol.ScopeReadReplyLaunch }, "local", new AgentAuditLog(profile), ingress);
