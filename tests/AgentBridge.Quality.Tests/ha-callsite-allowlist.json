@@ -18,6 +18,7 @@
   {"Path":"pwa/test/unit/status.test.mjs","Sites":1,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Test data: the homeassistant driver principal"},
   {"Path":"quality/README.md","Sites":5,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Documents the HA test suites and the HomeAssistantIntegration category"},
   {"Path":"quality/catalog.yml","Sites":10,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Test suites for the HA connector (ha-integration, ha-contract-*) and for this guard"},
+  {"Path":"quality/test-shards.json","Sites":5,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"The test shard plan: the HA test project and its Ha* test classes are listed by name, as data (no HA call); a plan refresh updates this count"},
   {"Path":"src/AgentBridge.App.Core/DemoHost.cs","Sites":3,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Demo data: the homeassistant driver principal"},
   {"Path":"src/AgentBridge.App.Core/SettingsViewModel.cs","Sites":3,"Slice":"S2","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"Settings page shows the HA token refusal and the ha token set hint (parity row 34)"},
   {"Path":"src/AgentBridge.App/SelfTest.Details.cs","Sites":1,"Slice":"S7","Issue":"https://github.com/danswett/agent-bridge/issues/1396","Reason":"App self-test data: the homeassistant driver principal"},
