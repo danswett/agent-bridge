@@ -1,16 +1,8 @@
-From bd5db1e0df693da11b65bc7b38ed02e6576b3595 Mon Sep 17 00:00:00 2001
+From 652822b007afe2c8d87490f5eec0f15fa4b7bf93 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 19:05:18 -0800
-Subject: [PATCH] Release train, re-cut for the FULL lane (S2 piece C2a, Part
- of #4104)
+Date: Mon, 23 Nov 2026 21:37:13 -0800
+Subject: [PATCH] scratch train-a
 
-release-train.yml: pick (the selector; the commit, version, FAST and FULL run ids and the waived notice from Get-PickOutputs), verify per
-architecture on FULL's exact bytes (package and hash required on both; the install and self-test required on x64, only recorded on Arm64,
-the owner's waiver), alert, publish (only while TRAIN_LIVE is exactly true, never on a dry run, only after verification passed; the only
-writer) and a report that says what a live run would do. Every download reads the FULL run. No WebKit stream, no signing, no attestation
-yet. The release-train catalog suite, the merge rule's exclusion list, the docs and ReleaseTrainWorkflowTests.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/release-train.yml           | 238 ++++++++++++++++++
  docs/app-windows.md                           |   5 +
@@ -266,10 +258,10 @@ index 000000000..b853eeff0
 +          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
 +          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
 diff --git a/docs/app-windows.md b/docs/app-windows.md
-index a41c7d106..fc6edfc3e 100644
+index 6495da285..6805cfc4d 100644
 --- a/docs/app-windows.md
 +++ b/docs/app-windows.md
-@@ -1257,6 +1257,11 @@ for a later app change either, so a green run publishes its own commit without w
+@@ -1290,6 +1290,11 @@ for a later app change either, so a green run publishes its own commit without w
    train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
    stands aside for a later app change any more (#4104): the train is to publish the newest verified
    commit, and a later change is the next verified commit's to publish.
@@ -282,10 +274,10 @@ index a41c7d106..fc6edfc3e 100644
    as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
    unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 98fe4ffe6..7cb74e314 100644
+index ac7dd68c5..79223e922 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1003,6 +1003,20 @@ suites:
+@@ -1037,6 +1037,20 @@ suites:
      where: halts-upload.yml upload
      status: exists
  
@@ -307,19 +299,21 @@ index 98fe4ffe6..7cb74e314 100644
      validation_plan: native
      kind: e2e
 diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-index 6777ce769..ca75f02f0 100644
+index 943f7b1fc..7b930b844 100644
 --- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-@@ -1083,9 +1083,10 @@ public class MergeRuleTests
-     //   verdict and a finished one needn't re-judge anything, #2454),
+@@ -1085,11 +1085,12 @@ public class MergeRuleTests
      //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+     //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
      //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
 +    //   Release train (schedule and dispatch, main only: publishes a verified commit and judges no pull request; its checks never land on a pull request's head).
+     //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
+     //   request; docs/app-windows.md, "Spacing").
      static readonly string[] OnlyOnTheDefaultBranchOrByHand =
      [
 -        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
 +        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)", "Release train",
-         "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+         "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
      ];
  
 diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
