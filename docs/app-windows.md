@@ -662,6 +662,12 @@ controls consume that same contract; this extraction does not disable or remove 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+    **Only inside the update window** (#4468; owner, Nov 24 ~08:15 PT, "Window 02:00-05:00 PT"): the gap and the backstop
+    install only between 02:00 and 05:00 Pacific Time by default (`AppPreferences.InstallWindowStart`/`End`/`Zone`, read
+    at the moment from the updater's clock, so daylight saving moves it). Outside it a ready release waits, phase `waiting`, and
+    `waiting` reads "it waits for the update window 02:00-05:00 Pacific Time". A time unset or unreadable is the whole
+    default pair, never a window open all day; with no time zone known the window is closed and says why. A person's press,
+    Restart to update, a device's Install or Update now, is never held by the window. The per-machine setting is a later slice.
   * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
     moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
     release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
@@ -671,7 +677,7 @@ controls consume that same contract; this extraction does not disable or remove 
     release is waiting to install, the halt policy allows it (a stale policy, or the app's release halted,
     holds it), "Download updates automatically" is on (off, nothing happens unasked), and the machine is
     quiet (no turn running and no question or approval waiting, over a whole snapshot settled for
-    `SettleFor`, 5 seconds, as for Install between turns), the app asks the
+    `SettleFor`, 5 seconds, as for Install between turns), and inside the update window (#4468, as above), the app asks the
     host to restart (`host.restart`: it ends with code 75 once fully stopped, and the launcher starts the
     replacement from `current\`). **Not an install,** and in either mode: nothing is downloaded, and
     Restart to update is unchanged. Only this machine's own host, over its own pipe, is ever restarted,
