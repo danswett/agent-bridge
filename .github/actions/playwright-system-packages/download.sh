@@ -42,12 +42,16 @@
 set -euo pipefail
 
 # One deadline for the whole step. Every wait below is bounded, but they ADD UP across update, prefetch and apt's retries, so no new attempt starts after this many
-# seconds into the step (SECONDS is the script's own clock), and the prefetch budget is at most half of what is left. The worst case, from the defaults:
+# seconds into the step (checked after a backoff sleep too, so a retry never starts late) (SECONDS is the script's own clock), and the prefetch budget is at most half of what is left. The worst case, from the defaults:
 #   deadline 600 + the longest single attempt that may still start (apt: its 180 s limit + 30 s kill grace = 210; a fetch: 60 s + 10 s connect = 70) = 810 s,
 #   then the plan call (60) and the offline install (180): 1050 s (17.5 min). The jobs that call this have a 35 min cap and need 15 min for their own work
 #   (npm ci, browsers, tests), so the worst case fits with 3 min to spare; test.sh computes it from these defaults and the callers' timeout-minutes.
 deadline=${PLAYWRIGHT_APT_DEADLINE:-600}
 deadline_hit=false
+# Set when every planned package was fetched and checked by prefetch(): apt's own download then has nothing to fetch, so the deadline does not forbid its one verifying call.
+all_prefetched=false
+# A file the attempts' output is copied to, for the forced-fallback proof (a pipe would run retry in a subshell and lose its state).
+transcript=''
 
 key_only=false
 if [ "${1:-}" = --cache-key ]; then key_only=true; shift; fi
@@ -163,14 +167,16 @@ retry() {
   network_failed=false
   log=$(mktemp)
   while true; do
-    # The deadline gates the FIRST download attempt too (#4458 P2): after the update (and after leaving Azure) the step may already be past it, and one more attempt of up to 210 s would
-    # make the real worst case about 1200 s, not the 1050 s of the header. So no download attempt starts at all once it is spent.
-    if [ "$n" -eq 1 ] && [ "$phase" = download ] && [ "$SECONDS" -ge "$deadline" ]; then
-      deadline_hit=true; network_failed=true; rc=124
-      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::the step's ${deadline} s deadline is spent before the first download attempt; none is started"; break
+    # The deadline gates EVERY attempt (#4458): a retry is checked again here, AFTER its backoff sleep (the check below, before the sleep, cannot see the time the sleep itself spends), and the first
+    # download attempt is checked too, after the update or leaving Azure may already have spent it, unless prefetch fetched and verified every package (then apt's call only verifies). So no attempt
+    # starts after the deadline, and the header's worst case holds.
+    if { [ "$n" -gt 1 ] || { [ "$phase" = download ] && [ "$all_prefetched" = false ]; }; } && [ "$SECONDS" -ge "$deadline" ]; then
+      deadline_hit=true; network_failed=true; [ "$n" -gt 1 ] || rc=124
+      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::the step's ${deadline} s deadline is spent before attempt $n of $max; none is started"; break
     fi
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $max: $*"
     rc=0; LC_ALL=C "$@" 2>&1 | tee "$log" || rc=$?
+    [ -z "$transcript" ] || cat "$log" >> "$transcript"
     if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
     [ "$rc" -ne 0 ] || rc=100
     if [ "$rc" -ne 124 ] || grep -qE '^[EW]:' "$log"; then network_error "$log" "$phase" || break; fi
@@ -375,6 +381,7 @@ prefetch() {
   echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::fetched $fetched of $planned planned packages one by one, each checked against the signed index"
   [ "$spent" = false ] || echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget ($budget s) ran out; the rest is left to apt"
   [ "${#left[@]}" -eq 0 ] || echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::left to apt's own bounded download: ${left[*]}"
+  [ "${#left[@]}" -ne 0 ] || [ "$planned" -eq 0 ] || all_prefetched=true
   return 0
 }
 prefetch
@@ -386,6 +393,7 @@ if [ "$force" = true ]; then
 else
   retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?
 fi
+if [ "$deadline_hit" = true ] && [ "$rc" -ne 0 ]; then fail download "$rc"; fi
 if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = true ]; }; then
   if [ "$rc" -eq 124 ]; then
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt took over $limit to download Playwright's system packages; fetching the rest from https://archive.ubuntu.com"
@@ -395,7 +403,8 @@ if [ "$force" = true ] || { [ "$left_azure" = false ] && [ "$network_failed" = t
   leave_azure
   if [ "$force" = true ]; then
     got=$(mktemp)
-    retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" | tee "$got"
+    rc=0; transcript="$got"; retry download bounded apt-get "${download_options[@]}" install -y --download-only --no-install-recommends "${pkgs[@]}" || rc=$?; transcript=''
+    [ "$rc" -eq 0 ] || fail download "$rc"
     if grep -q '^Get:.*azure\.archive\.ubuntu\.com' "$got"; then
       echo "::error::apt still fetched packages from azure.archive.ubuntu.com after it was taken off $mirrors"; exit 1
     fi

@@ -431,8 +431,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      minutes. Each `pwa-ui` leg, `pwa-e2e` and `spikes-linux` downloads and offline-installs
      Playwright's system packages through `.github/actions/playwright-system-packages`.
      Update attempts have a 60-second bound; downloads get at most 180 seconds per attempt, on Azure and on
-     Canonical alike (a connection silent for 30 seconds is dead sooner: curl's 1 kB/s floor and apt's own Acquire::http(s)::Timeout). The step as a whole has one 600-second deadline: no new attempt starts after it, the first download attempt included,
-     and the package-by-package prefetch before apt's own download is at most half of what is left (default 400). An Azure timeout switches to the runner's Canonical fallback,
+     Canonical alike (a connection silent for 30 seconds is dead sooner: curl's 1 kB/s floor and apt's own Acquire::http(s)::Timeout). The step as a whole has one 600-second deadline: no attempt starts after it, the first download attempt and a retry after its backoff sleep included (the deadline is checked again after the sleep), unless the package-by-package prefetch before apt's own download already fetched and verified every package; that prefetch is at most half of what is left. An Azure timeout switches to the runner's Canonical fallback,
      `https://archive.ubuntu.com` (main run 41927187905 lost a WebKit shard to that mirror at
      100 kB/s, and main run 41952998347 `pwa-e2e`). Before updating apt, a five-second Azure
      DNS probe switches immediately if lookup fails; an Azure DNS error during update or

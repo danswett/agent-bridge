@@ -135,6 +135,8 @@ EOF
 cat > "$work/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SLEEP_LOG"
+# SLEEP_REAL: really wait that long (a backoff that outlasts the step's deadline), so SECONDS moves
+[ -z "${SLEEP_REAL:-}" ] || /usr/bin/sleep "$SLEEP_REAL"
 EOF
 # curl serves files from CURL_FIXTURES/<host>/<path> and records each URL. CURL_DOWN_HOSTS time out (28), CURL_BAD_HOSTS serve other bytes,
 # and the first CURL_FAIL_FIRST requests for any one URL time out. Nothing here touches the network.
@@ -151,6 +153,7 @@ case " ${CURL_DOWN_HOSTS:-} " in *" $host "*) [ -z "${CURL_SLOW_SECONDS:-}" ] ||
 file="$CURL_FIXTURES/$host$path"
 [ -f "$file" ] || exit 22
 case " ${CURL_BAD_HOSTS:-} " in *" $host "*) size=$(wc -c < "$file"); file=$CURL_FIXTURES/corrupt; head -c "$size" /dev/zero | tr '\0' X > "$file" ;; esac
+[ -z "${CURL_SLOW_OK:-}" ] || /usr/bin/sleep "$CURL_SLOW_OK"   # a fetch that works but takes this long
 if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
 EOF
 chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout" "$work/bin/curl"
@@ -189,7 +192,7 @@ reset() {
   unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
-  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE CURL_SLOW_SECONDS
+  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE CURL_SLOW_SECONDS SLEEP_REAL PLAYWRIGHT_APT_RETRY_DELAY CURL_SLOW_OK PLAYWRIGHT_APT_FORCE_FALLBACK
   export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false; rm -rf "$CURL_FIXTURES"; mkdir -p "$CURL_FIXTURES"; : > "$CURL_LOG"; : > "$CURL_ARGS"
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
@@ -345,6 +348,27 @@ deadline_cases() {
   expect "the header shows the arithmetic" 'grep -q "worst case" "$here/download.sh"'
   reset "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0 PLAYWRIGHT_APT_ATTEMPTS=6 APT_DOWNLOAD_TIMEOUTS=99; dl
   expect "no download attempt starts once the deadline is spent (the first one included), and the error says so" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 0 ] && grep -q "^::error::apt download failed (exit 124): network or timeout.*deadline" "$work/out"'
+  # #4458 P1 (R4zzB839): the deadline is checked AFTER a backoff sleep too, not only before it. Deadline 8 s, backoff 10 s (a loaded machine can spend several seconds before attempt 1, so not less): attempt 1 on Canonical times out at once (inside the deadline), the step
+  # waits its 10 s backoff, and attempt 2 must NOT start, however many attempts are left.
+  reset "$azure" "$canonical"; export PLAYWRIGHT_APT_DEADLINE=8 PLAYWRIGHT_APT_RETRY_DELAY=10 SLEEP_REAL=10 PLAYWRIGHT_APT_ATTEMPTS=6 APT_DOWNLOAD_TIMEOUTS=99
+  dl
+  expect "no attempt starts after the deadline even when it passes during a backoff: one Azure attempt and one Canonical attempt, not a second" '[ "$DL_CODE" -ne 0 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 2 ] && grep -q "deadline is spent before attempt 2" "$work/out" && grep -q "^::error::apt download failed" "$work/out"'
+  unset SLEEP_REAL PLAYWRIGHT_APT_RETRY_DELAY CURL_SLOW_OK PLAYWRIGHT_APT_FORCE_FALLBACK
+  # R4zzB839 P3s on #4498. (1) A deadline spent before the first download attempt means NO attempt ran: it is not blamed on a slow mirror ("apt took over ..."), Azure is not dropped for it, and it fails.
+  reset "$azure" "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0
+  dl
+  expect "a deadline spent before any attempt fails with the deadline as the cause, never 'apt took over', and keeps Azure on the list" '[ "$DL_CODE" -ne 0 ] && grep -q "^::error::apt download failed" "$work/out" && grep -q "deadline was spent" "$work/out" && ! grep -q "apt took over" "$work/out" && grep -q azure "$PLAYWRIGHT_APT_ETC/apt-mirrors.txt"'
+  # (2) The forced-fallback proof with the deadline spent exits with a ::error::, not a bare 124 (its retry used to run in a pipe's subshell and lose the deadline's state).
+  reset "$azure" "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0 PLAYWRIGHT_APT_FORCE_FALLBACK=true
+  dl
+  expect "a forced-fallback proof whose deadline is spent says so: ::error::, the deadline, and a failing exit" '[ "$DL_CODE" -ne 0 ] && grep -q "^::error::apt download failed" "$work/out" && grep -q "deadline was spent" "$work/out"'
+  unset PLAYWRIGHT_APT_FORCE_FALLBACK
+  # (3) A prefetch that fetched and verified EVERY package but ran past the deadline does not fail the step: apt's call then has nothing to download.
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a" PLAYWRIGHT_APT_DEADLINE=12 CURL_SLOW_OK=14
+  dl
+  expect "a prefetch that finished all packages past the deadline still succeeds" '[ "$DL_CODE" -eq 0 ] && grep -q "fetched 1 of 1 planned" "$work/out" && [ "$(curls "liba")" -ge 1 ]'
+  unset CURL_SLOW_OK
   reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
   export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_DEADLINE=0
   dl
@@ -643,7 +667,7 @@ for transition in completed timeout completed-after-timeout timeout-with-diagnos
   if (
     source <(sed -n '/^network_error()/,/^leave_azure()/p' "$here/download.sh" | sed '$d')
     update_deadline=0; attempts=3; delay=0; left_azure=false; network_host=azure.archive.ubuntu.com
-    deadline=600; deadline_hit=false   # retry() reads the step's deadline; this subshell sources only its functions
+    deadline=600; deadline_hit=false; all_prefetched=false; transcript=''   # retry() reads the step's deadline and these; this subshell sources only its functions
     unset PLAYWRIGHT_APT_ATTEMPTS
     export PLAYWRIGHT_APT_RETRY_DELAY=0
     sleep() { :; }
