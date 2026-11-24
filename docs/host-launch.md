@@ -55,6 +55,17 @@ or unknown id, a held host, a kill switch or an excluded workspace refuses (`sco
 `person-required` confirmation, audited under the agent's principal. The plain `session.stop` stays
 person-only.
 
+Who may call: the caller must be a live agent session credential with `read+reply+launch` scope at depth 0
+and not adopted (the same subject check as a granted launch). Any such session may end any agent-launched
+session on this host (owner, Nov 16 on #2741): the record keeps no launcher principal, so a stop is not
+limited to the sessions that caller started. It cannot end its own session.
+
+Work is never ended over: the host reads git in the session's folder, once per request, and refuses with
+`policy` on uncommitted or untracked files (whatever `status.showUntrackedFiles` says), a stash, a commit
+on any local branch that has not been pushed, a local branch with no upstream, or git that cannot be read
+or does not answer in 5 s (the process tree is killed). An open pull request is GitHub's to say and the host
+makes no GitHub call, so a caller that must not end such a session checks it first (follow-up for program C).
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so

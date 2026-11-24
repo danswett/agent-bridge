@@ -134,6 +134,8 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 { return ("scope", null, null); }
                 return (null, agent, approved);
             }
+            // One git read per request: prepare and dispatch share it.
+            bool? pending = null;
             // No grant: the launch record must show an agent started this exact process; no record, or one that cannot be read, refuses.
             string? ByRecord()
             {
@@ -145,7 +147,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 try { if (!sessions.IsFleetWorker(found.Session)) { return "scope"; } }
                 catch (InvalidOperationException) { return "scope"; }
                 // Uncommitted or unpushed work in its folder is never ended over; an unreadable folder counts as pending.
-                return source.GetForStop(found.Session)?.Cwd is { } cwd && !(unpushed ?? UnpushedWork.Pending)(cwd) ? null : "policy";
+                return source.GetForStop(found.Session)?.Cwd is { } cwd && !(pending ??= (unpushed ?? UnpushedWork.Pending)(cwd)) ? null : "policy";
             }
             string? Check(GrantStore.State state)
             {

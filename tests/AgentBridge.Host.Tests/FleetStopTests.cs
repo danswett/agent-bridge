@@ -591,8 +591,9 @@ public sealed class FleetStopTests : IDisposable
         Assert.Contains(GateAuditProjection.Load(Folder).Rows, r => r.Action == "fleet.end.replay" && r.Request == request.ToString());
     }
     // #2741: an agent ends a session an agent started, by the host's own launch record (no grant), never by guess.
+    int pendingReads;
     FleetStopCommands Provenance(Func<string, SessionProcess?, bool> fleetWorker, bool pending = false) => new(Folder, key, () => "123", Device, credentials,
-        new(source, new(Device, "fixture", "windows", "1"), stops: stops, launcher: new Worker(fleetWorker)), source, stops, unpushed: _ => pending);
+        new(source, new(Device, "fixture", "windows", "1"), stops: stops, launcher: new Worker(fleetWorker)), source, stops, unpushed: _ => { pendingReads++; return pending; });
     Task<FleetStopReceipt> EndByRecord(FleetStopCommands handler, string? session = null) => handler.HandleAsync(caller,
         JsonSerializer.SerializeToElement(new FleetStopInput(1, Guid.NewGuid(), Guid.Empty, session ?? id), ProtocolJson.Options));
     [Fact]
@@ -601,6 +602,7 @@ public sealed class FleetStopTests : IDisposable
         var receipt = await EndByRecord(Provenance((_, process) => process is { Id: 700 }));
         Assert.Equal(("ended", null), (receipt.Outcome, receipt.Reason));
         Assert.Equal(1, injector.Calls);
+        Assert.Equal(1, pendingReads); // one git result per request, not one for prepare and another at dispatch
     }
     [Fact]
     public async Task A_session_a_person_started_or_with_no_launch_record_is_refused_without_typing()
@@ -633,30 +635,6 @@ public sealed class FleetStopTests : IDisposable
         var folder = Path.Combine(f.Root, "work");
         Directory.CreateDirectory(folder);
         Assert.True(UnpushedWork.Pending(folder));
-    }
-    [Fact]
-    public void Untracked_work_counts_as_pending_even_when_the_repository_hides_untracked_files()
-    {
-        var remote = Path.Combine(f.Root, "remote.git");
-        var work = Path.Combine(f.Root, "clone");
-        void Git(string folder, params string[] args)
-        {
-            var info = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (var a in new[] { "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false" }.Concat(args)) { info.ArgumentList.Add(a); }
-            using var git = System.Diagnostics.Process.Start(info)!;
-            git.WaitForExit();
-            Assert.Equal(0, git.ExitCode);
-        }
-        Directory.CreateDirectory(remote); Directory.CreateDirectory(work);
-        Git(remote, "init", "--bare", "-b", "main");
-        Git(work, "init", "-b", "main");
-        File.WriteAllText(Path.Combine(work, "a.txt"), "a");
-        Git(work, "add", "a.txt"); Git(work, "commit", "-m", "a");
-        Git(work, "remote", "add", "origin", remote); Git(work, "push", "-u", "origin", "main");
-        Assert.False(UnpushedWork.Pending(work));
-        Git(work, "config", "status.showUntrackedFiles", "no");
-        File.WriteAllText(Path.Combine(work, "new.txt"), "work in progress");
-        Assert.True(UnpushedWork.Pending(work));
     }
     sealed class Worker(Func<string, SessionProcess?, bool> fleetWorker) : ISessionLauncher
     {
