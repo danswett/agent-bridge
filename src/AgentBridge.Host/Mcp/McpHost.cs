@@ -45,8 +45,9 @@ public sealed class McpHost : IAsyncDisposable
     public static async Task<McpHost> OpenAsync(LocalEndpoint endpoint, string? token, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         var wait = timeout ?? RequestTimeout;
+        if (!OperatingSystem.IsWindows() && endpoint.Folder.Length == 0) { RefuseSharedSocket(endpoint.Address); }
         LocalChannel channel;
-        try { channel = await LocalClient.ConnectAsync(endpoint, wait < TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct, requireOwner: true); }
+        try { channel = await LocalClient.ConnectAsync(endpoint, wait < TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct); }
         catch (HostNotRunningException) { throw Unreachable(); }
         catch (LocalRefusedException e) { throw new McpToolException($"The {Product.HostName} refused this process: {e.Message}", McpFailure.Refused); }
         try
@@ -75,6 +76,24 @@ public sealed class McpHost : IAsyncDisposable
             await channel.DisposeAsync();
             throw;
         }
+    }
+
+    // An explicit Unix socket path (AGENT_BRIDGE_PIPE; the derived one lives in the host's own 0700 folder) is talked to only when neither the socket nor its
+    // folder can be written by group or others, so another user cannot have put a socket there. Windows has CurrentUserOnly on the client instead.
+    public static bool IsPrivateMode(UnixFileMode mode) => (mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) == 0;
+
+    static void RefuseSharedSocket(string path)
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists(path)) { return; } // no socket: the connect says the host is not running
+        try
+        {
+            var folder = Path.GetDirectoryName(path);
+            if ((folder is not null && !IsPrivateMode(File.GetUnixFileMode(folder))) || !IsPrivateMode(File.GetUnixFileMode(path)))
+            {
+                throw new McpToolException($"The {Product.HostName}'s socket can be written by other users, so it is not used.", McpFailure.Refused);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw Unreachable(); }
     }
 
     public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>

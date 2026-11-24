@@ -223,31 +223,40 @@ public sealed class McpHostTests : IDisposable
         hold.SetResult();
     }
 
-    // CurrentUserOnly makes the connection fail unless the pipe's owner is this user, so a pipe another user created under the name is never
-    // talked to. It cannot be exercised without a second user, so the client's options are the pinned thing.
+    // CurrentUserOnly makes the connection fail unless the pipe's owner is this user, so a pipe another user created under the name is never talked to.
+    // It cannot be exercised without a second user, so the client's construction is the pinned thing.
     [Fact]
     public void The_pipe_client_opens_with_current_user_only()
     {
-        Assert.True(LocalClient.ClientPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
-        Assert.True(LocalClient.ClientPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        var client = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Local", "LocalClient.cs"));
+        Assert.Matches(@"new NamedPipeClientStream\([^;]*PipeOptions\.CurrentUserOnly", client);
     }
 
-    [Fact]
-    public void A_unix_socket_is_trusted_only_when_its_peer_is_this_user()
-    {
-        Assert.True(LocalPeerOwner.IsCurrentUser(1000, 1000));
-        Assert.False(LocalPeerOwner.IsCurrentUser(0, 1000));
-        Assert.False(LocalPeerOwner.IsCurrentUser(1001, 1000));
-    }
+    // On Unix a socket another user can write to is not talked to: neither the socket file nor its folder may be writable by group or others.
+    [Theory]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, true)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupExecute, true)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupWrite, false)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.OtherWrite, false)]
+    public void A_unix_socket_or_folder_writable_by_others_is_not_private(UnixFileMode mode, bool expected) =>
+        Assert.Equal(expected, McpHost.IsPrivateMode(mode));
 
     [Fact]
-    public async Task On_linux_a_socket_this_user_serves_passes_the_owner_check()
+    public async Task On_unix_an_explicit_socket_others_can_write_is_refused_and_a_private_one_is_served()
     {
-        if (!OperatingSystem.IsLinux()) { return; }
+        if (OperatingSystem.IsWindows()) { return; }
         await using var server = Serve(Normal);
-        await using var host = await McpHost.OpenAsync(server.Endpoint, null, TimeSpan.FromSeconds(5));
-        Assert.True(host.Has("sessions.read"));
+        var explicitSocket = new LocalEndpoint(string.Empty, server.Endpoint.Address);
+        File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(explicitSocket.Address, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        await using (var host = await McpHost.OpenAsync(explicitSocket, null, TimeSpan.FromSeconds(5))) { Assert.True(host.Has("sessions.read")); }
+        File.SetUnixFileMode(explicitSocket.Address, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.OtherWrite);
+        var e = await Assert.ThrowsAsync<McpToolException>(() => McpHost.OpenAsync(explicitSocket, null, TimeSpan.FromSeconds(5)));
+        Assert.Equal(McpFailure.Refused, e.Kind);
     }
+
 
     // A hostile host: a frame header claiming 100 MB is refused at once, before any buffer is made, rather than waited on or allocated.
     [Fact]

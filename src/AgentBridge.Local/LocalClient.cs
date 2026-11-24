@@ -18,13 +18,9 @@ public static class LocalClient
 {
     // Connects and checks the host took this process: a refused one hears why in the first
     // event, before any response, and gets LocalRefusedException.
-    // CurrentUserOnly: the connection fails unless the pipe's owner is this process's token owner.
-    public const System.IO.Pipes.PipeOptions ClientPipeOptions = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
-
-    // requireOwner: on Unix, refuse a socket that is not this user's (LocalPeerOwner); the MCP server asks for it because its socket path can be named by the environment.
-    public static async Task<LocalChannel> ConnectAsync(LocalEndpoint endpoint, TimeSpan? timeout = null, CancellationToken ct = default, bool requireOwner = false)
+    public static async Task<LocalChannel> ConnectAsync(LocalEndpoint endpoint, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        var stream = await ConnectStreamAsync(endpoint, timeout ?? TimeSpan.FromSeconds(2), ct, requireOwner);
+        var stream = await ConnectStreamAsync(endpoint, timeout ?? TimeSpan.FromSeconds(2), ct);
         var channel = new LocalChannel(stream, "host", "host", "host", null, ProtocolJson.Options);
         channel.Start();
         return channel;
@@ -33,7 +29,7 @@ public static class LocalClient
     // The connection alone, with nothing reading it. Tests that speak frames by hand need it:
     // a channel's reader disposes the stream as soon as the host hangs up, which raced their
     // own writes to the host.
-    internal static async Task<Stream> ConnectStreamAsync(LocalEndpoint endpoint, TimeSpan wait, CancellationToken ct = default, bool requireOwner = false)
+    internal static async Task<Stream> ConnectStreamAsync(LocalEndpoint endpoint, TimeSpan wait, CancellationToken ct = default)
     {
         Stream stream;
         if (OperatingSystem.IsWindows())
@@ -42,7 +38,7 @@ public static class LocalClient
             // token owner, so a pipe another user created under the name is never talked to. An
             // elevated administrator's token owner is Administrators, so a host and an app at
             // different elevations fail here too.
-            var pipe = new NamedPipeClientStream(".", endpoint.Address, PipeDirection.InOut, ClientPipeOptions);
+            var pipe = new NamedPipeClientStream(".", endpoint.Address, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             try
             {
                 await ConnectPipeAsync(pipe, wait, ct);
@@ -67,11 +63,6 @@ public static class LocalClient
             {
                 socket.Dispose();
                 throw new HostNotRunningException($"the {Product.HostName} is not running for this profile", e);
-            }
-            if (requireOwner)
-            {
-                try { LocalPeerOwner.Verify(socket, endpoint.Address); }
-                catch { socket.Dispose(); throw; }
             }
             stream = new NetworkStream(socket, ownsSocket: true);
         }
