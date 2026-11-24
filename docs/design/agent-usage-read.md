@@ -1,8 +1,10 @@
 # Agent usage read: where fleet usage figures come from without Home Assistant (#1405)
 
 **Status: design note. No code changes with it.** Slice S6 of the Home Assistant retirement
-epic (#1396). The fleet's budget governor reads Home Assistant (HA) usage sensors today: the
-Copilot plan percentage and the Codex weekly figure. This note says what replaces them. Every
+epic (#1396); the usage meters are row 9 in fleet `docs/ha-retirement.md`. This note was
+written on the belief that the fleet's budget governor reads Home Assistant (HA) usage sensors
+(the Copilot plan percentage and the Codex weekly figure); the correction in "Status at main" below
+says it does not. This note says what replaces those sensors. Every
 claim was checked against the code at the commit this note was written from; file names are
 given so a reviewer can check them.
 
@@ -142,19 +144,23 @@ estimated **about 250 changed lines (size M), under 400**:
 2. The ten-pair comparison above as a script or test tool that writes the pairs and a verdict.
    About 100 lines.
 
-### Status at main 0416b9d7b (S1 definition of the remaining slice)
+### Status at main 0416b9d7b (the remaining slice)
+
+This status supersedes "Owner summary" and "Code slice needed" above where they disagree.
 
 * **Part 1 landed:** `usage-read` in the rehearsal tool (`tools/AgentBridge.Rehearsal/UsageRead.cs`,
   tests in `UsageReadTests.cs`; #2647, #2656). An MCP usage read also landed (#2824).
-* **Part 2 is the remaining slice, S2 (#1405):** the ten-pair comparison, about 100 lines with
+* **Part 2 is the remaining slice:** the ten-pair comparison, about 100 lines with
   tests-first RED then GREEN, as a rehearsal-tool command that writes the pairs and a verdict
-  under the rules in "How the governor's figures are compared". Part of #1405 and #1396.
+  under the rules in "How the governor's figures are compared". #1405 is closed, so it has no
+  open code issue and no command or verdict format yet; open one first (Part of #1396).
 * **Correction to "Owner summary":** the fleet repo has no code that reads the HA usage sensors.
   The budget governor reads spend from the F1 KPI snapshots (`governor/fleet_governor/core.py`,
   `board_spend`), not from `usage_*` sensors, and the quota watch is fed from the machines
-  directly (fleet #63, #64, #69) and is not built. The sensors are named only in fleet
-  `docs/ha-retirement.md`. So row 14 needs the comparison and this correction, not a consumer
-  switch; a consumer is added later against `usage-read` when the quota watch is built.
+  directly and is not built (fleet #63, #64 and #69 are GitHub API quota issues, not an
+  agent-usage watch). The sensors are named only in fleet `docs/ha-retirement.md`. So row 9
+  (usage meters, slice S6 there; row 14 is other HA uses) needs the comparison and this
+  correction, not a consumer switch; a consumer is added later against `usage-read` when the quota watch is built.
 
 Not in the slice: changing what an agent credential may do, relay reads, new readings, spend,
 and the HA connector. It does not touch `sensitive_paths` (no protocol, relay, auth or token

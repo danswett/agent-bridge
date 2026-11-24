@@ -542,6 +542,112 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         Assert.Equal(3, github.Requests.Count(r => r.Url == ReleaseDiscovery.CdnList));
     }
 
+    // The CDN served a 27-minute-old list from before a publish and the app said "up to date" while the next release existed. A copy older than
+    // CdnFreshFor may still OFFER a newer release (the halt and digest checks run on an offer unchanged), but it can never say "nothing newer": that
+    // is "unknown", which fails the check with words and tries again, as any refused answer does.
+    async Task<(string? Result, List<string> Said)> StaleRelayAsync(string relayVersion, string installed, TimeSpan age, Action<ReleaseDiscovery>? then = null)
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName),
+            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = Now.AddHours(-7), floors = new Dictionary<string, string> { ["win|pre"] = "0.1.0" } }));
+        var said = new List<string>();
+        var body = RelayList(relayVersion);
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList
+            ? new(HttpStatusCode.OK) { Content = new StringContent(body), Headers = { Age = age } }
+            : new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(30)) } };
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0, log: said.Add);
+        string? result = null;
+        try { result = await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, installed, "win"); }
+        catch (ReleaseDiscoveryException) { }
+        then?.Invoke(discovery);
+        return (result, said);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    [InlineData(10)]
+    public async Task A_relay_copy_within_the_freshness_window_that_shows_nothing_newer_is_still_current(int minutes)
+    {
+        var (result, _) = await StaleRelayAsync("0.1.0", "0.1.0", TimeSpan.FromMinutes(minutes));
+
+        Assert.Equal(RelayList("0.1.0"), result);
+    }
+
+    [Theory]
+    [InlineData(10, 1)]
+    [InlineData(27, 0)]
+    [InlineData(59, 0)]
+    public async Task A_relay_copy_older_than_the_window_that_shows_nothing_newer_is_unknown_not_up_to_date(int minutes, int seconds)
+    {
+        var (result, said) = await StaleRelayAsync("0.1.0", "0.1.0", TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(seconds));
+
+        Assert.Null(result);
+        Assert.Contains(said, line => line.Contains("nothing newer", StringComparison.Ordinal) && line.Contains("not used", StringComparison.Ordinal));
+        Assert.DoesNotContain(said, line => line.Contains("came from the CDN", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_relay_copy_older_than_the_window_that_names_an_older_release_than_installed_is_unknown_too()
+    {
+        var (result, _) = await StaleRelayAsync("0.1.0", "0.1.5", TimeSpan.FromMinutes(27));
+
+        Assert.Null(result);
+    }
+
+    [Theory]
+    [InlineData(11)]
+    [InlineData(27)]
+    [InlineData(59)]
+    public async Task A_relay_copy_older_than_the_window_may_still_offer_a_newer_release(int minutes)
+    {
+        var (result, said) = await StaleRelayAsync("0.1.2", "0.1.0", TimeSpan.FromMinutes(minutes));
+
+        Assert.Equal(RelayList("0.1.2"), result);
+        Assert.Contains(said, line => line.Contains("came from the CDN", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_stale_relay_copy_that_shows_nothing_newer_is_not_kept_as_the_answer()
+    {
+        await StaleRelayAsync("0.1.0", "0.1.0", TimeSpan.FromMinutes(27));
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, ReleaseDiscovery.FileName)));
+        Assert.False(saved.RootElement.TryGetProperty("body", out var body) && body.ValueKind == JsonValueKind.String);
+        Assert.NotEqual(ReleaseDiscovery.Sources.Cdn, saved.RootElement.TryGetProperty("source", out var source) ? source.ToString() : "");
+    }
+
+    // The copy kept here is judged by its true age on every check: one that was current when kept and has aged past the window while it was
+    // being served can no longer say nothing is newer.
+    [Fact]
+    public async Task A_kept_relay_copy_that_aged_past_the_window_no_longer_says_nothing_is_newer()
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName),
+            JsonSerializer.Serialize(new { url = Url, gitHubAnsweredAt = Now.AddHours(-7), floors = new Dictionary<string, string> { ["win|pre"] = "0.1.0" } }));
+        var body = RelayList("0.1.0");
+        github.Answer = r => r.RequestUri!.AbsoluteUri == ReleaseDiscovery.CdnList
+            ? new(HttpStatusCode.OK) { Content = new StringContent(body), Headers = { Age = TimeSpan.FromMinutes(8) } }
+            : new(HttpStatusCode.Forbidden) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(30)) } };
+        using var discovery = new ReleaseDiscovery(folder, github, time, random: () => 0);
+        Assert.Equal(body, await discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+
+        time.Advance(TimeSpan.FromMinutes(3)); // the kept copy is now 11 minutes old, inside the 10-minute check interval it was kept for
+        github.Answer = _ => throw new HttpRequestException("the relay is down"); // only the copy kept here can answer
+
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, b => b, CancellationToken.None, "0.1.0", "win"));
+    }
+
+    // The log said "the CDN was not asked" on the path that asks GitHub first and then the CDN once GitHub refuses.
+    [Fact]
+    public async Task The_log_says_GitHub_is_asked_first_and_the_CDN_is_the_fallback_never_that_the_CDN_was_not_asked()
+    {
+        var (_, said) = await StaleRelayAsync("0.1.2", "0.1.0", TimeSpan.Zero);
+
+        Assert.DoesNotContain(said, line => line.Contains("the CDN was not asked", StringComparison.Ordinal));
+        Assert.Contains(said, line => line.Contains("GitHub is asked first", StringComparison.Ordinal) && line.Contains("CDN", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(-25, false, false)]
     [InlineData(1, false, false)]

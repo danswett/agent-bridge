@@ -34,6 +34,27 @@ the row in parity.md section N whose first cell starts with those words. CI chec
 
 The checks live in `ChecklistTests`.
 
+### Phone approval audit evidence
+
+For [the per-client check](https://github.com/danswett/agent-bridge/issues/2649),
+the host subscribes to the existing `NoticeOutcome` hook. Its non-blocking queue
+drains into the existing private audit log before shutdown. No fixed node or new
+service is involved; each host retains its own existing profile audit files.
+The queue holds at most 64 pending outcomes. When full or closed, new outcomes
+are rejected without waiting for space, counted, and logged with a cumulative drop count.
+The existing row fields hold action `push`, direction `out`, recipient
+`person:<device>` (or `person:unknown`), question in `request`, session in `target`,
+kind `question` in `reason`, and the push-service outcome. No endpoint, keys,
+notification words or new audit fields are recorded.
+
+`PhoneApprovalEvidence.Read` reports those notices and distinct delivered questions
+per client alongside audited answers. Every expected client needs both delivery
+and an answer through the relay; missing identities, absent delivery and
+incomplete audit history never pass. An empty expected-client list is not proof.
+Here **delivered means accepted by the push service**, not received by the phone.
+Synthetic tests are not real-device or away-from-home evidence; those checks still
+need recorded audit rows and the device rehearsal.
+
 ## What runs where
 
 The rehearsal needs **two** disposable machines.
@@ -598,6 +619,10 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §8 "Only the publication writer" | N/A: tied to the HA writer role |
 | §9 "Offline machines" | Missing (#50, #51) |
 | §10 "Notification styling" | N/A: HA companion app only |
+| §10 "Notification paths with Home Assistant off" | Covered by tests, not a VM step: `PushFlowTests` (the PWA push flow with no Home Assistant connector) and `HaOffNotificationTests` (a source scan of the push and Windows toast code). The live part, ten finished-turn and ten question notices per client away from home, is the row 16 inventory in ha-s4-evidence-matrix.md, and stays open |
+| §10 "Reconnect never reannounces old work" | Covered by `PushNotifierTests` (a relay reconnect re-reads the same sessions); no scripted reconnect step yet |
+| §10 "Background push to iOS and iPadOS" | Missing: the APNs transport is not built (IOS-PUSH), and Apple machines are not in the rehearsal |
+| §10 "Delivery failures notice" | Missing on main: nothing calls the host's sender yet (the wiring is open, agent-bridge#4053), so there is nothing to exercise yet; it gets a step when it lands |
 | §11 "Transfers signed" | Intentionally different: signed commands replace the fleet secret |
 | §12 "Register hooks" | Missing for fresh installs (#54). A migrated machine keeps agent-ha-bridge's registrations, which D-04 and F-02 check |
 | §14 "Detect agents", §14 "Layout migration" | Missing (#54); N/A (migration starts from 1.33.x) |

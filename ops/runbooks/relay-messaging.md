@@ -62,8 +62,8 @@ unused once that evidence is in.
 ## Rules during a soak
 
 - **No relay deploy or restart.** A deploy drops every connection for a few seconds, and the
-  soak would count it as a relay-down case. Production relay deploys are the owner's approval
-  in any case (AGENTS.md "Relay deploys").
+  soak would count it as a relay-down case. Production relay deploys need SRE's approval
+  in any case (owner, Nov 23; AGENTS.md "Relay deploys").
 - **One change at a time.** Do not change the messenger and the host build together.
 - **Kill switch tested first.** A machine is not switched until the rollback above has been
   shown to work on it.

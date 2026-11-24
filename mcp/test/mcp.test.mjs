@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { openHost, pipeName, resolveEndpoint, PipeError } from '../src/pipe.mjs';
 import { createConnection, createServer } from '../src/server.mjs';
-import { turnMarker } from '../src/tools.mjs';
+import { endSession, turnMarker } from '../src/tools.mjs';
 
 // A fake host: speaks the pipe's framing and answers from `handlers`.
 async function fakeHost(handlers) {
@@ -187,6 +187,21 @@ test('list is typed by default and carries content only on request', async () =>
   assert.deepEqual(typed.sessions.map((s) => s.id), ['s1', 's2']);
   assert.equal(typed.sessions[0].activity, undefined);
   assert.equal((await call(client, 'list_agent_sessions', { include: 'content' })).sessions[0].activity.response, 'hello');
+  connection.close(); host.close();
+});
+
+test('the default list hides the working folder (cwd); title, repository and branch stay; cwd comes only with include "content"', async () => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'sessions.list': () => ({ sessions: [session({ cwd: 'C:/work/repo', repository: 'repo', branch: 'main', title: 'T' })] }),
+  });
+  const { client, connection } = await clientFor(host);
+  const plain = (await call(client, 'list_agent_sessions', {})).sessions[0];
+  assert.equal('cwd' in plain, false);
+  assert.deepEqual([plain.title, plain.repository, plain.branch], ['T', 'repo', 'main']);
+  const withContent = (await call(client, 'list_agent_sessions', { include: 'content' })).sessions[0];
+  assert.equal(withContent.cwd, 'C:/work/repo');
+  assert.equal(withContent.activity.response, 'hello');
   connection.close(); host.close();
 });
 
@@ -375,4 +390,83 @@ test('a read answered after more than a second still succeeds with no wait', asy
   assert.equal(out.done, true);
   assert.equal(out.response, 'hello');
   connection.close(); host.close();
+});
+
+// HA retirement rows 5 and 18: an agent behind this server can list, read, reply, launch and read usage, and
+// never answer, approve, trust or stop. The host refuses agent answers too (ScriptCredentialScopeTests); these
+// pins keep the server from ever offering or sending one.
+const ALL_CAPS = [...CAPS, 'usage'];
+const SURFACE = ['end_agent_session', 'get_launch_options', 'launch_agent_session', 'list_agent_sessions', 'read_agent_session', 'read_agent_usage', 'read_launch_result', 'reply_to_agent_session'];
+const FORBIDDEN_OPS = ['session.answer', 'sessions.approve', 'trust.answer', 'session.stop', 'sessions.focus'];
+
+test('with every capability the tool surface is exactly the known eight, and none can answer, approve, trust or send session.stop', async (t) => {
+  const host = await fakeHost({ hello: () => ({ capabilities: ALL_CAPS }), 'agent.hello': () => ({ principal: 'p' }) });
+  const { client, connection } = await clientFor(host);
+  t.after(() => { connection.close(); host.close(); });
+  const names = (await client.listTools()).tools.map((t) => t.name).sort();
+  assert.deepEqual(names, SURFACE);
+  assert.equal(names.some((n) => /answer|approve|trust|stop|decision|focus/i.test(n)), false);
+});
+
+test('using every tool sends the host only list, read, reply, launch and usage operations, never an answer, approval, trust answer or stop', async (t) => {
+  const trap = (op) => () => { throw new Error(`${op} must never be sent`); };
+  const host = await fakeHost({
+    hello: () => ({ capabilities: ALL_CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'sessions.list': () => ({ sessions: [session()] }), 'session.get': () => session(), 'session.reply': () => ({ outcome: 'delivered' }),
+    'session.launch': () => ({ outcome: 'started', session: 's9' }), 'launch.options': () => ({}), 'usage.get': () => ({ agents: [] }),
+    ...Object.fromEntries(FORBIDDEN_OPS.map((op) => [op, trap(op)])),
+  });
+  const { client, connection } = await clientFor(host);
+  t.after(() => { connection.close(); host.close(); });
+  const args = { list_agent_sessions: {}, read_agent_session: { session_id: 's1' }, reply_to_agent_session: { session_id: 's1', text: 'hi' },
+    end_agent_session: { session_id: '11111111-1111-4111-8111-111111111111' }, launch_agent_session: { prompt: 'go' }, read_launch_result: { request: 'r1' }, get_launch_options: {}, read_agent_usage: {} };
+  for (const name of SURFACE) { await client.callTool({ name, arguments: args[name] }); }
+  const sent = new Set(host.seen.map((r) => r.op));
+  for (const op of FORBIDDEN_OPS) { assert.equal(sent.has(op), false, op); }
+  assert.deepEqual([...sent].sort(), ['agent.hello', 'fleet.end', 'hello', 'launch.options', 'session.get', 'session.launch', 'session.reply', 'sessions.list', 'usage.get']);
+});
+
+const ZERO = '00000000-0000-0000-0000-000000000000';
+const SESSION = '11111111-1111-4111-8111-111111111111';
+
+test('end_agent_session is a thin wrapper over fleet.end with no grant and a fresh request id', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'fleet.end': (d) => ({ request: d.request, grant: d.grant, generation: 0, outcome: 'ended', sessionId: d.session }) });
+  const { client, connection } = await clientFor(host);
+  const out = await call(client, 'end_agent_session', { session_id: SESSION });
+  assert.deepEqual(host.seen.find((r) => r.op === 'fleet.end').data, { version: 1, request: out.request, grant: ZERO, session: SESSION });
+  assert.match(out.request, /^[0-9a-f-]{36}$/);
+  assert.equal(out.outcome, 'ended');
+  connection.close(); host.close();
+});
+
+test('end_agent_session reports the host refusal reason and never retries on its own', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'fleet.end': (d) => ({ request: d.request, grant: d.grant, generation: 0, outcome: 'refused', reason: 'scope' }) });
+  const { client, connection } = await clientFor(host);
+  const out = await call(client, 'end_agent_session', { session_id: SESSION });
+  assert.deepEqual([out.outcome, out.reason], ['refused', 'scope']);
+  assert.equal(host.seen.filter((r) => r.op === 'fleet.end').length, 1);
+  connection.close(); host.close();
+});
+
+test('end_agent_session needs a full session id, a UUID request, and an attributed connection', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }), 'fleet.end': () => ({ outcome: 'ended' }) });
+  const { client, connection } = await clientFor(host);
+  for (const args of [{}, { session_id: 'abcdef0123456789' }, { session_id: SESSION, request: 'not-a-uuid' }]) {
+    assert.equal((await client.callTool({ name: 'end_agent_session', arguments: args })).isError, true, JSON.stringify(args));
+  }
+  assert.equal(host.seen.some((r) => r.op === 'fleet.end'), false);
+  connection.close(); host.close();
+  const bare = await fakeHost({ hello: () => ({ capabilities: CAPS }) });
+  const anon = await clientFor(bare, { AGENT_BRIDGE_TOKEN: '' });
+  assert.equal((await anon.client.listTools()).tools.some((t) => t.name === 'end_agent_session'), false);
+  anon.connection.close(); bare.close();
+});
+
+test('endSession maps a lost pipe to unknown (same request kept) and a host error to refused', async () => {
+  const lost = await endSession({ request: async () => { throw new PipeError('timed out', 'unavailable'); } }, SESSION, 'r-1');
+  assert.deepEqual([lost.outcome, lost.request], ['unknown', 'r-1']);
+  const refused = await endSession({ request: async () => { throw new PipeError('no', 'refused'); } }, SESSION);
+  assert.equal(refused.outcome, 'refused');
 });

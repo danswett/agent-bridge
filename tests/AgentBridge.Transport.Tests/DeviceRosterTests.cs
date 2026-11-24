@@ -39,7 +39,7 @@ public class DeviceRosterTests
         var r = await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G"), Wire(w, "addB")]);
         Assert.Equal(["accepted", "accepted"], r!.Select(x => x.Verdict));
         var s = await roster.GetAsync(RosterFixture.Account);
-        Assert.Equal("observe", s!.Mode);
+        Assert.Equal(DeviceRoster.Observe, s!.Mode);
         Assert.Equal(2, s.Entries.Count);
         Assert.Equal(RosterFixture.Generation, s.Generation);
     }

@@ -106,7 +106,7 @@ public sealed partial class SessionView
             // A question still moving into view is held from the pointer until it has stopped.
             guard.Scrolled(DateTimeOffset.UtcNow);
             if (anchoring is not { } asked || Math.Abs(scroll.VerticalOffset - asked) >= 0.5) { TakeAnchor(); }
-            PinViewChanged(scroll);
+            PinViewChanged(scroll, final: !e.IsIntermediate);
             scrolling = e.IsIntermediate;
             if (!e.IsIntermediate)
             {
@@ -417,6 +417,7 @@ public sealed partial class SessionView
     void TakeAnchor()
     {
         anchor = null;
+        anchorHeld = false;
         if (ConversationScroll is not { } scroll || ConversationList.ItemsPanelRoot is not ItemsStackPanel panel || panel.FirstVisibleIndex < 0) { return; }
         var realised = new List<(int, double, double)>();
         for (var i = panel.FirstVisibleIndex; i <= Math.Min(panel.FirstVisibleIndex + 1, blocks.Count - 1); i++)
@@ -478,9 +479,7 @@ public sealed partial class SessionView
         if (!attached || !ConversationList.IsLoaded) { return; }
         if (RestoreReading()) { return; }
         if (pinEnd) { FollowPinnedEnd(); return; }
-        if (panning || scrolling || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
-            || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
-        if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
+        KeepAnchoredBlock();
     }
 
     static double Top(UIElement element, UIElement viewport) => element.TransformToVisual(viewport).TransformPoint(default).Y;

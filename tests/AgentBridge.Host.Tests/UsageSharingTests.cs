@@ -641,20 +641,50 @@ public sealed class UsageSharingTests : IAsyncLifetime
         desk.Store.Take([Claude(12, Now)], new UsageReader(oldId, "Old laptop"));
         await old.DisposeAsync();
         var phone = await relay.ConnectAsync(token, "Phone", "pwa");
-        await HostWait.UntilAsync(() => phone.Relay.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
+        // The desk too must have seen the laptop go offline before it is forgotten: a desk still showing it online would read "no longer
+        // listed offline" as the confirmation, and ask the forgotten laptop as a host (a second one asked).
+        await HostWait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == oldId) == true
+            && phone.Relay.Snapshot.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
 
         Assert.Null(await phone.Relay.ForgetAsync(oldId));
-        await HostWait.UntilAsync(() =>
-        {
-            var snap = desk.Device.Relay.Snapshot;
-            return snap.Known?.All(k => k.Id != oldId) == true && snap.Previous?.Known?.All(k => k.Id != oldId) == true;
-        }, "the desk to hear the forget confirmation", Patience);
+        await HostWait.UntilAsync(() => ForgetConfirmed(desk.Device.Relay.Snapshot, oldId), "the desk to hear the forget confirmation", Patience);
         await SeeAsync(desk.Device, vm.Device.Id);
         Assert.Equal(1, await desk.Peers.PassAsync());
 
         Assert.DoesNotContain(desk.Store.Entries, e => e.Agent == AgentKind.Claude);
         // The VM itself, not yet asked to look, still has it; the desk did not take it back.
         Assert.Contains(vm.Store.Entries, e => e.Agent == AgentKind.Claude);
+    }
+
+    // The relay's forget confirmation as a host reads it (UsagePeers.ForgetGone): two presence messages in a row that list the machine neither
+    // online nor offline. A machine that is merely still online is not offline-listed either, so presence is checked too.
+    static bool ForgetConfirmed(PresenceSnapshot snap, string id)
+    {
+        static bool Gone(PresenceSnapshot s, string id) => s.Known is not null && s.Presence.All(p => p.Id != id) && s.Known.All(k => k.Id != id);
+        return Gone(snap, id) && snap.Previous is { } before && Gone(before, id);
+    }
+
+    static PresenceSnapshot Message(bool online, bool offline, PresenceSnapshot? previous = null) => new(
+        online ? [new PresenceEntry("old", "Old laptop", "host", Now)] : [], offline ? [new KnownMachine("old", "Old laptop", "host", Now)] : [])
+    { Previous = previous };
+
+    [Fact]
+    public void A_laptop_still_online_is_not_a_forget_confirmation_even_when_it_is_not_listed_offline()
+    {
+        var online = Message(online: true, offline: false);
+
+        Assert.False(ForgetConfirmed(Message(online: true, offline: false, previous: online), "old"));
+    }
+
+    [Fact]
+    public void The_confirmation_is_two_messages_in_a_row_that_list_the_laptop_neither_online_nor_offline()
+    {
+        var offline = Message(online: false, offline: true);
+        var forgotten = Message(online: false, offline: false, previous: offline);
+
+        Assert.False(ForgetConfirmed(forgotten, "old"));
+        Assert.True(ForgetConfirmed(Message(online: false, offline: false, previous: forgotten), "old"));
+        Assert.False(ForgetConfirmed(new PresenceSnapshot([], null) { Previous = forgotten }, "old"));
     }
 
     sealed class Collector(Func<AgentUsage?> read) : IUsageCollector

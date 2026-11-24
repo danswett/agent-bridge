@@ -93,6 +93,11 @@ public sealed class HostControl
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
     }
 
+    internal object WorkspaceAdd(JsonElement data)
+    {
+        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
+    }
+
     readonly Action<string> log;
     readonly object gate = new();
     readonly DateTimeOffset startedAt;
@@ -264,11 +269,12 @@ public sealed class HostControl
                 {
                     throw new InvalidOperationException("a delivery or typing is still in progress; the host was not stopped, try again later");
                 }
-                ServedRequest.Current?.OnResponded(sent => { if (!sent) { prepared?.Dispose(); } });
-                return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; });
+                // Accepted: the host stops once this is answered, or even if the answer cannot be sent (RunsIfUnsent, #4134), so the stop lease taken above
+                // is never given back here: a Stop the client did not hear is still a Stop.
+                return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; }, RunsIfUnsent: true);
             case HostOps.Restart:
                 log("restarting: asked by the app");
-                return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
+                return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; }, RunsIfUnsent: true);
             case HostOps.UpdateReport when options.Updates is not null:
                 return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
             case HostOps.UpdateDepart when options.Updates is not null:

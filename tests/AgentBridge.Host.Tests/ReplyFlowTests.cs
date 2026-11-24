@@ -1062,14 +1062,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_first_reply_is_held_as_still_starting_and_never_typed_while_the_window_cannot_be_read_or_shows_no_box(bool readable)
+    public async Task A_first_reply_is_held_and_never_typed_while_the_window_cannot_be_read_or_shows_no_box_and_says_which(bool readable)
     {
         var (transcript, ch) = await FreshAsync(pid => pid == 101 && readable ? ["", "  Starting…"] : null);
 
         var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
 
-        // Creative's words (#1018): the clients read it as "The machine refused this reply: {reason}."
-        Assert.Equal(("refused", "the session is still starting, so it can't take a reply yet. Send it again in a moment"), (outcome, reason));
+        // The clients read it as "The machine refused this reply: {reason}." (#1018); the words name the check that failed (#3538).
+        Assert.Equal(("refused", readable ? FirstReplyWords.NoInputBox : FirstReplyWords.ScreenUnreadable), (outcome, reason));
         Assert.DoesNotContain("at the machine", reason);
         Assert.Empty(injector.Plans);
         Assert.False(File.Exists(transcript));
@@ -1787,7 +1787,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed()
+    public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_for_an_unclassified_sender_with_only_its_length_and_nothing_typed()
     {
         injector.Screen = _ => CopilotBox("half a thought \u202E");
         var ch = await OpenAsync();
@@ -1795,7 +1795,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
         Assert.Equal("refused", outcome);
-        Assert.Equal("something is already typed in Copilot's input box at the machine (16 characters: \"half a thought \\u202E\"); send or clear it there first", reason);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (16 characters, not shown here); send or clear it there first", reason);
         Assert.Empty(injector.Plans);
     }
 
@@ -2119,9 +2119,9 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await ReplyAsync(ch, "go on");
 
-        // The person's own client is shown it; the host's log says its length only.
+        // An unclassified sender is told its length only (a person-class reply is shown it: ReplyClearTests); the host's log says its length only.
         Assert.Equal("refused", outcome);
-        Assert.Equal($"something is already typed in Copilot's input box at the machine (28 characters: \"token {Secret}\"); send or clear it there first", reason);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (28 characters, not shown here); send or clear it there first", reason);
         await HostWait.UntilAsync(() => { lock (logged) { return logged.Any(m => m.StartsWith("reply ", StringComparison.Ordinal) && m.Contains("refused", StringComparison.Ordinal)); } }, "the outcome line", Patience);
         lock (logged)
         {
