@@ -197,4 +197,23 @@ public sealed class ShardWeightsTests : IDisposable
 
         ShardPlanFile.Parse(File.ReadAllText(file));
     }
+
+    // Found by the mutation order (#4324): an existing directory with no TRX, and fewer than two shards, are errors; small projects go heaviest first onto the lightest shard.
+    [Fact]
+    public void No_trx_in_an_existing_directory_and_fewer_than_two_shards_are_errors()
+    {
+        Assert.Throws<ArgumentException>(() => ShardWeights.Read(dir));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ShardWeights.Generate(new() { ["A.Tests"] = new() { ["A.OneTests"] = 1.0 } }, 1, 60));
+    }
+
+    [Fact]
+    public void Small_projects_go_heaviest_first_onto_the_lightest_shard()
+    {
+        foreach (var (name, seconds) in new[] { ("P1.Tests", 30.0), ("P2.Tests", 20.0), ("P3.Tests", 10.0), ("P4.Tests", 10.0) })
+            Trx(name, ($"{name}.OneTests", "x", seconds));
+        var plan = ShardPlanFile.Parse(ShardWeights.Generate(ShardWeights.Read(dir), 3, 60));
+
+        Assert.Equal(ShardRun.All, plan.For("P1.Tests", 1).Run);
+        Assert.Equal(ShardRun.All, plan.For("P2.Tests", 2).Run);
+    }
 }
