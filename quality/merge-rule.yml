@@ -99,6 +99,8 @@ main_green:
     - product
     - ha-integration
     - light
+    - design-gen
+    - playwright-apt
     - pwa-ui (chromium 1/3)
     - pwa-ui (chromium 2/3)
     - pwa-ui (chromium 3/3)

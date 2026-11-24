@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # download.sh against stand-ins for npx, sudo and apt-get: nothing here downloads, installs or
 # touches the runner's own apt configuration. The real timeout does the timing, cut to a second.
-# Run by ci.yml's light job (quality/catalog.yml, playwright-apt).
+# Run by ci.yml's playwright-apt job (quality/catalog.yml, playwright-apt).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)

@@ -900,7 +900,7 @@ suites:
     # and ui.md's motion section. So all of pwa/ and the app; the job takes under a minute.
     triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, src/AgentBridge.App.Core/AppAssets.cs, build/pack-app.ps1, build/app-channels.ps1, docs/design/ui.md]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
-    where: ci.yml light
+    where: ci.yml design-gen
     status: exists
 
   - id: pwa-unit
@@ -982,7 +982,7 @@ suites:
     # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
-    where: ci.yml light
+    where: ci.yml playwright-apt
     status: exists
 
   - id: pwa-pages
@@ -1488,7 +1488,7 @@ suites:
     runner: local
     triggers: [design/**, tools/design-gen/**]
     command: node --test tools/design-gen/test/contrast.test.mjs
-    where: ci.yml light
+    where: ci.yml design-gen
     status: exists
 
   - id: a11y-winui

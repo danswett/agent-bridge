@@ -90,6 +90,8 @@ jobs:
       app: ${{ steps.select.outputs.app }}
       app-installer: ${{ steps.select.outputs.app-installer }}
       light: ${{ steps.select.outputs.light }}
+      design-gen: ${{ steps.select.outputs.design-gen }}
+      playwright-apt: ${{ steps.select.outputs.playwright-apt }}
       pwa-ui: ${{ steps.select.outputs.pwa-ui }}
       pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
       suites: ${{ steps.select.outputs.suites }}
@@ -255,7 +257,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration app app-installer light pwa-ui pwa-e2e
+          JOBS: product ha-integration app app-installer light design-gen playwright-apt pwa-ui pwa-e2e
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -1242,9 +1244,6 @@ jobs:
     # The small Linux checks, on one runner instead of one each (#459): each step runs when its
     # suite is selected, and every selected one runs even after another fails. When the whole
     # ring runs, every step runs, whatever the plan selected (#487).
-    #  - design-gen, a11y-contrast: every client's generated copy matches design/, so a token or
-    #    SVG changed without regenerating fails here, and every theme meets the contrast rules in
-    #    design/tokens.json (design/README.md);
     #  - lab-nightly: the held nightly lab run's gate and cut verdict, offline (lab-nightly.yml);
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
@@ -1256,8 +1255,6 @@ jobs:
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
     #    server, offline (tools/lab/forms-soak);
-    #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
-    #    when it should (.github/actions/playwright-system-packages);
     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
     #    offline (lab-release-verify.yml);
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
@@ -1276,12 +1273,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - name: Every generated file matches design/
-        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
-        run: node tools/design-gen/generate.mjs --check
-      - name: Contrast, the SVG subset and the generated files
-        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
-        run: node --test "tools/design-gen/test/*.test.mjs"
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
@@ -1362,9 +1353,6 @@ jobs:
       - name: MCP server tests
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
         run: node --test "mcp/test/*.test.mjs"
-      - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
-        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
-        run: bash .github/actions/playwright-system-packages/test.sh
       - name: The lab release verification's gate refuses every run today, and its verdict passes only the release asked for
         # Offline: nothing reaches Azure or GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-release-verify')) }}
@@ -1506,6 +1494,42 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
           fi
+
+  # Every client's generated copy matches design/, so a token or SVG changed without regenerating fails here, and every theme meets the contrast rules in design/tokens.json
+  # (design/README.md): the design-gen and a11y-contrast suites. Their two steps were the light job's longest, 147-232 s of its serial run (#4104); a job of their own, beside it,
+  # still only when the plan selects either suite (a pull request that doesn't touch design/ or tools/design-gen skips it) or on the whole ring.
+  design-gen:
+    needs: plan
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.design-gen == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Every generated file matches design/
+        run: node tools/design-gen/generate.mjs --check
+      # Both run even when the first fails, as they did in light.
+      - name: Contrast, the SVG subset and the generated files
+        if: ${{ !cancelled() }}
+        run: node --test "tools/design-gen/test/*.test.mjs"
+
+  # The Playwright system packages' download and offline install checks, on a runner of their own (#4104): they took 45-49 s of the light job's serial run.
+  # Run when the plan selects the playwright-apt suite (quality/catalog.yml), or on the whole ring.
+  playwright-apt:
+    needs: plan
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.playwright-apt == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
+        run: bash .github/actions/playwright-system-packages/test.sh
 
   pwa-ui:
     # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
@@ -1733,7 +1757,7 @@ jobs:
     # new gate's check only once every job it needs is done; under the same name, the draft's
     # green gate would stand for the whole head until then, and a merge could go through on it.
     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
-    needs: [plan, product, ha-integration, app, app-installer, light, pwa-ui, pwa-e2e]
+    needs: [plan, product, ha-integration, app, app-installer, light, design-gen, playwright-apt, pwa-ui, pwa-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

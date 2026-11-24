@@ -562,7 +562,7 @@ public class CiPlanTests
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
         Assert.Equal(new[] { "plan", "product", "ha-integration", "app",
-            "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+            "app-installer", "light", "design-gen", "playwright-apt", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
         Assert.Equal(new[] { "plan", "app" },
@@ -579,5 +579,80 @@ public class CiPlanTests
         Assert.Contains("Write-AppDistributionEvidence", steps, StringComparison.Ordinal);
         Assert.Contains("-TimeoutSeconds 720", steps, StringComparison.Ordinal);
         Assert.Contains("${{ matrix.artifact }}-${{ env.APP_VERSION }}", steps, StringComparison.Ordinal);
+    }
+
+    // #4104: the Playwright system-package checks (test.sh, 45-49 s) and design-gen (its --check and its tests, 147-232 s) were the light job's two longest steps, run one after another. Each has a job of
+    // its own now, beside light, on the plan like any other.
+    [Theory]
+    [InlineData("playwright-apt", "playwright-system-packages/test.sh")]
+    [InlineData("design-gen", "tools/design-gen/test")]
+    public void A_check_that_was_a_light_step_runs_in_a_job_of_its_own_that_the_quality_gate_waits_for(string job, string script)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var workflow = (YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode;
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+        Assert.True(jobs.Children.ContainsKey(job), $"ci.yml has no {job} job");
+        var own = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs[job];
+        Assert.Equal("plan", own["needs"].ToString());
+        Assert.Equal($"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{job} == 'true'", own["if"].ToString());
+        Assert.Contains(script, own["steps"].ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(script, ((YamlDotNet.RepresentationModel.YamlMappingNode)jobs["light"])["steps"].ToString(), StringComparison.Ordinal);
+        var needs = ((YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"])["needs"]).Children.Select(n => n.ToString());
+        Assert.Contains(job, needs);
+    }
+
+    // The gate's own script, as ci.yml has it, against needs where the plan selected one of them: a job that failed or was skipped stops it, one that passed does not.
+    // Linux's bash and jq are what the gate runs on; the other runners here don't have to have them.
+    [Theory]
+    [InlineData("playwright-apt", "failure", 1, "failed or cancelled: playwright-apt")]
+    [InlineData("playwright-apt", "cancelled", 1, "failed or cancelled: playwright-apt")]
+    [InlineData("playwright-apt", "skipped", 1, "selected but did not succeed: playwright-apt (skipped)")]
+    [InlineData("playwright-apt", "success", 0, "")]
+    [InlineData("design-gen", "failure", 1, "failed or cancelled: design-gen")]
+    [InlineData("design-gen", "cancelled", 1, "failed or cancelled: design-gen")]
+    [InlineData("design-gen", "skipped", 1, "selected but did not succeed: design-gen (skipped)")]
+    [InlineData("design-gen", "success", 0, "")]
+    public void The_quality_gate_fails_when_a_selected_split_out_job_failed_or_was_skipped(string job, string result, int exit, string said)
+    {
+        if (!OperatingSystem.IsLinux()) { return; }
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+        var check = ((YamlDotNet.RepresentationModel.YamlSequenceNode)gate["steps"]).Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
+            .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
+        var names = ((YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"]).Children.Select(n => n.ToString()).Where(n => n != "plan").ToList();
+        var outputs = string.Join(",", names.Select(n => $"\"{n}\":\"{(n == job ? "true" : "false")}\"").Append("\"whole-ring\":\"false\""));
+        var needs = "{" + string.Join(",", names.Select(n => $"\"{n}\":{{\"result\":\"{(n == job ? result : "skipped")}\"}}").Prepend($"\"plan\":{{\"result\":\"success\",\"outputs\":{{{outputs}}}}}")) + "}";
+        var start = new System.Diagnostics.ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add("-ec");
+        start.ArgumentList.Add(check["run"].ToString());
+        start.Environment["NEEDS"] = needs;
+        start.Environment["PR_OFF"] = "";
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("bash did not start.");
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.True(process.ExitCode == exit, output);
+        Assert.Contains(said, output, StringComparison.Ordinal);
+    }
+
+    // main-red and the merge rule's main check read quality/merge-rule.yml's job list: every job the gate waits for, bar the plan and the post-merge installer, is in it.
+    [Fact]
+    public void Every_job_the_quality_gate_waits_for_is_one_the_merge_rule_watches_on_main()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlDotNet.RepresentationModel.YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
+        var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
+        var needs = ((YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"])["needs"]).Children.Select(n => n.ToString());
+        var watched = MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).MainGreen.Jobs;
+
+        var unwatched = needs.Where(n => n is not ("plan" or "app-installer") && !watched.Any(w => w == n || w.StartsWith(n + " (", StringComparison.Ordinal)));
+
+        Assert.Empty(unwatched);
     }
 }
