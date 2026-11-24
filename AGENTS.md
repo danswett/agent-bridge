@@ -39,6 +39,7 @@ Several agent sessions often work here at once.
   git -C <primary clone> worktree add -b <branch> <worktrees root>/agent-bridge-<slug> origin/main
   ```
 - Stage only the files you changed. Never `git add -A` and never `git stash`. Never touch a branch or worktree you did not create.
+- Never put the owner's name or email in any command or file (no `git -c user.email` or `user.name`, no `--author`). Git identity is already configured on the host: use a plain `git commit`. A personal identity in a command trips a hidden privacy prompt that stalls the session.
 - Remove a worktree you created, by name, once its PR is merged (`git worktree remove`, without `--force`). Never sweep a shared worktree root.
 - Agent commits end with the trailers `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` and `Copilot-Session: <your session id>`.
 

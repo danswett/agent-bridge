@@ -42,4 +42,8 @@ public class OwnerIdentityScanTests
             .ToList();
         Assert.True(hits.Count == 0, "owner identity in: " + string.Join(", ", hits));
     }
+
+    [Fact]
+    public void Agent_rules_state_the_plain_commit_rule() =>
+        Assert.Contains("plain `git commit`", File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "AGENTS.md")));
 }
