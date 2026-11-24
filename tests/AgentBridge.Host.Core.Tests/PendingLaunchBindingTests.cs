@@ -324,6 +324,31 @@ public class PendingLaunchBindingTests
         Assert.Null(after.Held);
     }
 
+    // The saved record is not proof: what runs under the saved pid and start must still be a terminal with a readable start.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_restart_does_not_retake_a_binding_for_a_server_or_a_process_whose_start_cannot_be_read(bool unreadableStart)
+    {
+        using var vm = new Machine();
+        var state = Path.Combine(vm.F.Root, "profile", "sessions-listed.json");
+        vm.Register(C);
+        await using (var before = vm.F.Source(stateFile: state))
+        {
+            before.PendingCodexLaunches = () => [.. vm.Launches];
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+        vm.Launches.Clear();
+        if (unreadableStart) { vm.F.Processes.RunUndated(AgentKind.Codex, Launched, LaunchedCommand); }
+        else { vm.F.Processes.Run(AgentKind.Codex, Launched, "codex.exe app-server --listen unix://", vm.Started); }
+
+        await using var after = vm.F.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+    }
+
     [Fact]
     public async Task On_Windows_a_folder_is_the_same_whatever_its_case()
     {

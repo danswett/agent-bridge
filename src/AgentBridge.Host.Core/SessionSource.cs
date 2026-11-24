@@ -725,10 +725,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             bound.Add(new DiscoveredSession(r.SessionId, AgentKind.Codex, transcript, null, process.Id, r, process.StartedAt));
         }
 
-        // A host that has just started: what it listed when it last ran, if that process (pid and start) still runs.
+        // A host that has just started: what it listed when it last ran, if that process (pid and start) still runs
+        // as a terminal with a readable start (the saved record alone is not trusted to name a server or another Codex).
         foreach (var s in _remembered ?? [])
         {
-            if (s.Agent == AgentKind.Codex && s.ProcessId is { } pid && s.ProcessStartedAt is not null && newest.Any(r => r.SessionId == s.Id)) { _pidlessBound.TryAdd(s.Id, (pid, s.ProcessStartedAt)); }
+            if (s.Agent == AgentKind.Codex && s.ProcessId is { } pid && s.ProcessStartedAt is not null && newest.Any(r => r.SessionId == s.Id)
+                && running.TryGetValue(pid, out var known) && known.StartedAt is not null && CodexLockDiscovery.IsTerminal(known.CommandLine)) { _pidlessBound.TryAdd(s.Id, (pid, s.ProcessStartedAt)); }
         }
         var unbound = new List<Registration>();
         foreach (var r in newest)
