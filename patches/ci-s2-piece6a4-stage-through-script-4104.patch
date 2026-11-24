@@ -1,6 +1,6 @@
-From c5153d70f49b59b6bbca8a57a71befde8db3ee5e Mon Sep 17 00:00:00 2001
+From 8073463e47080a9e84d3af19572065fa235d6a6b Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:46 -0800
+Date: Mon, 23 Nov 2026 23:24:19 -0800
 Subject: [PATCH] s 6a4
 
 ---
@@ -83,10 +83,10 @@ index 42a24cc1b..f6624a6a3 100644
          if: always() && steps.installed-selftest-text.outcome == 'success'
          with:
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index 9f2184ad5..6d0cd0975 100644
+index f8f2f8bac..86aa19161 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
-@@ -570,6 +570,24 @@ jobs:
+@@ -566,6 +566,24 @@ jobs:
          run: |
            Write-Output "::error title=app-selftest (win-arm64)::the self-test failed on both attempts (#2026)"
            exit 1
@@ -111,7 +111,7 @@ index 9f2184ad5..6d0cd0975 100644
  
    app-installer:
      # The packed Windows app installed the way a person installs it (#1766): the Setup.exe app-pack built in THIS run, run silently per user into its own channel and
-@@ -653,6 +671,27 @@ jobs:
+@@ -649,6 +667,27 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
