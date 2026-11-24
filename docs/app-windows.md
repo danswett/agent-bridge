@@ -1197,27 +1197,31 @@ pre-releases" in Settings stops it finding them until there are full releases.
 
 ### The release train (#2225)
 
-A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
-(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
-Merging never waits for it and it never blocks a merge.
+**Design, not yet built here:** `.github/workflows/release-train.yml` has never existed on `main`; what exists is the commit selector,
+`build/select-release-commit.ps1`, and its fixtures. The train is to be a second way to publish, apart from merging: it is to run hourly
+(and by hand, `workflow_dispatch`) and publish the newest `main` commit whose FAST lane and FULL lane both passed (below).
+Merging is never to wait for it, and it is never to block a merge. Everything below is that design unless it says the selector does it.
 
 **Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
 superseded run that went green published nothing when `main`'s head had since changed the
 app. While merges arrive faster than the app's CI finishes, nothing was released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. Per-commit groups
+15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. Per-commit groups
 (`ci-main-<sha>`, above) stopped the cancelling, and since #4104 `ci.yml`'s `publish` no longer stands aside
 for a later app change either, so a green run publishes its own commit without waiting for the train.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
-  - **FAST:** `quality-gate` and the x64 `app` job (the build) succeeded; a cancelled or superseded run counts only if those
-    both did. **And FULL** (`full.yml`, S2, #4104: the lane that never gates a merge): the same commit's FULL run finished with the
-    x64 self-test, pack and installer (`app-selftest (win-x64)`, `app-pack (win-x64)`, `app-installer (win-x64)`) succeeded and no
-    other job red, Arm64's apart. A commit with no FULL run yet is not publishable; the train dispatches one, and a later hourly
-    run picks it up. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, `app-selftest`, and
-    `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
-    publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
+  - **FAST:** `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **And FULL**, once `full.yml` exists (S2, #4104; not built yet, see quality/README.md; the selector already requires it): the
+    same commit's FULL run, found by its `head_sha`, finished with `full-gate` (the aggregate, which fails when a lane it selected was skipped),
+    the x64 self-test, pack and installer, and the **Arm64 pack** succeeded, and no other job red. **What runs the app on Arm64 is waived**: its
+    self-test and tests, and its installer (it installs and starts the app: the Arm64 self-test, #4159), **recorded, never silent**: the publish summary lists
+    each waived Arm64 result, and a red one also opens the full-red alert (to be written) while publish continues. **x64 is strict**: its self-test, pack, installer and
+    SBOM are all required, and an absent or skipped x64 job is no pass. The Arm64 package is never optional, and its SBOM must be there. A commit with no FULL run yet is not publishable; the train
+    is to dispatch one, and a later hourly run picks it up. **Arm64 does not gate** the self-test (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its self-test, tests and installer (the Arm64 `app` self-test, the
+    Arm64 `app-installer`, and `product` on Windows on Arm) still run and report, but a run that is red only for those is
+    publishable (its Arm64 pack must still have succeeded), but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
     reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
   - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
@@ -1227,25 +1231,25 @@ for a later app change either, so a green run publishes its own commit without w
     not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (that commit's FULL run builds them and keeps them 30 days); the version is read from their names.
+  - the **packages and the SBOMs** of both architectures (x64 and Arm64) are all there, unexpired (that commit's FULL run builds them and keeps them 30 days), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
   **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
-* **How.** The train downloads that commit's FULL run's packages (the bytes CI built and checked, never a
+* **How (design).** The train is to download that commit's FULL run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
-  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  commit. It is to share `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
   train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
-  stands aside for a later app change any more (#4104): the train publishes the newest verified
+  stands aside for a later app change any more (#4104): the train is to publish the newest verified
   commit, and a later change is the next verified commit's to publish.
-* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
-  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
-  unsigned, until it gains the sign step.
+* **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+  unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 * **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
-  so a train release carries neither until they are added.
+  so a train release is to carry neither until they are added.
 
 ### Signing
 
