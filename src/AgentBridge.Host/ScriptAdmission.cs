@@ -18,7 +18,7 @@ public sealed class ScriptAdmission(AgentCredentials credentials, AgentAuditLog?
     static readonly TimeSpan Lifetime = TimeSpan.FromHours(24);
     static readonly TimeSpan Slack = TimeSpan.FromSeconds(1);
 
-    sealed record Open(int Pid, DateTimeOffset Started, string Principal, string Name, DateTimeOffset At);
+    sealed record Open(int Pid, DateTimeOffset Started, string Principal, string Name, DateTimeOffset At, IReadOnlyList<string> Files);
 
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly object gate = new();
@@ -36,7 +36,8 @@ public sealed class ScriptAdmission(AgentCredentials credentials, AgentAuditLog?
             {
                 var name = data.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
                 if (name is null || !data.TryGetProperty("version", out var v) || !v.TryGetInt32(out var version)) { throw Refused(); }
-                return new { admission = Admit(name, version, caller).ToString("D"), version = Version };
+                var admitted = Admit(name, version, caller);
+                return new { admission = admitted.ToString("D"), version = Version, files = FilesOf(admitted) };
             }
             if (op == FinishedOp && data.TryGetProperty("admission", out var a) && a.ValueKind == JsonValueKind.String
                 && Guid.TryParseExact(a.GetString(), "D", out var id) && data.TryGetProperty("exit", out var e) && e.TryGetInt32(out var exit))
@@ -62,10 +63,13 @@ public sealed class ScriptAdmission(AgentCredentials credentials, AgentAuditLog?
         {
             foreach (var stale in open.Where(p => now - p.Value.At > Lifetime).Select(p => p.Key).ToList()) { open.Remove(stale); }
             if (open.Count >= MaxOpen) { open.Remove(open.OrderBy(p => p.Value.At).First().Key); }
-            open[id] = new(self.Id, self.StartedAt!.Value, principal, name, now);
+            open[id] = new(self.Id, self.StartedAt!.Value, principal, name, now, credential.ScheduledTask?.Files.Select(file => file.Path).ToArray() ?? []);
         }
         return id;
     }
+
+    // The files the host pinned for this admission, launcher first: what the launcher compares its own argv with.
+    IReadOnlyList<string> FilesOf(Guid admission) { lock (gate) { return open.TryGetValue(admission, out var entry) ? entry.Files : []; } }
 
     public void Finished(Guid admission, int exit, ProcessAncestry caller)
     {

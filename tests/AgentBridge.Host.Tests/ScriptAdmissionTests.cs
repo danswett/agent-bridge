@@ -157,6 +157,8 @@ public sealed class ScriptAdmissionTests : IDisposable
         var (admission, _, _) = Open();
         var admitted = JsonSerializer.SerializeToElement(Handle(admission, ScriptAdmission.AdmitOp, JsonSerializer.SerializeToElement(new { name = "dispatcher", version = 1 }), Caller()));
         var id = Guid.Parse(admitted.GetProperty("admission").GetString()!);
+        // The answer carries the files the host pinned, launcher first, so the launcher can refuse an argv that differs (#4524).
+        Assert.Equal([Launcher, Pwsh, Script], admitted.GetProperty("files").EnumerateArray().Select(e => e.GetString()));
         foreach (var bad in new object[] { new { name = "dispatcher" }, new { name = 5, version = 1 }, new { name = "dispatcher", version = 1, extra = 1 } })
         { Assert.Equal("refused: refused", Closed(() => Handle(admission, ScriptAdmission.AdmitOp, JsonSerializer.SerializeToElement(bad), Caller()))); }
         foreach (var bad in new object[] { new { admission = id }, new { admission = "nope", exit = 0 }, new { admission = id, exit = "x" } })
