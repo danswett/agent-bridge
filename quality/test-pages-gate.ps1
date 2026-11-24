@@ -135,7 +135,7 @@ function WorkflowGate(
     $runs, [string]$relation = 'identical', [string]$sha = $head, [switch]$Unreadable,
     [int]$TotalCount = 0, [switch]$AncestryError, [string]$Trigger = 'schedule',
     [switch]$NoCandidate, [string]$MainStatus = 'ahead', [switch]$MainError, [string]$AppAtRoot = 'true',
-    [switch]$FullLane, [switch]$NoFullRun
+    [switch]$FullLane, [switch]$NoFullRun, [string]$FullEvent = 'workflow_run', [string]$FullBranch = 'main'
 ) {
     $dir = Join-Path ([IO.Path]::GetTempPath()) "pages-gate-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory $dir | Out-Null
@@ -146,7 +146,7 @@ function WorkflowGate(
     $fastJobs = $jobs; $fullReplies = @{}
     if ($FullLane -or $NoFullRun) {
         $fastJobs = @($jobs | Where-Object { $_.name -in @('plan', 'product (ubuntu-latest)') })
-        $fullRuns = if ($NoFullRun) { @() } else { @(@{ id = 77; conclusion = 'success'; head_sha = $sha; event = 'workflow_run'; head_branch = 'main' }) }
+        $fullRuns = if ($NoFullRun) { @() } else { @(@{ id = 77; conclusion = 'success'; head_sha = $sha; event = $FullEvent; head_branch = $FullBranch }) }
         $fullReplies = @{ "actions/workflows/full.yml/runs?head_sha=$sha&per_page=20" = @{ workflow_runs = $fullRuns }
             'actions/runs/77/jobs?filter=latest&per_page=100' = @{ jobs = @($jobs | Where-Object { $_.name -notin @('plan', 'product (ubuntu-latest)') }) } }
     }
@@ -182,8 +182,9 @@ function WorkflowGate(
         $output = @(Get-Content $env:GITHUB_OUTPUT); $decision = @($output | Where-Object { $_ -match '^deploy=(true|false)$' })
         if ($decision.Count -ne 1 -or @($calls | Where-Object { -not $replies.ContainsKey($_) }).Count) { throw 'the gate must emit exactly one decision using only mocked APIs' }
         $summary = @(Get-Content $env:GITHUB_STEP_SUMMARY)
-        if ($Trigger -eq 'workflow_dispatch' -or $NoCandidate -or $NoFullRun) {
-            $expectedCalls = if ($Trigger -eq 'workflow_dispatch') { 0 } elseif ($NoFullRun) { 3 } else { 2 }
+        $fullIgnored = $NoFullRun -or $FullBranch -ne 'main'
+        if ($Trigger -eq 'workflow_dispatch' -or $NoCandidate -or $fullIgnored) {
+            $expectedCalls = if ($Trigger -eq 'workflow_dispatch') { 0 } elseif ($fullIgnored) { 3 } else { 2 }
             if ($output.Count -ne 1 -or $calls.Count -ne $expectedCalls -or $summary.Count) { throw 'manual dispatch and no-candidate exits must not emit a tested SHA or read deployment evidence' }
         } else {
             if ($output -notcontains "sha=$sha" -or @($calls | Where-Object { $_ -eq $historyPath }).Count -ne 1) { throw 'an automatic gate must emit its tested SHA after one bounded history read' }
@@ -235,6 +236,9 @@ foreach ($trigger in @('schedule', 'workflow_run')) {
 }
 if ((WorkflowGate $manual 'ahead' ('c' * 40) -FullLane) -ne 'deploy') { throw 'a commit whose PWA jobs passed in its FULL run did not deploy' }
 if ((WorkflowGate @() -NoFullRun) -ne 'skip') { throw 'Pages deployed on the FAST run alone' }
+# A by-hand FULL run on main at the commit counts (a workflow_run run reports main's tip, so only it names an older commit); one on a BRANCH never does: no one deploys a branch's PWA by dispatching FULL on it (#4503).
+if ((WorkflowGate $manual 'ahead' ('c' * 40) -FullLane -FullEvent workflow_dispatch) -ne 'deploy') { throw 'a by-hand FULL run on main at the commit did not deploy' }
+if ((WorkflowGate $manual 'ahead' ('c' * 40) -FullLane -FullEvent workflow_dispatch -FullBranch topic) -ne 'skip') { throw 'a by-hand FULL run on a BRANCH deployed a branch''s PWA' }
 if ((WorkflowGate @() -Trigger workflow_dispatch -NoCandidate) -ne 'deploy') { throw 'manual dispatch must remain available without automatic CI evidence' }
 # The rollback fence itself (#4369): held only while a rollback has no later successful resume; an unreadable or truncated history holds, and says so loudly.
 $rollbackScript = Join-Path $PSScriptRoot 'pages-rollback.ps1'
