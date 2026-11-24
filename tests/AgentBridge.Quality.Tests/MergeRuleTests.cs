@@ -1082,6 +1082,7 @@ public class MergeRuleTests
     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
     //   verdict and a finished one needn't re-judge anything, #2454),
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
     //   Stale PWA alarm (schedule every 4 h and dispatch, on main: reads the served site and main's history, judges no pull request, #4369).
     //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
@@ -1089,7 +1090,7 @@ public class MergeRuleTests
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Stale PWA alarm", "Update gap",
+        "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Stale PWA alarm", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)

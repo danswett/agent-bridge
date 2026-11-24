@@ -51,6 +51,7 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        public bool Watch;
         public string? Transcript;
         public SessionFiles? Files(string id) => Transcript is null ? null : new SessionFiles(Agent, Transcript, null);
         BusyQueueStore? busyStore;
@@ -69,7 +70,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
+            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store, Watcher = Watch ? new BusyQueueWatcher(Store, Clock) : null };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -126,8 +127,8 @@ public sealed class AgentLiteDeliveryTests
     }
 
     static Task<LiteDelivery> Send(Fixture f, string text = "hi") => f.Build().DeliverAsync(Envelope(text), text, default);
-    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null) => new(
-        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flag }, () => true,
+    static LaneComposition Composition(Fixture f, bool flag = true, Func<DeliveryJournal>? open = null, Func<bool>? flagNow = null) => new(
+        () => new AgentMessagingSettings { Remote = AgentMessagingSettings.OwnAccount, RemoteSet = true, LaneDelivery = flagNow?.Invoke() ?? flag }, () => true,
         new DeliveryGate(), f, new LaneScreens((_, _) => Task.FromResult<(bool? Idle, bool? Empty)>((f.Status == SessionStatus.Idle, f.Rows == EmptyBox)), f.Clock),
         "unused", f.Log.Add, f.Clock, open ?? (() => new DeliveryJournal(new byte[32], _ => { }, f.Log.Add)));
 
@@ -165,6 +166,49 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(LiteCodes.ComposerNotEmpty, result.Code);
         Assert.Null(result.Outcome);
         Assert.False(lane.HasPending(Target));
+    }
+
+    [Fact]
+    public async Task With_the_lane_flag_on_one_delivery_writes_exactly_one_lite_deliver_row_and_the_rate_cap_holds()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        var results = new List<LiteDelivery>();
+        for (var i = 0; i < LiteDeliver.MaxPerMinute + 1; i++)
+        { var r = Guid.NewGuid().ToString("D"); results.Add(await deliver.DeliverAsync(Envelope("hi", request: r), "hi", default)); }
+        // Six accepted (pending in the lane), the seventh in the same minute refused busy; one outcome row ("lite deliver: from") per delivery either way.
+        Assert.Equal(LiteDeliver.MaxPerMinute, results.Count(r => r.Outcome == LiteKind.Pending));
+        Assert.Equal(LiteCodes.Busy, results[^1].Code);
+        Assert.Equal(LiteDeliver.MaxPerMinute + 1, f.Log.Count(l => l.StartsWith("lite deliver: from", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(true, true, 1)]
+    [InlineData(false, true, 0)]
+    [InlineData(true, false, 0)]
+    public async Task The_lane_fence_needs_the_flag_and_the_target_still_current(bool flagAtFence, bool currentAtFence, int typed)
+    {
+        // The composition's fence is Enabled() && current(): either one false types nothing (a || would type in both refusals).
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        var flag = true;
+        using var lane = Composition(f, flagNow: () => flag);
+        Assert.Equal(LiteKind.Pending, (await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default)).Outcome);
+        var scheduler = lane.Resolve().Scheduler!;
+        flag = flagAtFence; f.FenceCurrent = currentAtFence;
+        await lane.Screens.RefreshAsync(Target);
+        await scheduler.DeliverNextAsync(Target);
+        Assert.Equal(typed, f.Typed.Count);
+    }
+
+    [Fact]
+    public async Task A_journal_write_that_fails_at_offer_still_writes_a_lite_deliver_row()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f, open: () => new DeliveryJournal(new byte[32], _ => throw new IOException("disk full"), f.Log.Add));
+        try { await f.Build(composition: lane).DeliverAsync(Envelope("hi"), "hi", default); } catch (IOException) { }
+        Assert.Single(f.Log, l => l.StartsWith("lite deliver: from", StringComparison.Ordinal));
+        Assert.Empty(f.Typed);
     }
 
     [Fact]
@@ -971,6 +1015,34 @@ public sealed class AgentLiteDeliveryTests
             File.AppendAllText(path, TakenRow(framed.Replace("request ", "request 0")) + "\n");   // another request's entry
             Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(l2));
             Assert.Single(f.Typed);
+        }
+        finally { File.Delete(path); }
+    }
+    // D2b-2b2 (#3856): with the active watch on, a prompt Claude takes is noticed without another send; a silent one is reported watchEnded and stays held.
+    static async Task Tick(Fixture f, Func<bool> done, TimeSpan limit)
+    {
+        for (var spent = TimeSpan.Zero; spent <= limit && !done(); spent += BusyQueueWatcher.Poll) { f.Clock.Advance(BusyQueueWatcher.Poll); await Task.Delay(5); }
+    }
+    [Fact]
+    public async Task With_the_watch_on_a_taken_prompt_is_noticed_without_another_send_and_a_silent_one_is_reported_watchEnded_and_stays_held()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lite-watch-" + Guid.NewGuid().ToString("N") + ".jsonl"); File.WriteAllText(path, "");
+        try
+        {
+            var taken = BusyClaude(ReplyStage.Queued); taken.Watch = true; taken.Transcript = path;
+            Assert.Equal(LiteKind.Queued, (await SendNew(taken.Build())).Outcome);
+            File.AppendAllText(path, TakenRow(Assert.Single(taken.Typed).Text!) + "\n");
+            await Tick(taken, () => taken.Store.Records().Single().State == BusyQueueStore.Delivered, TimeSpan.FromSeconds(30));
+            var done = taken.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Delivered, false), (done.State, done.Held));
+            Assert.False(taken.Store.SlotHeld(Target));
+
+            var silent = BusyClaude(ReplyStage.Queued); silent.Watch = true; silent.Transcript = path + ".none";
+            Assert.Equal(LiteKind.Queued, (await SendNew(silent.Build())).Outcome);
+            await Tick(silent, () => silent.Store.Records().Single().Reason == "watchEnded", TimeSpan.FromSeconds(130));
+            var ended = silent.Store.Records().Single();
+            Assert.Equal((BusyQueueStore.Unconfirmed, "watchEnded", true), (ended.State, ended.Reason, ended.Held));
+            Assert.True(silent.Store.SlotHeld(Target));
         }
         finally { File.Delete(path); }
     }

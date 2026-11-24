@@ -495,8 +495,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      that one on an Azure fetch too, and dropped it). A run by hand runs every
      job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
      docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
-     It runs only when `spikes/` changes, like `spikes` on Windows.
+   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
+     `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
@@ -612,8 +612,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      queued or in-progress named jobs pass the run over. A failed plan or a
      classification-skipped product family also passes it over. A newer main head still running
      does not block; the pull request's own running checks still do. The single
-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
-     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
+     `main_green.jobs` list pins exact display names for ha-integration,
+     light, pwa-ui, pwa-e2e and app (`spikes` and `spikes-linux` left it with S2 piece 4: they are the FULL lane's), including every static shard and runtime. Product is a
      dynamic family: at least one entry must exist and every present instance must pass; runners
      omitted by the plan are not required. Entirely absent families still hold.
      Optional `main_green.leg_families` adds lists of exact alternative check names to
@@ -903,7 +903,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
-  `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
