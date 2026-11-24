@@ -1,6 +1,6 @@
-From cb2d08c3dfbfd5952544c733d5cf05ac8c7c4e38 Mon Sep 17 00:00:00 2001
+From 26464c008b847cb2e26b49a75d8103d754846b7a Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:22:00 -0800
+Date: Mon, 23 Nov 2026 22:32:43 -0800
 Subject: [PATCH] s 6a1
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH] s 6a1
  3 files changed, 158 insertions(+), 3 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index 7473199f8..ce1863d7e 100644
+index 77a87beff..7da19ddd3 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -23,6 +23,10 @@ on:
@@ -158,7 +158,7 @@ index a17bb9dbc..6e06c26d4 100644
    - id: lab-nightly
      validation_plan: native
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 6e0653623..408d84a53 100644
+index 9b9fc029a..0b2f595c2 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -170,7 +170,7 @@ index 6e0653623..408d84a53 100644
          Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
      }
  
-@@ -185,7 +185,7 @@ public class FullWorkflowTests
+@@ -189,7 +189,7 @@ public class FullWorkflowTests
              .Single(s => s.Children.ContainsKey("if") && Scalar(s, "if").Contains("workflow_dispatch", StringComparison.Ordinal));
          var script = Scalar(step, "run");
  
@@ -179,7 +179,7 @@ index 6e0653623..408d84a53 100644
          Assert.Equal(["boolean", "false"], [Scalar(inputs["force-apt-fallback"], "type"), Scalar(inputs["force-apt-fallback"], "default")]);
          foreach (var rule in new[] { "refs/heads/main", "main's head", "open pull request's head", "INPUT_SHA", "force-apt-fallback" })
              Assert.Contains(rule, script, StringComparison.Ordinal);
-@@ -194,4 +194,46 @@ public class FullWorkflowTests
+@@ -198,4 +198,46 @@ public class FullWorkflowTests
          Assert.Equal(["critical-release", "critical-reason"], ciInputs.Children.Keys.Select(k => k.ToString()));
          Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
      }
