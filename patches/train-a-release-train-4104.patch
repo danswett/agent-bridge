@@ -1,6 +1,6 @@
-From 418a44dff7356fb778aba1df57952dd800b99c6b Mon Sep 17 00:00:00 2001
+From 3fa27498c4e6773e59e3a238233d5f1b65f64874 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:42 -0800
+Date: Mon, 23 Nov 2026 23:24:14 -0800
 Subject: [PATCH] s train-a
 
 ---
@@ -274,7 +274,7 @@ index 9ebe296cf..92c84eea3 100644
    as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
    unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index ac7dd68c5..79223e922 100644
+index 3d4f46e48..5193e5696 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -1037,6 +1037,20 @@ suites:
