@@ -370,7 +370,7 @@ switch (command)
             var rest = new List<string>(arguments);
             var p = rest.IndexOf("--profile");
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
-            if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
+            if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant connection or token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
             return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active, () => SecretInput.Read(Console.Error));
         }
@@ -397,7 +397,7 @@ switch (command)
             if (OwnPeerCommands.Writes(rest) && Refused("change the pinned own-peers")) { return 4; }
             var identity = LoadIdentity();
             var local = new OwnPeerCommands.Local(Wire.DeviceId(identity.Key.Public), identity.Account?.AccountId);
-            return OwnPeerCommands.Run(rest, identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, local, Console.In.ReadLine, Console.Out, Console.Error);
+            return OwnPeerCommands.Run(rest, identity.Folder, local, Console.In.ReadLine, Console.Out, Console.Error);
         }
     case "hooks" when arguments.ElementAtOrDefault(1) == "status":
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.

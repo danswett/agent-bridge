@@ -32,11 +32,11 @@ public static class McpEndpoint
         return PipeName.IsMatch(name) && !name.Contains("..", StringComparison.Ordinal) ? name : null;
     }
 
-    static readonly System.Text.RegularExpressions.Regex PipeName = new(@"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    static readonly System.Text.RegularExpressions.Regex PipeName = new(@"\A[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    // An absolute socket path to a file, with no ".." segment. Who owns it is checked on connect (LocalPeerOwner).
+    // An absolute socket path to a file, with no ".." segment. Who owns it is checked on connect (UnixPeer, #4432); no control character, so the kernel and this code read the same path.
     static string? UnixSocketPath(string value) =>
-        value.StartsWith('/') && !value.EndsWith('/') && !value.Split('/').Contains("..") ? value : null;
+        value.StartsWith('/') && !value.EndsWith('/') && !value.Split('/').Contains("..") && !value.Any(char.IsControl) ? value : null;
 
     static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
