@@ -101,15 +101,15 @@ static partial class SelfTest
             // Measured from the end, as the person sees it: older turns drawn above during a notch raise the offset by
             // their height while what is read stays put (CI 45303880104 read -660, -306, … as raw offset). Eight notches
             // stay within the first viewport above the end, where every row below is already laid out.
-            var moved = new List<double>();
+            var (moved, grew) = (new List<double>(), new List<double>());     // grew: the extent's change per notch, so a short notch can be told from a lost prepend
             for (var n = 0; n < 8; n++)
             {
-                var fromEnd = scroll.ScrollableHeight - scroll.VerticalOffset;
+                var (fromEnd, extentBefore) = (scroll.ScrollableHeight - scroll.VerticalOffset, scroll.ScrollableHeight);
                 var (_, to, _) = await Notch(-1);
-                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); }
+                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); grew.Add(Math.Round(scroll.ScrollableHeight - extentBefore)); }
             }
             check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
-                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)})");
+                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)}; extent grew {string.Join(", ", grew)})");
             phase = "down";
             var (offsets, back) = (new List<double>(), 0.0);
             var high = scroll.VerticalOffset;

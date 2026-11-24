@@ -10,7 +10,6 @@ public sealed class ScrollSettleTests
 {
     const double End = 40000;
 
-    // Frames of a view that closes the distance to the end over `lag` frames, then rests there.
     static ScrollSettle Feed(ScrollSettle settle, int lag, int rest, double startGap = 771)
     {
         for (var i = 0; i < lag; i++) { settle.Observe(End - startGap * (1 - (i + 1.0) / (lag + 1)), End, moving: true); }
@@ -71,7 +70,6 @@ public sealed class ScrollSettleTests
     {
         var settle = new ScrollSettle(high: End - 50, maxFrames: 1000);
 
-        // The end moves every 40 frames and the view is 50 behind it each time, catching up in the frames between: never 60 frames short of a final extent.
         for (var step = 0; step < 20; step++)
         {
             for (var i = 0; i < 40; i++) { settle.Observe(End + step * 200 - 50 + Math.Min(i * 5, 50), End + step * 200, moving: i < 10); }
@@ -80,7 +78,6 @@ public sealed class ScrollSettleTests
         Assert.False(settle.Done);
     }
 
-    // The seed matters from the first frame: the notches before the settle have already raised the high-water mark, so a first frame below it is moving back up.
     [Fact]
     public void A_first_frame_below_the_seeded_high_water_mark_is_moving_back_up()
     {
@@ -130,7 +127,6 @@ public sealed class ScrollSettleTests
         Assert.Contains("extent 20000 to 69000 (changed on 49 frames,", settle.Describe(), StringComparison.Ordinal);
     }
 
-    // CI 45364490020: the view sat 66 short of a final extent for 90 s; the artifact has no trace, so the verdict carries the last frames (parked or creeping, moving or not).
     [Fact]
     public void A_view_that_does_not_settle_reports_its_last_frames_so_parked_can_be_told_from_creeping()
     {
@@ -205,7 +201,6 @@ public sealed class ScrollSettleTests
         Assert.True(settle.Passed, settle.Describe());
     }
 
-    // Moving back up in the notches before the settle (the loop in the self-test) is carried in, so the settle cannot launder it.
     [Fact]
     public void Back_movement_seen_during_the_notches_is_carried_into_the_verdict()
     {
@@ -229,7 +224,6 @@ public sealed class ScrollSettleTests
         Assert.Equal(0, settle.WorstBack);
     }
 
-    // History still drawing with the pin keeping up: the view is at the end on every frame, but its offset and extent change on every frame, so it is not at rest yet.
     [Fact]
     public void A_view_at_the_end_whose_offset_and_extent_keep_growing_together_is_not_settled()
     {
