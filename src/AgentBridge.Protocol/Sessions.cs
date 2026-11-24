@@ -116,6 +116,8 @@ public static class Limits
     // Free text in an answer (session.answer's text, or a field's other), and the request.
     public const int AnswerText = 4 * 1024;
     public const int AnswerRequest = 16 * 1024;
+    // The client-reported card target (AnswerRequest.CardTarget): its own cap, outside the AnswerRequest budget above.
+    public const int CardTarget = 64;
     // The text of a session.reply.
     public const int ReplyText = 16 * 1024;
     // A sub-agent's entry (docs/design/subagents.md §5): its label, the start of the prompt
@@ -799,6 +801,9 @@ public sealed record AnswerRequest
     public required string Request { get; init; }
     public IReadOnlyDictionary<string, JsonElement>? Fields { get; init; }
     public string? Text { get; init; }
+    // The session id the person's card showed, as the CLIENT reports it (ha-audit-client-field.md, owner decision on #4044). Evidence only:
+    // the host records it in the audit row and never reads it for a decision. Older hosts ignore it.
+    public string? CardTarget { get; init; }
     // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
     // result, and the result carries Timings. Absent, nothing about the exchange changes.
     public bool? Progress { get; init; }
