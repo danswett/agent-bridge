@@ -1049,6 +1049,85 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal("2 sessions need you", Assert.Single(Received()).Notification.GetProperty("title").GetString());
     }
 
+    // Quality, #4335 (mutation survivors): the digest's own slot, tag, topic and time to live, its right to be sent at all, and that it wakes the pump.
+    [Fact]
+    public async Task A_watch_digest_has_its_own_tag_topic_and_the_question_time_to_live_and_a_newer_one_keeps_the_same_slot()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        await After(TimeSpan.FromSeconds(1));
+        notifier.NotifyWatch("2 sessions need you", "2 waiting at a prompt: a, b");
+        await After(TimeSpan.FromSeconds(1));
+
+        var sent = Received();
+        Assert.Equal(2, sent.Count);
+        Assert.All(sent, r => Assert.Equal(($"{Machine}:~watch", 86400, PushNotice.Topic(Machine, "~watch")), (r.Notification.GetProperty("tag").GetString(), r.Ttl, r.Topic)));
+        Assert.NotEqual(PushNotice.Topic(Machine, "~needsyou"), sent[0].Topic);
+    }
+
+    // A digest never replaces a notice that has not gone yet: the folder-trust one (its own key) and a session question (its own key).
+    [Fact]
+    public async Task A_watch_digest_never_replaces_a_pending_folder_trust_or_question_notice()
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.TrustQuestions = () => [TrustAsk("t1")];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        sender.Connected = false;
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromMinutes(2));
+        var queued = notifier.Pending;
+        Assert.True(queued >= 2, "the trust notice and the second question are waiting");
+
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        Assert.Equal(queued + 1, notifier.Pending);
+        sender.Connected = true;
+        await After(TimeSpan.FromMinutes(1));
+
+        var titles = Received().Select(r => r.Notification.GetProperty("title").GetString()).ToList();
+        Assert.Contains("1 session needs you", titles);
+        Assert.Contains("Claude on DEV needs a folder-trust answer", titles);
+        Assert.Equal(2, titles.Count(x => x == "Fix the login"));
+    }
+
+    [Fact]
+    public async Task A_watch_digest_is_not_queued_for_a_device_whose_person_grant_has_been_revoked()
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var pins = Enforce(host, person).Store;
+        Start();
+        var peer = PinnedPeer(person);
+        Subscribe(peer.Device, peer: peer);
+        Assert.Single(store.All);
+
+        pins.Revoke(person.Public);
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        Assert.Equal(0, notifier.Pending);
+        await notifier.PumpAsync();
+
+        Assert.Equal(0, notifier.Pending);
+        Assert.Empty(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_watch_digest_wakes_the_running_pump_by_itself()
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.Start();
+        await Task.Delay(300);
+
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        for (var i = 0; i < 100 && sender.Sent.Count == 0; i++) { await Task.Delay(50); }
+
+        Assert.Single(sender.Sent);
+        await notifier.DisposeAsync();
+    }
+
     [Fact]
     public async Task A_trust_question_answered_in_time_sends_nothing_and_a_later_question_is_a_new_episode()
     {
