@@ -56,6 +56,7 @@ import { HISTORY, closedQuestionIds } from '../history.js';
 import { MoveStrip } from './move-view.js';
 import { moveView, moves } from '../move.js';
 import { ScrollFollow } from './scroll-follow.js';
+import { jumpText } from './jump-latest.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The original agent-ha-bridge card's list; selection survives redraws and reopening a session.
@@ -736,8 +737,11 @@ export class SessionCard {
     if (typeof IntersectionObserver === 'function') {
       new IntersectionObserver((entries) => { this.#questionSeen = entries.at(-1).isIntersecting; this.#syncWaiting(); }, { root: e.scroll }).observe(e.question);
     }
+    // "Jump to latest" (ui.md §6.4 H3, #1720): in no layout (a row with no height), so it never changes what is read.
+    e.jump = h('button', { type: 'button', class: 'jump-latest', hidden: true, onclick: () => this.#jump() }, jumpText({}));
+    e.jumpRow = h('div', { class: 'jump-row' }, e.jump);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.waiting, e.reply, e.replyBar);
+      e.scroll, e.jumpRow, e.waiting, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -808,6 +812,7 @@ export class SessionCard {
       canFollow: (revealed) => !this.#s?.question || (!revealed && (!this.#placed || (!this.#touches && !this.#pressing && !this.#hovering))),
       canDefer: () => !!this.historyStore && (!e.user.hidden || !e.prompt.hidden || !e.agentBlock.hidden),
       onFollow: () => this.update(this.#s),
+      onPosition: (state) => this.#syncLatest(state),
     });
     const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
     this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
@@ -950,7 +955,7 @@ export class SessionCard {
     }
 
     this.#renderQuestion(s);
-    this.#syncWaiting();
+    this.#syncLatest();
     this.#renderReply(s);
     this.#renderStop(s);
     // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
@@ -1962,8 +1967,30 @@ export class SessionCard {
 
   #questionSeen = true;
 
+  // The pill's words, and whether it shows (fading in and out as Arriving and leaving): from where the reader is and
+  // what arrived below since (ScrollFollow holds both), and whether a question waits at the end.
+  #position = { away: false, count: 0 };
+
+  #syncLatest(state = this.#position) {
+    const e = this.els;
+    this.#position = state;
+    const question = !!this.#s?.question;
+    const text = jumpText({ count: state.count, question });
+    if (e.jump.textContent !== text) { e.jump.textContent = text; }
+    e.jump.toggleAttribute('data-question', question);
+    if (e.jump.hidden === state.away) {
+      if (state.away) { e.jump.hidden = false; enter(e.jump, 'listItem'); } else { leave(e.jump, 'listItem'); e.jump.hidden = true; }
+    }
+    this.#syncWaiting();
+  }
+
+  // The pill takes the question's place over the reply box while it shows: one pill, not two.
   #syncWaiting() {
-    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen;
+    this.els.waiting.hidden = !this.#s?.question || this.#questionSeen || !this.els.jump.hidden;
+  }
+
+  #jump() {
+    this.#follow.jump(scrollBehavior());
   }
 
   #showWaiting() {

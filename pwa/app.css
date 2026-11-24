@@ -1455,6 +1455,21 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 @media (max-width: 759px) {
   .question-waiting { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--foot-h) + var(--ab-space-2)); margin: 0; z-index: 3; }
 }
+/* "Jump to latest" (ui.md §6.4 H3, #1720): more than a screen above the end, a pill above the reply box. It is in no
+   layout (a row with no height; the pill is drawn up from its foot), so it never changes the conversation's size or
+   what the person is reading. Centred with auto margins, not a transform, which its entering and leaving own. */
+.jump-row { position: relative; flex: none; height: 0; z-index: 3; }
+.jump-latest {
+  position: absolute; left: 0; right: 0; bottom: var(--ab-space-2); margin-inline: auto; width: fit-content;
+  min-height: 36px; max-width: calc(100% - 2 * var(--ab-space-4)); padding: 0 var(--ab-space-4);
+  border: 1px solid var(--ab-stroke2); border-radius: 999px; background: var(--ab-card); color: var(--ab-text);
+  font: inherit; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.jump-latest[hidden] { display: none; }
+/* A question waiting at the end (H3a): in Needs you's text colour. */
+.jump-latest[data-question] { color: var(--ab-needs-text); border-color: currentColor; }
+/* On a phone the reply area is drawn over the conversation's foot: the pill rides above it. */
+@media (max-width: 759px) { .jump-latest { bottom: calc(var(--foot-h, 0px) + var(--ab-space-2)); } }
 /* What the main agent is doing now: the tool's glyph, its name and arguments, in mono. */
 .tool-line { margin: var(--ab-space-2) 0 0; display: flex; gap: var(--ab-space-2); align-items: baseline; min-width: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .tool-line .glyph { align-self: center; }
