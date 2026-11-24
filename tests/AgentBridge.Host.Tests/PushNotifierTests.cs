@@ -1094,16 +1094,17 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
-    public async Task A_watch_digest_is_not_queued_for_a_device_whose_person_grant_has_lapsed()
+    public async Task A_watch_digest_is_not_queued_for_a_device_whose_person_grant_has_been_revoked()
     {
         using var host = P256KeyPair.Generate();
         using var person = P256KeyPair.Generate();
-        Enforce(host, person);
+        var pins = Enforce(host, person).Store;
         Start();
         var peer = PinnedPeer(person);
         Subscribe(peer.Device, peer: peer);
+        Assert.Single(store.All);
 
-        time.Advance(TimeSpan.FromHours(2));
+        pins.Revoke(person.Public);
         notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
         Assert.Equal(0, notifier.Pending);
         await notifier.PumpAsync();
