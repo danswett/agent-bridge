@@ -1,10 +1,12 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { crc32 } from 'node:zlib';
 import path from 'node:path';
 import { repoRoot } from '../generate.mjs';
-import { appIconSpec, appIconTargets, staleAppIcons, writeAppIcons, ICO_SIZES, rasterize, windowsContainer } from '../lib/app-icon.mjs';
+import { appIconSpec, appIconTargets, staleAppIcons, writeAppIcons, ICO_SIZES, rasterize, rasterMemoSize, windowsContainer } from '../lib/app-icon.mjs';
 import { render, encodePng, decodePng, readIco, pngSize } from '../lib/raster.mjs';
 
 // Per process: two runs in one checkout (#565) deleted each other's scratch folder.
@@ -251,4 +253,49 @@ test('the app project, its window, tray, toasts and installer use the generated 
 test('the design keeps an SVG of each platform\'s container, Android\'s as its three layers', () => {
   const svgs = Object.keys(appIconTargets(appIconSpec(path.join(repoRoot, 'design')))).filter((f) => f.startsWith('design/app-icon/'));
   assert.deepEqual(svgs.map((f) => path.basename(f, '.svg')).sort(), ['android-background', 'android-foreground', 'android-monochrome', 'ios', 'macos', 'maskable', 'windows', 'windows-20', 'windows-24', 'windows-small']);
+});
+
+// #4104: staleAppIcons drew every icon again for each comparison (about 9 s a call, called about 25 times here). Drawing is a pure function of the spec and the target, so within one process
+// an icon already drawn for an equal spec is not drawn again. The memo is in memory only, keyed by the spec's content, and what is compared against it, the files, is read fresh every time.
+test('an icon of an equal spec is drawn once per process, and a changed spec draws again', () => {
+  const root = copy('memo');
+  const a = appIconSpec(path.join(root, 'design'));
+  const b = appIconSpec(path.join(root, 'design'));
+  assert.notEqual(a, b, 'two specs read from the same files');
+  assert.equal(rasterize(a, 'windows', 48), rasterize(b, 'windows', 48), 'an equal spec drew the icon again');
+  setTokens(root, (t) => { t.appIcon.plate = '#102A2E'; });
+  const changed = rasterize(appIconSpec(path.join(root, 'design')), 'windows', 48);
+  assert.notEqual(changed, rasterize(a, 'windows', 48));
+  assert.ok(!changed.pixels.equals(rasterize(a, 'windows', 48).pixels), 'a changed plate drew the same pixels');
+});
+
+test('a change to the mark in design/ is still detected after the icons were drawn and compared', () => {
+  const root = copy('memo-mark');
+  assert.deepEqual(staleAppIcons(root), []);
+  const mark = path.join(root, 'design', 'icons', 'mark.svg');
+  const original = readFileSync(mark, 'utf8');
+  const changed = original.replace('M42.872 8.625', 'M41.872 8.625');
+  assert.notEqual(changed, original, 'the mark does not start at M42.872 8.625, so nothing changed');
+  writeFileSync(mark, changed);
+  assert.ok(staleAppIcons(root).length > 0, 'a changed mark left every icon up to date');
+});
+
+test('one pixel changed in an icon is still stale after the icons were drawn and compared', () => {
+  const root = copy('memo-bytes');
+  assert.deepEqual(staleAppIcons(root), []);
+  const file = path.join(root, 'pwa', 'icons', 'maskable-192.png');
+  const img = decodePng(readFileSync(file));
+  const at = (96 * img.width + 96) * 4;
+  img.pixels[at] ^= 0x40;
+  writeFileSync(file, encodePng(img, { opaque: img.opaque }));
+  assert.deepEqual(staleAppIcons(root), ['pwa/icons/maskable-192.png']);
+});
+
+test('the memo of drawn icons stays in its process', () => {
+  rasterize(appIconSpec(path.join(repoRoot, 'design')), 'windows', 48);
+  assert.ok(rasterMemoSize() > 0);
+  const lib = pathToFileURL(path.join(repoRoot, 'tools', 'design-gen', 'lib', 'app-icon.mjs')).href;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import { rasterMemoSize } from ${JSON.stringify(lib)}; console.log(rasterMemoSize());`], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout.trim(), '0', 'a new process started with icons already drawn');
 });
