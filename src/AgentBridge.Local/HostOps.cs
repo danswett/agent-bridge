@@ -207,6 +207,9 @@ public sealed record HostStatus
     // Why the host acts on nothing from other devices now (delivery.readOnly, or agent-ha-bridge
     // running), absent when it does: an install a device asked for before is not carried out.
     public string? ReadOnly { get; init; }
+    // The profile's disk for fleet launches (#2771): "diskLow: ..." under 1 GiB free (the fleet grant and fleet launches are refused), "disk unknown" when
+    // free space cannot be read (launches are still allowed), absent when fine.
+    public string? Disk { get; init; }
     // The Dev Box keep-awake, absent when this machine is not a Dev Box.
     public DevBoxStatus? DevBox { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.

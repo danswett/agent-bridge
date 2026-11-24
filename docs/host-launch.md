@@ -583,3 +583,10 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+
+**`diskLow` (runbook, #2771).** With under 1 GiB free on the profile's disk the host refuses to turn the fleet grant on
+(`grants issue`, `scripts grant-fleet`) and refuses every fleet launch (a script's and a grant's), with code `diskLow`, and `host.status` shows
+`diskLow: ... MiB free`. Free some space on the profile's drive; the next launch goes through, with no restart. If the free space cannot be read at all
+the launch is **not** refused: it is allowed, the log says so once, and `host.status` shows `disk unknown`. Fleet workers are not ended for idling:
+a grant-launched fleet worker takes a live slot like any agent-started session, but the 2 hour `agentLaunchedIdleHours` policy never lists it
+(`AgentLimits.IdleSessions` skips sessions bound with `fleet`). Ordinary agent-started sessions are still listed.
