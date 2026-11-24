@@ -1963,6 +1963,19 @@ public class MergeRuleTests
         Assert.InRange(reads.Count, 1, mostCalls);
     }
 
+    // A run passed over for its parent still running is followed by the next run, which walks the same chain again: nothing it read is read twice.
+    [Fact]
+    public void A_run_passed_over_for_a_parent_still_running_leaves_the_next_run_nothing_to_read_again()
+    {
+        var runs = MainRunsAged(MainNow, (9, "completed", "success", 1, 10), (8, "completed", "success", 1, 20), (7, "in_progress", null, 1, 25), (6, "completed", "success", 1, 90));
+
+        var (posted, reads) = RelianceReads(runs, (9, Relies(8)), (8, Relies(7)), (7, RelyNone), (6, RelyNone));
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        Assert.True(twice.Count == 0, $"read more than once in one evaluation: {string.Join(", ", twice)}");
+    }
+
     // A record that is not in the shape is an error, never a guess that the run relied on nothing. Its raw text reaches the log, so
     // its control characters are shown as escapes and its length is capped: it can't add a workflow command.
     [Fact]
