@@ -941,6 +941,9 @@ start within about a minute; a queue that grows is the signal to add runners or 
   `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
   fails a workflow that reads it otherwise, since a string `'false'` is non-empty and so true. Only people with write
   access can dispatch, and only main's workflow file runs.
+  **After the variable flips, one read tells how it went:** `pwsh quality/ab-ci-watch.ps1 -Since <when it flipped>`
+  names the first same-repo PR run's and the first main run's x64 product job, its runner, its time against the
+  hosted median on main before the flip, and any failed or hung test. Read-only and no polling: call it again later.
   **Fork PRs are stopped by the owner's repository setting "Require approval for all external contributors", not by this
   lint.** A fork's run uses the fork's own copy of the workflow, so a fork can edit `runs-on` and remove the guard, and
   neither the lint (which reads this repository's files) nor main's guard applies to it. A person approves each fork
