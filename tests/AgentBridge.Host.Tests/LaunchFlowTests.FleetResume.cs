@@ -12,15 +12,15 @@ public sealed partial class LaunchFlowTests
     const string Coordinator = "agent:machine/99999999-9999-4999-8999-999999999999";
 
     // The launch record of the session's first run: its process has since ended.
-    void Earlier(string? grant, string? role = null) => File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(f.Root, "profile")).FullName, "launch-provenance.json"), System.Text.Json.JsonSerializer.Serialize(
-        new Dictionary<Guid, object> { [Guid.NewGuid()] = new { session = FleetId, process = new { id = 4242, startedAt = DateTimeOffset.Parse("2026-11-23T00:00:00Z") }, grant, role } },
+    void Earlier(string? grant, string? role = null, string? lane = null) => File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(f.Root, "profile")).FullName, "launch-provenance.json"), System.Text.Json.JsonSerializer.Serialize(
+        new Dictionary<Guid, object> { [Guid.NewGuid()] = new { session = FleetId, process = new { id = 4242, startedAt = DateTimeOffset.Parse("2026-11-23T00:00:00Z") }, grant, role, lane } },
         new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
 
     [Fact]
     public async Task A_fleet_resume_restarts_the_same_session_as_a_fleet_worker_with_its_recorded_settings()
     {
         Resumable(FleetId, app, "A builder");
-        Earlier("fleet", "quality-lead");
+        Earlier("fleet", "quality-lead", lane: "engineering-lead");
         var profile = Path.Combine(f.Root, "fleet-profile");
         Directory.CreateDirectory(profile);
         var credentials = new AgentCredentials(profile, "machine");
@@ -36,6 +36,7 @@ public sealed partial class LaunchFlowTests
         Assert.NotNull(process);
         Assert.True(launcher.IsFleetWorker(FleetId, process));
         Assert.True(launcher.WasFleetLaunched(FleetId));
+        Assert.Equal("engineering-lead", launcher.LaunchLane(FleetId));   // the resumed worker keeps the lane it was launched in
         Assert.Equal("quality-lead", launcher.LaunchRole(FleetId));   // a resumed coordinator keeps its recorded role and can resume others
         Assert.Empty(screens.Typed);
     }

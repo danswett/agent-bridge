@@ -53,6 +53,11 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
 2. **Refused:** an unknown id; a session only a person launched; any session another person's host record names (nothing
    crosses people: this host's record is one person's); a derived (16-hex) id; a session already running (`running`; no
    force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host, excluded caller, session, fleet name or workspace (the lists fleet.end honours), or a workspace not approved.
+2a. **Own lane (owner decision, leads only).** A coordinator resumes only workers launched by a coordinator of its own ROLE. At launch the host
+   records, on a fleet worker launched by an agent session, the launching coordinator's recorded role (the lane), never its session id, so a
+   one-for-one successor with the same role keeps its workers. A resume keeps the lane it already had. `fleet.resume` refuses with `lane`
+   (and an audit row) a worker whose recorded lane differs from the caller's role, and a worker with no recorded lane (a launch by a person or
+   a script, or an older record), fail closed. A worker launched on another machine's grant records none here, so it is not resumable here.
 3. **Never wider than the original.** The resume uses the settings the host recorded when the session was launched
    (agent, profile, model, effort, context, and permissions as launched), never anything the caller supplies, and never
    wider: a setting the machine no longer offers falls back to its default, and settings that cannot be read refuse the
@@ -69,7 +74,7 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
    resumes nothing twice; after a host restart the session is simply running, which refuses. (No durable intent row: the
    resume is not an op the gate audit knows; a follow-up if Quality wants it.)
 6. **Receipt.** `{request, outcome: resumed | refused | unconfirmed, reason?, session}`. Closed reasons reuse the fleet set
-   (`scope`, `policy`, `kill-switch`, `bad-argument`, `audit-unavailable`) plus `running` and `busy`; a launcher failure is
+   (`scope`, `policy`, `kill-switch`, `bad-argument`, `audit-unavailable`) plus `running`, `busy` and `lane`; a launcher failure is
    `unconfirmed` / `failed`.
 
 ## Known limits (not built in this change)

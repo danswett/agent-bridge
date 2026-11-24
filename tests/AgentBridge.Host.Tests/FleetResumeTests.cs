@@ -18,6 +18,7 @@ public sealed class FleetResumeTests : IDisposable
     AgentCredential caller;
     readonly List<ResumeAsk> resumed = [];
     string? callerRole = "quality-lead";
+    string? lane = "quality-lead";   // the role of the coordinator that launched the target worker
     bool fleetLaunched = true, running;
     RestoreLaunch? recorded = new("copilot", "App", null, null, null, null, null, LaunchProtocol.AllowAll);
     LaunchResult outcome = new(LaunchOutcome.Started, null) { Session = null };
@@ -38,7 +39,7 @@ public sealed class FleetResumeTests : IDisposable
             launch = new { enabled = true, workspaces = approved ? new[] { new { label = "App", path = folder } } : [] },
         }));
     string? name;
-    FleetResumeCommands Open() => new(folder, credentials, session => session == target ? null : callerRole, _ => fleetLaunched, _ => running, _ => recorded,
+    FleetResumeCommands Open() => new(folder, credentials, session => session == target ? null : callerRole, s => s == target ? lane : null, _ => fleetLaunched, _ => running, _ => recorded,
         (ask, _) => { resumed.Add(ask); return Task.FromResult(outcome with { Session = ask.Id }); }, s => s == target ? name : null);
     Task<FleetResumeReceipt> Resume(string? session = null, Guid? request = null, AgentCredential? who = null) => Open().HandleAsync(who ?? caller,
         JsonSerializer.SerializeToElement(new { version = 1, request = request ?? Guid.NewGuid(), session = session ?? target }));
@@ -80,6 +81,28 @@ public sealed class FleetResumeTests : IDisposable
         var receipt = await Resume();
         Assert.Equal(("refused", "scope"), (receipt.Outcome, receipt.Reason));
         Assert.Empty(resumed);
+    }
+    // Own lane (owner decision, leads only): a coordinator resumes only workers launched by a coordinator of its own role.
+    [Theory]
+    [InlineData("same", "resumed", null)]
+    [InlineData("other", "refused", "lane")]       // another listed role's worker
+    [InlineData("none", "refused", "lane")]        // no recorded launching role (an older record): fails closed
+    public async Task A_coordinator_resumes_only_workers_launched_in_its_own_lane(string which, string outcome, string? reason)
+    {
+        Settings(["quality-lead", "engineering-lead"]);
+        lane = which switch { "same" => "quality-lead", "other" => "engineering-lead", _ => null };
+        var receipt = await Resume();
+        Assert.Equal((outcome, reason), (receipt.Outcome, receipt.Reason));
+        Assert.Equal(outcome == "resumed" ? 1 : 0, resumed.Count);
+    }
+    // The lane is a role, not a session: a one-for-one successor (another session, same recorded role) resumes its predecessor's workers.
+    [Fact]
+    public async Task A_successor_with_the_same_role_resumes_the_workers_its_predecessor_launched()
+    {
+        var successor = Caller(AgentProtocol.ScopeReadReplyLaunch);
+        Assert.NotEqual(caller.Session, successor.Session);
+        var receipt = await Resume(who: successor);
+        Assert.Equal("resumed", receipt.Outcome);
     }
     [Fact]
     public async Task A_caller_without_launch_scope_or_not_at_depth_zero_is_refused()

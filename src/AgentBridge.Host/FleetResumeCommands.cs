@@ -13,7 +13,7 @@ public sealed record FleetResumeReceipt(Guid Request, string Outcome, string? Re
 // session at depth 0 with launch scope whose own recorded launch role the person listed in agents.resume.roles; the session is
 // one the launch record shows a fleet launch, ended, never the caller's own, resumed with the settings it was launched with.
 // Everything else refuses before anything starts, with a closed reason.
-public sealed class FleetResumeCommands(string folder, AgentCredentials credentials, Func<string, string?> launchRole,
+public sealed class FleetResumeCommands(string folder, AgentCredentials credentials, Func<string, string?> launchRole, Func<string, string?> launchLane,
     Func<string, bool> wasFleetLaunched, Func<string, bool> running, Func<string, RestoreLaunch?> recorded,
     Func<ResumeAsk, CancellationToken, Task<LaunchResult>> resume, Func<string, string?>? fleetName = null)
 {
@@ -72,6 +72,10 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 bool fleet;
                 try { fleet = wasFleetLaunched(session); } catch (InvalidOperationException) { fleet = false; }
                 if (!fleet) { return Refused("scope", session); }
+                // Own lane (owner decision, leads only): the worker's recorded launching ROLE must be the caller's role; none recorded refuses.
+                string? lane;
+                try { lane = launchLane(session); } catch (InvalidOperationException) { lane = null; }
+                if (lane is null || !string.Equals(lane, role, StringComparison.Ordinal)) { return Refused("lane", session); }
                 if (running(session)) { return Refused("running", session); }
                 // The original settings or nothing: never the caller's, and never the machine's defaults.
                 if (recorded(session) is not { } launch) { return Refused("policy", session); }
