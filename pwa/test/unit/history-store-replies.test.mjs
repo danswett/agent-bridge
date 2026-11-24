@@ -76,6 +76,16 @@ test('with a response ref two id-less replies are two parts, and the second stil
   assert.equal(new Set(shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.id)).size, 2);
 });
 
+// #4333 review P1: the same words with a different ref are two replies on both clients (the Windows client used to restate a live part by its words).
+test('two id-less replies with the same words and different refs are two parts, and the same ref is one', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'Done.', 'r1'));
+  store.live('h', sayRef(null, 'Done.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['Done.', 'Done.']);
+  store.live('h', sayRef(null, 'Done.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['Done.', 'Done.']);
+});
 test('without a response ref an id-less reply is the legacy single slot, as before', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);

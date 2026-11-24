@@ -100,6 +100,20 @@ public sealed class SessionHistoryRepliesTests
         Assert.Equal(2, history.Turns.Single().Parts.Select(p => p.Id).Distinct().Count());
     }
 
+    // #4333 review P1: two id-less replies with the SAME words and DIFFERENT refs are two replies (the PWA already shows both); the restate rule is for a
+    // part a page stored, not for a live part, whose own ref says whether it is the same reply.
+    [Fact]
+    public async Task Two_id_less_replies_with_the_same_words_and_different_refs_are_two_parts_and_the_same_ref_is_one()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(SaidRef(null, "Done.", "r1"));
+        history.Observe(SaidRef(null, "Done.", "r2"));
+        Assert.Equal(["Done.", "Done."], Replies(history));
+        Assert.Equal(2, history.Turns.Single().Parts.Select(p => p.Id).Distinct().Count());
+        history.Observe(SaidRef(null, "Done.", "r2"));
+        Assert.Equal(["Done.", "Done."], Replies(history));
+    }
     [Fact]
     public async Task Without_a_response_ref_an_id_less_reply_is_the_legacy_single_slot_as_before()
     {
