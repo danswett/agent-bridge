@@ -29,7 +29,8 @@ public static class LocalClient
     // The connection alone, with nothing reading it. Tests that speak frames by hand need it:
     // a channel's reader disposes the stream as soon as the host hangs up, which raced their
     // own writes to the host.
-    internal static async Task<Stream> ConnectStreamAsync(LocalEndpoint endpoint, TimeSpan wait, CancellationToken ct = default)
+    // peerUid: how a test reads the Unix peer's user (the kernel's answer when absent).
+    internal static async Task<Stream> ConnectStreamAsync(LocalEndpoint endpoint, TimeSpan wait, CancellationToken ct = default, Func<Socket, uint?>? peerUid = null)
     {
         Stream stream;
         if (OperatingSystem.IsWindows())
@@ -64,6 +65,9 @@ public static class LocalClient
                 socket.Dispose();
                 throw new HostNotRunningException($"the {Product.HostName} is not running for this profile", e);
             }
+            // Another user's process could have listened where this one connects: the host must be this user, as the Windows pipe's owner check makes it.
+            try { UnixPeer.Require((peerUid ?? UnixPeer.PeerUid)(socket), UnixPeer.CurrentUid()); }
+            catch (LocalRefusedException) { socket.Dispose(); throw; }
             stream = new NetworkStream(socket, ownsSocket: true);
         }
         return stream;

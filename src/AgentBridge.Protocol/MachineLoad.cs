@@ -12,7 +12,7 @@ public enum LoadAgentKind { Other, Agency, Direct, Copilot, Claude, Codex }
 [UnknownAs(Other)]
 public enum LoadHandleKind { Other, Handles, Fds }
 
-// Relay-only numerical readings (v1-machine-load.md). Unknown figures stay absent, never zero.
+// Numerical readings on authenticated channels (v1-machine-load.md). Unknown stays absent.
 public sealed record MachineLoad
 {
     MachineLoadState state;
@@ -21,6 +21,7 @@ public sealed record MachineLoad
 
     public DateTimeOffset? SampledAt { get; init; }
     public long? AgeMs { get; init; }
+    public double? RunQueueAvg { get; init; }
     public MachineLoadState State { get => truncated && state == MachineLoadState.Fresh ? MachineLoadState.Partial : state; init => state = value; }
     public long? StaleAfterMs { get; init; }
     public MachineLoadCpu? Cpu { get; init; }
@@ -37,6 +38,15 @@ public sealed record MachineLoad
     public UnattributedLoad? Unattributed { get; init; }
 }
 
+// What the local pipe's load.get answers (#2982): only what launch admission reads. No session list, nothing per session, no CPU or memory
+// totals, no sample time. The owner's clearance for the full record (#1150) was for the relay channel and is not widened to local processes.
+public sealed record MachineLoadFigures
+{
+    public MachineLoadState State { get; init; }
+    public long? AgeMs { get; init; }
+    public double? RunQueueAvg { get; init; }
+    public long? StaleAfterMs { get; init; }
+}
 public sealed record MachineLoadCpu(double? Percent = null, int? Cores = null);
 public sealed record MachineLoadMemory(long? TotalBytes = null, long? AvailableBytes = null,
     double? CommittedPercent = null, double? UsedPercent = null);

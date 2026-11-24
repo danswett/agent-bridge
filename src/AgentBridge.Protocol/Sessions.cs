@@ -113,9 +113,11 @@ public static class Limits
     // activity.background.shells (v1-sessions.md "Background"): a shell whose latest start or "still running"
     // mark is older than this stops counting, so a finished session whose shell never reported back reads idle (#1108).
     public static readonly TimeSpan BackgroundShellStale = TimeSpan.FromHours(4);
-    // Free text in an answer (session.answer's text, or a field's other), and the request.
-    public const int AnswerText = 4 * 1024;
-    public const int AnswerRequest = 16 * 1024;
+    // Free text in an answer (session.answer's text, or a field's other) is as long as a reply (#2752): a person can paste diagnostics. The request
+    // is that text plus an envelope for what is around it (the ids, the request UUID, the flags), so a maximum answer fits whole.
+    public const int AnswerText = ReplyText;
+    public const int AnswerEnvelope = 1024;
+    public const int AnswerRequest = AnswerText + AnswerEnvelope;
     // The client-reported card target (AnswerRequest.CardTarget): its own cap, outside the AnswerRequest budget above.
     public const int CardTarget = 64;
     // The text of a session.reply.

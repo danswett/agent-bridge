@@ -132,7 +132,7 @@ public sealed partial class ReplyService : ISessionReplier
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         this.attachments = attachments;
-        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, Busy);
+        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, () => Busy() with { KeyDisposition = ReplyKeyDisposition.NoKeysSent });
         if (options.PreRead && options.PlatformSupported)
         {
             source.Changed += OnSessionChanged;
@@ -238,11 +238,17 @@ public sealed partial class ReplyService : ISessionReplier
             request.Intent == ReplyIntent.Steer);
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"),
-            owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
+            owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request") with { KeyDisposition = ReplyKeyDisposition.NoKeysSent }));
     }
 
     // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
-    sealed class KeyTrack { public bool MayHaveBeenSent; }
+    sealed class KeyTrack
+    {
+        public bool MayHaveBeenSent;
+        // The host's keys-going callback ran: from then a key may have gone, whatever fails next.
+        public bool KeysGoingFired;
+        public Action? Watch(Action? keysGoing) => keysGoing is null ? null : () => { KeysGoingFired = true; keysGoing(); };
+    }
 
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
@@ -250,7 +256,8 @@ public sealed partial class ReplyService : ISessionReplier
         var result = await DeliverCoreAsync(request, key, peer, timeline, track);
         // NoKeysSent only where the code proves no key went: every return before a typing attempt, and an attempt that reports KeysWent false. An
         // exception inside an attempt leaves it MayHaveBeenSent. Never inferred from the refusal or its reason.
-        return result with { KeyDisposition = track.MayHaveBeenSent ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
+        // A result that already says NoKeysSent (the catch below, which only runs before a key) keeps it.
+        return result with { KeyDisposition = track.MayHaveBeenSent && result.KeyDisposition != ReplyKeyDisposition.NoKeysSent ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
     }
 
     async Task<ReplyResult> DeliverCoreAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline, KeyTrack track)
@@ -295,7 +302,7 @@ public sealed partial class ReplyService : ISessionReplier
                 track.MayHaveBeenSent = true;   // from here a key could go; an attempt that reports KeysWent false narrows it again
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing, request.RequireEmptyBox);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, track.Watch(request.KeysGoing), request.RequireEmptyBox);
                 keysWent = outcome.KeysWent;
                 track.MayHaveBeenSent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
@@ -324,7 +331,7 @@ public sealed partial class ReplyService : ISessionReplier
         {
             // Only reached before anything was typed: CopilotAsync owns its own failures
             // once a key may have gone.
-            return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e) with { Cleared = cleared };
+            return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e) with { Cleared = cleared, KeyDisposition = track.KeysGoingFired ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
         }
 
         // The session is free again once the keys have gone: a question it asks next can be
