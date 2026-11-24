@@ -163,6 +163,22 @@ public class SessionWatchTests
     }
 
     [Fact]
+    public void Only_the_main_agents_own_answer_counts_as_delivered_not_a_delegates_text()
+    {
+        Session Idle(Activity a) => S(SessionStatus.Idle, T.AddMinutes(-25)) with { Activity = a };
+        var w = Watch(null, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddMinutes(-40))], T.AddMinutes(-30));
+        // The top-level response is a delegate's (Source names it) and the main agent has said nothing of its own.
+        var delegateOnly = new Activity { TurnCount = 1, Response = "delegate text", Source = new ActivitySource { Response = "delegate text" } };
+        Assert.Single(w.Evaluate([Idle(delegateOnly)], T));
+
+        var own = Watch(null, "s1");
+        own.Evaluate([S(SessionStatus.Working, T.AddMinutes(-40))], T.AddMinutes(-30));
+        var mainAnswer = delegateOnly with { Own = new OwnActivity { Response = "Done." } };
+        Assert.Empty(own.Evaluate([Idle(mainAnswer)], T));
+    }
+
+    [Fact]
     public void A_zero_cap_still_sends_one_notice_then_one_final_notice()
     {
         var w = Watch(new WatchSettings { MaxPerEpisode = 0 });

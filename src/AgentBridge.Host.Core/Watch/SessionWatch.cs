@@ -67,7 +67,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
         return notices;
     }
 
-    // "Delivered" is the transition PushNotifier already treats as finished: Working or Waiting to Idle with a response.
+    // "Delivered" is the transition PushNotifier already treats as finished: Working or Waiting to Idle with the MAIN agent's own answer (never a delegate's text).
     // Seen first as Idle (a host restart) the answer is unknown, and then neither R2 nor R4 may fire.
     Delivery Track(Session s)
     {
@@ -76,7 +76,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
             ? s.Status == SessionStatus.Idle ? Delivery.Unknown : Delivery.No
             : s.Status == SessionStatus.Working ? Delivery.No
             : s.Status == SessionStatus.Idle && was.Status != SessionStatus.Idle
-                ? string.IsNullOrWhiteSpace(s.Activity.Response) ? Delivery.No : Delivery.Yes
+                ? string.IsNullOrWhiteSpace(NotificationClasses.MainResponse(s)) ? Delivery.No : Delivery.Yes
             : was.Delivery;
         seen[s.Id] = (s.Status, delivery);
         return delivery;
