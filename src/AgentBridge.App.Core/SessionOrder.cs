@@ -251,23 +251,48 @@ public sealed class SessionOrder
     List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
         : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
-    // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
-    // hasn't finished sending, nor past one.
+    // Whether a row on screen can move by one (-1 up, 1 down): within its group, or at the group's
+    // edge across it (Crossing); not a row its machine hasn't finished sending, nor past one.
     public bool CanMove(string key, int delta)
     {
         if (Sort != SessionSort.Yours || GroupOf(key) is not { } g || pending.Contains(key)) { return false; }
         var i = g.IndexOf(key) + delta;
-        return i >= 0 && i < g.Count && !pending.Contains(g[i]);
+        if (i >= 0 && i < g.Count) { return !pending.Contains(g[i]); }
+        return Crossing(key, delta) is not null;
     }
 
-    // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
-    // their places relative to each other.
+    // Moves a row past its neighbour on screen, or across its group's edge. Rows remembered for
+    // sessions not shown keep their places relative to each other.
     public bool Move(string key, int delta)
     {
         if (!CanMove(key, delta)) { return false; }
         var g = GroupOf(key)!;
-        Insert(key, g[g.IndexOf(key) + delta], delta > 0);
+        var i = g.IndexOf(key) + delta;
+        if (i >= 0 && i < g.Count) { Insert(key, g[i], delta > 0); return true; }
+        var (id, anchor, after) = Crossing(key, delta)!.Value;
+        Groups.SetGroup(key, id);
+        if (anchor is not null) { Insert(key, anchor, after); }
         return true;
+    }
+
+    // Where an unpinned row goes past the edge of its group: the sections run each group in turn,
+    // then Sessions (no group), and Pinned is never one of them. Down lands at the top of the next
+    // open section, up at the foot of the previous one; a collapsed group is passed over. Null at
+    // the first and last places, for a pinned row, or when the row it would land beside is pending.
+    (string? Group, string? Anchor, bool After)? Crossing(string key, int delta)
+    {
+        if (IsPinned(key)) { return null; }
+        var sections = Groups.Items.Select(g => (string?)g.Id).Append(null).ToList();
+        for (var s = sections.IndexOf(Groups.GroupOf(key)) + delta; s >= 0 && s < sections.Count; s += delta)
+        {
+            var id = sections[s];
+            if (id is not null && GroupCollapsed(id)) { continue; }
+            var members = shownSessions.Where(k => Groups.GroupOf(k) == id).ToList();
+            if (members.Count == 0) { return (id, null, false); }
+            var anchor = delta > 0 ? members[0] : members[^1];
+            return pending.Contains(anchor) ? null : (id, anchor, delta < 0);
+        }
+        return null;
     }
 
     // A drag: the row goes before (or after) the target row, and into the target's group, so a

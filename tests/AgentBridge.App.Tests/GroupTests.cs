@@ -299,7 +299,8 @@ public sealed class GroupTests : IDisposable
         main.SelectedMachine = main.Machines[0];
         main.RemoveFromGroup(card);
         Assert.Equal(["b", "a"], main.Sessions.Select(c => c.Id));
-        Assert.False(main.Move(card, -1));
+        Assert.True(main.Move(card, -1));
+        Assert.Equal(id, main.Order.Groups.GroupOf(key));
         main.DeleteGroup(id);
         Assert.Empty(main.Groups);
     }

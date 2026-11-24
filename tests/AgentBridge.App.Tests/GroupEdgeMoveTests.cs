@@ -85,6 +85,7 @@ public sealed class GroupEdgeMoveTests : IDisposable
         Assert.Equal("ab | cd | e | ", Screen(order));
         Assert.True(order.Move(K("b"), 1));
         Assert.Equal(c, order.Groups.GroupOf(K("b")));
+        Assert.Equal("a | cd | be | ", Screen(order));
         Assert.True(order.Move(K("b"), -1));
         Assert.Equal(a, order.Groups.GroupOf(K("b")));
     }
