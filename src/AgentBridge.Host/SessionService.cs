@@ -116,6 +116,9 @@ public sealed class SessionService
 
     // An agent's own session.launch (#3237 S3), after AgentPipeLaunch's checks: the card's launch
     // service, with the attributed agent principal as provenance and peer.
+    // Whether the host's own launch record shows an agent started this session's current process through the fleet route (#2741).
+    // Throws, so the caller refuses, when the record is unfinished or unreadable.
+    internal bool IsFleetWorker(string session) => launcher?.IsFleetWorker(session, source.ProcessOf(session)) == true;
     internal Fleet.Grants.StopTarget? GrantTarget(string session) => source.Get(session) is not null
         && source.ProcessOf(session) is { Id: > 0, StartedAt: { } started } process ? new(session, new(process.Id, started)) : null;
     internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized, string? grant = null, Action<string>? confirmed = null)
