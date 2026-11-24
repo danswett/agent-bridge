@@ -1,6 +1,6 @@
-From 1633be628125d99a50f97f205e6fe6336fb4559b Mon Sep 17 00:00:00 2001
+From f4903abff4a35d379ed343c282dfa2d747525da8 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:22:02 -0800
+Date: Mon, 23 Nov 2026 22:32:45 -0800
 Subject: [PATCH] s 6a3
 
 ---
@@ -12,7 +12,7 @@ Subject: [PATCH] s 6a3
  5 files changed, 193 insertions(+), 10 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index ca16cb8cc..9d0f270d6 100644
+index b055617a8..9f2184ad5 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -571,18 +571,140 @@ jobs:
@@ -257,7 +257,7 @@ index 8aae8addb..ba81c2f66 100644
      $code = Get-Content -Raw $script
      foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index a48142fdb..f7a98e332 100644
+index 127825537..f1a7dc8d3 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -269,7 +269,7 @@ index a48142fdb..f7a98e332 100644
          Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
      }
  
-@@ -266,4 +266,49 @@ public class FullWorkflowTests
+@@ -270,4 +270,49 @@ public class FullWorkflowTests
          Assert.Equal("true", Scalar(retry, "continue-on-error"));
          Assert.Contains("exit 1", Scalar(twice, "run"), StringComparison.Ordinal);
      }
