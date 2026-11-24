@@ -10,16 +10,22 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 // sends, receives or signs.
 //
 //   remote           "own-account" (the default when the key is absent or null) or "off"
+//   scope            "same-person" (the default when absent or null) or "off": the same switch under the name a person sees
+//                    (docs/design/beta-messaging.md). Off from either key wins; an unknown value is off and reported. An explicit
+//                    "same-person" is an explicit on for the flags below, but after a recorded kill only remote "own-account" turns
+//                    messaging back on (RemoteKeyOn; LiteKill.On). If a key appears twice in the file, the last one wins, as for
+//                    every setting here (MessagingScopeTests); a null scope reads as absent.
 //   allowAllTargets  false (the default) or true: whether own-agent text may enter an allow-all
-//                    session. Counts only while remote is explicitly "own-account", so the default
-//                    never opens one; otherwise such a target falls back to Home Assistant.
+//                    session. Counts only while messaging is explicitly on (remote "own-account" or scope "same-person"), so the
+//                    default never opens one; otherwise such a target falls back to Home Assistant.
 //   allowAllTargetSessions [] (default): exact session ids allowed with allowAllTargets on; names and wildcards grant nothing.
 //   allowAllLaunchedTargets false (default): all live allow-all launches here, independently of the list path.
-//   laneDelivery     false (default): the owner-gated lane delivery path (docs/message-delivery.md). Counts only while remote is
-//                    explicitly "own-account"; a consumer must also AND it with liteKill.On. Nothing reads it yet.
+//   laneDelivery     false (default): the owner-gated lane delivery path (docs/message-delivery.md). Counts only while messaging is
+//                    explicitly on; a consumer must also AND it with liteKill.On. Nothing reads it yet. The Scope property has no
+//                    consumer yet either: PR4's Settings control (docs/design/beta-messaging.md) is the first.
 //
 // Only a clean absent key is on. An explicit "off" (which the kill writes), an unknown value, a
-// section that is not an object, any problem in a section without remote, or a file that cannot
+// section that is not an object, any problem in a section without remote or scope, or a file that cannot
 // be read (Closed) is off. Invalid list entries are ignored. Installs/upgrades never write these keys.
 //
 // A change needs no restart: HostSettings.CurrentAgentMessaging(folder) is called per message, which reads
@@ -39,6 +45,9 @@ public sealed record AgentMessagingSettings
     public string Remote { get; init; } = Off;
     // Whether config.json names remote itself. After a kill, the default alone never turns the mode back on.
     public bool RemoteSet { get; init; }
+    // Whether the remote key itself says "own-account". The one thing that turns messaging back on after a recorded kill: a scope of
+    // same-person never does, and neither does unsetting the "off" a kill wrote (docs/design/beta-messaging.md section 3).
+    public bool RemoteKeyOn { get; init; }
     public bool AllowAllTargets { get; init; }
     public bool AllowAllLaunchedTargets { get; init; }
     public bool LaneDelivery { get; init; }
@@ -63,7 +72,7 @@ public sealed record AgentMessagingSettings
         if (s.TryGetProperty("remote", out var remote) && remote.ValueKind != JsonValueKind.Null)
         {
             var value = remote.ValueKind == JsonValueKind.String ? remote.GetString() : null;
-            settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true };
+            settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true, RemoteKeyOn = value == OwnAccount };
             if (value is not (OwnAccount or Off)) { problems.Add($"agentMessaging.remote is not \"{Off}\" or \"{OwnAccount}\", so remote agent messaging is off"); }
         }
         // scope (docs/design/beta-messaging.md section 3): "same-person" is an explicit on, "off" is off, and anything else is off and
@@ -74,7 +83,7 @@ public sealed record AgentMessagingSettings
             if (value == SamePerson) { settings = settings with { Remote = settings.RemoteSet ? settings.Remote : OwnAccount, RemoteSet = true }; }
             else
             {
-                settings = settings with { Remote = Off, RemoteSet = true };
+                settings = settings with { Remote = Off, RemoteSet = true, RemoteKeyOn = false };
                 if (value != Off) { problems.Add($"agentMessaging.scope is not \"{Off}\" or \"{SamePerson}\", so remote agent messaging is off"); }
             }
         }

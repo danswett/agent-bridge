@@ -124,6 +124,66 @@ public sealed class MessagingScopeTests
         finally { Directory.Delete(root, true); }
     }
 
+    // The ONE rule (docs/design/beta-messaging.md section 3): once a kill is recorded, only an explicit remote "own-account" turns messaging
+    // back on. A scope of same-person never does, and neither does unsetting the remote key a kill wrote (receipt: #4316 comment 7124772690).
+    [Fact]
+    public void After_a_kill_a_scope_of_same_person_with_the_remote_key_unset_does_not_turn_messaging_back_on()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scope-unset-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.scope", "same-person"], root, TextWriter.Null, TextWriter.Null));
+            var kill = new LiteKill(root);
+            kill.Kill();
+            Assert.False(kill.On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "unset", "agentMessaging.remote"], root, TextWriter.Null, TextWriter.Null));
+            Assert.False(new LiteKill(root).On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.scope", "same-person"], root, TextWriter.Null, TextWriter.Null));
+            Assert.False(new LiteKill(root).On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], root, TextWriter.Null, TextWriter.Null));
+            Assert.True(new LiteKill(root).On);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    // "Never an agent" for the setting is the #67 refusal in Program.cs, which the ConfigCommands tests above do not reach (they call Run
+    // directly). This runs the real host command line as a process that says it is inside an agent session (receipt: #4316 comment).
+    [Theory]
+    [InlineData("set", "agentMessaging.scope", "off")]
+    [InlineData("set", "agentMessaging.remote", "own-account")]
+    [InlineData("unset", "agentMessaging.remote", "")]
+    public async Task Config_set_and_unset_from_an_agent_session_are_refused_and_change_nothing(string verb, string key, string value)
+    {
+        var local = Path.Combine(Path.GetTempPath(), "scope-agent-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(local);
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+            start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "agent-bridge-host.dll"));
+            foreach (var arg in new[] { "config", verb, key, value }.Where(a => a.Length > 0)) { start.ArgumentList.Add(arg); }
+            start.Environment["LOCALAPPDATA"] = local;
+            start.Environment[AgentBridge.Local.AgentAncestry.SessionVariable] = "agent-session-1";
+            using var process = System.Diagnostics.Process.Start(start)!;
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.Contains("refused", error);
+            Assert.Empty(Directory.GetFiles(local, "config.json", SearchOption.AllDirectories));
+        }
+        finally { Directory.Delete(local, true); }
+    }
+
+    // A key written twice: the reader takes the last, as every other setting does, and a null scope is the same as an absent one.
+    [Fact]
+    public void A_key_written_twice_reads_as_its_last_value_and_a_null_scope_reads_as_absent()
+    {
+        Assert.False(Read("""{"scope":"same-person","scope":"off"}""").Settings.RemoteEnabled);
+        Assert.True(Read("""{"scope":"off","scope":"same-person"}""").Settings.RemoteEnabled);
+        Assert.Equal(Read("{}").Settings.Scope, Read("""{"scope":null}""").Settings.Scope);
+        Assert.False(Read("""{"scope":null}""").Settings.RemoteSet);
+    }
+
     [Fact]
     public void An_upgrade_default_is_not_an_explicit_on()
     {
