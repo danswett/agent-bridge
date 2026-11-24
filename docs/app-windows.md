@@ -957,6 +957,21 @@ controls consume that same contract; this extraction does not disable or remove 
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
+  * **A download or an install under way finishes, whatever newer release appears** (owner, Nov 23:
+    VM6 failed 8040 to 8050 when 8051 landed minutes later; `ObservedUpdater`, `AutoUpdaterTests`).
+    VelopackUpdater's check drops the package it holds when it finds a newer release, so a check
+    from Settings or a tick while a download ran, or while the host stopped for an install, left
+    nothing to apply and the install aborted. From the start of a download, and from the moment an
+    install is claimed (Restart to update, a device's Install, or the tick's) to its end,
+    `ObservedUpdater` answers a check with what was last found and puts it off
+    (`CheckDeferred`), and fetches nothing else. A check already running finishes first, and an
+    install begins only if the release it chose is still the one ready (nothing is stopped
+    otherwise, as above). When the download or install has ended (an applied one exits the app,
+    and the new version checks at its start; a failed one leaves the old release running), the
+    next tick checks at once, not after the 30 minutes, and the newer release is downloaded and
+    offered. A release downloaded and waiting, with no install claimed, is still replaced by the
+    next check's newer one, as before. The host restart onto its installed files (#4107) and the
+    bounded apply retry (#4093) are unchanged.
   * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: a second
     Restart to update, or a device's Install, while one installs is refused): an install that
     fails starts it again and waits for the next check; quitting the app while the host is

@@ -3489,7 +3489,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(updater.Applied, string.Join("\n", log));
         Assert.Equal("0.2.0", updater.AppliedVersion);
         Assert.DoesNotContain(log, l => l.Contains("package ready changed"));
-        Assert.Single(processes.Started);
+        // Applied, not restarted: the host stays down for the installer.
+        Assert.Empty(processes.Started);
     }
 
     [Fact]
@@ -3563,7 +3564,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.2.0", observed.Ready);
         var (checks, downloads) = (updater.Checks, updater.Downloads);
 
-        var hold = observed.Applying();
+        var hold = await observed.ApplyingAsync();
         updater.Found = "0.3.0";
         Assert.Equal("0.2.0", await observed.CheckAsync());
         await observed.DownloadAsync(_ => { });
@@ -4820,7 +4821,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    public async Task A_new_release_found_after_a_download_has_none_of_the_old_releases_counts()
     {
         updater.ReportsDownloadFacts = true;
         updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -4830,14 +4831,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var downloading = observed.DownloadAsync(_ => { });
         Assert.Equal(3, observed.Bytes);
 
+        // A download under way completes first: the check is put off, so the release downloading keeps its own counts.
         updater.Found = "0.3.0";
         await observed.CheckAsync();
-        var counts = (observed.Bytes, observed.Total);
+        var during = (observed.Found, observed.Bytes, observed.Total);
         updater.DownloadGate.SetResult();
         await downloading;
+        Assert.Equal(("0.2.0", (long?)3, (long?)10), during);
 
+        // The newer release is found once it has ended, and none of the old release's counts go with it.
+        await observed.CheckAsync();
         Assert.Equal("0.3.0", observed.Found);
-        Assert.Equal(((long?)null, (long?)null), counts);
+        Assert.Equal(((long?)null, (long?)null), (observed.Bytes, observed.Total));
     }
 
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed
