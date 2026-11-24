@@ -9,16 +9,17 @@
 # and WebKit's packages. The runner's mirror list (/etc/apt/apt-mirrors.txt, from
 # actions/runner-images) puts that mirror first and Canonical's HTTPS archive after it, but apt
 # moves down the list only when a fetch fails, never when it is slow. Network attempts get
-# 60 seconds for updates; downloads get 180 seconds on Azure and 600 on Canonical. Azure timeout or DNS failure
+# 60 seconds for updates; downloads get 180 seconds on Azure and on Canonical alike. Azure timeout or DNS failure
 # immediately leaves Azure. The Azure mirror is taken off the list and apt fetches the rest
 # from https://archive.ubuntu.com,
 # keeping what it has. Nothing else changes: no source, key or trust setting is added, apt checks
 # every package against the signed index either way. Azure DNS failures leave immediately;
-# Downloads get three attempts (5/20 s backoff). Updates get an initial attempt plus three
+# Downloads get six attempts (5/20/30 s backoff, capped at 30), each on the NEXT listed mirror once Azure is left. Updates get an initial attempt plus three
 # retries (15/30/60 s) for known-host network errors, including Microsoft's feed and HTTP 429.
 # Retry budget is per mirror, NOT a total deadline: allowing each 30 s kill grace, Canonical
-# update can take 4*(60+30)+105 = 465 s, downloads 3*(600+30)+25 = 1915 s.
-# Together that is 2380 s (39m40s), already beyond the 35m job cap, before install/tests.
+# update can take 4*(60+30)+105 = 465 s, downloads 6*(180+30)+115 = 1375 s at the very worst, and a connection that goes silent
+# is dead after PLAYWRIGHT_APT_STALL_SECONDS (30 s, apt's Acquire::http(s)::Timeout), so a stalled mirror costs seconds, not an attempt's limit.
+# The package-by-package fetch below runs first and is the fast path; this is what is left to apt after it.
 # Azure attempts and its up-to-7 s DNS probe can add more. The job cap is the final bound;
 # retries do not reserve test time. See quality/README.md for the budget and proof limits.
 # Exhausted throttling or Microsoft-feed errors are fatal even on a cache hit.
@@ -107,7 +108,7 @@ if [ "${DEBS_CACHE_HIT:-}" = true ]; then
   else echo "::warning::apt cache lacks debs; treating it as a miss"; fi
 fi
 if [ "$cache_available" = true ] && [ "$force" = false ]; then cache_hit=true; fi
-attempts=${PLAYWRIGHT_APT_ATTEMPTS:-3}
+attempts=${PLAYWRIGHT_APT_ATTEMPTS:-6}
 delay=${PLAYWRIGHT_APT_RETRY_DELAY:-5}
 network_host=azure.archive.ubuntu.com
 left_azure=false
@@ -135,11 +136,22 @@ network_error() {
     ! grep -qviE "^[EW]: Failed to fetch .* (Temporary failure resolving|Could not resolve|Could not connect|Unable to connect|Connection (failed|timed out|refused|reset)|Network is unreachable|($status)([[:space:]]|$))" <<< "$errors"
 }
 
+# Puts the next listed mirror first, so the next attempt asks a different one (a regional mirror that stalls is not asked again straight away).
+rotate_mirrors() {
+  local first rotated
+  [ "$(grep -c '^https\{0,1\}://' "$mirrors")" -gt 1 ] || return 0
+  first=$(grep -m 1 '^https\{0,1\}://' "$mirrors")
+  rotated=$(mktemp)
+  { grep -v -x -F -- "$first" "$mirrors" || true; printf '%s\n' "$first"; } > "$rotated"
+  sudo cp -- "$rotated" "$mirrors"; rm -f "$rotated"
+  echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the next attempt asks the next mirror: $(grep -m 1 '^https\{0,1\}://' "$mirrors" | cut -f 1)"
+}
 retry() {
   local phase="$1" n=1 rc=0 log wait max="$attempts" strict=false
   shift
-  if [ "$phase" = download ] && [ "$left_azure" = true ]; then limit=${PLAYWRIGHT_APT_LIMIT:-600s}; fi
+  if [ "$phase" = download ] && [ "$left_azure" = true ]; then limit=${PLAYWRIGHT_APT_LIMIT:-180s}; fi
   [ "$phase" != update ] || max=${PLAYWRIGHT_APT_ATTEMPTS:-4}
+  if [ "$phase" = download ] && [ "$left_azure" = false ]; then max=${PLAYWRIGHT_APT_ATTEMPTS:-3}; fi
   network_failed=false
   log=$(mktemp)
   while true; do
@@ -157,10 +169,12 @@ retry() {
       network_failed=true; break
     fi
     wait=$((delay * 4 ** (n - 1)))
+    [ "$wait" -le 30 ] || wait=30
     if [ "$phase" = update ]; then
       wait=$((${PLAYWRIGHT_APT_RETRY_DELAY:-15} * 2 ** (n - 1)))
       [ "$wait" -le 60 ] || wait=60
     fi
+    [ "$phase" != download ] || [ "$left_azure" != true ] || [ "${PLAYWRIGHT_APT_ROTATE:-true}" != true ] || rotate_mirrors
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $max); retrying"
     sleep "$wait"; n=$((n + 1))
   done
@@ -215,6 +229,12 @@ if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
     leave_azure
   fi
 fi
+# A connection with no data for this long is dead (curl: under 1 kB/s for it; apt: Acquire::http(s)::Timeout), whatever the attempt's total limit.
+stall_seconds=${PLAYWRIGHT_APT_STALL_SECONDS:-30}
+# Written before anything is fetched: apt waits this long for DATA on a connection, not for the whole file, so a mirror that stalls mid-download
+# (main run 45351659153: Get:69 libmfx1, then nothing, three attempts each waiting out their full limit) fails at once and the retry asks another mirror.
+sudo mkdir -p "$apt_etc/apt.conf.d"
+printf 'Acquire::http::Timeout "%s";\nAcquire::https::Timeout "%s";\n' "$stall_seconds" "$stall_seconds" | sudo tee "$apt_etc/apt.conf.d/99playwright-stall" > /dev/null
 rc=0
 retry update bounded apt-get update || rc=$?
 if [ "$rc" -ne 0 ]; then
@@ -303,7 +323,7 @@ prefetch() {
     for base in "${urls[@]}"; do
       idx=${base%%|*}; base=${base#*|}
       for ((try = 1; try <= fetch_tries; try++)); do
-        if curl --fail --silent --show-error --location --connect-timeout 10 --max-time "$fetch_timeout" -o "$work_dir/$file" "$base" 2>/dev/null </dev/null &&
+        if curl --fail --silent --show-error --location --connect-timeout 10 --max-time "$fetch_timeout" --speed-limit 1024 --speed-time "$stall_seconds" -o "$work_dir/$file" "$base" 2>/dev/null </dev/null &&
           [ "$(wc -c < "$work_dir/$file")" -eq "$size" ] && printf '%s  %s\n' "${hash#SHA256:}" "$work_dir/$file" | sha256sum --check --status; then
           got=true; break 2
         fi
