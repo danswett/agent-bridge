@@ -242,6 +242,18 @@ jobs:
         run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
       - name: The catalog is complete
         run: dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll check
+      # #4465: the silent-revert guard. A warning, never a failure: for every line this pull request deletes against its base it names the merged pull request that last changed it (git blame at the
+      # base, which on a pull request is HEAD^1 of the merge commit) and any test method it deletes. The plan job has no secrets; blame needs history, so the 2-commit checkout is deepened first.
+      - name: Silent-revert guard (a warning only, #4465)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        env:
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags --unshallow origin || git fetch --no-tags --depth=20000 origin
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll silent-revert --base HEAD^1 --head HEAD --pr "$PR" --summary "$GITHUB_STEP_SUMMARY"
       - name: What runs and why
         id: select
         shell: pwsh

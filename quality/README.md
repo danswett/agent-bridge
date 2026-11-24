@@ -1115,6 +1115,15 @@ each reader posts its own receipt comment (naming its model family) and sets its
 per-command route. Quality spot-checks them and alone gates, arms and merges.
 To roll back, revoke the App's key or suspend it in GitHub settings; nothing else depends on it.
 
+### The silent-revert guard (#4465)
+
+PR #3968's merge of main silently reverted #4126, its code and its four tests together, and CI stayed green because the tests went with the code. `agent-bridge-quality silent-revert --base REF
+[--head REF] [--pr N]` asks, for every line a change deletes against its base, which MERGED pull request last changed it: `git blame` at the base, the pull request from the trailing `(#N)` of the squash
+subject, the change's own number left out. It names the deleted test methods (a public method right after a deleted `[Fact]` or `[Theory]`, in a test file) and prints a job summary and a
+`::warning` annotation per pull request: "this PR removes lines from #4126". **It only warns, and exits 0**: the point is that a reader looks. The builder's own rule stays (after a merge of main, run
+`git diff main...HEAD --stat` and confirm it removes nothing that is not yours); this is the automatic backstop. It is **bounded** (#4490): the step fetches only the base's last 1000 commits, a line older than that
+is reported as not checked (never blamed on the shallow boundary), and a 90 s time box and a 20,000-line budget stop it and say what it left.
+
 ## 5. Coverage, timing, flakes and reports
 
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
