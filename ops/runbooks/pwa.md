@@ -10,6 +10,7 @@ failing to install (a release the worker could not keep whole; #650).
 `pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI or Full completion.
 Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed, each in the CI run or in the same commit's Full run (full.yml; a Pages deploy waits for FULL, never deploys on CI alone); other jobs do not gate.
 Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
+A FULL run that never starts or was cancelled (its concurrency group cancels by arrival, not by commit) leaves the newest commit undeployed and silent: only the stale-PWA alarm (`stale-pwa.yml`, #4369) notices. To unblock it, while that commit is still main's tip, dispatch FULL by hand on main: `gh workflow run full.yml -R danswett/agent-bridge --ref main`. A by-hand FULL run on `main` at that exact commit counts for Pages; a dispatch on any branch never does (write access is needed to dispatch).
 Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 sha256 with the built files, retrying for about five minutes while Pages propagates. A mismatch

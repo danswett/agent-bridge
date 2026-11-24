@@ -805,7 +805,7 @@ export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 # The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
 export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_ARGS="$work/curl-args.log" CURL_FIXTURES="$work/curl-fixtures"
 
-# force-apt-fallback (full.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
+# force-apt-fallback (the action's input; no workflow passes it until the by-hand proof gets its trigger, quality/README.md §4.7): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.
 from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
 from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'
