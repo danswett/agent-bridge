@@ -950,7 +950,7 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentHaBridge = agentHaCached,
         HomeAssistant = () => haAuth.Problem,
         FleetPublication = () => fleetPublication.Status,
-        SessionWatch = () => sessionWatch is null ? null : new SessionWatchStatus(true, sessionWatch.Loop.LastPass, sessionWatch.Task.IsCompleted),
+        SessionWatch = () => SessionWatchHealth.Of(sessionWatch),
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
         Agents = agentReadiness,

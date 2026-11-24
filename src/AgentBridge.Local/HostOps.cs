@@ -128,7 +128,7 @@ public sealed record HostAccount(string Login, string AccountId);
 public sealed record RelayStatus(RelayState State, string? Url = null, string? Detail = null, DateTimeOffset? Since = null);
 
 // The session watch (#4262, docs/design/session-watch.md "When the watch itself fails"): its heartbeat for the app. On: the watch runs. LastPassAt: when its
-// last pass finished (null before the first), so the app can show a stale watch. Stopped: the loop ended and stays down until the host restarts.
+// last pass finished (null before the first), so the app can show a stale watch. Stopped: the loop is no longer running (it failed twice in an hour, or the host is stopping).
 public sealed record SessionWatchStatus(bool On, DateTimeOffset? LastPassAt = null, bool Stopped = false);
 
 public sealed record FleetPublicationStatus(string Result, int SkippedInvalidIds = 0, int Failures = 0, DateTimeOffset? NextRetry = null, string? Failure = null);
