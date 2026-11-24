@@ -98,6 +98,33 @@ public class ClaudeReplyRefTests
     }
 
     [Fact]
+    public async Task A_reply_that_grows_across_a_thinking_block_keeps_its_first_ref_and_the_next_reply_has_another()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        await using var source = f.Source();
+        var seen = new List<(string? Ref, string? Text)>();
+        async Task Step(params string[] lines)
+        {
+            Fixture.Append(transcript, lines);
+            await source.RefreshAsync();
+            var a = source.Get(Id)!.Activity;
+            seen.Add((a.ResponseRef, a.Response));
+        }
+        await Step(Claude.User("go", 1), Claude.AssistantMessage("m1", 2, null, Claude.Text("One")));
+        await Step(Claude.AssistantMessage("m1", 3, null, Claude.Thinking("considering the second part")));
+        await Step(Claude.AssistantMessage("m1", 4, null, Claude.Text("Two")));                                            // the same message grows across a thinking block
+        await Step(Claude.AssistantMessage("m2", 5, "end_turn", Claude.Text("Next")));
+        var one = seen.First(s => s.Text == "One");
+        var grown = seen.First(s => s.Text == "One\n\nTwo");
+        var next = seen.First(s => s.Text == "Next");
+        Assert.False(string.IsNullOrEmpty(one.Ref));
+        Assert.Equal(one.Ref, grown.Ref);
+        Assert.NotEqual(grown.Ref, next.Ref);
+    }
+    [Fact]
     public async Task A_host_restart_and_a_full_re_read_give_the_same_reply_the_same_ref()
     {
         using var f = new Fixture();
