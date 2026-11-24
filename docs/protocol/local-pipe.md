@@ -74,6 +74,9 @@ devices that reach the host through the relay (`push` is not in hello's capabili
 here). Hello's capabilities on the pipe add `host.manage` for the app, and are cut to
 reading for a process inside an agent session ([below](#who-may-manage-the-host)).
 
+`load.get` `{}` answers only what launch admission reads (#2982): `state`, `ageMs`, `runQueueAvg` and `staleAfterMs` ([MachineLoadFigures](v1-machine-load.md#the-local-pipes-load)). No session list, nothing per session, no CPU or memory totals and no sample time: the full [MachineLoad](v1-machine-load.md#machineload) stays on the relay, where the owner cleared it (#1150). A stale or unavailable sample has no `runQueueAvg`, never a 0. It is read-only, like `sessions.list`, and is served only when `load.enabled` is on. Every caller the pipe admits gets exactly these figures (the app, the host's command line, a process inside an agent session, and anything else of the user's); a script credential is refused it, as it is every op but `fleet.list`, `fleet.find`, `agent.send` and the fleet launch. `load.subscribe`,
+`load.unsubscribe`, `load.update` and the `load` capability remain relay-only.
+
 Attachments differ in size only. The pipe is a direct path (design §4.6): its bytes cost
 the relay nothing, so hello offers `sessions.attach.direct` with `sessions.attach`, and
 `attachment.chunk` takes files up to 100 MiB, not 256 KiB. The host writes one over
@@ -111,6 +114,19 @@ Every call requires a freshly classified local app on the pipe, without an agent
 credential. Agents, other processes (including the host CLI) and remote channels
 are refused with a reason. This slice adds no app view or launch-policy enforcement.
 
+`host.workspace.add` approves a folder for launching, so the app needs no terminal; it is the
+same check as `agent-bridge-host workspace add` (`WorkspaceApproval`). Its data is exactly
+`{ "path": "<absolute path>", "label": "<optional>" }`: the exact folder only. The result is
+`{ "result": "added", "label", "path", "restartRequired": true }` or `{ "result": "refused", "code" }`,
+the code one of `not-a-path`, `missing`, `system-folder`, `not-git`, `already-approved`,
+`label-in-use`, `too-many`, `unwritable`, `not-local` (a network share, or a drive that is not a
+fixed one of this machine), `busy` (the config file was being changed elsewhere for 10 seconds; try
+again), `invalid-request` or `config-unreadable`; no text from the
+request comes back. Workspaces are read when the host starts, so a new one applies after a restart.
+It is a person's act: a freshly classified local app without an agent credential. An agent, another
+process (the host CLI included), a script credential or a remote channel is refused with
+`person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
+
 `host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
 "genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
 `{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
@@ -132,10 +148,10 @@ host also asks *which* process each request comes from, op by op:
 
 | The caller | How the host tells | May |
 |---|---|---|
-| **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
+| **Inside an agent session** | The connecting process, or any process it descends from, is a live session's own process (by id and start time, so a reused id does not count), one a launch started, any agent CLI found running (Copilot, Claude, Codex, including under Node or Bun), or an executable named `copilot`, `claude`, `codex` or `agency` | Read: `hello` (offering only `sessions.read` and `usage`), `sessions.list`, `session.get`, `sessions.subscribe`, `usage.*`, `launch.options`, `load.get` (the four figures only, [v1-machine-load.md](v1-machine-load.md#the-local-pipes-load)), `host.status`, `host.subscribe`. Everything else is refused: `refused: this connection is from pid 4120, inside the copilot session 1a2b3c4d (pid 3112); …`. That includes `session.history` (`…; reading a session's history is for the person, from the app or a phone`, [v1-history.md](v1-history.md#security-and-authorization)) and `sessions.focus` (`…; telling the host the person is using the app is for the person, from the app or a phone`): a device in use holds back the person's pushes ([v1-sessions.md](v1-sessions.md#while-the-person-uses-a-device-1190)) |
 | **The app** | Not inside an agent session, its whole ancestry read, and its executable is `AgentBridge.exe` (the app) in the host's own folder, which is how the app ships | Everything, `host.manage` included; the script credential ops (`scripts.add`, `scripts.revoke`, `scripts.grant-fleet`, `scripts.revoke-fleet`, `scripts.list`, `scripts.confirm`) only with the confirmation `scripts.confirm` issued on this connection (below) |
 | **The host's command line** | Not inside an agent session, its whole ancestry read, and its executable is this host's own (`agent-bridge-host`, as `migrate` and `rollback` run it) | What anything else may, `session.launch`, `session.rename`, `agent.adopt`, `agent.revoke`, `scripts.add`, `scripts.revoke`, and `host.restart`, which a migration and a rollback need to hand the hook spool over and back ([migration.md](../migration.md)). Nothing else the app may |
-| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
+| **Anything else of the user's** | Neither, a process that could not be traced, or one whose ancestry could be read only in part (an agent may be above what was read) | The sessions ops as before except `session.rename` and `session.launch`; `load.get` (the four figures only); `host.status` and `host.subscribe`; not the other management ops (`only the Slipgates app beside this host may stop, restart, sign in, change settings or read the relay account`) |
 
 `session.launch` checks caller classification afresh. An untraceable caller is refused
 with `untraceableCaller` and audited as `unknown:local`, without trusting identity fields
@@ -416,7 +432,7 @@ of its own session, so its ancestry includes the credential's root process. It k
 agent-ha-bridge's tool names (`list_agent_sessions`, `read_agent_session`,
 `reply_to_agent_session`, `launch_agent_session`, `read_launch_result`, `get_launch_options`) and
 maps them to `sessions.list`, `session.get`, `session.reply`, `session.launch` and
-`launch.options`. It finds the host from `AGENT_BRIDGE_PIPE` (a pipe name or path) or, on
+`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (a pipe name or path) or, on
 Windows, as above from the user's SID and the profile folder (`AGENT_BRIDGE_ROOT`, then
 `AGENT_BRIDGE_PROFILE`, default `default`). `AGENT_BRIDGE_TOKEN` is the credential, sent in
 `agent.hello`. It lists only the tools whose capability `hello` names, and none when no host

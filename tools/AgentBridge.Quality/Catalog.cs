@@ -113,12 +113,23 @@ sealed class Catalog
             }
             else if (suite.TierJobs.Count > 0)
                 Tier("names tier_jobs but isn't tier post-merge");
-        }
+            // The two lanes (S2, #4104): ci.yml's jobs are the FAST lane, full.yml's the FULL lane, which never gates a merge.
+            void LaneProblem(string message) => problems.Add(new("lane", $"suite {suite.Id} {message}"));
+            var wheres = string.IsNullOrWhiteSpace(suite.Where) ? [] : Completeness.ParseWhere(suite.Where).ToList();
+            if (suite.Lane is not null && !Lanes.Contains(suite.Lane, StringComparer.Ordinal))
+                LaneProblem($"has lane '{suite.Lane}', not one of {string.Join(", ", Lanes)}, so it counts as fast");
+            else if (suite.Lane == FullLane.Name && wheres.Any(w => w.File == "ci.yml"))
+                LaneProblem("is lane full, but its where names ci.yml: the FULL lane's jobs are full.yml's");
+            else if (suite.Lane == FullLane.Name && wheres.Count > 0 && !wheres.Any(w => w.File == FullLane.File))
+                LaneProblem("is lane full, but its where names no full.yml job");
+            else if (suite.Lane != FullLane.Name && wheres.Any(w => w.File == FullLane.File))
+                LaneProblem("is lane fast (the default), but its where names full.yml: mark it lane: full");        }
         return problems;
     }
 
     const string PostMerge = "post-merge";
     static readonly string[] Tiers = ["blocking", PostMerge];
+    static readonly string[] Lanes = ["fast", FullLane.Name];
 
     static bool InWhere(Suite suite, string job) => !string.IsNullOrWhiteSpace(suite.Where)
         && Completeness.ParseWhere(suite.Where).Any(w => w.File == "ci.yml" && w.Jobs.Contains(job.Split(" (")[0], StringComparer.Ordinal));
@@ -154,6 +165,8 @@ sealed class Suite
     /// <summary>blocking (when absent) or post-merge, for exactly the <see cref="TierJobs"/> named.</summary>
     public string? Tier { get; set; }
     public List<string> TierJobs { get; set; } = [];
+    /// <summary>fast (when absent: ci.yml, the merge gate) or full (full.yml, which never gates a merge), S2, #4104.</summary>
+    public string? Lane { get; set; }
 
     public bool IsSentinel => string.Equals(Select, "always", StringComparison.OrdinalIgnoreCase);
 }

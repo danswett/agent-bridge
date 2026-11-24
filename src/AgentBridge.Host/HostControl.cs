@@ -93,6 +93,11 @@ public sealed class HostControl
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
     }
 
+    internal object WorkspaceAdd(JsonElement data)
+    {
+        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
+    }
+
     readonly Action<string> log;
     readonly object gate = new();
     readonly DateTimeOffset startedAt;

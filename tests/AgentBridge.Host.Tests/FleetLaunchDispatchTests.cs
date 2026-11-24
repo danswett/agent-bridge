@@ -88,7 +88,6 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
             agentWorktreeCheck: (workspace, made, _) => AgentLaunchWorktreeCheck.Check(workspace, made, "claude"));
         var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude", Workspace = "App",
             Permissions = LaunchProtocol.AllowAll, Prompt = "fixture", Role = "quality-lead" };
-
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, new AgentAuditLog(profile),
             new("local", "agent", principal, null), fleet: true, refusal: () => null);
 

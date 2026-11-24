@@ -46,9 +46,12 @@ disposable host.
 ## Afterwards
 
 Rollback state lives in manual Pages run history: one page of at most 100 runs, ordered by creation
-time, recognizing only main-branch `Pages rollback` and `Pages resume`. Unknown ancestry, lookup
-failure or no boundary in that page blocks automation. Retention (90 days) can age the boundary out;
-perform the explicit manual resume above to re-establish it. First deployment also needs that resume.
+time, recognizing only main-branch `Pages rollback` and `Pages resume`. With no `Pages rollback` run
+in the complete history the fence is open and automatic deploys proceed (no resume is needed for a
+first deployment). After a rollback, deploys stay held until a successful `Pages resume` dispatch.
+Unknown ancestry, a lookup failure or a truncated history (more than 100 runs, none a rollback)
+blocks automation loudly. Matching is by exact run title, so a renamed or retention-expired
+(90 days) `Pages rollback` run leaves the fence open.
 
 If PWA CI would have caught it, it should have: Pages deploys only after its named jobs pass,
 so add the missing test.
