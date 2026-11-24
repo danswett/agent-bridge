@@ -106,3 +106,32 @@ for (const long of [true, false]) {
     expect(await geometry(page)).toEqual(at);
   });
 }
+
+// The expanded box is three lines (92) wherever the installed layout treats the screen as a phone
+// (the owner, Nov 23 about 23:30 PT), with less only where there is less room: never an empty box
+// that scrolls, and never a first paint at one line that is raised to three after layout.
+const textHeights = (page) => page.evaluate(() => {
+  const t = [...document.querySelectorAll('form.reply textarea.reply-input')].find((e) => e.getClientRects().length);
+  return { h: t.getBoundingClientRect().height, overflowY: getComputedStyle(t).overflowY, floor: getComputedStyle(t).minHeight, scrolls: t.scrollHeight > t.clientHeight };
+});
+
+test('installed on an iPhone, the box is three lines, in landscape too, and lower on a short screen without scrolling empty', async ({ page }) => {
+  await installed(page, { long: true });
+  expect(await textHeights(page)).toMatchObject({ h: 92, scrolls: false });
+
+  // Landscape is wider than 760: the installed layout still draws the phone's box, at three lines from the stylesheet.
+  await page.setViewportSize({ width: 852, height: 393 });
+  await frame(page);
+  expect((await textHeights(page)).h).toBeLessThanOrEqual(92);
+  await page.setViewportSize({ width: 852, height: 600 });
+  await frame(page);
+  expect(await textHeights(page)).toMatchObject({ h: 92, floor: '92px' });
+
+  // The keyboard up on a short screen: less room than three lines lowers the box to what is there, and an empty box does not scroll.
+  await page.setViewportSize({ width: 390, height: 170 });
+  await frame(page);
+  const short = await textHeights(page);
+  expect(short.h).toBeGreaterThanOrEqual(44);
+  expect(short.h).toBeLessThan(92);
+  expect(short).toMatchObject({ overflowY: 'hidden', scrolls: false });
+});

@@ -138,6 +138,22 @@ export async function launchSession(host, ledger, options = {}) {
   return answer;
 }
 
+const NO_GRANT = '00000000-0000-0000-0000-000000000000';
+
+// Ends a session the host's own launch record shows an agent started (#2741), by the host's fleet.end with no grant.
+// Thin on purpose: every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is
+// 'unknown' and keeps its request id: send the same request again, never a new one, to learn what happened.
+export async function endSession(host, id, request = randomUUID()) {
+  let receipt;
+  try {
+    receipt = await host.request('fleet.end', { version: 1, request, grant: NO_GRANT, session: id });
+  } catch (error) {
+    if (!(error instanceof PipeError)) throw error;
+    return { id, request, outcome: error.kind === 'unavailable' ? 'unknown' : 'refused', reason: error.message };
+  }
+  return { id, request, outcome: receipt.outcome, ...(receipt.reason ? { reason: receipt.reason } : {}) };
+}
+
 export const getLaunchOptions = (host) => host.request('launch.options', {});
 
 export const readUsage = (host) => host.request('usage.get', {});

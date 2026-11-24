@@ -73,7 +73,8 @@ public sealed class AgentLiteSender(
             Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), script ? "" : "agent", script ? "" : "agent-bridge",
             script ? "script" : "agent", script ? caller.Principal : null);
         byte[] envelope;
-        try { envelope = LiteProfile.Seal(from, new LiteTarget(peerId, input.Session, Zero12), request, data, time.GetUtcNow().ToUnixTimeSeconds(), key.Sign); }
+        var issuedAt = time.GetUtcNow().ToUnixTimeSeconds();
+        try { envelope = LiteProfile.Seal(from, new LiteTarget(peerId, input.Session, Zero12), request, data, issuedAt, key.Sign); }
         catch (EnvelopeException) { return Out(LiteKind.Refused, Malformed); }
 
         using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -95,7 +96,7 @@ public sealed class AgentLiteSender(
         flight.CancelAfter(ackTimeout);
         try
         {
-            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point) }, flight.Token);
+            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point), sentAt = Math.Min(input.SentAt ?? issuedAt, issuedAt) }, flight.Token);
             if (ack.KillEpoch > mode.KillEpoch) { mode.RaiseEpoch(ack.KillEpoch); }
             if (ack.Request != request) { return Out(LiteKind.Unconfirmed, BadAck); }
             return ack.Status switch

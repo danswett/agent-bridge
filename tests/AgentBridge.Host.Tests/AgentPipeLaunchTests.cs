@@ -498,6 +498,36 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Null(replay.Reservation.Target);
     }
 
+    // #2771 (part b), through the real grant path: a grant-launched fleet worker is tracked by the live limit but never listed for idle end.
+    [Fact]
+    public async Task A_grant_launched_fleet_worker_is_never_listed_for_idle_end()
+    {
+        using var key = P256KeyPair.Generate();
+        var source = new FleetPublisherTests.Source();
+        var (pipe, grant, _) = Granted(key, source: source);
+        RegistrationEvidence(pipe, source);
+        var result = await GrantedLaunch(pipe, GrantBody(grant));
+        Assert.Equal(LaunchOutcome.Started, result.Result.Outcome);
+        var gate = pipe.Credentials.LaunchGate;
+        gate.ObserveSession(result.Result.Session!, DateTimeOffset.UtcNow.AddHours(-3), personTyped: false);
+        Assert.DoesNotContain(result.Result.Session!, gate.IdleSessions());
+    }
+
+    // #2771: a grant launch under 1 GiB free on the profile's disk is refused with diskLow before anything is reserved or started.
+    [Fact]
+    public async Task Under_1_GiB_free_refuses_a_grant_launch_with_diskLow()
+    {
+        using var key = P256KeyPair.Generate();
+        var (pipe, grant, _) = Granted(key);
+        var input = GrantBody(grant).Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+        var caller = pipe.Credentials.Of(pipe.Channel)!;
+        var low = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher, new ProfileDisk(folder, _ => 1L));
+        var denied = await Assert.ThrowsAsync<FleetLaunchDenied>(() => low.PrepareAsync(caller, input));
+        Assert.Equal("diskLow", denied.Message);
+        var roomy = new FleetGrantLaunch(folder, key, () => "123", new('a', 32), pipe.Credentials, launcher, new ProfileDisk(folder, _ => 5L << 30));
+        Assert.NotNull(await roomy.PrepareAsync(caller, input with { Request = Guid.NewGuid() }));
+    }
+
     [Fact]
     public async Task Reviewer_recovery_does_not_substitute_the_current_process_for_the_launched_process()
     {
@@ -818,9 +848,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(grantKey: key, grantOnly: true);
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
-        var mode = on is { } o ? new Mode(o) : null;
-        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null, mode: mode), channel, grant,
-            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode: mode)) { Request = request };
+        var mode = new Mode(on ?? true);
+        return new(new FleetRemoteLaunch(pipe.Launch, store, mode, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode)) { Request = request };
     }
 
     [Fact]
@@ -925,6 +955,41 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    // G9c2 (review P1): the receiver must be constructed in production. Program calls FleetRemoteLaunch.Wire once, after grantPipe, with liteKill;
+    // this runs that same method on a real SessionService and a real pipeline, and reads Program.cs to prove the one call and its order.
+    [Fact]
+    public async Task The_host_wires_one_shared_receiver_into_the_session_service_gated_by_the_lite_kill()
+    {
+        using var key = P256KeyPair.Generate();
+        var pipe = Open(grantKey: key, grantOnly: true);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        var mode = new Mode(false);
+        var sessions = new SessionService(new FleetPublisherTests.Source(), new MachineInfo("machine", "Test", "windows", "0.1.0"), launcher: launcher);
+        Assert.Null(sessions.FleetRemoteLaunch);
+        var wired = FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, mode);
+        Assert.Same(wired, sessions.FleetRemoteLaunch);
+        Assert.Same(wired, FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, mode));
+        Assert.Throws<ArgumentNullException>(() => FleetRemoteLaunch.Wire(sessions, pipe.Launch, store, null!));
+        var channel = new LiteChannel(Wire.DeviceId(RandomNumberGenerator.GetBytes(32)), "host", RandomNumberGenerator.GetBytes(32), new string('a', 32), "123", true);
+        Assert.Equal("kill-switch", (await wired.ReceiveAsync(channel, default)).Reason);
+        mode.On = true;
+        Assert.NotEqual("kill-switch", (await wired.ReceiveAsync(channel, default)).Reason); // past the kill gate (a fresh receiver then refuses on its own rules)
+        Assert.Equal(0, launcher.Launches);
+
+        var program = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "AgentBridge.Host", "Program.cs"));
+        var call = System.Text.RegularExpressions.Regex.Matches(program, @"FleetRemoteLaunch\.Wire\(service, grantPipe, [^;]*\bliteKill\);");
+        Assert.Single(call);
+        Assert.True(call[0].Index > program.IndexOf("grantPipe = new AgentPipeLaunch(", StringComparison.Ordinal), "the receiver is wired after grantPipe is built");
+        Assert.Empty(System.Text.RegularExpressions.Regex.Matches(program, @"new FleetRemoteLaunch\(")); // only Wire constructs it
+    }
+
+    static string RepositoryRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        return root.FullName;
+    }
+
     [Fact]
     public async Task A_freshly_started_receiver_refuses_every_envelope_until_the_replay_warm_up_has_passed()
     {
@@ -987,7 +1052,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             ["launch"], scope, new(3, 3, 2), now, 1, now.AddHours(8));
         Assert.True(new GrantStore(folder, key, new(folder), scope).Issue(grant).Usable);
         var receiverStore = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
-        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore, startedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
+        var receiver = new FleetRemoteLaunch(pipe.Launch, receiverStore, new Mode(true), startedAt: DateTimeOffset.UtcNow.AddMinutes(-10));
         var channel = new LiteChannel(self, "host", statik, new('a', 32), "123", true);
         var sign = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var q = sign.ExportParameters(false).Q;
@@ -1094,6 +1159,43 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Contains(AuditRows(), row => row.Contains(request) && row.Contains("kill-switch"));
     }
 
+    // G9c2 (R4zzB583 P2-2): each refusal writes exactly ONE source-side row, the signer is not asked when the mode starts off, and an unwritable
+    // audit is its own refusal.
+    [Fact]
+    public async Task A_sender_whose_mode_starts_off_never_asks_the_signer_and_writes_one_row()
+    {
+        using var key = P256KeyPair.Generate();
+        var signs = 0;
+        var s = OpenSender(key, mode: new Mode(false), audited: true, duringSign: (_, _) => signs++);
+        await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal(0, signs);
+        Assert.Single(AuditRows(), row => row.Contains(request));
+    }
+
+    [Theory]
+    [InlineData("peer-not-trusted")]
+    [InlineData("target-offline")]
+    public async Task A_peer_refusal_writes_one_source_row_with_its_code(string reason)
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, audited: true, serve: _ => Task.FromException<JsonElement>(reason == "target-offline"
+            ? new LitePeerOfflineException("gone") : new LitePeerNotTrustedException("not the same account")));
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, reason), (receipt.Result.Outcome, receipt.Reason));
+        Assert.Single(AuditRows(), row => row.Contains(request) && row.Contains(reason));
+    }
+
+    [Fact]
+    public async Task An_unwritable_audit_is_the_audit_unavailable_refusal_and_nothing_is_sent()
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, mode: new Mode(false), audited: true);
+        await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        using var blocked = new BlockedAuditFile(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single());
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, "audit-unavailable", 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
+    }
+
     [Theory]
     [InlineData("kill")]
     [InlineData("credential")]
@@ -1167,6 +1269,79 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal((LaunchOutcome.Refused, "peer-not-trusted"), (receipt.Result.Outcome, receipt.Reason));
         Assert.Equal(1, s.Link.Calls);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    // #4170 (G9 receiver): fleet-grants.md says every refused use is audited. Once the envelope has verified, the caller is the authenticated
+    // peer device, and each refusal from there (binding or replay, grant missing or revoked, scope) writes one refused row for it.
+    string[] PeerRows(Remote r) => AuditRows().Where(l => l.Contains(r.Channel.PeerId)).ToArray();
+
+    [Fact]
+    public async Task A_remote_launch_refused_for_scope_writes_one_audit_row_for_the_peer()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var other = FleetActionEnvelope.SubjectDigest("123", r.Channel.PeerId, Guid.NewGuid().ToString("D"), "AQEBAQEBAQEBAQEBAQEBAQ", 4242, 1);
+        Assert.Equal("scope", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason);
+        var row = Assert.Single(PeerRows(r));
+        Assert.Contains("scope", row);
+        Assert.Contains(r.Request, row);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_remote_launch_for_a_revoked_or_unknown_grant_writes_an_audit_row_with_the_receipt_reason()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
+        Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
+        Assert.Contains("grant-revoked", Assert.Single(PeerRows(r)));
+
+        var unknown = Guid.NewGuid();
+        var input = new FleetLaunchInput(1, Guid.Parse(r.Request), unknown, "SG Builder 266", "App", "claude", Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello");
+        var body = new FleetActionBody("123", r.Channel.PeerId, FleetActionEnvelope.SubjectDigest(r.Subject.Account, r.Subject.SourceHost, r.Subject.Session,
+            r.Subject.Credential, r.Subject.ProcessInstance.Pid, r.Subject.ProcessInstance.StartedAt.UtcTicks), r.Channel.Self, "fleet.launch",
+            unknown.ToString("D"), 1, input.Request, FleetActionEnvelope.NewNonce(), DateTimeOffset.UtcNow.AddSeconds(60),
+            FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        var missing = (await r.Receiver.ReceiveAsync(r.Channel, r.Data(input: input, body: body))).Reason;
+        Assert.NotNull(missing);
+        Assert.NotEqual("grant-revoked", missing);
+        Assert.Equal(2, PeerRows(r).Length);
+        Assert.Contains(missing!, PeerRows(r)[1]);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_verified_replay_is_audited_but_a_refusal_before_verification_is_not()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var data = r.Data();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.Receiver.ReceiveAsync(r.Channel, data)).Result.Outcome);
+        Assert.Empty(PeerRows(r));
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, data)).Reason);
+        Assert.Contains("policy", Assert.Single(PeerRows(r)));
+
+        // The caller is not yet authenticated for these, so no row names it.
+        var untrusted = OpenRemote(key, trusted: false);
+        Assert.Equal("policy", (await untrusted.Receiver.ReceiveAsync(untrusted.Channel, untrusted.Data())).Reason);
+        Assert.Equal("bad-argument", (await r.Receiver.ReceiveAsync(r.Channel, JsonSerializer.SerializeToElement(new { launch = 1 }))).Reason);
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(audience: new string('c', 32)))).Reason);
+        Assert.Single(PeerRows(r));
+        Assert.Empty(PeerRows(untrusted));
+    }
+
+    [Fact]
+    public async Task A_remote_refusal_that_cannot_be_audited_says_audit_unavailable()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var other = FleetActionEnvelope.SubjectDigest("123", r.Channel.PeerId, Guid.NewGuid().ToString("D"), "AQEBAQEBAQEBAQEBAQEBAQ", 4242, 1);
+        Assert.Equal("scope", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason);
+        using (new BlockedAuditFile(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single()))
+        { Assert.Equal("audit-unavailable", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason); }
         Assert.Equal(0, launcher.Launches);
     }
 
