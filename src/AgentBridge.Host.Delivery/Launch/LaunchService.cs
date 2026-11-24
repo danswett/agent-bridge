@@ -32,6 +32,8 @@ public interface ISessionLauncher
     Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) => Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "fleet launch is unavailable"));
     bool IsFleetWorker(string session, SessionProcess? process) => false;
+    bool WasFleetLaunched(string session) => false;
+    string? LaunchRole(string session) => null;
     LaunchConfig? FleetConfig => null;
     IReadOnlyList<LaunchStatus> LaunchStatuses() => [];
     void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result) { }
@@ -786,6 +788,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare,
         CancellationToken cancellationToken = default) => LaunchOnceAsync(request, principal, prepare, fleet: true);
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
+    public bool WasFleetLaunched(string session) => provenance.WasFleetLaunched(session);
+    public string? LaunchRole(string session) => provenance.RoleOf(session);
     public LaunchConfig FleetConfig => Config;
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
@@ -1326,7 +1330,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null);
+            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, plan.Role);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

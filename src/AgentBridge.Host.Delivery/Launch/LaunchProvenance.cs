@@ -6,6 +6,7 @@ namespace AgentBridge.Host.Delivery.Launch;
 internal sealed class LaunchProvenance
 {
     const int MaxBytes = 4 * 1024 * 1024;
+    static readonly System.Text.RegularExpressions.Regex RoleName = new("^[A-Za-z0-9-]{1,64}$");
     // Wire timestamps lose sub-millisecond ticks; process identities must round-trip exactly.
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     readonly string? path;
@@ -13,7 +14,8 @@ internal sealed class LaunchProvenance
     readonly Lock gate = new();
     readonly Dictionary<Guid, Origin> origins = [];
     bool unavailable;
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null);
+    // Role: the launch's own role name (a coordinator's role, #4318), kept so a later caller is judged by what was recorded, never by a name.
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -26,7 +28,7 @@ internal sealed class LaunchProvenance
             if (stream.Length > MaxBytes) { throw new InvalidDataException(); }
             var stored = JsonSerializer.Deserialize<Dictionary<Guid, Origin>>(stream, Json)
                 ?? throw new InvalidDataException();
-            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Session is not { Length: <= 1024 } ||
+            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Role is { } role && !RoleName.IsMatch(role) || o.Session is not { Length: <= 1024 } ||
                 (o.Process is not null && (o.Session.Length == 0 || o.Process is not { Id: > 0, StartedAt: not null }
                     || o.Process.StartedAt == default(DateTimeOffset)))))
             { throw new InvalidDataException(); }
@@ -41,9 +43,9 @@ internal sealed class LaunchProvenance
         }
     }
 
-    public void Preparing(Guid request, string session = "", string? grant = null)
+    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null)
     {
-        lock (gate) { Check(); origins[request] = new(session, null, grant); Save(); }
+        lock (gate) { Check(); origins[request] = new(session, null, grant, role); Save(); }
     }
 
     public void Abandon(Guid request)
@@ -56,7 +58,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             Save();
@@ -82,6 +84,37 @@ internal sealed class LaunchProvenance
                 .Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))
                 .All(o => o.Grant == "fleet" && o.Process == process);
         }
+    }
+
+    // Whether the record alone shows every launch of this session was a fleet launch, whether or not its process still runs
+    // (a resume, #4318, is of a session that has ended). An unfinished launch with no durable binding throws, fail closed.
+    public bool WasFleetLaunched(string session)
+    {
+        lock (gate)
+        {
+            Check();
+            Unfinished(session);
+            var mine = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).ToArray();
+            return mine.Length > 0 && mine.All(o => o.Grant == "fleet" && o.Process is not null);
+        }
+    }
+
+    // The one role every record of this session carries; none when there is no record, no role, or two roles.
+    public string? RoleOf(string session)
+    {
+        lock (gate)
+        {
+            Check();
+            Unfinished(session);
+            var roles = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).Select(o => o.Role).Distinct().ToArray();
+            return roles is [{ } role] ? role : null;
+        }
+    }
+
+    void Unfinished(string session)
+    {
+        if (origins.Values.Any(o => o.Process is null && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
+        { throw new InvalidOperationException("refused: an unfinished launch has no durable process binding"); }
     }
 
     void Check()
