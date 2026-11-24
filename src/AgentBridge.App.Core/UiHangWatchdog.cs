@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace AgentBridge.App.Core;
 
-/// <summary>Takes the dump when the UI thread is hung: the platform's job (Windows: WindowsMiniDump). Null when it could not.</summary>
+/// <summary>Takes the dump when the UI thread is hung: the platform's job (Windows: <see cref="WindowsMiniDump"/>). Null when it could not.</summary>
 public interface IHangDumpWriter
 {
     string? Write();
@@ -79,7 +79,14 @@ public sealed class UiHangWatchdog : IDisposable
     void Loop()
     {
         try { while (!stop.Wait(pingEvery)) { Tick(); } }
-        catch (Exception e) { log($"UI hang watchdog stopped: {e.GetType().Name}"); closed = true; }
+        catch (Exception e) { closed = true; Say($"UI hang watchdog stopped: {e.GetType().Name}"); }
+    }
+
+    // The log is the app's, and a full disk or a closed file must not become an unhandled exception on this background thread, which ends the app.
+    void Say(string line)
+    {
+        try { log(line); }
+        catch (Exception) { /* nothing left to say it to */ }
     }
 
     /// <summary>One beat: ask the UI thread to answer, or judge the ask it has not answered.</summary>
@@ -93,13 +100,22 @@ public sealed class UiHangWatchdog : IDisposable
         if (gap > PauseAfter || resumed) { pinged = false; resumed = false; }
         if (pinged && Volatile.Read(ref answeredId) == pingId)
         {
-            if (hung) { log($"UI hang: the UI thread answered again after {Seconds(time.GetElapsedTime(pingAt, now))}"); hung = false; }
+            if (hung) { hung = false; Say($"UI hang: the UI thread answered again after {Seconds(time.GetElapsedTime(pingAt, now))}"); }
             pinged = false;
         }
         if (!pinged)
         {
             var id = ++pingId;
-            try { ui.Post(() => Volatile.Write(ref answeredId, id)); }
+            // A queue that refuses the ping has shut down: an app that is closing, never a hung UI thread.
+            try
+            {
+                if (!ui.TryPost(() => Volatile.Write(ref answeredId, id)))
+                {
+                    closed = true;
+                    Say("UI hang watchdog stopped: the UI dispatcher refused the ping (the app is closing)");
+                    return;
+                }
+            }
             catch (Exception) { closed = true; return; }
             (pinged, pingAt) = (true, now);
             return;
@@ -111,17 +127,17 @@ public sealed class UiHangWatchdog : IDisposable
         try
         {
             var path = dump.Write();
-            log(path is null
+            Say(path is null
                 ? $"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written"
                 : $"UI hang: the UI thread has not answered for {Seconds(waited)}; minidump written to {path}");
         }
         catch (HangDumpSkipped skipped)
         {
-            log($"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written: {skipped.Message}");
+            Say($"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written: {skipped.Message}");
         }
         catch (Exception e)
         {
-            log($"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written ({e.GetType().Name})");
+            Say($"UI hang: the UI thread has not answered for {Seconds(waited)}; the minidump was not written ({e.GetType().Name})");
         }
     }
 
