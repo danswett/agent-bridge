@@ -1,6 +1,6 @@
-From 93cde307a9895f4942ee4741582a50def1ecda76 Mon Sep 17 00:00:00 2001
+From 04dd7f11ed3464c76b548f76d3e22e52748f4c1d Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:21:26 -0800
+Date: Mon, 23 Nov 2026 22:31:55 -0800
 Subject: [PATCH] s 4b
 
 ---
@@ -22,7 +22,7 @@ index b9717b4e6..ea7f81eb5 100644
        # The commit every other job checks out. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
        # the event's text, and either is refused unless it is 40 lowercase hex: no job reads the event's commit, they all read this output.
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index c30c5aace..c2e6dff0f 100644
+index 2243eb31f..9d7e0d0d4 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -47,13 +47,15 @@ public class FullWorkflowTests
