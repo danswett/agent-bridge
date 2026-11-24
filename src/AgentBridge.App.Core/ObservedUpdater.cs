@@ -100,12 +100,13 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         try
         {
             if (Busy) { deferred = true; return Offered(this.found); }
+            // Attempted, whatever comes of it: a feed that fails is asked at the next check, not at every tick.
+            deferred = false;
             var from = Bound();
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
             if (Bound() != from) { return Offered(found); }
             if (Found != found) { (Bytes, Total) = (null, null); }
-            deferred = false;
             Found = found;
             CheckedAt = time.GetUtcNow();
             FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
@@ -195,9 +196,18 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public async Task<IDisposable> ApplyingAsync()
     {
         Interlocked.Increment(ref applying);
-        Raise();
-        await checking.WaitAsync();
-        checking.Release();
+        try
+        {
+            Raise();
+            await checking.WaitAsync();
+            checking.Release();
+        }
+        catch
+        {
+            // A Changed handler that throws, or a wait cut off, must not leave the hold counted for good.
+            Interlocked.Decrement(ref applying);
+            throw;
+        }
         return new ApplyHold(this);
     }
 

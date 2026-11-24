@@ -3579,6 +3579,36 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_check_put_off_and_then_attempted_clears_the_deferral_even_when_it_fails()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        var hold = await observed.ApplyingAsync();
+        await observed.CheckAsync();
+        Assert.True(observed.CheckDeferred);
+        hold.Dispose();
+
+        // A failing feed is asked at the next check, not at every tick.
+        updater.CheckFails = new InvalidOperationException("the feed refused");
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.CheckAsync);
+        Assert.False(observed.CheckDeferred);
+    }
+
+    [Fact]
+    public async Task A_Changed_handler_that_throws_does_not_leave_an_install_hold_behind()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        void Throws() => throw new InvalidOperationException("a handler failed");
+        observed.Changed += Throws;
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.ApplyingAsync);
+        observed.Changed -= Throws;
+
+        // Nothing is held: a check goes to the feed, and is not put off.
+        await observed.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        Assert.False(observed.CheckDeferred);
+    }
+
+    [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
     {
