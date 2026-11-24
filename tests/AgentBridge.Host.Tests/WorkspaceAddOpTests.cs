@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -14,6 +15,7 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
     // Under the test's own folder rather than temp, which the system-folder check refuses.
     readonly string dirs = Path.Combine(AppContext.BaseDirectory, "abwo-" + Guid.NewGuid().ToString("N")[..8]);
     readonly List<string> logged = [];
+    readonly List<IReadOnlyList<WorkspaceConfig>> applied = [];
     readonly Callers callers = new();
     LocalServer server = null!;
     Func<IProtocolChannel, string, JsonElement, Task<object?>> handler = null!;
@@ -33,6 +35,7 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
             SignedIn = (_, _) => throw new NotSupportedException(),
             Stop = () => throw new NotSupportedException(),
             Restart = () => throw new NotSupportedException(),
+            ApplyWorkspaces = applied.Add,
         }, logged.Add);
         handler = LocalApi.Handler(null!, control, callers, logged.Add);
         server = LocalServer.Start(LocalEndpoint.For(folder), handler);
@@ -49,15 +52,16 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
     Task<LocalChannel> Connect() => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromSeconds(10));
 
     [Fact]
-    public async Task The_app_approves_a_folder_and_is_told_it_takes_effect_after_a_restart()
+    public async Task The_app_approves_a_folder_and_it_is_applied_to_the_running_host_with_no_restart()
     {
         var app = Dir("My Tools");
         await using var ch = await Connect();
 
         var result = await ch.CallAsync(Op, new { path = app, label = "Tools" });
 
-        Assert.Equal(("added", "Tools", app, true), (result.GetProperty("result").GetString(), result.GetProperty("label").GetString(),
+        Assert.Equal(("added", "Tools", app, false), (result.GetProperty("result").GetString(), result.GetProperty("label").GetString(),
             result.GetProperty("path").GetString(), result.GetProperty("restartRequired").GetBoolean()));
+        Assert.Equal([("Tools", app)], Assert.Single(applied).Select(w => (w.Label, w.Path)));
         var saved = JsonNode.Parse(File.ReadAllText(ConfigPath))!;
         Assert.Equal(7, saved["retained"]!.GetValue<int>());
         Assert.Equal((app, "Tools"), (saved["launch"]!["workspaces"]![0]!["path"]!.GetValue<string>(), saved["launch"]!["workspaces"]![0]!["label"]!.GetValue<string>()));
@@ -112,6 +116,42 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
 
         Assert.Equal(("refused", "invalid-request"), (result.GetProperty("result").GetString(), result.GetProperty("code").GetString()));
         Assert.Equal(before, File.ReadAllText(ConfigPath));
+    }
+
+    [Fact]
+    public async Task A_configuration_that_does_not_load_clean_is_refused_and_nothing_is_written_or_applied()
+    {
+        File.WriteAllText(ConfigPath, """{ "version": 1, "launch": { "workspaces": [ { "path": "x", "isolate": 1 } ] } }""");
+        await using var ch = await Connect();
+
+        var before = File.ReadAllText(ConfigPath);
+
+        var result = await ch.CallAsync(Op, new { path = Dir("a") });
+
+        Assert.Equal(("refused", "unwritable"), (result.GetProperty("result").GetString(), result.GetProperty("code").GetString()));
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+        Assert.Empty(applied);
+    }
+
+    [Fact]
+    public void If_applying_fails_after_the_folder_was_saved_it_is_still_reported_approved_and_says_restart()
+    {
+        var app = Dir("a");
+
+        var result = WorkspaceAddOp.Handle(folder, JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new { path = app })), logged.Add, _ => throw new InvalidOperationException("boom"));
+
+        var answer = JsonSerializer.SerializeToElement(result);
+        Assert.Equal(("added", true), (answer.GetProperty("result").GetString(), answer.GetProperty("restartRequired").GetBoolean()));
+        Assert.Equal([app], HostSettings.Load(folder).Settings.Launch.Workspaces.Select(w => w.Path));
+        Assert.Single(logged, line => line.Contains("applies after a restart", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Where_the_host_cannot_apply_a_workspace_the_answer_says_restart()
+    {
+        var result = WorkspaceAddOp.Handle(folder, JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new { path = Dir("a") })), logged.Add);
+
+        Assert.True(JsonSerializer.SerializeToElement(result).GetProperty("restartRequired").GetBoolean());
     }
 
     [Fact]

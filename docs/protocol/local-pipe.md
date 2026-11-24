@@ -119,7 +119,7 @@ the code one of `not-a-path`, `missing`, `system-folder`, `not-git`, `already-ap
 `label-in-use`, `too-many`, `unwritable`, `not-local` (a network share, or a drive that is not a
 fixed one of this machine), `busy` (the config file was being changed elsewhere for 10 seconds; try
 again), `invalid-request` or `config-unreadable`; no text from the
-request comes back. Workspaces are read when the host starts, so a new one applies after a restart.
+request comes back. A new workspace is applied to the running host at once when `config.json` reads back clean (`restartRequired` is false; the whole approved list is read back from the file, so a workspace edited by hand since the host started is applied with it); otherwise, or where the host cannot apply it, `restartRequired` is true.
 It is a person's act: a freshly classified local app without an agent credential. An agent, another
 process (the host CLI included), a script credential or a remote channel is refused with
 `person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.

@@ -88,6 +88,18 @@ public sealed class AddFolderTests : IAsyncLifetime
         Assert.Null(add.PendingPath);
     }
 
+    [Fact]
+    public async Task When_the_host_applied_the_folder_at_once_the_app_says_only_that_it_is_approved()
+    {
+        host.On(HostOps.WorkspaceAdd, _ => new { result = "added", label = "My Tools", path = Folder, restartRequired = false });
+        var add = Make();
+        await add.ChooseAsync();
+
+        await add.ApproveAsync();
+
+        Assert.Equal((AddFolderState.Added, AddFolderTexts.Approved), (add.State, add.StatusText));
+    }
+
     [Theory]
     [InlineData("not-a-path", "That is not a folder path.")]
     [InlineData("missing", "That folder does not exist.")]

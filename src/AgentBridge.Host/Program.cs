@@ -929,6 +929,12 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"folder-trust questions from devices: {(on ? "on" : "off")} (set by the app; applies now)");
         },
         ApplyRemoteFolderTrustDevices = ids => launcher.TrustDevices = ids,
+        ApplyWorkspaces = list =>
+        {
+            launcher.SetWorkspaces(list);
+            // The verification gate compares launch settings with what the host runs; a workspace applied now is not a change to restart for.
+            launchConfiguration = JsonSerializer.Serialize(settings.Launch with { Workspaces = list }, ProtocolJson.Options);
+        },
         ApplyDevBoxKeepAwake = keepAwake is null ? null : on => keepAwake.Enabled = on,
         DevBox = () => DevBoxCommands.Status(keepAwake?.State),
         Updates = updates,

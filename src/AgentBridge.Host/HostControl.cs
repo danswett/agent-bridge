@@ -46,6 +46,8 @@ public sealed class HostControlOptions
     // Applies launch.remoteFolderTrust to the running host when the app changes it; null where it
     // takes a restart like the rest.
     public Action<bool>? ApplyRemoteFolderTrust { get; init; }
+    // Applies the approved workspaces to the running host after the app approves one (host.workspace.add); null where it takes a restart.
+    public Action<IReadOnlyList<Delivery.Launch.WorkspaceConfig>>? ApplyWorkspaces { get; init; }
     // And launch.remoteFolderTrustDevices, the devices approved to answer them.
     public Action<IReadOnlyList<string>>? ApplyRemoteFolderTrustDevices { get; init; }
     // Applies devBox.keepAwake to the running host's keep-awake; null where there is none (not
@@ -95,7 +97,7 @@ public sealed class HostControl
 
     internal object WorkspaceAdd(JsonElement data)
     {
-        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
+        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log, options.ApplyWorkspaces); }
     }
 
     readonly Action<string> log;
