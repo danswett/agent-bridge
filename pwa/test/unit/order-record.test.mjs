@@ -1,10 +1,10 @@
 // The sealed order record's plaintext (docs/protocol/order-records.md §3, §5, §6), replayed from the shared
 // vectors in docs/protocol/vectors/order-records.json (#759, S2): what a reader accepts and refuses, the exact
-// expansion to the merge form, the limits and the order things go when a record is over.
+// expansion to the merge form and the limits. What goes when a record is over (fit) is the next piece.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { canonical, fit, fromMergeForm, LIMITS, OrderRecordError, parseOrder, toMergeForm } from '../../js/order-record.js';
+import { canonical, fromMergeForm, LIMITS, OrderRecordError, parseOrder, toMergeForm } from '../../js/order-record.js';
 import { mergeOrder } from '../../js/order-merge.js';
 
 const v = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/order-records.json', import.meta.url), 'utf8')).order;
@@ -57,11 +57,6 @@ test('the limits: 500 rows, 500 memberships, 32 groups, and the size, measured i
   refuses(build({ rows: 1, memberships: 0, groups: 0, tombstones: 4000 }), 'too-large', 'a record whose sealed object would pass 65,536 bytes');
 });
 
-test('over the size, tombstones older than 30 days go, then ended rows oldest first, and nothing else', () => {
-  for (const c of v.fit) {
-    const out = fit(parseOrder(c.input), { nowDay: c.nowDay, ended: c.ended ?? {}, maxBytes: c.maxBytes });
-    assert.equal(out.fits, c.fits, c.name);
-    assert.deepEqual(out.left, c.left, c.name);
-    if (c.output !== null) { assert.equal(canonical(out.record), c.output, c.name); }
-  }
+test('a deeply nested input is refused with a code, not a stack overflow', () => {
+  refuses('['.repeat(30000) + ']'.repeat(30000), 'not-canonical', 'nesting');
 });

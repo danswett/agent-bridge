@@ -67,14 +67,16 @@ form (more with 32-hex host ids). The expansion is exact, so the merge ports are
   compared as bytes, a tombstone before a value on a full tie), and the expansion to and from the
   merge form is exact: the host index and device index are replaced by the strings they name.
 - A key lives in its live map or in `x`, never both. `day` is the UTC day number (milliseconds / 86,400,000,
-  rounded down) on the writer's clock when it wrote the tombstone; it is read only to age the tombstone
-  (§5), never to order anything.
+  rounded down, at most 100,000) on the writer's clock when it wrote the tombstone; it is read only to
+  age the tombstone (§5), never to order anything. A `day` after the reader's today is aged as today.
 - A row key is the host index (decimal), a line feed and the session id (1 to 128 characters, no
   control character). A fractional key is 1 to 32 characters of `[0-9a-z]`, compared as strings. A
   group id is a lowercase UUID, 36 characters. A group name is 1 to 40 characters, trimmed, with no
   control character; duplicates differing in case can arise from a merge and are not refused here.
-- `d` has unique entries, at most 64; `h` unique entries, at most 64. An entry no register names is
-  refused. The legacy key is the only key form of version 1 (the stable `r:<role>` key of CHANGE C1
+  *Trimmed*: neither end is U+0009-000D, 0020, 00A0, 1680, 2000-200A, 2028, 2029, 202F, 205F, 3000
+  or FEFF. *Control character*: U+0000-001F, 007F-009F. Every string is well-formed (no lone surrogate).
+- `d` and `h` are strictly ascending in code unit order (so one state is one record), at most 64
+  entries each. An entry no register names is refused. The legacy key is the only key form of version 1 (the stable `r:<role>` key of CHANGE C1
   needs `v` 2, and a reader of `v` 1 refuses it, so an old client cannot overwrite it).
 
 ## 4. The marker record (plaintext)
@@ -84,7 +86,7 @@ form (more with 32-hex host ids). The expansion is exact, so the merge ports are
 ```
 
 Merged by the maximum turn per key; a marker for a session with no row is kept. At most 1,500
-entries. Row keys and host entries follow §3.
+entries. Row keys and host entries follow §3. Its validator and vectors are the next piece.
 
 ## 5. Limits, aging and what goes first
 
@@ -97,10 +99,11 @@ entries. Row keys and host entries follow §3.
 
 If a record would exceed 65,536 bytes: tombstones older than 30 days go first, then rows of ended
 sessions, oldest first (with their membership registers). If it still does not fit, the writer keeps
-the change on this device, shows "Not fully synced", and drops nothing else. Rows past 500 live only
-on this device. A row left out of an object is not deleted: it is not a tombstone, and a device that
-holds it keeps it. The vectors give the ended rows and their day as an input (`ended`); which sessions
-are ended is a client's knowledge, never in the record.
+the change on this device, shows "Not fully synced", and drops nothing else. Rows past 500 (the last in
+the order: fractional key, then device tag, then row key) live only on this device. A writer checks what
+it writes with the reader's rules (§6) and sends nothing a reader would refuse. A row left out of an object is not deleted: it is not a tombstone, and a device that
+holds it keeps it. A writer's ended rows and their day are its own input; which sessions are ended is
+a client's knowledge, never in the record. The code and vectors for this section are the next piece.
 
 ## 6. A reader refuses
 

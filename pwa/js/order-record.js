@@ -4,7 +4,7 @@
 // another device, so anything out of shape is refused whole (never read in part) with a code.
 const LF = String.fromCharCode(10);
 
-export const LIMITS = Object.freeze({ bytes: 65536, overhead: 106, rows: 500, memberships: 500, groups: 32, devices: 64, hosts: 64, tombstoneDays: 30 });
+export const LIMITS = Object.freeze({ bytes: 65536, overhead: 106, rows: 500, memberships: 500, groups: 32, devices: 64, hosts: 64, tombstoneDays: 30, maxDay: 100000 });
 
 export class OrderRecordError extends Error {
   constructor(code) { super(code); this.name = 'OrderRecordError'; this.code = code; }
@@ -20,7 +20,12 @@ export function canonical(v) {
 
 const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 const int = (x) => Number.isSafeInteger(x) && x >= 0;
-const hasControl = (s) => [...s].some((c) => c.codePointAt(0) < 32 || c.codePointAt(0) === 127);
+// A control character (U+0000-001F, 007F-009F) or a lone surrogate: neither is in any string of a record.
+const badText = (s) => [...s].some((c) => { const p = c.codePointAt(0); return p < 32 || (p >= 127 && p < 160) || (p >= 0xd800 && p <= 0xdfff); });
+// JavaScript's trim set, which the doc spells out (§3): whether either end of a string is one of those characters.
+const SPACE = new Set([9, 10, 11, 12, 13, 32, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff]);
+const isSpace = (c) => SPACE.has(c) || (c >= 0x2000 && c <= 0x200a);
+const untrimmed = (s) => isSpace(s.charCodeAt(0)) || isSpace(s.charCodeAt(s.length - 1));
 const HEX32 = /^[0-9a-f]{32}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const FRACTION = /^[0-9a-z]{1,32}$/;
@@ -30,7 +35,7 @@ function table(list, max, ok) {
   if (!Array.isArray(list)) { refuse('bad-shape'); }
   if (list.length > max) { refuse('limit'); }
   for (const e of list) { if (typeof e !== 'string' || !ok(e)) { refuse('range'); } }
-  if (new Set(list).size !== list.length) { refuse('duplicate'); }
+  for (let i = 1; i < list.length; i += 1) { if (list[i - 1] >= list[i]) { refuse(list[i - 1] === list[i] ? 'duplicate' : 'unsorted'); } }
 }
 
 // A register of `length` fields: counter, device index, then the value fields.
@@ -46,7 +51,7 @@ function rowHost(key, hosts) {
   const host = key.slice(0, at);
   if (at < 1 || !/^(0|[1-9][0-9]*)$/.test(host)) { refuse('bad-key'); }
   const session = key.slice(at + 1);
-  if (!session || [...session].length > 128 || hasControl(session)) { refuse('bad-key'); }
+  if (!session || [...session].length > 128 || badText(session)) { refuse('bad-key'); }
   if (Number(host) >= hosts) { refuse('index'); }
   return Number(host);
 }
@@ -56,14 +61,16 @@ export function parseOrder(text) {
   if (bytesOf(text) > LIMITS.bytes - LIMITS.overhead) { refuse('too-large'); }
   let v;
   try { v = JSON.parse(text); } catch { refuse('bad-json'); }
-  if (canonical(v) !== text) { refuse('not-canonical'); }
+  let again;
+  try { again = canonical(v); } catch { refuse('not-canonical'); } // nested past what it can write
+  if (again !== text) { refuse('not-canonical'); }
   if (!isObject(v)) { refuse('bad-shape'); }
   const fields = ['d', 'g', 'h', 'm', 'r', 'v', 'x'];
   if (Object.keys(v).some((k) => !fields.includes(k))) { refuse('unknown-field'); }
   if (fields.some((k) => !Object.hasOwn(v, k))) { refuse('missing-field'); }
   if (v.v !== 1) { refuse('bad-version'); }
   table(v.d, LIMITS.devices, (e) => HEX32.test(e));
-  table(v.h, LIMITS.hosts, (e) => [...e].length <= 64 && !hasControl(e));
+  table(v.h, LIMITS.hosts, (e) => [...e].length <= 64 && !badText(e));
   if (![v.g, v.m, v.r, v.x].every(isObject)) { refuse('bad-shape'); }
   if (Object.keys(v.x).some((k) => !['g', 'm', 'r'].includes(k))) { refuse('unknown-field'); }
   if (!['g', 'm', 'r'].every((k) => Object.hasOwn(v.x, k))) { refuse('missing-field'); }
@@ -81,8 +88,8 @@ export function parseOrder(text) {
   };
   each(v.r, 4, (r) => { if (typeof r[2] !== 'string' || !FRACTION.test(r[2]) || (r[3] !== 0 && r[3] !== 1)) { refuse('range'); } }, true);
   each(v.m, 3, (r) => { if (r[2] !== null && !(typeof r[2] === 'string' && UUID.test(r[2]))) { refuse('range'); } }, true);
-  each(v.g, 3, (r) => { if (typeof r[2] !== 'string' || r[2] !== r[2].trim() || ![...r[2]].length || [...r[2]].length > 40 || hasControl(r[2])) { refuse('range'); } }, false);
-  const day = (r) => { if (!int(r[2])) { refuse('range'); } };
+  each(v.g, 3, (r) => { if (typeof r[2] !== 'string' || ![...r[2]].length || [...r[2]].length > 40 || untrimmed(r[2]) || badText(r[2])) { refuse('range'); } }, false);
+  const day = (r) => { if (!int(r[2]) || r[2] > LIMITS.maxDay) { refuse('range'); } };
   each(v.x.r, 3, day, true);
   each(v.x.m, 3, day, true);
   each(v.x.g, 3, day, false);
@@ -131,25 +138,4 @@ export function fromMergeForm(merge, { nowDay }) {
     }
   }
   return rec;
-}
-
-// What goes when a record is over its size: tombstones more than 30 days old (always), then rows of ended
-// sessions, oldest first, with their memberships; nothing else. `ended` maps a row key to the day it ended.
-// A row left out is not deleted (not a tombstone); it stays on the devices that hold it.
-export function fit(rec, { nowDay, ended = {}, maxBytes = LIMITS.bytes - LIMITS.overhead }) {
-  const merge = toMergeForm(rec);
-  for (const map of Object.values(merge)) {
-    for (const [k, r] of Object.entries(map)) { if (r.tombstone === true && nowDay - r.day > LIMITS.tombstoneDays) { delete map[k]; } }
-  }
-  const size = () => bytesOf(canonical(fromMergeForm(merge, { nowDay })));
-  const left = [];
-  const order = Object.keys(ended).filter((k) => Object.hasOwn(merge.rows, k) && merge.rows[k].tombstone !== true)
-    .sort((a, b) => ended[a] - ended[b] || (a < b ? -1 : 1));
-  for (const k of order) {
-    if (size() <= maxBytes) { break; }
-    delete merge.rows[k];
-    delete merge.membership[k];
-    left.push(k);
-  }
-  return { record: fromMergeForm(merge, { nowDay }), left, fits: size() <= maxBytes };
 }
