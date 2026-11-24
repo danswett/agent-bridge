@@ -12,7 +12,7 @@ using Xunit;
 // leaves of this machine.
 public sealed class UpkeepTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    static readonly string Machine = Contract.Machine;
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     const string B = "c1a2b3c4-d5e6-4f70-8a91-b2c3d4e5f607";
     static readonly string Slug = HaContract.MachineSlug(Machine);
@@ -1044,7 +1044,7 @@ public sealed class UpkeepTests : IDisposable
         ha.Draw();
         var other = new HaConnectorOptions
         {
-            MachineName = "DSWETT-HOME", Version = "0.1.0", StateFile = Path.Combine(folder, "other.json"),
+            MachineName = "BUILD-2", Version = "0.1.0", StateFile = Path.Combine(folder, "other.json"),
             FieldPinDelay = TimeSpan.Zero, SelectDelay = TimeSpan.Zero, DiscoveryReset = TimeSpan.Zero,
             RegisteredDelay = TimeSpan.Zero, HelperStateDelay = TimeSpan.Zero,
         };

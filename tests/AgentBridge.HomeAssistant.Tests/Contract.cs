@@ -24,6 +24,10 @@ internal static class Contract
 
     public static string Text(string path) => At(path).GetValue<string>();
 
+    // The machine every fixture was recorded on. Fixtures may name a machine and tests may not
+    // (#2643), so tests read it here rather than write it.
+    public static string Machine => Text("machine.machineName");
+
     public static IReadOnlyList<string> Strings(string path) => [.. At(path).AsArray().Select(n => n!.GetValue<string>())];
 
     // A recorded publication, as the connector's would be compared.

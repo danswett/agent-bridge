@@ -217,14 +217,14 @@ public class ClientTests
             command["id"] = 1;
             return command;
         }
-        var helper = HaContract.DetailedHelperId("dswett_dev_vm1");
+        var helper = HaContract.DetailedHelperId(HaContract.MachineSlug(Contract.Machine));
 
         var (lister, listed, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["id"] = helper, ["name"] = "x" }, new JsonObject { ["name"] = "no id" }) });
         Assert.Equal([helper], await lister.ListInputBooleansAsync());
         Contract.AssertJson(Recorded("present", "input_boolean/list"), listed[1]);
 
         var (creator, created, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject { ["id"] = helper + "_2", ["name"] = "x" } });
-        Assert.Equal(helper + "_2", await creator.CreateInputBooleanAsync(HaContract.DetailedHelperName("dswett_dev_vm1"), HaContract.DetailedHelperIcon));
+        Assert.Equal(helper + "_2", await creator.CreateInputBooleanAsync(HaContract.DetailedHelperName(HaContract.MachineSlug(Contract.Machine)), HaContract.DetailedHelperIcon));
         Contract.AssertJson(Recorded("absent", "input_boolean/create"), created[1]);
 
         var (deleter, deleted, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = null });
@@ -232,7 +232,7 @@ public class ClientTests
         Contract.AssertJson(Recorded("deduplicated", "input_boolean/delete"), deleted[1]);
 
         var (namer, named, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
-        await namer.SetEntityNameAsync("input_boolean." + helper, HaContract.DetailedHelperDisplayName("DSWETT-DEV-VM1"));
+        await namer.SetEntityNameAsync("input_boolean." + helper, HaContract.DetailedHelperDisplayName(Contract.Machine));
         Contract.AssertJson(Recorded("absent", "config/entity_registry/update"), named[1]);
 
         var (registry, _, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray(new JsonObject { ["entity_id"] = "input_boolean." + helper, ["unique_id"] = helper, ["name"] = "Detailed activity" }) });
