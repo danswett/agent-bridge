@@ -1,6 +1,6 @@
-From 081b2ae40644e09272cade24f34fbbd5b08c5b43 Mon Sep 17 00:00:00 2001
+From 4371689e6ba1af8108732296d33e39408a9e6cc5 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:10:50 -0800
+Date: Mon, 23 Nov 2026 22:21:58 -0800
 Subject: [PATCH] s train-a
 
 ---
@@ -258,7 +258,7 @@ index 000000000..b853eeff0
 +          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
 +          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
 diff --git a/docs/app-windows.md b/docs/app-windows.md
-index 6495da285..6805cfc4d 100644
+index 9ebe296cf..92c84eea3 100644
 --- a/docs/app-windows.md
 +++ b/docs/app-windows.md
 @@ -1290,6 +1290,11 @@ for a later app change either, so a green run publishes its own commit without w
