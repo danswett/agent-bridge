@@ -62,12 +62,19 @@ public sealed record PushOptions
     // any of that machine's sessions for the agent and account still does; never once per session.
     public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
     public TimeSpan SignInTtl { get; init; } = TimeSpan.FromHours(6);
+    // A launched agent waiting on a folder-trust answer this long is told to the owner by the host, once per question (owner decision B1).
+    // Documented, no setting yet.
+    public TimeSpan TrustWaitAfter { get; init; } = TimeSpan.FromMinutes(2);
     // #913 rule 5: a question still unanswered this long after its session's first question notice of
     // the episode alerts once more. Zero sends none.
     public TimeSpan ReminderAfter { get; init; } = TimeSpan.FromMinutes(15);
     // #913 rule 3: questions of other sessions notified this soon after one that went on its own join
     // one grouped notice instead of going one by one. Zero groups nothing.
     public TimeSpan BurstWindow { get; init; } = TimeSpan.FromSeconds(30);
+    // S2b: delivery failures of the machine's lane are counted for this long from the first, and go as one count at the
+    // window's end to devices that asked for them. A debounce, trailing: the next window opens with the next failure.
+    public TimeSpan FailuresWindow { get; init; } = TimeSpan.FromSeconds(60);
+    public TimeSpan FailuresTtl { get; init; } = TimeSpan.FromHours(6);
     // #1190: a device is in use while it says it is on screen (sessions.focus) with input this recent.
     public TimeSpan ActiveFor { get; init; } = TimeSpan.FromMinutes(2);
 }
@@ -135,12 +142,17 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     // The question each device was last notified of per session, while it is still on that
     // device: a resolved notice goes only where there is something to replace.
     readonly Dictionary<(string Device, string Session), string> shownOn = [];
+    // S2b: failures counted in the open window, and when it closes. In memory only: a count, never an id or text.
+    int failuresPending;
+    DateTimeOffset? failuresAt;
     // Who answered a question from a client: that device needs no notice that it was answered.
     readonly Dictionary<(string Session, string Question), string> answeredBy = [];
     // When each device was last sent a finished notice per session, for FinishedCollapse.
     readonly Dictionary<(string Device, string Session), DateTimeOffset> finishedSent = [];
     // When each sign-in notice (PushNotice.SignInKey) was last made, while its sessions still need sign-in.
     readonly Dictionary<string, DateTimeOffset> signInSent = new(StringComparer.Ordinal);
+    // The folder-trust questions already told, by question id: one notice per question, the episode's latch.
+    readonly Dictionary<string, DateTimeOffset> trustSent = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> recent = new();
     // #913 rule 3: the sessions in the grouped notice, each with its question, while that is pending.
     readonly Dictionary<string, string> grouped = new(StringComparer.Ordinal);
@@ -239,6 +251,9 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     public Func<IReadOnlyList<DevicePresence>>? Presences { get; set; }
     // Told how each question notice went to each device, under the notifier's lock: it must not block.
     public Action<PushNoticeOutcome>? NoticeOutcome { get; set; }
+    // The folder-trust questions launched agents wait on now (LaunchService.TrustQuestions): host-local, they belong to pending launches and
+    // have no session. Null when this host cannot launch.
+    public Func<IReadOnlyList<TrustQuestion>>? TrustQuestions { get; set; }
 
     public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null,
         RemoteAuthorization? trust = null)
@@ -833,6 +848,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
         times.AddRange(sessions.Values.Where(t => t.RemindAt is not null).Select(t => t.RemindAt!.Value));
+        if (failuresAt is { } failuresDue) { times.Add(failuresDue); }
         // Not one already past with no device to tell (SignIns made nothing), which woke the loop at
         // once, again and again. But one that came due while a push was in flight (#945) is only
         // made by the next pump: dropped, that push left nothing else to wake it, so the machine
@@ -840,6 +856,8 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         // forgets it, so waking for it cannot spin.
         var anyDevice = store.All.Any(MayNotify);
         times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now || anyDevice));
+        // Trust questions arrive with no session event, so while this host can launch it looks again every half minute.
+        if (TrustQuestions is not null) { times.Add(now + TimeSpan.FromSeconds(30)); }
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
@@ -910,9 +928,10 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     foreach (var d in unseen.Where(d => !d.Wants(NoticeKind.Finished, id)))
                     {
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
-                        if (t.Replaced is { } answered && shownOn.GetValueOrDefault((d.Device, id)) == answered)
+                        // Whatever question it shows, not only the one just answered: a later one may have been held back.
+                        if (shownOn.TryGetValue((d.Device, id), out var shown))
                         {
-                            Enqueue(s, NoticeKind.Resolved, answered, [d], ended: t.Removed, queued: due.Queued);
+                            Enqueue(s, NoticeKind.Resolved, shown, [d], ended: t.Removed, queued: due.Queued);
                         }
                     }
                     break;
@@ -936,7 +955,64 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         Remind(now);
         if (groupChanged) { Regroup(now); }
         SignIns(now);
+        Trusts(now);
+        Failures(now);
     }
+
+    // The machine's delivery lane dropped or could not confirm a message (S2b). Counted, never described: the first
+    // failure opens a window of FailuresWindow, and its end sends the count (Failures).
+    public void NoteDeliveryFailure(int count = 1)
+    {
+        if (count < 1) { return; }
+        lock (gate)
+        {
+            failuresPending = (int)Math.Min(int.MaxValue, (long)failuresPending + count);
+            failuresAt ??= time.GetUtcNow() + options.FailuresWindow;
+        }
+        Signal();
+    }
+
+    // At the window's end: one count, to every device that turned delivery failures on (PushSubscriber.Wants: off unless
+    // asked for). A device in use is told all the same, and it replaces a count still waiting for it. A window nobody
+    // wants leaves nothing behind.
+    void Failures(DateTimeOffset now)
+    {
+        if (failuresAt is not { } at || at > now) { return; }
+        var count = failuresPending;
+        (failuresPending, failuresAt) = (0, null);
+        if (count < 1) { return; }
+        foreach (var sub in store.All.Where(d => MayNotify(d) && d.Wants(NoticeKind.Failures, "")))
+        {
+            outbox.RemoveAll(o => o.Device == sub.Device && o.Session == PushNotice.FailuresKey);
+            outbox.Add(new Outgoing
+            {
+                Device = sub.Device,
+                Session = PushNotice.FailuresKey,
+                Kind = NoticeKind.Failures,
+                Plain = PushNotice.Serialize(FailuresMessage(count, sub.App, now)),
+                Ttl = (int)options.FailuresTtl.TotalSeconds,
+                Urgency = "normal",
+                Topic = PushNotice.Topic(machine.Id, PushNotice.FailuresKey),
+                Created = now,
+                NotBefore = now,
+                Grant = sub.Grant,
+                Alerts = true,
+            });
+        }
+    }
+
+    // Always a visible notification (never silent), naming the machine and a count: no session, id or message text.
+    internal PushMessage FailuresMessage(int count, string app, DateTimeOffset now) => PushNotice.Fit(new PushMessage
+    {
+        Notification = new PushNotification
+        {
+            Title = PushFailuresWords.Title,
+            Body = PushFailuresWords.Body(count, machine.Name),
+            Navigate = PushNotice.NavigateMachine(app, machine.Id),
+            Tag = PushNotice.Tag(machine.Id, PushNotice.FailuresKey),
+            Data = new PushNoticeData { Kind = NoticeKind.Failures, Machine = machine.Id, Session = "", Failures = count, At = now },
+        },
+    });
 
     // #913 rule 3: whether a burst window is open. It closes early once nothing in it is pending: a
     // question then is the first of a new burst, and goes as itself.
@@ -1088,6 +1164,62 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     {
         if (key is null || sessions.Values.Any(t => !t.Removed && SignInKeyOf(t.Last) == key)) { return; }
         ForgetSignIn(key);
+    }
+
+    static string TrustKey(string question) => "~trust:" + question;
+
+    // A folder-trust question waiting TrustWaitAfter is told once, to every device, in the needs-you class and the question kind, in words
+    // the host builds (the agent's name and the machine's, nothing the agent said, no folder). One answered or gone before it went is
+    // forgotten with anything of it still waiting; a later question is a new episode. With no device to tell, nothing has been said.
+    void Trusts(DateTimeOffset now)
+    {
+        if (TrustQuestions is not { } read) { return; }
+        var waiting = read().ToDictionary(q => q.Id, StringComparer.Ordinal);
+        foreach (var id in trustSent.Keys.Where(k => !waiting.ContainsKey(k)).ToList())
+        {
+            trustSent.Remove(id);
+            outbox.RemoveAll(o => o.Kind == NoticeKind.Question && o.Session == TrustKey(id));
+        }
+        foreach (var q in waiting.Values)
+        {
+            if (trustSent.ContainsKey(q.Id) || now < q.AskedAt + options.TrustWaitAfter || !store.All.Any(MayNotify)) { continue; }
+            trustSent[q.Id] = now;
+            EnqueueTrust(q, now);
+        }
+    }
+
+    void EnqueueTrust(TrustQuestion q, DateTimeOffset now)
+    {
+        var key = TrustKey(q.Id);
+        foreach (var sub in store.All)
+        {
+            if (!MayNotify(sub) || !sub.Wants(NoticeKind.Question, key)) { continue; }
+            var message = PushNotice.Fit(new PushMessage
+            {
+                Notification = new PushNotification
+                {
+                    Title = $"{AgentName(q.Kind)} on {machine.Name} needs a folder-trust answer",
+                    Body = "A launched session is waiting for a folder-trust answer",
+                    Navigate = PushNotice.NavigateNeedsYou(sub.App, machine.Id),
+                    Tag = PushNotice.Tag(machine.Id, key),
+                    Data = new PushNoticeData { Kind = NoticeKind.Question, Machine = machine.Id, Session = "", Class = NotificationClass.NeedsYou, At = now },
+                },
+            });
+            outbox.RemoveAll(o => o.Device == sub.Device && o.Session == key);
+            outbox.Add(new Outgoing
+            {
+                Device = sub.Device,
+                Session = key,
+                Kind = NoticeKind.Question,
+                Plain = PushNotice.Serialize(message),
+                Ttl = (int)options.QuestionTtl.TotalSeconds,
+                Urgency = "high",
+                Topic = PushNotice.Topic(machine.Id, key),
+                Created = now,
+                NotBefore = now,
+                Grant = sub.Grant,
+            });
+        }
     }
 
     void ForgetSignIn(string key)
@@ -1420,6 +1552,13 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 // The grouped notice's words (#913 rule 3), in one place for Creative (6690989275). #913's example
 // names each machine ("3 sessions need you: Laptop (2), Desk (1)"); a host knows only its own, so
 // its group names it once. No agent text (#263), and nothing to answer from the notice (#253).
+static class PushFailuresWords
+{
+    public const string Title = "Messages not delivered";
+    // The machine first, after the same " · " as a single notice's first line.
+    public static string Body(int count, string machine) => count == 1 ? $"{machine} · 1 message not delivered" : $"{machine} · {count} messages not delivered";
+}
+
 static class PushGroupWords
 {
     // The same for the group, its silent changes and its withdrawal: a change never re-titles it.

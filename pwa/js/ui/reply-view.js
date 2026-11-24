@@ -33,8 +33,11 @@ const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const SHOWN = /^image\/(png|jpeg|gif|webp|heic|heif)$/;
 // Above this a thumbnail is not worth a second copy of the photo in memory.
 const THUMBNAIL_MAX = 16 * 1024 * 1024;
-// A phone's box grows a line at a time to six lines (24 each, and 10 above and below), then
-// scrolls inside (ui.md §6.5, #935).
+// A phone's box is three lines at rest and grows a line at a time to six (24 each, and 10 above and
+// below), then scrolls inside (ui.md §6.5, #935; three lines: the owner, Nov 23 about 23:30 PT). The
+// stylesheet holds the three lines from the first paint, so no frame is shorter and no height changes
+// after layout to move the conversation; only a phone with less room than that lowers it.
+const REST = 92;
 const GROW_MAX = 164;
 
 // After busy, Send comes back after this long, as for an answer.
@@ -136,7 +139,7 @@ export class ReplyBox {
   #offline = null;
   // The hold it was last given (hold.js): a quiet one while the app catches up after a return.
   #hold = holdOf(null);
-  // Below 760 (a phone): the box is one line at rest and grows with its words.
+  // Below 760 (a phone): the box is three lines at rest and grows with its words.
   #phone = null;
   #resize = null;
   #width = 0;
@@ -237,19 +240,24 @@ export class ReplyBox {
     const iphone = installedPhone(t.ownerDocument.documentElement);
     if (!this.#phone?.matches && !iphone) {
       t.style.removeProperty('height');
+      t.style.removeProperty('min-height');
       t.style.removeProperty('overflow-y');
       return;
     }
     if (!t.getClientRects().length) { return; }
     const top = t.scrollTop;
-    // Its least height (the stylesheet's one line) first, so the words alone decide.
+    // No least height at all while measuring, so the words alone decide (not the stylesheet's three lines).
+    t.style.minHeight = '0px';
     t.style.height = '0px';
     const full = t.scrollHeight;
     const slot = t.closest('.reply-slot'), conversation = t.closest('.conversation');
     const max = iphone && slot && conversation
       ? Math.max(44, Math.min(GROW_MAX, conversation.clientHeight - (slot.offsetHeight - t.offsetHeight)))
       : GROW_MAX;
-    t.style.height = `${Math.min(full, max)}px`;
+    // Less room than three lines (an installed phone with its keyboard up on a short screen) lowers the least height to it.
+    const floor = Math.min(REST, max);
+    if (floor < REST) { t.style.minHeight = `${floor}px`; } else { t.style.removeProperty('min-height'); }
+    t.style.height = `${Math.max(floor, Math.min(full, max))}px`;
     t.style.overflowY = full > max ? 'auto' : 'hidden';
     t.scrollTop = top;
   }

@@ -7,6 +7,13 @@ namespace AgentBridge.App.Core;
 public interface IUiDispatcher
 {
     void Post(Action action);
+
+    /// <summary>Posts, and says whether the queue took it: false when the dispatcher has shut down (an app that is closing). The default cannot tell.</summary>
+    bool TryPost(Action action)
+    {
+        Post(action);
+        return true;
+    }
 }
 
 public sealed class InlineDispatcher : IUiDispatcher

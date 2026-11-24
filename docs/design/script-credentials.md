@@ -135,7 +135,8 @@ press, no phone issuance and no signed remote envelope for these actions.
 
 * **Mint.** In app Settings the person presses "Add script credential" and picks a script name.
   The host writes the token straight into an owner-only file for that script (§7) and the app shows
-  the name, scope, expiry date and the **last four characters** only. The token is never printed,
+  the name, scope, expiry date and last use, and no part of the token (not even its last four characters: R9 ruling, no
+  credential-store format change). The token is never printed,
   logged, put in an argument, or sent over any channel, and no person ever handles it.
 * **Revoke.** The "Revoke" press beside the script in the app. The record is deleted, every open
   connection on it is closed and the next call is refused.
@@ -145,6 +146,47 @@ press, no phone issuance and no signed remote envelope for these actions.
   only during a rotation; a failed first call changes nothing, and a Revoke press kills both. To
   end a leak at once, revoke first and then mint, rather than rotating. A script reads its file on
   each run, so it needs no restart.
+
+**Host operations behind the presses (P1).** The app calls five operations on the local pipe, and no
+others: `scripts.list`, `scripts.confirm`, `scripts.add` (mint, or rotate when the name already has a
+live credential), `scripts.revoke`, and `scripts.grant-fleet` / `scripts.revoke-fleet` (the `launch:fleet`
+tick). They are for the person's app on this machine, or still the host command line until the app path
+ships and the CLI is app-gated (P3). An agent, a script, an unclassified caller and any connection that has
+passed `agent.hello` are refused. Those are the app's operations. The scheduled-task launcher of [script-credentials-run.md](script-credentials-run.md) (not built yet) adds two operations of its own,
+`scripts.admit` and `scripts.finished`, which only a bound task's own descendant may call (the second only from the caller that was admitted, once); they are not the app's
+and the app's list above does not widen.
+
+* **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
+  asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
+  name the host keeps a **generation counter**, moved on by every press attempt (right or wrong) and by every mint,
+  revoke, rotation, expiry, tick and untick, and holds at most **one outstanding confirmation** for the name, bound to that
+  generation, the operation and the connection it was issued to. The value is derived from a random per-process
+  salt and a fresh nonce, lives **two minutes on the monotonic clock** (a wall-clock step cannot stretch it), and is checked and used up in one atomic step under the
+  credential store's lock; the audit attempt and the change follow, with no store lock held while the audit log is written. So a used, expired, replayed or guessed value, one presented on another
+  connection, one made for another action or script, and one whose script has since changed (even if it has
+  since come back, as after a mint and a revoke) is refused and changes nothing; two presses at once with one
+  confirmation make one credential, and two confirmations asked at once never make two. A wrong try also uses up
+  what the script had outstanding, so the person is asked again. At most 64 confirmations are held (the oldest
+  goes first), and a restart forgets them all. This is the grants G8 pattern; the host does not trust the app's
+  say-so alone (the same-user imitation residual stays OPEN, Q7).
+* **The list.** `scripts.list` returns, per script name, the scope, the latest expiry among its live credentials, how many
+  credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
+  a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps
+  only the hash, so a later list cannot recover them).
+* **The Settings page (P2).** Settings > Script credentials lists each script (name, scope, expiry, live count, when it last
+  authenticated, and the launch tick) and offers Add, Rotate, Revoke and Allow/Stop launching. Each press shows a confirmation dialog
+  with plain words, then asks `scripts.confirm` and sends the press; a host refusal is shown as the page's notice. The page never holds,
+  shows or copies a secret. It appears only for the app, on Windows, when the host offers the `host.scripts` capability. "Last used" is
+  kept in memory since the host started, so it says so; the last four characters of a credential are not shown, because the host
+  keeps only the hash. Showing them would need a stored field, which is a store-format change left to a decision.
+* **The tick keeps the host's own policy.** `scripts.grant-fleet` is still refused unless the script's
+  credential is `read+reply` and the host's agents setting is on; the press cannot widen what the grant
+  allows (fleet caps, ticked workspaces and isolation are unchanged and owner-run).
+* **Audit before change.** Each accepted press is recorded as an attempt before anything is written, as for the CLI,
+  and an unwritable audit log refuses the press (its confirmation is already used up, so the person asks again). Refusals
+  before that point (an unclassified caller, an agent, a credentialed connection, a missing, wrong or expired confirmation)
+  write no audit row: they change nothing, and a wrong try only costs the person a fresh confirmation.
+
 * **Automatic revocation.** Expiry; an unreadable store (fail closed, nothing is accepted until
   the owner deals with it).
 
@@ -214,11 +256,13 @@ revocable at the machine in one app press.
 ## 7. Placing it on each machine
 
 * **Per machine, minted on that machine.** A credential works only on the host that minted it.
+  Copying its protected file, token or hash record never rebinds it: the protected file uses
+  Windows CurrentUser DPAPI, and a store with another machine's script identity fails closed.
   Nothing is synced, and the relay never holds one (agent-token-rotation.md §3).
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
   rules as agent-token-rotation.md §1. The host keeps only the hash.
-* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design):** how that
+* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design; proposal: [script-credentials-run.md](script-credentials-run.md), the `script-run` launcher):** how that
   path reaches the script now that no terminal step may set it (a per-script path the host reports
   to the app, or a fixed per-profile location the script derives). It is not put in any session's environment, and the
   `set-agent-ha-token.ps1` approach of setting a per-VM environment variable is not repeated:
@@ -227,6 +271,21 @@ revocable at the machine in one app press.
 * **Rollout, one machine at a time.** The owner presses "Add script credential" in the app for
   each script on each of the four machines; no command is run. Nothing is minted for another machine
   from one device: there is no remote mint (Q3).
+  The credential is a protected file the host writes for that script; the app never shows it and the
+  result never contains the token. How the script learns the file's path is OPEN (#1414 design). The
+  scheduled process must use the minting Windows user and read/unprotect the file on each run. Do not
+  copy the store, file or token between hosts, export it into session environments, or include it in bundles.
+* **Audit before use.** Presentations and scope refusals append one row by script principal;
+  fleet reads append one attempt even for invalid input or an unavailable registry.
+  Invalid sends append one refusal; valid sends retain their existing attempt and terminal
+  outcome rows. Separately granted fleet launches audit credential admission/refusal without
+  replacing launch-history evidence. None includes token or message text.
+  Missing/unwritable audit refuses use.
+  Audit-only hash/name attribution for recently revoked credentials is bounded and in-memory;
+  after restart, an unknown/deleted token cannot be attributed to a credential name.
+  Rotate with the app's Rotate press, verify an audited fleet read, then retire the
+  old consumer. Revoke with the app's Revoke press if compromised. HA-token retirement
+  remains separate work after fleet cutover validation.
 * **No Apple host yet.** Apple machines are out for now (epic #1396), and the session
   credential has no Mac or Linux path until peer identification exists (agent-principals.md
   §3.4); the same holds here.
@@ -277,7 +336,7 @@ these script credentials grant no roster verification or additional actions.
 |---|---|
 | `kind` and `name` on the record; mint without a session; check that skips the process binding | about 90 |
 | Caller rule: ancestry in full, no agent session in it, else refuse | about 60 |
-| Host mint, revoke and rotate ops behind the local app presses (grants G4/G7b/G8 pattern), owner-only file write, last-four display | about 100 |
+| Host mint, revoke and rotate ops behind the local app presses (grants G4/G7b/G8 pattern), owner-only file write | about 100 |
 | Script principal in the audit and the UI label; op allow-list for `kind: "script"` | about 50 |
 | Tests (kind confusion, refusal from inside a session, expiry, revoke, canary) | about 90 |
 | **Total** | **about 390** |

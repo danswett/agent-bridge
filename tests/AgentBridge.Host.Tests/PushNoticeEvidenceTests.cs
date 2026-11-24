@@ -10,7 +10,7 @@ namespace AgentBridge.Host.Tests;
 
 // #2649: what the host learns about each question notice it pushes to a phone, so the answer-away evidence can say
 // the push service took the notice (delivered means accepted by the push service, not received by the phone).
-public sealed class PushNoticeEvidenceTests : IDisposable
+public sealed class PushNoticeEvidenceTests : IAsyncLifetime
 {
     const string Account = "1";
     const string Phone = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -20,14 +20,20 @@ public sealed class PushNoticeEvidenceTests : IDisposable
     readonly Source source = new();
     readonly Sender sender = new(Account);
     readonly List<PushNoticeOutcome> outcomes = [];
+    readonly List<string> evidenceErrors = [];
     readonly string folder = Path.Combine(Path.GetTempPath(), "abnotice-" + Guid.NewGuid().ToString("N"));
     readonly P256KeyPair browser = P256KeyPair.Generate();
     PushNotifier notifier = null!;
+    PhoneNoticeRecorder recorder = null!;
 
     public PushNoticeEvidenceTests() => Directory.CreateDirectory(folder);
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
+        if (notifier is not null) { await notifier.DisposeAsync(); }
+        if (recorder is not null) { await recorder.DisposeAsync(); }
         browser.Dispose();
         try { Directory.Delete(folder, recursive: true); } catch (IOException) { }
     }
@@ -35,8 +41,10 @@ public sealed class PushNoticeEvidenceTests : IDisposable
     void Start()
     {
         var store = PushStore.Load(Path.Combine(folder, "push-subscriptions.json"), Account);
-        notifier = new PushNotifier(source, new MachineInfo("53d1997f0a1b2c3d4e5f60718293a4b5", "DEV", "windows", "0.1.0"), store, null, _ => { }, time)
-        { NoticeOutcome = outcomes.Add };
+        recorder = new PhoneNoticeRecorder(new AgentAuditLog(folder), evidenceErrors.Add);
+        notifier = new PushNotifier(source, new MachineInfo("53d1997f0a1b2c3d4e5f60718293a4b5", "DEV", "windows", "0.1.0"), store, null, _ => { }, time);
+        notifier.NoticeOutcome += outcomes.Add;
+        notifier.NoticeOutcome += recorder.Record;
         notifier.Attach(sender);
         notifier.Handle(new PushPeer(Phone, "iPhone", Account, true), Ops.PushSubscribe, JsonSerializer.SerializeToElement(new
         {
@@ -73,6 +81,130 @@ public sealed class PushNoticeEvidenceTests : IDisposable
         await Notify(status);
 
         Assert.Equal(new PushNoticeOutcome(Phone, "s1", "q1", NoticeKind.Question, outcome), Assert.Single(outcomes));
+    }
+
+    // Recorder-only RED contract: synthetic notices are not real-device delivery or answer evidence.
+    [Theory]
+    [InlineData(201, "delivered")]
+    [InlineData(410, "gone")]
+    [InlineData(503, "retrying")]
+    [InlineData(400, "refused")]
+    public async Task A_production_subscriber_records_the_existing_notice_fields_without_claiming_an_answer(int status, string outcome)
+    {
+        await Notify(status);
+        await recorder.DisposeAsync();
+        var report = PhoneApprovalEvidence.Read(folder, []);
+        var recorded = JsonSerializer.Serialize(report);
+
+        Assert.Contains($"\"{Phone}\"", recorded);
+        Assert.Contains("\"s1\"", recorded);
+        Assert.Contains("\"q1\"", recorded);
+        Assert.Contains($"\"{outcome}\"", recorded);
+        Assert.Equal(new PushNoticeOutcome(Phone, "s1", "q1", NoticeKind.Question, outcome), Assert.Single(report.Notices));
+        Assert.Equal(status == 201 ? 1 : 0, Assert.Single(report.Clients).Delivered);
+        Assert.DoesNotContain("https://web.push.apple.com", recorded);
+        Assert.DoesNotContain("p256dh", recorded);
+        Assert.DoesNotContain("Which database?", recorded);
+        Assert.All(report.Clients, client => Assert.Equal((0, 0), (client.Answered, client.AnsweredAway)));
+        Assert.False(report.Passed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("unknown")]
+    [InlineData("person:local")]
+    [InlineData("unrecognized")]
+    public async Task A_missing_or_unknown_notice_identity_is_recorded_as_unknown_not_as_a_real_device(string? device)
+    {
+        Start();
+        notifier.NoticeOutcome?.Invoke(new PushNoticeOutcome(device!, "s1", "q1", NoticeKind.Question, "delivered"));
+        await recorder.DisposeAsync();
+        var report = PhoneApprovalEvidence.Read(folder, []);
+
+        Assert.Equal("unknown", Assert.Single(report.Clients).Client);
+        Assert.Equal(0, report.Clients[0].Delivered);
+        Assert.Contains("\"delivered\"", JsonSerializer.Serialize(report));
+        Assert.DoesNotContain(report.Clients, client => client.Client == "person:local");
+        Assert.All(report.Clients, client => Assert.Equal((0, 0), (client.Answered, client.AnsweredAway)));
+        Assert.False(report.Passed);
+    }
+
+    [Fact]
+    public async Task Recorded_notices_and_relay_answers_pass_for_that_client_without_counting_a_retry_twice()
+    {
+        Start();
+        var session = Guid.NewGuid().ToString();
+        var question = Guid.NewGuid().ToString();
+        source.Upsert(Waiting(session, question));
+        time.Advance(TimeSpan.FromSeconds(2));
+        await notifier.PumpAsync();
+        notifier.NoticeOutcome?.Invoke(new PushNoticeOutcome(Phone, session, question, NoticeKind.Question, "delivered"));
+        await recorder.DisposeAsync();
+
+        var audit = new AgentAuditLog(folder);
+        var gate = new GateAuditMetadata(1, Guid.NewGuid(), Guid.NewGuid(), 0, "intent", "relay", "person-client",
+            Guid.Parse(session), "none", Guid.Parse(question));
+        var answer = new AgentAuditEntry("in", gate.Operation.ToString(), $"person:{Phone}", [], Ops.SessionAnswer,
+            session, "attempted", Gate: gate);
+        Assert.True(audit.Append(answer));
+        Assert.True(audit.Append(answer with { Outcome = "delivered", Gate = gate with { Phase = "terminal" } }));
+
+        var report = PhoneApprovalEvidence.Read(folder, [Phone]);
+        Assert.True(report.Complete);
+        Assert.True(report.Passed);
+        Assert.Equal(2, report.Notices.Count);
+        var client = Assert.Single(report.Clients);
+        Assert.Equal((1, 1, 1), (client.Delivered, client.Answered, client.AnsweredAway));
+        Assert.False(PhoneApprovalEvidence.Read(folder, [Phone, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]).Passed);
+    }
+
+    [Fact]
+    public async Task A_full_notice_queue_drops_and_logs_new_outcomes_without_losing_accepted_evidence()
+    {
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var audit = new AgentAuditLog(folder)
+        {
+            LockTiming = new AuditLockTiming(() => 0, () => { blocked.TrySetResult(); release.Wait(); }),
+        };
+        recorder = new PhoneNoticeRecorder(audit, evidenceErrors.Add);
+        var held = AgentAuditLog.Lock(Path.Combine(folder, AgentAuditLog.FolderName));
+        try
+        {
+            recorder.Record(new PushNoticeOutcome(Phone, "s1", "first", NoticeKind.Question, "delivered"));
+            await blocked.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            for (var i = 0; i < 66; i++)
+            {
+                recorder.Record(new PushNoticeOutcome(Phone, "s1", $"q{i}", NoticeKind.Question, "delivered"));
+            }
+            Assert.Equal(["phone notice evidence queue full or closed; dropped=1",
+                "phone notice evidence queue full or closed; dropped=2"], evidenceErrors);
+        }
+        finally
+        {
+            held.Dispose();
+            release.Set();
+            await recorder.DisposeAsync();
+        }
+        var notices = PhoneApprovalEvidence.Read(folder, []).Notices;
+        Assert.Equal(65, notices.Count);
+        Assert.Equal("first", notices[0].Question);
+        Assert.Equal("q63", notices[^1].Question);
+    }
+
+    [Fact]
+    public async Task An_unwritable_audit_is_reported_instead_of_claiming_notice_evidence()
+    {
+        Start();
+        File.WriteAllText(Path.Combine(folder, AgentAuditLog.FolderName), "not a directory");
+        notifier.NoticeOutcome?.Invoke(new PushNoticeOutcome(Phone, "s1", "q1", NoticeKind.Question, "delivered"));
+        await recorder.DisposeAsync();
+
+        Assert.Contains("phone notice evidence could not be recorded", evidenceErrors);
+        var report = PhoneApprovalEvidence.Read(folder, [Phone]);
+        Assert.False(report.Complete);
+        Assert.False(report.Passed);
     }
 
     [Fact]

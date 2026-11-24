@@ -199,6 +199,14 @@ running. Migration re-points agent-ha-bridge's own registrations at this program
 (below). Rollback restores them byte for byte from the snapshot taken at migrate time
 ([migration.md](migration.md)).
 
+A migrated profile has no `agent-bridge-owner.json`: migration records what it re-pointed in
+`migration.json` instead. Settings reads that record. An agent it lists as re-pointed, while the
+record is `migrated` and intake is on, and whose re-pointed file is in the home Settings reads (so
+a fresh `--codex-home` does not count), reports `hookSetup: completed` with `hookMigrated: true`, so it is Not tested yet
+(`docs/design/ui.md` §6.11, #783) and never offers Set up or Remove. An agent it did not re-point, such as
+Codex when agent-ha-bridge never hooked it, stays `notSetUp`, so a Codex launch there is still
+refused with `codexHooksMissing` ([host-launch.md](host-launch.md)).
+
 The design's `agent-bridge-host hook --fallback` is this program's own fallback: with no fresh
 heartbeat it prints the fixed reply and nothing else. `agent-bridge-host-hook --fallback
 <agent> <hook>` does the same unconditionally, for a registration that must never spool. It

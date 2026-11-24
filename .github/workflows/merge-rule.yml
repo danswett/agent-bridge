@@ -15,16 +15,22 @@ name: Merge rule
 #    labelled or unlabelled.
 #  - status: a receipt or any other status posted on a head. The App's own merge-rule posts do
 #    start a run (only GITHUB_TOKEN's events don't), so the job skips status events for the
-#    merge-rule context: they'd only re-judge what was just judged.
+#    merge-rule context: they'd only re-judge what was just judged. Any failure, error or pending
+#    judges again, whatever its context; a success only for the contexts the verdict reads by name
+#    (independent-review, independent-review-2, Copilot's, CodeQL's). The accepted residual (#4104):
+#    an unlisted status going pending to success waits for the next event or sweep, a slower merge,
+#    never a wrong verdict.
 #  - workflow_run: any other workflow started (in_progress) or finished on a pull request.
 #    New runs and re-runs trigger re-judgement at start; completion picks up a late red.
 #    GitHub documents: "The requested activity type does not occur when a workflow is re-run."
 #    https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run
 #    Only requested is dropped (#1821): a queued run not yet started on a runner can retain an
 #    earlier verdict until start or another judgement (the accepted P3 residual). A test keeps the list
-#    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
+#    complete, less the workflows it names as unable to put a check on a pull request's head (the event table
+#    in MergeRuleTests: workflows that run only on the default branch or by hand). That includes the review relay in merge-rule-review.yml: pull_request_review runs
 #    the pull request's copy of a workflow, which mustn't post statuses. And CI's push run on main
-#    starting and finishing, so every verdict follows main going red or green again (main_green).
+#    finishing, so every verdict follows main going red or green again (main_green); not its start,
+#    since main's verdict is its newest completed evidence (#4104: each start swept every pull request).
 #  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
@@ -34,7 +40,9 @@ name: Merge rule
 # dispatch and main's own CI finishing sweep every open pull request into main. The run uses a
 # built evaluator cached per its source and doesn't wait for a burst to settle. Setting the
 # repository variable FLEET_MERGERULE to `off` (read on every run) puts back the earlier path:
-# the 45 s wait, a build of main's evaluator, and every run judging every pull request.
+# the 45 s wait, a build of main's evaluator, and every run judging every pull request, in one group.
+# The narrower triggers stay either way (#4104): CI's start on main and an unlisted status's success
+# start no evaluation, whatever the switch says.
 # Verdicts are the evaluator's, the same on both paths (quality/README.md §4.9, #1251).
 
 on:
@@ -45,7 +53,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [ARM64 self-test loop (non-gating), Apple clients, Beta acceptance, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Main red, Merge rule review relay, Ops probe, Pages, Perf, Re-run known flakes, Relay deploy, Revert culprit, Update gap, Upload release halt policy, Weekly quality report, Workflow lint]
+    workflows: [Apple clients, CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Perf, Relay deploy, Weekly quality report, Workflow lint]
     types: [in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here
@@ -61,14 +69,19 @@ permissions: {}
 # Skipped events must never displace either;
 # the event-table test keeps this eligibility condition identical to evaluate's if below.
 # PR actions share a slot: --pr reads current labels, draft, base and head, not event snapshots.
-# Only a new head cancels its own obsolete admission; the shared writer lock below is unchanged.
+# Only the newest run per pull request or head survives (#4104: up to 30 runs queued on one head): a
+# newer run of the same key cancels an older one, waiting or judging, and judges that key itself.
+# The evaluator posts only verdicts, so a cancelled run leaves the last verdict until the newer one posts.
+# A sweep (cron, dispatch, main's CI finishing) never cancels: one runs and the newest waits, as before;
+# the shared writer lock below never cancels either.
 concurrency:
   group: >-
     merge-rule-admit-${{
       ((github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
-      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
+      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push' && github.event.action == 'completed'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
-      && (github.event_name != 'status' || github.event.context != 'merge-rule'))
+      && (github.event_name != 'status' || github.event.context != 'merge-rule' && (github.event.state != 'success' || github.event.context == 'independent-review'
+      || github.event.context == 'independent-review-2' || startsWith(github.event.context, 'copilot') || startsWith(github.event.context, 'codeql'))))
       && (github.event_name == 'schedule' && 'backstop'
       || github.event_name == 'workflow_dispatch' && 'dispatch'
       || vars.FLEET_MERGERULE == 'off' && 'sweep'
@@ -77,7 +90,10 @@ concurrency:
       || github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha
       || 'sweep') || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' && vars.FLEET_MERGERULE != 'off' }}
+  cancel-in-progress: >-
+    ${{ vars.FLEET_MERGERULE != 'off' && (github.event_name == 'pull_request_target' || github.event_name == 'status' && github.event.sha != ''
+    || github.event_name == 'check_suite' && github.event.check_suite.head_branch != 'main' && github.event.check_suite.head_sha != ''
+    || github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha != '') }}
 
 jobs:
   backstop:
@@ -114,17 +130,19 @@ jobs:
       || github.event.workflow_run.head_branch != 'main' && github.event.workflow_run.head_sha)
       && 'merge-rule-scoped-v1' || 'merge-rule-sweep-v1' }}
     # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
-    # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
+    # evaluation: no pull request's head is on main. But a push run of CI finishing (not starting) on main does:
     # main going red fails every pull request (but a fixes-main one), and going green again frees
-    # them (quality/merge-rule.yml, main_green). A start also re-judges a new run or re-run.
+    # them (quality/merge-rule.yml, main_green). Off main, a workflow's start also re-judges its head: a new
+    # run or re-run there revokes an earlier success.
     # Every other start or completion does too, whatever its
     # event: Perf dispatched on a pull request's branch counts toward the verdict too.
     if: >-
       !cancelled() && (github.event_name != 'schedule' || needs.backstop.outputs.proceed != 'false')
       && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
-      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
+      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push' && github.event.action == 'completed'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
-      && (github.event_name != 'status' || github.event.context != 'merge-rule')
+      && (github.event_name != 'status' || github.event.context != 'merge-rule' && (github.event.state != 'success' || github.event.context == 'independent-review'
+      || github.event.context == 'independent-review-2' || startsWith(github.event.context, 'copilot') || startsWith(github.event.context, 'codeql')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The merge-rule App's key lives in this environment, which only main may deploy from
@@ -194,7 +212,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
-          ARM64_WAIVER: ${{ vars.ARM64_WAIVER }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FAST: ${{ vars.FLEET_MERGERULE != 'off' }}
           CODEX_WAIVER: ${{ vars.CODEX_WAIVER }}

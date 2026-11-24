@@ -92,6 +92,34 @@ public class RosterTests
         Assert.InRange(known.LastSeen, before.AddSeconds(-1), DateTimeOffset.UtcNow.AddSeconds(1));
     }
 
+    // HA retirement row 2 (machine presence), HA off (#1396): a machine appears in presence when it starts and drops to the offline list when it
+    // stops, every time, with no Home Assistant anywhere. Repeated three times; the whole sequence stays well inside the minute the row allows.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_machine_that_stops_and_starts_three_times_is_offline_after_each_stop_and_online_after_each_start_within_a_minute()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var app = await relay.ConnectAsync(token, "app", "app");
+        var host = await relay.ConnectAsync(token, "desk", "host");
+        var (id, key) = (host.Id, host.Key);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (var cycle = 1; cycle <= 3; cycle++)
+        {
+            await app.Relay.WaitForPeerAsync(p => p.Id == id, Patience);
+            Assert.DoesNotContain(app.Relay.Known!, k => k.Id == id);
+            var stoppedAt = DateTimeOffset.UtcNow;
+            await LeaveAsync(relay, host, app);
+            var known = await UntilKnownAsync(app, id);
+            Assert.InRange(known.LastSeen, stoppedAt.AddSeconds(-1), DateTimeOffset.UtcNow.AddSeconds(1));
+            Assert.DoesNotContain(app.Relay.Presence, p => p.Id == id);
+            host = await relay.ConnectAsync(token, "desk", "host", key);
+        }
+        await app.Relay.WaitForPeerAsync(p => p.Id == id, Patience);
+        Assert.DoesNotContain(app.Relay.Known!, k => k.Id == id);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(60), $"three stop/start cycles took {clock.Elapsed}");
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Only_hosts_are_recorded_and_each_only_as_itself()
