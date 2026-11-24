@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
@@ -28,9 +29,10 @@ internal static class ScriptTaskXml
 
     static XElement? Part(XElement task, string name) => task.Elements().FirstOrDefault(e => e.Name.LocalName == name);
 
+    // Escaped, so text that looks like markup can never hash the same as markup.
     static string Canon(XElement e) => "<" + e.Name.LocalName
-        + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{a.Value}\""))
-        + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : e.Value.Trim()) + "</" + e.Name.LocalName + ">";
+        + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{SecurityElement.Escape(a.Value)}\""))
+        + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : SecurityElement.Escape(e.Value.Trim())) + "</" + e.Name.LocalName + ">";
 
     // SHA-256 of the task's actions, principal and triggers (not its registration date or settings), or null when the XML is not a task.
     internal static string? Definition(string xml)
@@ -76,6 +78,10 @@ internal static class ScriptTaskXml
         && path[2] is '\\' or '/' && path.IndexOfAny(['%', '$', '*', '?', '<', '>', '|', '"'], 2) < 0 && !path.Any(char.IsControl) && path.IndexOf(':', 2) < 0
         && !path[3..].Split('\\', '/').Any(s => s is "." or "..");
 
+    // A task is named by its full path, such as \Folder\Task: no traversal, wildcard, control character or empty segment.
+    internal static bool ValidTaskName(string? task) => task is { Length: > 1 and <= 260 } && task[0] == '\\' && !task.EndsWith('\\')
+        && task.IndexOfAny(['*', '?', '<', '>', '|', '"', '/']) < 0 && !task.Any(char.IsControl) && !task.Split('\\').Skip(1).Any(s => s is "" or "." or "..");
+
     static List<string> Tokens(string line)
     {
         var tokens = new List<string>();
@@ -106,18 +112,26 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
     public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task)
     {
         var engines = new List<ScriptTaskEngine>();
+        if (!ScriptTaskXml.ValidTaskName(task)) { return engines; }
         Scheduler<object>(service =>
         {
-            foreach (var running in (IEnumerable?)Call(service, "GetRunningTasks", 1) ?? Array.Empty<object>())
+            var running = Call(service, "GetRunningTasks", 1);
+            try
             {
-                try
+                foreach (var one in (IEnumerable?)running ?? Array.Empty<object>())
                 {
-                    if (!string.Equals(Get(running, "Path") as string, task, StringComparison.OrdinalIgnoreCase)) { continue; }
-                    using var engine = Process.GetProcessById(Convert.ToInt32(Get(running, "EnginePID")));
-                    engines.Add(new(engine.Id, new DateTimeOffset(engine.StartTime.ToUniversalTime())));
+                    try
+                    {
+                        if (!string.Equals(Get(one, "Path") as string, task, StringComparison.OrdinalIgnoreCase)) { continue; }
+                        using var engine = Process.GetProcessById(Convert.ToInt32(Get(one, "EnginePID")));
+                        engines.Add(new(engine.Id, new DateTimeOffset(engine.StartTime.ToUniversalTime())));
+                    }
+                    catch (Exception e) when (e is InvalidOperationException or ArgumentException or COMException or TargetInvocationException or InvalidCastException
+                        or FormatException or OverflowException or System.ComponentModel.Win32Exception) { }
+                    finally { Release(one); }
                 }
-                catch (Exception e) when (e is InvalidOperationException or ArgumentException or COMException or TargetInvocationException or System.ComponentModel.Win32Exception) { }
             }
+            finally { Release(running); }
             return null;
         });
         return engines;
@@ -152,8 +166,9 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
+    // The name is checked here as well as by the binding: a path with traversal or a wildcard reads as no task.
     static T? Task<T>(string name, Func<object, T?> use) where T : class =>
-        Scheduler(service =>
+        !ScriptTaskXml.ValidTaskName(name) ? null : Scheduler(service =>
         {
             object? folder = null, task = null;
             try
