@@ -143,6 +143,7 @@ static partial class SelfTest
             view.Card = new SessionCardViewModel(card.Session with { Id = "limited" },
                 new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
             await Until(() => view.Card.Stored?.State == HistoryLoad.StartReached && line.Text == "Start of available history", TimeSpan.FromSeconds(10));
+            check(rows.ItemsSourceView.Count == view.Card.Stored!.Turns.Count, "the start row shows only once every held turn is drawn");
             check(line.Visibility == Visibility.Visible && line.Text == "Start of available history"
                 && Find<TextBlock>(view).Count(b => b.Visibility == Visibility.Visible && b.Text == "Start of available history") == 1,
                 "a limited last page shows exactly one Start of available history row");
