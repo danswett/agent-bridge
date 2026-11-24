@@ -98,7 +98,7 @@ jobs:
             $rollbackStatus = if ($rollback.held) { '' } else { 'ahead' }
             if ($rollback.fence) {
               try { $rollbackStatus = (Read-Api "repos/$env:GITHUB_REPOSITORY/compare/$($rollback.fence)...$head").status }
-              catch { Write-Warning 'rollback-ancestry-unavailable' }
+              catch { Write-Warning 'rollback-ancestry-unavailable'; $rollback.loud = $true }
             }
             try {
               $site = (Read-Api "repos/$env:GITHUB_REPOSITORY/pages").html_url.TrimEnd('/')
@@ -116,6 +116,16 @@ jobs:
             "### Pages candidate $head ($($verdict[1]))" >> $env:GITHUB_STEP_SUMMARY
             $candidate.jobs | ForEach-Object { "$($_.name): $($_.conclusion)" >> $env:GITHUB_STEP_SUMMARY }
             "deploy=$($verdict[0] -eq 'deploy')".ToLower() >> $env:GITHUB_OUTPUT
+            # A hold nobody chose must never be a silent green skip (#4369): the run fails, red, with the reason.
+            if ($verdict[1] -eq 'rollback-held') {
+              if ($rollback.loud) {
+                Write-Host "::error title=Pages deploy held::$($rollback.reason): the rollback fence could not be read, so nothing deploys. Run Pages with no ref to resume."
+                "**Pages is HELD ($($rollback.reason)); nothing deployed.**" >> $env:GITHUB_STEP_SUMMARY
+                exit 1
+              }
+              Write-Host '::warning title=Pages rollback active::Automatic deploys are paused by a Pages rollback. Run Pages with no ref to resume.'
+              'Pages rollback active: automatic deploys are paused until a Pages resume run.' >> $env:GITHUB_STEP_SUMMARY
+            }
           } else {
             'deploy=true' >> $env:GITHUB_OUTPUT
           }

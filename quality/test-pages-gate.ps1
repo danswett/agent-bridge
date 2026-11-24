@@ -113,7 +113,9 @@ function WorkflowGate(
         $env:GITHUB_OUTPUT = Join-Path $dir 'output'; $env:GITHUB_STEP_SUMMARY = Join-Path $dir 'summary'
         New-Item -ItemType File -Path @($env:GITHUB_OUTPUT, $env:GITHUB_STEP_SUMMARY) | Out-Null
         $step = Join-Path $dir 'gate.ps1'; Set-Content -LiteralPath $step -Value ($block.Groups[1].Value -replace '(?m)^          ', '')
+        $global:LASTEXITCODE = 0
         & $step
+        $stepExit = $LASTEXITCODE
         $output = @(Get-Content $env:GITHUB_OUTPUT); $decision = @($output | Where-Object { $_ -match '^deploy=(true|false)$' })
         if ($decision.Count -ne 1 -or @($calls | Where-Object { -not $replies.ContainsKey($_) }).Count) { throw 'the gate must emit exactly one decision using only mocked APIs' }
         $summary = @(Get-Content $env:GITHUB_STEP_SUMMARY)
@@ -122,9 +124,11 @@ function WorkflowGate(
             if ($output.Count -ne 1 -or $calls.Count -ne $expectedCalls -or $summary.Count) { throw 'manual dispatch and no-candidate exits must not emit a tested SHA or read deployment evidence' }
         } else {
             if ($output -notcontains "sha=$sha" -or @($calls | Where-Object { $_ -eq $historyPath }).Count -ne 1) { throw 'an automatic gate must emit its tested SHA after one bounded history read' }
-            if ($summary.Count -ne ($jobs.Count + 1) -or $summary[0] -notlike "### Pages candidate $sha (*)" -or (Compare-Object @($jobs | ForEach-Object { "$($_.name): $($_.conclusion)" }) @($summary | Select-Object -Skip 1))) { throw 'the summary must identify the tested SHA and every named job conclusion' }
+            if ($summary.Count -lt ($jobs.Count + 1) -or $summary[0] -notlike "### Pages candidate $sha (*)" -or (Compare-Object @($jobs | ForEach-Object { "$($_.name): $($_.conclusion)" }) @($summary | Select-Object -Skip 1 -First $jobs.Count))) { throw 'the summary must identify the tested SHA and every named job conclusion' }
         }
-        if ($decision[0] -eq 'deploy=true') { 'deploy' } else { 'skip' }
+        $held = @($summary | Where-Object { $_ -like '**Pages is HELD*' }).Count
+        if ($stepExit -eq 1) { if (-not $held) { throw 'the gate failed without saying why' }; 'fail' }
+        elseif ($decision[0] -eq 'deploy=true') { 'deploy' } else { 'skip' }
     } finally {
         Pop-Location
         foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key]) }
@@ -152,9 +156,9 @@ $resume.status = 'in_progress'
 if ((WorkflowGate @($manual, $resume)) -ne 'skip') { throw 'pending resume cleared the rollback fence' }
 $manual.status = 'queued'; $manual.conclusion = $null
 if ((WorkflowGate $manual) -ne 'skip') { throw 'pending rollback did not hold the fence' }
-if ((WorkflowGate @() -Unreadable) -ne 'skip') { throw 'unreadable history cleared the rollback fence' }
-if ((WorkflowGate $manual -AncestryError) -ne 'skip') { throw 'failed ancestry lookup cleared the rollback fence' }
-if ((WorkflowGate @($resume) -TotalCount 101) -ne 'skip') { throw 'truncated history cleared the rollback fence' }
+if ((WorkflowGate @() -Unreadable) -ne 'fail') { throw 'unreadable history cleared the rollback fence' }
+if ((WorkflowGate $manual -AncestryError) -ne 'fail') { throw 'failed ancestry lookup cleared the rollback fence' }
+if ((WorkflowGate @($resume) -TotalCount 101) -ne 'fail') { throw 'truncated history cleared the rollback fence' }
 if ((WorkflowGate @()) -ne 'deploy') { throw 'a history with no rollback in it held the deploy (no rollback was ever made, #4369)' }
 foreach ($trigger in @('schedule', 'workflow_run')) {
     if ((WorkflowGate $manual -Trigger $trigger) -ne 'skip') { throw "$trigger bypassed the rollback fence" }
