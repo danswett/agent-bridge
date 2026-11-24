@@ -47,6 +47,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             PackageHosts = () => [],
             Elevated = () => elevated,
         };
+        Hermetic(manager);
         return Task.CompletedTask;
     }
 
@@ -56,6 +57,40 @@ public sealed class HostManagerTests : IAsyncLifetime
         Directory.Delete(app, recursive: true);
     }
 
+    // A HostManager a test builds sees only what the test gives it, never the machine it runs on (#4104): an ab-ci
+    // runner VM runs a real Slipgates host, which the installation's default process scan took for one of this
+    // installation's and an update then waited for on a clock that never moves; and the app's elevation and the
+    // machine's battery differ between hosted and self-hosted runners. Whatever a test set itself stays.
+    static void Hermetic(HostManager m)
+    {
+        void Set(string name, Delegate value)
+        {
+            var property = typeof(HostManager).GetProperty(name)!;
+            if (((Delegate)property.GetValue(m)!).Method.DeclaringType?.Assembly != typeof(HostManagerTests).Assembly) { property.SetValue(m, value); }
+        }
+        Set(nameof(HostManager.PackageHosts), new Func<IReadOnlyCollection<int>>(() => []));
+        Set(nameof(HostManager.Elevated), new Func<bool>(() => false));
+        Set(nameof(HostManager.LaptopReason), new Func<string?>(() => null));
+    }
+
+    // What a runner VM's real host looks like to the default scan: a process named like the host, running from this
+    // installation's folder, that nothing here can hold. Windows only: a copy of cmd.exe under the host's name.
+    sealed class PlantedHost : IDisposable
+    {
+        readonly System.Diagnostics.Process? process;
+        public PlantedHost(string app)
+        {
+            if (!OperatingSystem.IsWindows()) { return; }
+            var exe = Path.Combine(Directory.CreateDirectory(Path.Combine(app, "planted")).FullName, "agent-bridge-host.exe");
+            File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), exe);
+            process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "/c ping -n 120 127.0.0.1 >nul") { UseShellExecute = false, CreateNoWindow = true });
+        }
+        public void Dispose()
+        {
+            try { process?.Kill(entireProcessTree: true); process?.WaitForExit(); } catch (InvalidOperationException) { }
+            process?.Dispose();
+        }
+    }
     [Fact]
     public async Task Uninstall_hook_cleanup_uses_this_apps_host_and_profile_without_guessing_agent_homes()
     {
@@ -316,6 +351,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(timed);
         timed.SetStartAtSignIn(true);
         tasks.OnRun = () => starting = true;
         // The first look (is it running?) moves the clock to T0+1 s, so the wait for the task ends
@@ -336,6 +372,8 @@ public sealed class HostManagerTests : IAsyncLifetime
         // The update's stop is held on a clock that never moves, so it waits for this test to let
         // the host go however slow the runner is. On the wall clock its 1 s ran out first on Arm64,
         // and the update ended in "the host did not stop" rather than the quit (#425).
+        // A real host of this installation's name runs beside it, as on an ab-ci runner VM (#4104).
+        using var planted = new PlantedHost(app);
         var held = new HostManager(manager.Layout, tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
@@ -344,6 +382,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Time = new FakeTimeProvider(Make.T0),
         };
+        Hermetic(held);
         held.SetStartAtSignIn(true);
         var stopping = new TaskCompletionSource();
         host.On(HostOps.Stop, d => { _ = Task.Run(async () => { await stopping.Task; await host.StopAsync(); }); return new { stopping = true }; });
@@ -417,6 +456,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Log = logged.Add,
         };
+        Hermetic(m);
         using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.Zero);
         Assert.NotNull(held);
 
@@ -447,6 +487,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(timed);
         timed.SetStartAtSignIn(true);
         // No host answers, while the launcher's run goes on (a launcher that never looks at the
         // marker): each look at it takes a second.
@@ -514,6 +555,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
+        Hermetic(m);
         processes.OnStart = () => { if (!up) { up = true; host.Start(); } };
         await m.StartAsync();
         // Its host crashed; the launcher (pid 99) is still there, waiting to start it again.
@@ -553,6 +595,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(m);
         m.SetStartAtSignIn(true);
         tasks.StillRunningWhile = () => { clock.Advance(TimeSpan.FromSeconds(1)); return launcherThere; };
 
@@ -576,6 +619,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             ProbePoll = TimeSpan.FromMilliseconds(50),
             PackageHosts = () => [],
         };
+        Hermetic(quick);
         quick.SetStartAtSignIn(true);
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
         host.Start();
@@ -717,6 +761,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             // package under this host's pid was never held, and refuses the update).
             PackageHosts = () => { lock (processes) { return processes.StartTimes[4242] == Make.T0 ? [4242] : []; } },
         };
+        Hermetic(m);
         processes.Alive.Add(4242);
         processes.StartTimes[4242] = Make.T0;
         host.On(HostOps.Status, _ =>
@@ -986,6 +1031,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(10),
         };
+        Hermetic(m);
         m.SetStartAtSignIn(true);
         using var cancel = new CancellationTokenSource();
         // Cancelled (the app closing, say) while it waits for the launcher's run to end.
@@ -1034,6 +1080,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(10),
         };
+        Hermetic(m);
         using var cancel = new CancellationTokenSource();
         await cancel.CancelAsync();
 
@@ -1056,6 +1103,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(m);
         m.SetStartAtSignIn(true);
         // The task's run and a launcher started directly by an earlier run of the app, each still
         // starting a host.
@@ -1099,6 +1147,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(m);
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
         using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
         Assert.True(launcherFiles.HoldRecord(77, startedUtc));
@@ -1129,6 +1178,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Time = clock,
             Elevated = () => false,
         };
+        Hermetic(m);
         processes.OnStart = () => host.Start();
         // This app's launcher (99) started its host, then ended with it; another launcher (77),
         // started since, is waiting to start the host again.
@@ -1164,6 +1214,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Time = clock,
         };
+        Hermetic(m);
         // Recorded by the launcher itself, as it does; the process with pid 77 now is that launcher,
         // or another that started later and was given its pid.
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
@@ -1196,6 +1247,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
         };
+        Hermetic(m);
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
         using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
         Assert.True(launcherFiles.HoldRecord(77, startedUtc));
@@ -1236,6 +1288,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
             Time = clock,
         };
+        Hermetic(m);
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
         using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
         Assert.True(launcherFiles.HoldRecord(77, startedUtc));
@@ -1333,6 +1386,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Poll = TimeSpan.FromMilliseconds(10),
             Elevated = () => false,
         };
+        Hermetic(m);
         processes.OnStart = () => { lock (happened) { happened.Add("launcher"); } };
         // A Start asked for just after the Stop has let go of the lock it replaced the token that
         // cancels Starts under: a Stop that queued only then had this Start go first (Copilot
@@ -1376,6 +1430,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
             Time = clock,
         };
+        Hermetic(m);
         using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
         if (afterAnAdoptedOne)
         {
@@ -1426,6 +1481,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
             Log = logged.Add,
         };
+        Hermetic(m);
         using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.FromSeconds(1));
         Assert.NotNull(held);
 
@@ -1457,6 +1513,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(10),
         };
+        Hermetic(m);
 
         var ended = await Record.ExceptionAsync(() => m.StartAsync());
 
@@ -1482,6 +1539,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
             Time = clock,
         };
+        Hermetic(m);
 
         await Assert.ThrowsAsync<TimeoutException>(() => m.StartAsync());
 

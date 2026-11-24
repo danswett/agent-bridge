@@ -200,6 +200,9 @@ public sealed partial class HaConnector
     static LaunchAgent? DefaultAgent(LaunchOptions offered) =>
         offered.Agents.FirstOrDefault(a => a.Id == offered.Defaults.Agent) ?? offered.Agents.FirstOrDefault();
 
+    // A refused workspace is named by what the machine offers, never by the rejected value: it may itself be a path (#1901, #841).
+    static string UnknownWorkspace(LaunchOptions offered) => $"Unknown workspace - this machine has {string.Join(", ", offered.Workspaces.Select(w => w.Label))}";
+
     static string AgentLabel(LaunchOptions offered, string id) => offered.Agents.FirstOrDefault(a => a.Id == id)?.Label ?? id;
 
     static bool Stale(string? state) => state is null or "" or "unknown" or "unavailable";
@@ -333,7 +336,7 @@ public sealed partial class HaConnector
             if (launchRequestsHandled.Count > 50) { launchRequestsHandled.RemoveAt(50); }
         }
         launchConsumedPress = pressedAt;
-        log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
+        log($"Home Assistant connector: launch request {id} received ({(read.Settings!.Count > 0 ? string.Join(", ", read.Settings.OrderBy(k => k.Key, StringComparer.Ordinal).Select(k => k.Key == "workspace" ? "workspace=(named)" : $"{k.Key}={k.Value}")) : "machine defaults")}; prompt of {read.Text.Length} chars)");
         var refusal = read.Problem;
         if (refusal.Length == 0 && time.GetUtcNow() - pressedAt > TimeSpan.FromMinutes(5))
         {
@@ -504,7 +507,7 @@ public sealed partial class HaConnector
             if (Stale(workspace)) { workspace = offered.Defaults.Workspace; }
             if (offered.Workspaces.Count > 0 && !offered.Workspaces.Any(w => w.Label == workspace))
             {
-                await LaunchNoteAsync($"Unknown workspace '{workspace}'", ct);
+                await LaunchNoteAsync(UnknownWorkspace(offered), ct);
                 return;
             }
         }
@@ -664,7 +667,7 @@ public sealed partial class HaConnector
             var known = offered.Workspaces.FirstOrDefault(w => string.Equals(w.Label, wantedWorkspace, StringComparison.OrdinalIgnoreCase));
             if (known is null)
             {
-                return (null, null, $"Unknown workspace '{wantedWorkspace}' - this machine has {string.Join(", ", offered.Workspaces.Select(w => w.Label))}");
+                return (null, null, UnknownWorkspace(offered));
             }
             workspace = known.Label;
         }

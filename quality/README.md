@@ -307,6 +307,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
    unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
+   **A main run records what it relied on (#2454).** Its plan job emits the notice annotation
+   `plan-base: base=<sha> relied-parent=<sha|none>`: the commit the run diffed from, and the in-flight
+   parent run it counted on to test only its own change. The judges (the merge rule, main_green and the
+   train selector) read it, so a run counts green only if what it relied on is green too. Today every run
+   records `relied-parent=none`: it diffs from a passed base. The record comes first, the judges next, and the
+   first-parent shortcut that makes a run rely on its parent last, so nothing changes until the judges honour it.
+
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
@@ -860,12 +867,17 @@ for itself (build once and hand the output over as an artifact is decided after 
 with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
 is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, and VSTest's
 `~` is a **case-insensitive** contains (`Foo.ATests.` is inside `Foo.aTests.`), so classes like that, by case too, are one unit and travel together (3 of Host.Tests' 175
-classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. An empty shard's filter is empty text,
-which `dotnet test` reads as no filter, so a caller skips an empty shard. The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
-the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. Discovery must be the **built
-assembly's, by reflection**, never a scan of the source: the spike's source scan missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no
-shard. `dotnet test --list-tests` is not an option either (222 s on Host.Tests alone). A class name the filter language would misread is refused, never dropped. The
-shard legs, the discovery command, the weights file and `quality-gate` failing on a missing or skipped shard are later pieces.
+classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. The plan is a pure function of
+the classes discovered and their recorded seconds, so every shard job computes the same plan; a class with no recorded time weighs the median of those that have one, so
+a new class is spread rather than piled on. **No discovery step:** a scan of the source missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran
+in no shard, and `dotnet test --list-tests` takes 222 s on Host.Tests alone. So `quality/test-shards.json` has shards 1 to N-1 **list** their classes per project, and
+**shard N is the remainder**: it runs everything not listed, by a negated filter (`FullyQualifiedName!~Class.` for every listed class, `&`-joined), so a new, renamed or
+unlisted class lands there and is never dropped. Small projects are listed whole in a shard; a project listed nowhere runs whole in the remainder.
+`agent-bridge-quality shard-filter --plan FILE --project P --shard I` prints `none`, `all` or the filter, and `--check` reads the plan alone. **An empty shard prints
+`none` and is skipped, never run:** `dotnet test` reads an empty `--filter` as no filter at all, so it would run every test. **What the plan must keep true, refused
+when it is read:** no class in two lists, no two classes in different shards whose terms match each other's tests, case aside (they would run twice), no class name the
+filter language would misread, and every filter under 24,000 characters (Windows' command line is 32 K). The weights file, the shard legs and `quality-gate` failing on
+a missing or skipped shard are later pieces.
 
 **What gates main: two lanes (decided, owner, Nov 23, S2, #4104; built in the pieces below, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
 one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on

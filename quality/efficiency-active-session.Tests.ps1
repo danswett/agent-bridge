@@ -43,6 +43,8 @@ function Invoke-CancelledDriver {
     catch [OperationCanceledException] { $cancelled = $true }
     Assert $cancelled 'The driver did not propagate cancellation.'
 }
+# Set up: EfficiencyActiveSessionTests times the scenario from here, not pwsh's own start (#4104).
+[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()
 try {
     switch ($Scenario) {
         'rates' {
