@@ -39,9 +39,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/playwright-apt-debs
-        key: playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.ref-hash }}
+        key: playwright-apt-v4-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-${{ steps.identity.outputs.ref-hash }}
         restore-keys: |
-          playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-
+          playwright-apt-v4-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-
     - id: packages
       shell: bash
       working-directory: ${{ inputs.working-directory }}
