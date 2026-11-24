@@ -67,6 +67,9 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
             foreach (var id in owned.Where(id => !ids.Contains(id)).ToList())
             {
                 if (ended(id)) { owned.Remove(id); missingSince.Remove(id); continue; }
+                // Explained by what the watch saw: the host was ending it (Ending), or it had delivered and was closed. Decided at the first absence.
+                if (!missingSince.ContainsKey(id) && seen.TryGetValue(id, out var last) && (last.Status == SessionStatus.Ending || last.Delivery == Delivery.Yes))
+                { owned.Remove(id); continue; }
                 if (!missingSince.TryGetValue(id, out var since)) missingSince[id] = since = now;
                 if (now - since > settings.MissingForget) { owned.Remove(id); missingSince.Remove(id); continue; }
                 var key = (WatchRule.Missing, id);

@@ -275,6 +275,19 @@ public class SessionWatchTests
     }
 
     [Fact]
+    public void An_owned_session_seen_ending_is_explained_when_it_goes_and_so_is_one_that_had_delivered()
+    {
+        var stopped = WatchEnded(_ => false, "s1");
+        stopped.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-2));
+        stopped.Evaluate([S(SessionStatus.Ending, T.AddMinutes(-1))], T.AddMinutes(-1));
+        Assert.Empty(stopped.Evaluate([], T));
+
+        var finished = WatchEnded(_ => false, "s1");
+        Delivered(finished);
+        Assert.Empty(finished.Evaluate([], T));
+    }
+
+    [Fact]
     public void A_missing_session_is_forgotten_after_a_day()
     {
         var w = WatchEnded(_ => false, "s1");
