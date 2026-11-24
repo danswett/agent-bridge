@@ -1836,7 +1836,8 @@ public sealed class StandaloneHooksTests : IDisposable
     [Fact]
     public async Task An_unmigrated_profile_with_a_legacy_root_still_refuses_Codex()
     {
-        Directory.CreateDirectory(Legacy);
+        // A full installation (installation.json) still refuses; an empty or unused root is retired (#3644).
+        Write(Path.Combine(Legacy, "installation.json"), "{}");
         var before = Listing();
         await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
         Assert.Equal(before, Listing());
