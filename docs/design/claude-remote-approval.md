@@ -15,15 +15,24 @@ person answers on a device, and print that decision. With no usable decision it 
 
 - **Who may approve.** Only a **person's** decision is taken (the decision file's `principal` is `person`). An agent's decision is refused,
   logged by its reason only, and ignored. Nothing is ever approved automatically: no default, no timeout-allow, no "remember".
-- **Which request.** The event carries no request id, so the id is a hash of the session, tool and input (16 hex digits). A decision for another id
-  is refused; a decision file older than two minutes or dated more than five seconds ahead is refused; an unknown verdict or unreadable file is
-  refused. A changed command is a different request, so approving one command cannot approve another.
-- **What is shown.** The device shows the host's bounded, escaped preview of the command (the existing escaped-approval rules, PR2). The hook's
+- **Which request, and no replay.** The event carries no request id, so the id is a hash of the session, tool and input (16 hex digits). Each prompt
+  also gets a fresh one-time **nonce** the hook keeps in its own pending record; a decision must carry the **proof** for this prompt (a hash of
+  the nonce with the request id, session, tool and the **full** input), must be dated **no earlier than the prompt began**, and is **consumed** (claimed
+  by a move, deleted) the moment it is read, whether usable or not; any older file is removed before the prompt is recorded. So one answer settles
+  one prompt and cannot be reused for the next identical one, and a changed command is a different prompt. A decision for another request or proof,
+  older than the prompt, over two minutes old, dated more than five seconds ahead, over 4 KiB, with an unknown verdict or unreadable, is refused.
+- **NOT AUTHENTICATED (stated plainly).** `principal: "person"` is text in a file in the user's profile (`agent-bridge-claude`, the folder family
+  `host-hooks.md` says has no ACL on Windows, where an unauthenticated local file never drives an answer, #3847). Any process of the same user can read
+  the pending record, including its nonce, and write a matching decision, an agent's own tool call included. The nonce stops **replay and
+  cross-prompt reuse, not forgery**, and "an agent's decision is refused" holds only for a writer that labels itself an agent. **So this feature must
+  stay off until the host answers through a channel an agent cannot write** (a host-only, ACL-protected or signed answer from a device that the relay
+  has authenticated), and PR2 does not turn anything on before that is designed, tested and approved. Until then this contract is the hook side only.
+- **What is shown.** The device shows the host's bounded, escaped preview of the command (the existing escaped-approval rules, PR2). **A truncated command is never answerable**: the id binds the full input, but a person would see only a prefix. The hook's
   decision carries no command text and the log carries reasons only.
 - **Default off.** The existing `permissions.remoteApproval` defaults **on** (it governs Copilot approvals today), so this uses its own setting,
   **`permissions.claudeApproval`, default off** (PR2), registered only when on. Off means no hook, and the terminal prompt as today.
-- **Timeout.** The hook's wait is shorter than the hook timeout Claude is given, so the hook ends itself with no output rather than being
-  cancelled. What Claude does when a hook is cancelled is not documented; the design does not rely on it.
+- **Timeout.** The hook's wait (100 s, measured on a monotonic clock so a stepped wall clock cannot stretch it) is shorter than the hook timeout Claude is
+  given (120 s, a test pins it), so the hook ends itself with no output rather than being cancelled. A read that fails is tried again. What Claude does when a hook is cancelled is not documented; the design does not rely on it.
 - **Not a new privilege.** The person who answers could already answer at the machine; this moves the same decision to a signed-in device of the
   account, through the relay, as the Copilot approvals do. It does not widen what an agent can do.
 
