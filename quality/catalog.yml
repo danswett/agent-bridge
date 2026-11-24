@@ -609,6 +609,22 @@ suites:
     # Flip to exists with that patch.
     status: planned
 
+  - id: full-red-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The alert for a red FULL lane (S2, #4104): one issue per commit, labelled full-red, with the blocking and the waived (Arm64
+    # self-test, tests, installer) red jobs apart, on a stub gh. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/full-red.ps1, quality/test-full-red.ps1]
+    command: pwsh -NoProfile -File quality/test-full-red.ps1
+    where: ci.yml light
+    # planned until full-red.yml and its ci.yml step land (patches/ci-s2-piece7a-full-red-4104.patch, applied by Quality). Flip to
+    # exists, and add full-red.yml report to the where, with that patch.
+    status: planned
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit

@@ -858,7 +858,10 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
   with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
 * **A red FULL lane is to open an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
-  **never holds a merge**: merges continue.
+  **never holds a merge**: merges continue. Its script is written and tested (piece 7, `quality/full-red.ps1`, `quality/test-full-red.ps1`; the
+  workflow that runs it is a patch for Quality): it finds the commit's issue by the marker `<!-- full-red:<sha> -->` so a commit never has two, reopens a closed
+  one, and lists **Blocking** red jobs (x64 anything, the Arm64 pack, any other job) apart from **Waived** ones (the Arm64 self-test, tests and installer: recorded
+  in the issue though the run succeeded, publish continues). The aggregates are never a cause; a red `full-gate` with no failed job behind it is its own line.
 * **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
   suites `lane: full` with their `full.yml` job names (the validators then read both workflows). The ruleset keeps requiring only
   `quality-gate` and the merge-rule status.
