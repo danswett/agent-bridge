@@ -26,10 +26,10 @@ public class FullWorkflowTests
     static string Expression(string value) => value.Trim().StartsWith("${{", StringComparison.Ordinal) ? value.Trim()[3..^2].Trim() : value.Trim();
 
     [Fact]
-    public void Full_yml_has_the_trigger_job_the_spikes_and_the_gate_and_ci_yml_no_longer_has_the_spikes()
+    public void Full_yml_has_the_trigger_job_the_spikes_pwa_e2e_and_the_gate_and_ci_yml_no_longer_has_them()
     {
-        Assert.Equal(["full-gate", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
-        Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal));
+        Assert.Equal(["full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -131,6 +131,21 @@ public class FullWorkflowTests
         foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "tested=$sha\" >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pwa_ui_runs_the_six_legs_whose_names_are_the_ones_Pages_waits_for_and_none_of_it_is_for_a_pull_request()
+    {
+        var job = (YamlMappingNode)Jobs("full.yml")["pwa-ui"];
+        var include = (YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)job["strategy"])["matrix"])["include"];
+        var legs = include.Children.Select(l => $"pwa-ui ({Scalar(l, "name")})").Order(StringComparer.Ordinal).ToArray();
+        var pages = System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(Root, "quality", "pages-jobs.json")))!
+            .Where(n => n.StartsWith("pwa-ui", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(pages, legs);
+        Assert.Equal(["chromium", "chromium", "chromium", "webkit", "webkit", "webkit"], include.Children.Select(l => Scalar(l, "project")).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("pull_request'", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml")).Replace("pull_request_target", "", StringComparison.Ordinal)
+            .Split('\n').Where(l => !l.TrimStart().StartsWith('#')).Aggregate("", (a, l) => a + l));
     }
 
     // The trigger's commit step, run for real under bash with a stub gh, as CriticalReleaseTests does for ci.yml's guard.

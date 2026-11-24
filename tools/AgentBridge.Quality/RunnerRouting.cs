@@ -57,6 +57,12 @@ static partial class RunnerRouting
         // The dispatch alternative reads inputs.use_ab_ci: only a boolean input is safe ('false' as a string is truthy).
         var booleanDispatch = DispatchInputType(root, "use_ab_ci") == "boolean";
         var problems = new List<string>();
+        // R8c (#4306 P3-1): a merge key at the root or under jobs: brings in jobs this check never reads: fail closed.
+        if (root.Children.Keys.Concat(map.Children.Keys).Any(k => k is YamlScalarNode { Value: "<<" }))
+        {
+            problems.Add($"{file} uses a YAML merge key (<<) at the root or under jobs:, which can bring in jobs this check doesn't read");
+            jobs.Remove("<<");
+        }
         foreach (var (name, job) in jobs)
         {
             // Where a runner is chosen: the job's runs-on, and, for a reusable workflow's caller, each input that names the
@@ -68,6 +74,8 @@ static partial class RunnerRouting
                 routes.AddRange(inputs.Children.Values.Where(v => Label().IsMatch(Text(v))));
             }
             var whys = routes.Select(r => Unguarded(r, value => MaySelfHost(value, job, name, file))).OfType<string>().ToList();
+            // A merge key (<<) can bring in runs-on, a matrix or a row this check never sees: fail closed (R8b P2).
+            if (HasMergeKey(job)) { whys.Add("it uses a YAML merge key (<<), which this check doesn't follow"); }
             if (!booleanDispatch && routes.Any(r => Text(r).Contains("inputs.use_ab_ci", StringComparison.Ordinal)))
             {
                 problems.Add($"{file} job {name} reads inputs.use_ab_ci, which must be a workflow_dispatch input of type: boolean (as a string, 'false' is truthy)");
@@ -81,7 +89,14 @@ static partial class RunnerRouting
 
     // Whether a job's runner may be anything but known hosted labels, guarded or not: CachePolicy's ab-ci test (B221 P1-2).
     internal static bool MayRunSelfHosted(YamlMappingNode job, string name, string file)
-        => job.Children.TryGetValue(new YamlScalarNode("runs-on"), out var runsOn) && Unguarded(runsOn, v => MaySelfHost(v, job, name, file)) is not null;
+        => HasMergeKey(job) || job.Children.TryGetValue(new YamlScalarNode("runs-on"), out var runsOn) && Unguarded(runsOn, v => MaySelfHost(v, job, name, file)) is not null;
+
+    static bool HasMergeKey(YamlNode node) => node switch
+    {
+        YamlMappingNode m => m.Children.Any(p => p.Key is YamlScalarNode { Value: "<<" } || HasMergeKey(p.Value)),
+        YamlSequenceNode s => s.Children.Any(HasMergeKey),
+        _ => false,
+    };
 
     // null: never self-hosted. "": self-hosted only behind the whole guard. Otherwise why not.
     static string? Unguarded(YamlNode runsOn, Func<Expr, bool> maySelfHost)
@@ -155,6 +170,9 @@ static partial class RunnerRouting
     {
         if (!job.Children.TryGetValue(new YamlScalarNode("strategy"), out var st) || st is not YamlMappingNode strategy
             || !strategy.Children.TryGetValue(new YamlScalarNode("matrix"), out var m) || m is not YamlMappingNode matrix) { return false; }
+        // R8b P2: include under another spelling, or a merge key (<<) in the matrix or a row, can carry a row this check
+        // wouldn't read: fail closed.
+        if (matrix.Children.Keys.Any(k => k is YamlScalarNode { Value: { } s } && (s == "<<" || s != "include" && s.Equals("include", StringComparison.OrdinalIgnoreCase)))) { return false; }
         var values = new List<string>();
         var include = matrix.Children.TryGetValue(new YamlScalarNode("include"), out var inc) ? inc : null;
         // GitHub reads context keys case-insensitively: OS and os are one key, so both spellings count, and two fail.
@@ -177,6 +195,7 @@ static partial class RunnerRouting
                 foreach (var row in rows.Children)
                 {
                     if (row is not YamlMappingNode r) { return false; }
+                    if (HasMergeKey(r)) { return false; }
                     var cells = r.Children.Where(p => p.Key is YamlScalarNode { Value: { } k } && k.Equals(key, StringComparison.OrdinalIgnoreCase)).ToList();
                     if (cells.Count == 0) { continue; }
                     if (cells.Count > 1 || cells[0].Value is not YamlScalarNode { Value: { } c } || c.Contains("${{", StringComparison.Ordinal)) { return false; }
@@ -249,6 +268,31 @@ static partial class RunnerRouting
             }
         }
         return all;
+    }
+
+    // plan.ps1's product-os pin (R8b on #4306): quality/product-os-pin.ps1 reads plan.ps1 with the PowerShell parser and
+    // allow-lists the one safe write of product-os, refusing every other write to $outputs, $productOs, $runners or the
+    // output file (computed keys, method writes, splatting, writes by name). Here, the map values it found are held to
+    // ProductRunners, every one a known hosted label.
+    internal static List<string> ProductOsProblems(string repoRoot, string plan)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", Path.Combine(repoRoot, "quality", "product-os-pin.ps1"), "-Plan", plan }) { start.ArgumentList.Add(arg); }
+        using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
+        var error = process.StandardError.ReadToEndAsync();
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0) { return [$"quality/product-os-pin.ps1 failed (exit {process.ExitCode}): {error.Result.Trim()}"]; }
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            static List<string> Strings(JsonElement e) => e.ValueKind == JsonValueKind.Array ? [.. e.EnumerateArray().Select(x => x.GetString() ?? "")] : e.ValueKind == JsonValueKind.String ? [e.GetString()!] : [];
+            var problems = Strings(doc.RootElement.GetProperty("problems"));
+            var runners = Strings(doc.RootElement.GetProperty("runners"));
+            if (!runners.SequenceEqual(ProductRunners) || !runners.All(r => Hosted().IsMatch(r))) { problems.Add($"plan.ps1's $runners map is [{string.Join(", ", runners)}], not [{string.Join(", ", ProductRunners)}]"); }
+            return problems;
+        }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return [$"quality/product-os-pin.ps1 wrote no readable result: {e.Message}"]; }
     }
 
     // The declared type of a workflow_dispatch input, or null when there is no such input or type.

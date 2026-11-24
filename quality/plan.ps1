@@ -135,7 +135,8 @@ $tiers = [ordered]@{}
 foreach ($job in $Jobs) { $tiers[$job] = if ($job -cin $postMerge) { 'post-merge' } else { 'blocking' } }
 foreach ($name in $postMerge) { $tiers[$name] = 'post-merge' }
 $outputs['tiers'] = ConvertTo-Json -InputObject $tiers -Compress
-$lines = $outputs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
+# One line per output: a line break in a key or value would write a second line, a second output (#4306).
+$lines = $outputs.GetEnumerator() | ForEach-Object { $line = "$($_.Key)=$($_.Value)"; if ($line -match '[\r\n]') { throw "plan output $($_.Key) holds a line break, which would write a second output line" }; $line }
 if ($env:GITHUB_OUTPUT) { $lines | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 } else { $lines | Write-Output }
 
 # The summary. Text from the catalog and file names goes into table cells, where | would split one.

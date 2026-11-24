@@ -37,6 +37,7 @@ Do not hand-edit `sessions.json`: the generator-equality test would reject it.
 | `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions, enrollment values, and the v3 (capSign) genesis bytes, T3 transcript and key collisions. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
 | `roster-state.json` | Not records: the roster's acceptance rule and state ([devices.md](../devices.md), #55): the §10 scenarios as entries offered in order, each verdict and refusal code, and the state a verifier then applies. `RosterStateVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-state.test.mjs` replays it through the PWA's port of the rule |
 | `roster-commands.json` | Not records: the roster's vetoes, person commands and head attestations ([devices.md](../devices.md), #55): each case's parser refusal or check code against one roster, and an attestation's key, message and MAC beside a signed command's under the same key. `RosterCommandTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-commands.test.mjs` replays it |
+| `order-records.json` | Not records: the sealed order record's plaintext ([order-records.md](../order-records.md), #759 S2): valid and refused records, the expansion to the merge form, the limits, aging and what goes first when over. `order-record.test.mjs` replays it. |
 
 ## Shape
 

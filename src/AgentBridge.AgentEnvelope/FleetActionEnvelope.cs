@@ -15,6 +15,7 @@ public sealed record FleetActionSigned(string Body, string Signature);
 public static class FleetActionEnvelope
 {
     public const string LaunchAction = "fleet.launch";
+    public const string EndAction = "fleet.end";
     public const int MaxLifetimeSeconds = 120;
     const int MaxBody = 2048;
     static readonly byte[] Domain = Framing.Label("agent-bridge fleet action envelope v1");
@@ -49,7 +50,7 @@ public static class FleetActionEnvelope
     // expectedSource is the device whose key is trusted: the body's sourceDevice must be that device, so a valid signature
     // from one peer's key can never be presented as another device's action.
     public static FleetActionBody Verify(FleetActionSigned signed, ReadOnlySpan<byte> trustedSourceHostSign,
-        string expectedAccount, string expectedSource, string expectedAudience, DateTimeOffset now)
+        string expectedAccount, string expectedSource, string expectedAudience, DateTimeOffset now, string expectedAction = LaunchAction)
     {
         if (signed is null || !P256.IsPoint(trustedSourceHostSign)
             || signed.Body is not { Length: > 0 and <= MaxBody * 4 / 3 + 4 }
@@ -61,7 +62,7 @@ public static class FleetActionEnvelope
         { throw Bad(); }
         var body = Read(raw);
         var remaining = body.ExpiresAt - now;
-        if (!raw.AsSpan().SequenceEqual(Write(body)) || !Shape(body) || body.Action != LaunchAction
+        if (!raw.AsSpan().SequenceEqual(Write(body)) || !Shape(body) || body.Action != expectedAction || expectedAction is not (LaunchAction or EndAction)
             || body.Account != expectedAccount || body.SourceDevice != expectedSource || body.Audience != expectedAudience
             || remaining <= TimeSpan.Zero || remaining > TimeSpan.FromSeconds(MaxLifetimeSeconds)) { throw Bad(); }
         return body;
