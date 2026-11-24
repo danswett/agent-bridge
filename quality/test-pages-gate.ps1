@@ -72,6 +72,60 @@ $new.jobs[1].conclusion = 'cancelled'
 if ((& $candidate -Runs @($new, $old)).sha -ne $live) { throw 'newest eligible SHA did not win' }
 $new = Run 3 $live; $new.jobs[1].conclusion = 'skipped'
 if ((& $candidate -Runs @($old, $new)).sha) { throw 'older evidence replaced the latest run for a SHA' }
+# The two lanes (S2, #4104): the PWA jobs are in the FAST run today and move to the FULL run (full.yml, found by the commit's head_sha). A commit
+# deploys when plan, product (ubuntu-latest) and every PWA job passed, each in whichever lane holds it. Pages never deploys on a FAST run that lacks them.
+$fastNames = @('plan', 'product (ubuntu-latest)')
+$pwaNames = @(Get-Content -Raw (Join-Path $PSScriptRoot 'pages-jobs.json') | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object { $_ -cnotin $fastNames })
+function LaneJobs([string]$sha, [string[]]$names) { @($names | ForEach-Object { @{ name = $_; head_sha = $sha; status = 'completed'; conclusion = 'success' } }) }
+function LaneRun([int]$number, [string]$sha, [string[]]$names) { @{ run_number = $number; head_sha = $sha; event = 'push'; head_branch = 'main'; jobs = (LaneJobs $sha $names) } }
+$script:fullCalls = @()
+# A GetFull that answers from a table (sha -> the FULL run: Id, Conclusion, jobs; or $null) and records what it was asked.
+function Candidate($runs, [hashtable]$fullBySha) {
+    $calls = [System.Collections.Generic.List[string]]::new()
+    $getFull = { param($sha) $calls.Add($sha); $fullBySha[$sha] }.GetNewClosure()
+    $result = & $candidate -Runs @($runs) -GetFull $getFull
+    $script:fullCalls = @($calls)
+    $result
+}
+function FullRun([string]$sha, [string[]]$names, [string]$conclusion = 'success') { [pscustomobject]@{ Id = 77; Conclusion = $conclusion; jobs = (LaneJobs $sha $names) } }
+
+$moved = LaneRun 2 $head $fastNames
+$got = Candidate @($moved) @{ $head = (FullRun $head $pwaNames) }
+if ($got.sha -ne $head -or @($got.jobs).Count -ne $fastNames.Count + $pwaNames.Count -or ($script:fullCalls -join ',') -ne $head) { throw 'a FAST run with the PWA jobs in the same commit''s FULL run was refused' }
+$got = Candidate @((LaneRun 2 $head ($fastNames + $pwaNames))) @{}
+if ($got.sha -ne $head -or $script:fullCalls.Count) { throw 'a FAST run that holds every job needed a FULL lookup' }
+$got = Candidate @($moved) @{ $head = $null }
+if ($got.sha -or $got.reason -ne 'named-jobs-not-success' -or $script:fullCalls.Count -ne 1) { throw 'Pages deployed on a FAST run alone' }
+$got = Candidate @($moved) @{}
+if ($got.sha) { throw 'Pages deployed with no FULL run to read' }
+$got = Candidate @((LaneRun 3 $live $fastNames), (LaneRun 2 $head $fastNames)) @{ $head = (FullRun $head $pwaNames) }
+if ($got.sha -ne $head -or ($script:fullCalls -join ',') -ne "$live,$head") { throw 'the newest commit with a FULL run did not win over a newer one without' }
+$got = Candidate @((LaneRun 2 $head ($fastNames + @($pwaNames | Where-Object { $_ -like 'pwa-ui*' })))) @{ $head = (FullRun $head @('pwa-e2e')) }
+if ($got.sha -ne $head) { throw 'PWA jobs split between the lanes (pwa-ui in FAST, pwa-e2e in FULL, as when only one has moved) were refused' }
+$got = Candidate @((LaneRun 2 $head ($fastNames + @('pwa-e2e')))) @{ $head = (FullRun $head @($pwaNames | Where-Object { $_ -like 'pwa-ui*' })) }
+if ($got.sha -ne $head) { throw 'PWA jobs split between the lanes (pwa-e2e in FAST, pwa-ui in FULL) were refused' }
+$redFast = LaneRun 2 $head $fastNames; $redFast.jobs[1].conclusion = 'failure'
+$got = Candidate @($redFast) @{ $head = (FullRun $head $pwaNames) }
+if ($got.sha -or $script:fullCalls.Count) { throw 'a red FAST job was read past, or cost a FULL lookup' }
+$got = Candidate @($moved) @{ $head = (FullRun $head $pwaNames 'failure') }
+if ($got.sha -ne $head) { throw 'a FULL run red elsewhere (spikes, Arm64) held the Pages deploy: only the named PWA jobs count' }
+foreach ($fault in @('red-leg', 'cancelled-leg', 'missing-leg', 'extra-shard', 'running', 'wrong-sha', 'duplicate')) {
+    $fullJobs = LaneJobs $head $pwaNames
+    switch ($fault) {
+        'red-leg' { $fullJobs[0].conclusion = 'failure' }
+        'cancelled-leg' { $fullJobs[2].conclusion = 'cancelled' }
+        'missing-leg' { $fullJobs = @($fullJobs | Where-Object { $_.name -ne 'pwa-ui (webkit 3/3)' }) }
+        'extra-shard' { $fullJobs += @{ name = 'pwa-ui (webkit 4/4)'; head_sha = $head; status = 'completed'; conclusion = 'success' } }
+        'running' { $fullJobs[1].status = 'in_progress'; $fullJobs[1].conclusion = $null }
+        'wrong-sha' { $fullJobs[1].head_sha = $live }
+        'duplicate' { $run = LaneRun 2 $head ($fastNames + @('pwa-e2e')) }
+    }
+    $fastRun = if ($fault -eq 'duplicate') { $run } else { $moved }
+    $got = Candidate @($fastRun) @{ $head = [pscustomobject]@{ Id = 77; Conclusion = 'success'; jobs = $fullJobs } }
+    if ($got.sha) { throw "Pages deployed on a FULL run with a $fault" }
+}
+$legacy = & $candidate -Runs @($moved)
+if ($legacy.sha) { throw 'without a FULL lookup, a run lacking the PWA jobs deployed' }
 $root = Split-Path -Parent $PSScriptRoot
 $workflow = Get-Content -Raw (Join-Path $root '.github' 'workflows' 'pages.yml')
 $block = [regex]::Match($workflow, '(?ms)^  gate:\r?\n.*?^        run: \|\r?\n(.*?)(?=^  build:)')

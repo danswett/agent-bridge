@@ -872,8 +872,16 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   and the packages and both SBOMs (the Arm64 one is what attestation needs) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
   commit's `head_sha`, never by branch. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, "Releases and updates" in docs/app-windows.md
   describes what runs.
-* **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
-  that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
+* **Pages waits for FULL** (owner decision B: a Pages deploy is a release, so it stays blocked until FULL is green; R8b on #4104). `pwa-ui` (six legs) and
+  `pwa-e2e` move to `full.yml` (piece 5), and `quality/pages-candidate.ps1` already takes them from either lane: a main commit deploys when `plan`,
+  `product (ubuntu-latest)` and every job in `pages-jobs.json` passed, each in the FAST run or in the same commit's FULL run, found by `head_sha`
+  with the release train's own helpers (`Get-FullRunsPath`, `Select-FullRunRow`: push or `workflow_run`, main). A FAST run that lacks the PWA jobs, with no FULL run yet,
+  **never deploys**; a job in both lanes, a missing or extra shard, a running or wrong-commit job are refused; only the named jobs count, so a FULL run red
+  elsewhere (spikes, Arm64) does not hold Pages. `pages.yml` is to pass the lookup (`-GetFull`) and to watch `Full` as well as `CI`: a patch for Quality.
+* **Before go-live** (the train and Pages relying on FULL): a real `workflow_dispatch` of `full.yml`, and a real `workflow_run` one, prove that the run found by
+  `head_sha` is the run that tested that commit (its jobs' checkouts are that sha), **and show the `head_sha` GitHub returns for a `workflow_run` run and for its
+  jobs** (the train and Pages both compare it with the commit; if GitHub returns the default branch's tip there instead, they fail closed and never deploy or
+  publish, which is safe but must be seen once), and the first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
   `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
