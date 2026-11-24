@@ -28,20 +28,81 @@ public sealed class ScrollSettleTests
         Assert.Equal(0, settle.WorstBack);
     }
 
-    // The failure being fixed: the same view, on a slower runner, takes many times as many frames to get there. The verdict is the state it reaches, not how long that took.
+    // Arrival is a user-visible bound (Chief ruling on #4404): once the content stops changing the view is at the end within about a second (60 frames), because a pin that takes seconds is a
+    // visible bug in the owner's wheel behaviour. The long wall-clock budget is only a hang backstop; it was the first attempt's mistake to let "however long it takes" pass.
     [Theory]
     [InlineData(5)]
-    [InlineData(60)]
-    [InlineData(400)]
-    public void How_many_frames_the_catching_up_takes_does_not_change_the_verdict(int lag)
+    [InlineData(30)]
+    [InlineData(59)]
+    public void A_view_that_gets_to_the_end_within_the_arrival_bound_of_the_last_content_change_passes(int lag)
     {
         var settle = Feed(new ScrollSettle(high: End - 1833), lag, rest: 40, startGap: 1833);
 
         Assert.True(settle.Passed, settle.Describe());
     }
 
-    // CI 45357085188: the history was still drawing 10 s (600 frames at 60 fps) after the last notch, the pin was following the growing end to within 417, and the 600-frame budget ran out.
-    // The default budget has to outlast a slow draw; a settled run still stops at once.
+    [Theory]
+    [InlineData(61)]
+    [InlineData(400)]
+    public void A_view_that_takes_longer_than_the_arrival_bound_to_reach_the_end_fails_however_it_ends(int lag)
+    {
+        var settle = Feed(new ScrollSettle(high: End - 1833), lag, rest: 40, startGap: 1833);
+
+        Assert.True(settle.Done);
+        Assert.False(settle.Passed);
+        Assert.Contains("did not arrive", settle.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_parked_view_fails_at_the_arrival_bound_not_after_the_hang_backstop()
+    {
+        var settle = new ScrollSettle(high: End - 66);
+
+        for (var i = 0; i < 200 && !settle.Done; i++) { settle.Observe(End - 66, End, moving: false); }
+
+        Assert.True(settle.Done);
+        Assert.False(settle.Passed);
+        Assert.Equal(61, settle.Frames);                                   // the 61st frame without a content change and still short of the end
+        Assert.Contains("66", settle.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void While_the_content_is_still_changing_the_arrival_clock_keeps_restarting()
+    {
+        var settle = new ScrollSettle(high: End - 50, maxFrames: 1000);
+
+        // The end moves every 40 frames and the view is 50 behind it each time, catching up in the frames between: never 60 frames short of a final extent.
+        for (var step = 0; step < 20; step++)
+        {
+            for (var i = 0; i < 40; i++) { settle.Observe(End + step * 200 - 50 + Math.Min(i * 5, 50), End + step * 200, moving: i < 10); }
+        }
+
+        Assert.False(settle.Done);
+    }
+
+    // The seed matters from the first frame: the notches before the settle have already raised the high-water mark, so a first frame below it is moving back up.
+    [Fact]
+    public void A_first_frame_below_the_seeded_high_water_mark_is_moving_back_up()
+    {
+        var settle = new ScrollSettle(high: 40000);
+
+        settle.Observe(39900, End, moving: false);
+
+        Assert.Equal(100, settle.WorstBack, 3);
+        Assert.False(settle.Passed);
+    }
+
+    [Fact]
+    public void A_view_that_never_rises_above_a_seeded_high_water_mark_still_fails_for_the_fall_below_it()
+    {
+        var settle = new ScrollSettle(high: 40000);
+        for (var i = 0; i < 40; i++) { settle.Observe(39990, 39990, moving: false); }      // at its own end, 10 below where the notches had been
+
+        Assert.True(settle.Done);
+        Assert.False(settle.Passed);
+        Assert.Equal(10, settle.WorstBack, 3);
+    }
+
     [Fact]
     public void A_view_still_following_a_growing_end_after_600_frames_settles_within_the_default_budget()
     {
@@ -55,7 +116,6 @@ public sealed class ScrollSettleTests
         Assert.Equal(0, settle.WorstBack);
     }
 
-    // A run that does not settle has to say why: where the extent started, where it ended, and how often it changed.
     [Fact]
     public void A_view_that_does_not_settle_says_how_its_extent_changed()
     {
@@ -70,8 +130,7 @@ public sealed class ScrollSettleTests
         Assert.Contains("extent 20000 to 69000 (changed on 49 frames,", settle.Describe(), StringComparison.Ordinal);
     }
 
-    // CI 45364490020: the extent was final, the view never went back, and it sat 66 short of the end for the rest of 90 s. The artifact has no frame trace, so the verdict itself carries the last
-    // frames: parked (the same offset every frame) or still creeping, and moving or not.
+    // CI 45364490020: the view sat 66 short of a final extent for 90 s; the artifact has no trace, so the verdict carries the last frames (parked or creeping, moving or not).
     [Fact]
     public void A_view_that_does_not_settle_reports_its_last_frames_so_parked_can_be_told_from_creeping()
     {
@@ -84,13 +143,12 @@ public sealed class ScrollSettleTests
         Assert.DoesNotContain("62000/", text, StringComparison.Ordinal);       // only the last six
     }
 
-    // Growth still under way at the end of the budget (the content keeps drawing) is a different finding from a view parked short of a final extent; one number tells them apart.
     [Fact]
     public void A_view_that_does_not_settle_says_how_long_ago_its_extent_last_changed()
     {
-        var growing = new ScrollSettle(high: 10000, maxFrames: 100);
+        var growing = new ScrollSettle(high: 10000, maxFrames: 100, arrivalFrames: int.MaxValue);
         for (var i = 0; i < 100; i++) { growing.Observe(10000 + i, 20000 + i * 50, moving: false); }
-        var parked = new ScrollSettle(high: 10000, maxFrames: 100);
+        var parked = new ScrollSettle(high: 10000, maxFrames: 100, arrivalFrames: int.MaxValue);
         for (var i = 0; i < 100; i++) { parked.Observe(10066, i < 10 ? 20000 + i * 50 : 20450, moving: false); }
 
         Assert.Equal(0, growing.FramesSinceExtentChange);
@@ -100,9 +158,9 @@ public sealed class ScrollSettleTests
     }
 
     [Fact]
-    public void A_view_that_parks_short_of_the_end_never_settles_and_fails_when_the_frame_budget_runs_out()
+    public void With_the_arrival_bound_off_a_view_that_parks_short_of_the_end_fails_at_the_hang_backstop()
     {
-        var settle = new ScrollSettle(high: End - 771, maxFrames: 100);
+        var settle = new ScrollSettle(high: End - 771, maxFrames: 100, arrivalFrames: int.MaxValue);
 
         for (var i = 0; i < 200; i++) { settle.Observe(End - 771, End, moving: false); }
 

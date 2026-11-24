@@ -21,6 +21,24 @@ static partial class SelfTest
             Text = n % 3 == 0 ? $"Ran tool {n}:\n\n```\n{string.Join("\n", Enumerable.Range(1, 18).Select(l => $"line {l} of tool output {n}"))}\n```" : $"Reply {n}, short." } },
     };
 
+    // Only this stage, with the frame trace left beside <out> as <out>.wheel-notch.json: for reproducing a flake with the whole trace (the CI artifact carries none). Control-level notches, so
+    // no OS input is sent. Run it with --self-test-wheel-notch <out>.
+    public static async Task RunWheelNotchAsync(MainWindow window, MainViewModel main, DemoHost demo, string outFile, Action<int> exit)
+    {
+        var (passed, failed) = (new List<string>(), new List<string>());
+        void Check(bool ok, string what)
+        {
+            (ok ? passed : failed).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+        }
+        // The whole self-test has loaded the window by the time it gets here; on its own, wait until the window has a XamlRoot.
+        await Until(() => window.RootElement.XamlRoot is not null, TimeSpan.FromSeconds(15));
+        try { await CheckWheelNotches(window, main, demo, Check, outFile); }
+        catch (Exception e) { Check(false, $"wheel notch crashed: {e}"); }
+        await Write(outFile, new Dictionary<string, object?>(), passed, failed, null);
+        exit(failed.Count == 0 ? 0 : 1);
+    }
+
     static async Task CheckWheelNotches(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
     {
         window.ShowPage("sessions");

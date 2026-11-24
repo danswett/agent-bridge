@@ -8,6 +8,7 @@ public sealed class ScrollSettle
 {
     readonly int stillFrames;
     readonly int maxFrames;
+    readonly int arrivalFrames;
     readonly double tolerance;
     double high;
     double lastOffset = double.NaN;
@@ -19,11 +20,13 @@ public sealed class ScrollSettle
     /// <param name="high">The highest offset seen so far (the notches before this).</param>
     /// <param name="worstBack">The worst fall below it seen so far.</param>
     /// <param name="stillFrames">Consecutive rendered frames at the end, unmoving and unchanged, that settle the view.</param>
-    /// <param name="maxFrames">The frame budget (about 90 s at 60 fps; CI 45357085188 was still following history that drew for over 10 s, so 600 frames was too few): a view that has not settled by then fails, so a view that never arrives cannot hang the run.</param>
+    /// <param name="maxFrames">The hang backstop (about 90 s at 60 fps), never the standard: a view that has not settled by then fails, so a view that never arrives cannot hang the run.</param>
+    /// <param name="arrivalFrames">The user-visible bound (about a second at 60 fps): once the content stops changing the view is at the end within this many frames, or it fails at once. A pin that takes
+    /// seconds is a visible bug in the wheel behaviour (#4243), so how long arrival takes is judged; the content still changing restarts the clock.</param>
     /// <param name="tolerance">Pixels of rounding: a fall of no more than this is not moving back up, and this close to the end is at the end.</param>
-    public ScrollSettle(double high, double worstBack = 0, int stillFrames = 30, int maxFrames = 5400, double tolerance = 1.5)
+    public ScrollSettle(double high, double worstBack = 0, int stillFrames = 30, int maxFrames = 5400, double tolerance = 1.5, int arrivalFrames = 60)
     {
-        (this.high, WorstBack, this.stillFrames, this.maxFrames, this.tolerance) = (high, worstBack, stillFrames, maxFrames, tolerance);
+        (this.high, WorstBack, this.stillFrames, this.maxFrames, this.tolerance, this.arrivalFrames) = (high, worstBack, stillFrames, maxFrames, tolerance, arrivalFrames);
     }
 
     public int Frames { get; private set; }
@@ -45,7 +48,10 @@ public sealed class ScrollSettle
 
     public bool Settled => still >= stillFrames;
 
-    public bool Done => Settled || Frames >= maxFrames;
+    /// <summary>The content stopped changing more than the arrival bound ago and the view is still short of the end.</summary>
+    public bool Late { get; private set; }
+
+    public bool Done => Settled || Late || Frames >= maxFrames;
 
     public bool Passed => Settled && WorstBack <= tolerance;
 
@@ -65,9 +71,12 @@ public sealed class ScrollSettle
         var unchanged = offset == lastOffset && extent == lastExtent;
         still = Gap <= tolerance && !moving && unchanged ? still + 1 : 0;
         (lastOffset, lastExtent) = (offset, extent);
+        Late = !Settled && Gap > tolerance && FramesSinceExtentChange > arrivalFrames;
     }
 
-    public string Describe() => Settled
+    public string Describe() => Late
+        ? $"did not arrive within {arrivalFrames} frames of the last content change: {Gap:0.#} from the end after {Frames} frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames, last changed {FramesSinceExtentChange} frames ago), last frames {string.Join(' ', tail)} (offset/extent, + while moving)"
+        : Settled
         ? $"settled at the end after {Frames} frames, worst back {WorstBack:0.#}"
         : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames, last changed {FramesSinceExtentChange} frames ago), last frames {string.Join(' ', tail)} (offset/extent, + while moving)";
 }
