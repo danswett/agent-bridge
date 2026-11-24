@@ -307,6 +307,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    selector's tests), and unclassifiable paths still run product. PRs still test changed tests;
    unknown-base main runs keep the whole ring. There are no push-trigger path filters.
 
+   **A main run records what it relied on (#2454).** Its plan job emits the notice annotation
+   `plan-base: base=<sha> relied-parent=<sha|none>`: the commit the run diffed from, and the in-flight
+   parent run it counted on to test only its own change. The judges (the merge rule, main_green and the
+   train selector) read it, so a run counts green only if what it relied on is green too. Today every run
+   records `relied-parent=none`: it diffs from a passed base. The record comes first, the judges next, and the
+   first-parent shortcut that makes a run rely on its parent last, so nothing changes until the judges honour it.
+
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass
    `-Narrow app,app-installer`: a whole-ring-only workflow or quality change does not build
