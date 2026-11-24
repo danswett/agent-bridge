@@ -5,7 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { pathToFileURL } from 'node:url';
 import { openHost, resolveEndpoint, PipeError } from './pipe.mjs';
-import { LaunchLedger, getLaunchOptions, launchSession, listSessions, readSession, readUsage, replyToSession } from './tools.mjs';
+import { LaunchLedger, endSession, getLaunchOptions, launchSession, listSessions, readSession, readUsage, replyToSession } from './tools.mjs';
 
 export const INSTRUCTIONS =
   'Slipgates messaging is connected on this machine. When you need to message, read or start another ' +
@@ -29,6 +29,14 @@ const SCHEMAS = {
     type: 'object',
     required: ['session_id', 'text'],
     properties: { session_id: str('Session id.'), text: str('The whole message, up to 16 KiB. It arrives as one line.') },
+  },
+  end_agent_session: {
+    type: 'object',
+    required: ['session_id'],
+    properties: {
+      session_id: str('Full session id (a UUID) from list_agent_sessions, never a shortened or guessed one.'),
+      request: str('A UUID. Pass the same one again only to learn what an "unknown" or "unconfirmed" end came to.'),
+    },
   },
   launch_agent_session: {
     type: 'object',
@@ -55,6 +63,7 @@ const NEEDS = {
   list_agent_sessions: 'sessions.read',
   read_agent_session: 'sessions.read',
   reply_to_agent_session: 'sessions.reply',
+  end_agent_session: 'sessions.launch', // no capability of its own: the host decides by its launch record
   launch_agent_session: 'sessions.launch',
   read_launch_result: 'sessions.launch',
   get_launch_options: 'sessions.launch',
@@ -62,9 +71,10 @@ const NEEDS = {
 };
 
 const DESCRIPTIONS = {
-  list_agent_sessions: 'List the agent sessions on this machine (status only unless include is "content").',
+  list_agent_sessions: 'List the agent sessions on this machine: status, title, repository and branch (no working folder). include "content" adds the working folder (cwd), latest response and question of each session.',
   read_agent_session: 'Read a session\'s latest answer. Pass the since from reply_to_agent_session to never get a stale answer.',
   reply_to_agent_session: 'Send a message to another agent session on this machine.',
+  end_agent_session: 'End a session on this machine that an agent started through the fleet launch route. The host refuses a person-started session, your own, an unknown or shortened id, one with uncommitted or unpushed work, or one it has no launch record for; outcome "refused" with a reason means do not try another way.',
   launch_agent_session: 'Start (or resume) an agent session on this machine.',
   read_launch_result: 'What a launch made through this server came to.',
   get_launch_options: 'What launch_agent_session can name on this machine.',
@@ -72,6 +82,7 @@ const DESCRIPTIONS = {
 };
 
 const MAX_TEXT = 16 * 1024;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REQUEST_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
 // Without an accepted agent principal the connection is unattributed: only reads are offered.
 const UNATTRIBUTED_OK = new Set(['list_agent_sessions', 'read_agent_session']);
@@ -103,6 +114,12 @@ function validate(name, args) {
     case 'reply_to_agent_session':
       requireString('session_id');
       requireString('text', { max: MAX_TEXT });
+      break;
+    case 'end_agent_session':
+      requireString('session_id');
+      if (!UUID.test(args.session_id)) throw new PipeError('session_id must be the full session id (a UUID).');
+      requireString('request', { optional: true });
+      if (args.request !== undefined && !UUID.test(args.request)) throw new PipeError('request must be a UUID.');
       break;
     case 'launch_agent_session':
       requireString('prompt', { max: MAX_TEXT, optional: true });
@@ -166,6 +183,7 @@ export function createServer(connection) {
         case 'read_agent_session':
           return json(await readSession(host, args.session_id, { since: args.since, waitSeconds: Math.min(600, Number(args.wait_seconds) || 0) }));
         case 'reply_to_agent_session': return json(await replyToSession(host, args.session_id, args.text));
+        case 'end_agent_session': return json(await endSession(host, args.session_id, args.request));
         case 'launch_agent_session': return json(await launchSession(host, ledger, args));
         case 'read_launch_result': return json(ledger.read(args.request));
         case 'read_agent_usage': return json(await readUsage(host));

@@ -182,6 +182,21 @@ static class MergeRuleCommand
         }
         """;
 
+    // What a scoped run needs of the open list: which pull requests are on one head. A number and
+    // a head each, so a page of a hundred costs a point, where the full list is read twenty-five
+    // to a page. Every pull request on the head is then read in full, one at a time.
+    static readonly string LightQuery = """
+        query($owner: String!, $name: String!, $base: String!, $cursor: String) {
+          rateLimit { cost remaining }
+          repository(owner: $owner, name: $name) {
+            pullRequests(states: OPEN, baseRefName: $base, first: 100, after: $cursor, orderBy: { field: CREATED_AT, direction: ASC }) {
+              pageInfo { hasNextPage endCursor }
+              nodes { number headRefOid }
+            }
+          }
+        }
+        """;
+
     /// <summary>One run's reads: what it cost, and each head's files, which never change, read once.</summary>
     sealed class Session(IGitHub github, MergeRuleConfig config, string slug, bool arm64Waiver)
     {
@@ -195,10 +210,11 @@ static class MergeRuleCommand
         public bool Arm64Waiver { get; } = arm64Waiver;
         /// <summary>The catalog's post-merge job names (quality/README.md §4.9): shown, never counted.</summary>
         public IReadOnlySet<string> PostMerge { get; init; } = new HashSet<string>();
+        readonly object gate = new();
         public int GraphQLPoints { get; private set; }
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
-        public Dictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public System.Collections.Concurrent.ConcurrentDictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Main's CI, read once at the start of the run (ReadMain), so every verdict in it sees the same main.</summary>
         public MainFact Main { get; set; } = new("error", "main's CI wasn't read");
@@ -206,19 +222,23 @@ static class MergeRuleCommand
         public JsonDocument GraphQL(string query, Dictionary<string, object> variables)
         {
             var doc = GitHub.GraphQL(query, variables);
-            if (doc.RootElement.GetProperty("data").TryGetProperty("rateLimit", out var rate) && rate.ValueKind == JsonValueKind.Object)
+            lock (gate)
             {
-                GraphQLPoints += rate.GetProperty("cost").GetInt32();
-                GraphQLRemaining = rate.GetProperty("remaining").GetInt32();
+                if (doc.RootElement.GetProperty("data").TryGetProperty("rateLimit", out var rate) && rate.ValueKind == JsonValueKind.Object)
+                {
+                    GraphQLPoints += rate.GetProperty("cost").GetInt32();
+                    GraphQLRemaining = rate.GetProperty("remaining").GetInt32();
+                }
+                else
+                    GraphQLPoints++;
             }
-            else
-                GraphQLPoints++;
             return doc;
         }
 
         public JsonDocument Rest(string path)
         {
-            RestCalls++;
+            lock (gate)
+                RestCalls++;
             return GitHub.Rest(path);
         }
 
@@ -308,7 +328,7 @@ static class MergeRuleCommand
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
-            var one = FetchOne(session, n, checks: false, history: true);
+            var one = FetchOne(session, n, checks: false, history: true, out var oneLight);
             if (MergeRule.Evaluate(config, session.Main, one) is null)
             {
                 output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
@@ -316,19 +336,17 @@ static class MergeRuleCommand
             }
             else
             {
-                (var open, listCut) = FetchOpen(session);
-                prs = open.Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
-                if (prs.Count == 0)
-                    prs = [one];
+                (prs, listCut) = FetchOnHead(session, one.HeadSha, oneLight);
                 problems += Report(output, listCut);
             }
         }
         else
         {
-            (prs, listCut) = FetchOpen(session);
-            problems += Report(output, listCut);
             if (!widened && options.TryGetValue("sha", out var sha))
-                prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
+                (prs, listCut) = FetchOnHead(session, sha, null);
+            else
+                (prs, listCut) = FetchOpen(session);
+            problems += Report(output, listCut);
         }
 
         // With the open list cut short, a held pull request on any head may be among the unread,
@@ -339,9 +357,11 @@ static class MergeRuleCommand
                 .ToList();
 
         var rows = new List<string>();
-        foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
+        var heads = prs.GroupBy(p => p.HeadSha.ToLowerInvariant()).ToList();
+        var assessed = AssessTogether(session, heads);
+        foreach (var head in heads)
         {
-            var judged = Judged(head.Select(p => Assess(session, p)), head.Key);
+            var judged = Judged(assessed[head.Key], head.Key);
             if (judged.Count == 0)
                 continue;
             var combined = MergeRule.Combine(judged);
@@ -407,6 +427,33 @@ static class MergeRuleCommand
             File.AppendAllText(summary, md.ToString());
         }
         return problems == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// How many heads' reads are in flight at once: a head's full read is a query and a compare, each
+    /// a round trip, so the heads of a sweep are read together, a few at a time.
+    /// </summary>
+    internal const int HeadsAtOnce = 4;
+
+    /// <summary>
+    /// Every head's pull requests assessed, the heads together (a few at once, the pull requests of one
+    /// head one after another) and the answers in the heads' own order, so what is printed and posted
+    /// reads as it did when they were read one after another. A read that is not a read failure (those
+    /// become the head's verdict) ends the run as it did, with its own exception.
+    /// </summary>
+    static Dictionary<string, List<(PullRequestFacts Pr, MergeVerdict? Verdict)>> AssessTogether(Session session, List<IGrouping<string, PullRequestFacts>> heads)
+    {
+        var answers = new List<(PullRequestFacts Pr, MergeVerdict? Verdict)>[heads.Count];
+        try
+        {
+            Parallel.For(0, heads.Count, new ParallelOptions { MaxDegreeOfParallelism = HeadsAtOnce },
+                i => answers[i] = heads[i].Select(p => Assess(session, p)).ToList());
+        }
+        catch (AggregateException e)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(e.Flatten().InnerExceptions[0]).Throw();
+        }
+        return heads.Select((head, i) => (head.Key, answers[i])).ToDictionary(x => x.Key, x => x.Item2);
     }
 
     static int Report(TextWriter output, string? error)
@@ -494,7 +541,8 @@ static class MergeRuleCommand
             if (!found)
             {
                 log = $"Main: no completed product evidence in {config.MainGreen.Workflow}'s push history.";
-                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one");
+                return new("failure", $"no completed CI product evidence on {config.Base}: waiting for one"
+                    + (skipped.Count == 0 ? "" : $" (skipped unreadable run {string.Join(", ", skipped)})"));
             }
             var (run, latest, all, _) = evidence.Current;
             var sha = run.GetProperty("head_sha").GetString();
@@ -621,7 +669,8 @@ static class MergeRuleCommand
                 : new MainFact("failure", $"{config.Base} is red (CI {MergeRule.Short(sha!)}): named job {held[0]} is not green");
             // A run whose jobs stayed unreadable past the grace was passed over for an older readable one: the status says which, so it is
             // never silent (alerts follow the blocking reasons in the description).
-            return fact with { Alerts = skipped.Count == 0 ? alerts : [.. alerts, $"skipped unreadable run {string.Join(", ", skipped)}"] };
+            // First, ahead of any infra alert: the description shows the first alert and counts the rest, and cuts at 140 characters.
+            return fact with { Alerts = skipped.Count == 0 ? alerts : [$"skipped unreadable run {string.Join(", ", skipped)}", .. alerts] };
         }
         catch (Exception e) when (IsReadFailure(e))
         {
@@ -636,7 +685,74 @@ static class MergeRuleCommand
     /// </summary>
     internal static readonly TimeSpan UnreadableGrace = TimeSpan.FromMinutes(15);
 
+    /// <summary>
+    /// A run old enough to skip is read once more after this pause before it is: one transient 404 or 5xx must not skip a main run (they take
+    /// 26 to 35 minutes, so most are older than the grace). There is no memory between evaluations: a run unreadable on both reads of one evaluation is skipped.
+    /// </summary>
+    internal static TimeSpan UnreadableRetryAfter { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>How many of main's older runs are read together once the newest has not answered.</summary>
+    internal const int RunsAtOnce = 4;
+
+    /// <summary>One run's job list, all its pages; or that it can't be read (skipped only when it may be).</summary>
+    static (List<JsonElement> Jobs, bool Unreadable) ReadRunJobs(Session session, JsonElement run)
+    {
+        var id = run.GetProperty("id").GetInt64();
+        var jobs = new List<JsonElement>();
+        for (var jobPage = 1; ; jobPage++)
+        {
+            JsonDocument listed;
+            JsonElement batch;
+            var jobsPath = $"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}";
+            try
+            {
+                (listed, batch) = ReadJobs(session, jobsPath);
+            }
+            // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
+            catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
+            {
+                // Skipped only once unreadable for over the grace, never a failure or a state not known (it would hide a red main),
+                // and never when the run's age isn't known: those error, as before. An old enough run is read once more first.
+                if (!MayBeSkipped(session, run)) { throw; }
+                Thread.Sleep(UnreadableRetryAfter);
+                try
+                {
+                    (listed, batch) = ReadJobs(session, jobsPath);
+                }
+                catch (Exception again) when (again is InvalidOperationException or JsonException or KeyNotFoundException)
+                {
+                    return (jobs, true);
+                }
+            }
+            using var held = listed;
+            jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
+            if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
+                return (jobs, false);
+            if (batch.GetArrayLength() == 0 || jobPage >= 20)
+                throw new InvalidOperationException("CI job list is incomplete");
+        }
+    }
+
+    // The runs read ahead (CompletedMainCore) are all finished when this ends, whether the walk reached
+    // them or found its answer first: nothing is read, counted or recorded once a caller has its verdict,
+    // so what it then enumerates (the reads it made, the points it spent) is not written under it. A read
+    // that was never reached and failed is nothing to say: it is only waited for.
     static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMain(Session session, List<long>? skipped = null)
+    {
+        var started = new List<Task>();
+        try
+        {
+            foreach (var evidence in CompletedMainCore(session, skipped, started))
+                yield return evidence;
+        }
+        finally
+        {
+            try { Task.WaitAll([.. started]); }
+            catch (AggregateException) { }
+        }
+    }
+
+    static IEnumerable<(JsonElement Run, Dictionary<string, JsonElement> Jobs, List<JsonElement> All, bool Usable)> CompletedMainCore(Session session, List<long>? skipped, List<Task> started)
     {
         var config = session.Config;
         var seen = 0;
@@ -644,36 +760,25 @@ static class MergeRuleCommand
         {
             using var doc = session.Rest($"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page=20&page={page}");
             var runs = doc.RootElement.GetProperty("workflow_runs");
-            foreach (var run in runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()))
+            // The newest run is read alone: it usually answers, and a read is a quota point. Once a run has
+            // not, the runs below it are read together, a few at a time, and each answer is used in order,
+            // so the answer is the one reading them one after another gave. A failed read of a run not yet
+            // reached is raised when that run is, not before.
+            var ordered = runs.EnumerateArray().OrderByDescending(r => r.GetProperty("id").GetInt64()).Select(r => r.Clone()).ToList();
+            var ahead = new Task<(List<JsonElement> Jobs, bool Unreadable)>?[ordered.Count];
+            for (var at = 0; at < ordered.Count; at++)
             {
+                if (ahead[at] is null)
+                    for (var next = at; next < Math.Min(ordered.Count, at + (at == 0 ? 1 : RunsAtOnce)); next++)
+                    {
+                        var readRun = ordered[next];
+                        // A thread of its own: the read blocks on a gh process, and on a busy or small pool it would
+                        // queue behind other work and the reads would not overlap after all.
+                        started.Add(ahead[next] = Task.Factory.StartNew(() => ReadRunJobs(session, readRun), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
+                    }
+                var run = ordered[at];
                 var id = run.GetProperty("id").GetInt64();
-                var jobs = new List<JsonElement>();
-                var unreadable = false;
-                for (var jobPage = 1; ; jobPage++)
-                {
-                    JsonDocument listed;
-                    JsonElement batch;
-                    try
-                    {
-                        listed = session.Rest($"repos/{session.Slug}/actions/runs/{id}/jobs?filter=all&per_page=100&page={jobPage}");
-                        batch = listed.RootElement.GetProperty("jobs");
-                    }
-                    // A 404 or other non-2xx (gh exits 1 and says so), an empty or cut-short body, or a body with no jobs: unreadable.
-                    catch (Exception e) when (e is InvalidOperationException or JsonException or KeyNotFoundException)
-                    {
-                        // Skipped only once unreadable for over the grace, never a completed failure (it would hide a red main), and
-                        // never when the run's age isn't known: those error, as before.
-                        if (!MayBeSkipped(session, run)) { throw; }
-                        unreadable = true;
-                        break;
-                    }
-                    using var held = listed;
-                    jobs.AddRange(batch.EnumerateArray().Select(j => j.Clone()));
-                    if (jobs.Count >= listed.RootElement.GetProperty("total_count").GetInt32())
-                        break;
-                    if (batch.GetArrayLength() == 0 || jobPage >= 20)
-                        throw new InvalidOperationException("CI job list is incomplete");
-                }
+                var (jobs, unreadable) = ahead[at]!.GetAwaiter().GetResult();
                 if (unreadable)
                 {
                     skipped?.Add(id);
@@ -723,11 +828,35 @@ static class MergeRuleCommand
         }
     }
 
+    // A page of a run's jobs, the document disposed if its body turns out to have no jobs.
+    static (JsonDocument Doc, JsonElement Jobs) ReadJobs(Session session, string path)
+    {
+        var doc = session.Rest(path);
+        try
+        {
+            return (doc, doc.RootElement.GetProperty("jobs"));
+        }
+        catch
+        {
+            doc.Dispose();
+            throw;
+        }
+    }
+
     // A run may be passed over when its jobs can't be read only if it is old enough and isn't a completed failure.
+    // An ALLOW-list, so what isn't known fails closed: a run not yet completed, or one that ended in a conclusion GitHub documents as not a failure.
+    // An unknown status or conclusion, a completed run with none, and a failure of any kind are never skipped.
     static bool MayBeSkipped(Session session, JsonElement run)
     {
-        if (run.TryGetProperty("status", out var status) && status.GetString() == "completed"
-            && run.TryGetProperty("conclusion", out var conclusion) && conclusion.GetString() is "failure" or "timed_out" or "startup_failure")
+        if (!run.TryGetProperty("status", out var statusNode) || statusNode.ValueKind != JsonValueKind.String)
+            return false;
+        if (statusNode.GetString() == "completed")
+        {
+            if (!run.TryGetProperty("conclusion", out var conclusion) || conclusion.ValueKind != JsonValueKind.String
+                || conclusion.GetString() is not ("cancelled" or "success" or "neutral" or "skipped" or "stale" or "action_required"))
+                return false;
+        }
+        else if (statusNode.GetString() is not ("queued" or "in_progress" or "waiting" or "pending" or "requested"))
             return false;
         return run.TryGetProperty("created_at", out var created) && created.ValueKind == JsonValueKind.String
             && DateTimeOffset.TryParse(created.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
@@ -831,13 +960,21 @@ static class MergeRuleCommand
         && current.Creator == config.StatusPoster
         && current.State == verdict.State && current.Description == verdict.Description;
 
-    static PullRequestFacts FetchOne(Session session, int number, bool checks, bool history)
+    static PullRequestFacts FetchOne(Session session, int number, bool checks, bool history) =>
+        FetchOne(session, number, checks, history, out _);
+
+    /// <summary>
+    /// <paramref name="light"/> is the same pull request read as the open list reads it (no waivers,
+    /// no receipt history), so a scoped run judges it as a sweep would have.
+    /// </summary>
+    static PullRequestFacts FetchOne(Session session, int number, bool checks, bool history, out PullRequestFacts light)
     {
         var (owner, name) = Split(session.Slug);
         using var doc = session.GraphQL(OneQuery(checks), new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{session.Slug} has no pull request #{number}.");
+        light = ParseFacts(node, session.Config);
         var facts = ParseFacts(node, session.Config, session.Arm64Waiver, session.PostMerge) with { CodexWaiverOn = session.CodexWaiver };
         return history ? WithReceiptHistory(session, facts) : facts;
     }
@@ -910,6 +1047,68 @@ static class MergeRuleCommand
         }
         while (cursor is not null);
         return (prs, null);
+    }
+
+    /// <summary>
+    /// The open pull requests whose head is <paramref name="head"/>, as the open list would give
+    /// them (light facts), from the light list: only these are read in full, one query each, where
+    /// the whole list is read twenty-five to a page. <paramref name="known"/> is the pull request
+    /// the run is about, already read: it is among them whether or not the list has it yet. A list
+    /// that fails after a page was read, or a pull request on the head that can't be read, gives
+    /// the error with what was read, as FetchOpen does: no head gets success from it.
+    /// </summary>
+    static (List<PullRequestFacts> Prs, string? Error) FetchOnHead(Session session, string head, PullRequestFacts? known)
+    {
+        var (owner, name) = Split(session.Slug);
+        var numbers = new List<int>();
+        string? error = null, cursor = null;
+        var read = 0;
+        do
+        {
+            var variables = new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["base"] = session.Config.Base };
+            if (cursor is not null)
+                variables["cursor"] = cursor;
+            try
+            {
+                using var doc = session.GraphQL(LightQuery, variables);
+                var page = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequests");
+                foreach (var node in page.GetProperty("nodes").EnumerateArray())
+                {
+                    read++;
+                    if (SameSha(node.GetProperty("headRefOid").GetString() ?? "", head))
+                        numbers.Add(node.GetProperty("number").GetInt32());
+                }
+                var info = page.GetProperty("pageInfo");
+                cursor = info.GetProperty("hasNextPage").GetBoolean() ? info.GetProperty("endCursor").GetString() : null;
+            }
+            catch (Exception e) when (IsReadFailure(e) && read > 0)
+            {
+                error = e.Message;
+                cursor = null;
+            }
+        }
+        while (cursor is not null);
+        var prs = new List<PullRequestFacts>();
+        foreach (var number in numbers)
+        {
+            if (known is not null && known.Number == number)
+            {
+                prs.Add(known);
+                continue;
+            }
+            try
+            {
+                FetchOne(session, number, checks: false, history: false, out var light);
+                prs.Add(light);
+            }
+            catch (Exception e) when (IsReadFailure(e))
+            {
+                error ??= e.Message;
+            }
+        }
+        if (known is not null && prs.All(p => p.Number != known.Number))
+            prs.Add(known);
+        return (prs, error);
     }
 
     /// <summary>

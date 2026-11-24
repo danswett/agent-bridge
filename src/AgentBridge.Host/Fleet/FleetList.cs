@@ -270,13 +270,12 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     public async Task<object?> HandleAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
-        var caller = Authorize(channel, Op);
+        var caller = Authorize(channel, Op, auditLog ?? audit);
         // The only member read; a principal or account in the body is ignored. Names are what a
         // person typed, so they come only when asked for (design §5.8).
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
         // `fresh: true` (the send-time name fence): a read that starts after this request, never the shared one.
         using var fresh = RegistryReads.Scope(IsFresh(data));
-        LocalApi.AuditAgentAction(credentials!, caller, Op, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         return await ListAsync(withNames, caller, ct);
     }
@@ -287,7 +286,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
     // routing metadata, never roster verification; its distinct trust is for messaging only.
     public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default, AgentAuditLog? auditLog = null)
     {
-        var caller = Authorize(channel, FindOp);
+        var caller = Authorize(channel, FindOp, auditLog ?? audit);
         var sessionId = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("sessionId", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
         var target = JsonSerializer.Serialize(sessionId is { Length: > 64 } ? sessionId[..(char.IsHighSurrogate(sessionId[63]) ? 63 : 64)] + "..." : sessionId ?? "<missing>");
         if (sessionId is null || !FleetSessionMatch.IsId(sessionId) || data.TryGetProperty("name", out _) || data.TryGetProperty("machineName", out _))
@@ -301,7 +300,6 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
                 throw new InvalidOperationException($"refused: fleet.find sessionId {target}: machine must be an exact device ID");
             }
         }
-        LocalApi.AuditAgentAction(credentials!, caller, FindOp, "fleet", "attempted", auditLog ?? audit);
         AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
         if (RoutingRoster is not IScopedFleetRoster scoped) { throw new InvalidOperationException("refused: fleet.find needs an authenticated account-scoped registry"); }
         using var fresh = RegistryReads.Scope(IsFresh(data));
@@ -348,7 +346,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SessionId = null,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trust = null);
 
-    AgentCredential Authorize(IProtocolChannel channel, string op)
+    AgentCredential Authorize(IProtocolChannel channel, string op, AgentAuditLog? auditLog)
     {
         credentials?.CheckScriptOperation(channel, op);
         if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
@@ -360,6 +358,7 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
         {
             throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; {op} needs at least '{AgentProtocol.ScopeRead}'");
         }
+        LocalApi.AuditAgentAction(credentials, caller, op, "fleet", "attempted", auditLog);
         if (RoutingRoster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
         return caller;
     }

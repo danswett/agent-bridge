@@ -1253,10 +1253,17 @@ public sealed class HostManagerTests : IAsyncLifetime
     [Trait("Category", "Network")]
     // Stopped by this app, or by another process (Program's stop, a second app), which the first
     // cannot cancel and only its stop marker tells of.
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_stop_while_starting_waits_on_a_launcher_an_earlier_run_of_the_app_started_is_not_undone_by_a_fresh_launcher(bool fromElsewhere)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    // A runner so slow that the Stop comes after the Start's 2 s on the wall clock: the Start's deadline is on the clock the test
+    // freezes, so it still gives way to the Stop, and says so, rather than timing out (#3434).
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task A_stop_while_starting_waits_on_a_launcher_an_earlier_run_of_the_app_started_is_not_undone_by_a_fresh_launcher(bool fromElsewhere, bool slowRunner)
     {
+        // Frozen, as in the update tests: the Start's 2 s and the Stop's 1 s are about the Stop reaching the launcher, not about the
+        // runner's speed.
+        var clock = new FakeTimeProvider(Make.T0);
         // A host that keeps crashing: the launcher an earlier run started (77) waits between
         // restarts, so no host answers, and ends at its next look once the Stop's marker is there.
         // The app's launch-time Start takes it on and waits; the person presses Stop meanwhile
@@ -1274,6 +1281,7 @@ public sealed class HostManagerTests : IAsyncLifetime
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(10),
             Elevated = () => false,
+            Time = clock,
         };
         var m = Manager();
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
@@ -1293,6 +1301,7 @@ public sealed class HostManagerTests : IAsyncLifetime
         // Asked for first, as at launch, and waiting on that launcher before the Stop.
         var start = m.StartAsync();
         await Wait.UntilAsync(() => Volatile.Read(ref looks) >= 3, "Start to wait on the launcher", TimeSpan.FromSeconds(30));
+        if (slowRunner) { await Task.Delay(TimeSpan.FromSeconds(2.5)); }
         await (fromElsewhere ? Manager() : m).StopAsync();
         Volatile.Write(ref stopped, true);
 

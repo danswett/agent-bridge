@@ -77,12 +77,37 @@ public sealed partial class AgentAuditLog
     {
         profile = profileFolder;
         this.time = time ?? TimeProvider.System;
-        this.log = log ?? (_ => { });
+        // The diagnostic log is a fallback the audit relies on: if it throws, nothing may escape into the caller.
+        this.log = s => { try { log?.Invoke(s); } catch (Exception) { } };
         this.maxBytes = maxBytes;
     }
 
-    // text is only measured and hashed, never kept. Returns whether the line was written.
+    int unauditedHa;
+    internal int PendingUnauditedHa => Volatile.Read(ref unauditedHa);
+
+    // An HA action was performed although its audit row could not be written (owner decision: send anyway and log the failure,
+    // design/ha-gate-counters.md). The event goes to the host diagnostic log, never to the audit file that just failed, and an
+    // in-memory count that the next successful write flushes into the audit as one audit_write_failed row. Only a closed action
+    // kind and a sanitized session id are logged: no answer text, no token, no request body.
+    internal void RecordUnauditedHa(string kind, string? session)
+    {
+        Interlocked.Increment(ref unauditedHa);
+        var id = new string((session ?? "").Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-').Take(64).ToArray());
+        log($"audit_write_failed kind={kind} session={(id.Length == 0 ? "unknown" : id)} at={time.GetUtcNow().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)}");
+    }
+
+    // text is only measured and hashed, never kept. Returns whether the line was written. A successful write also flushes any pending
+    // unaudited-HA count, once (the count is taken before it is written and put back if that write fails).
     public bool Append(AgentAuditEntry entry, string? text = null)
+    {
+        var written = AppendCore(entry, text);
+        if (written && Interlocked.Exchange(ref unauditedHa, 0) is var count and > 0
+            && !AppendCore(new AgentAuditEntry("local", Guid.NewGuid().ToString(), "ha:connector", [], "audit_write_failed", count.ToString(CultureInfo.InvariantCulture), "recorded")))
+        { Interlocked.Add(ref unauditedHa, count); }
+        return written;
+    }
+
+    bool AppendCore(AgentAuditEntry entry, string? text = null)
     {
         var now = time.GetUtcNow();
         try
@@ -97,7 +122,9 @@ public sealed partial class AgentAuditLog
                 var folder = PrivateFolder.Ensure(Path.Combine(profile, FolderName), "the agent audit folder", "agent actions are not recorded");
                 using var folderLock = Lock(folder, timing: LockTiming);
                 Resume(folder);
-                if (entry.Gate is not null) { Bootstrap(folder); }
+                // A first notice is evidence too, not a legacy prefix for the first answer to adopt.
+                var evidence = entry.Gate is not null || entry.Action == "push";
+                if (evidence) { Bootstrap(folder); }
                 if (entry.Gate is { } metadata)
                 {
                     metadata = metadata with { Sequence = checked(new[] { LastGateSequence(folder, false), LastGateSequence(folder, true),
@@ -112,7 +139,7 @@ public sealed partial class AgentAuditLog
                     line = line with { Gate = metadata, Reason = metadata.ReasonCode, DataSha256 = null, TextLength = null };
                 }
                 var launch = entry.Action == "session.launch";
-                var anchored = entry.Gate is not null || HasHeads(folder);
+                var anchored = evidence || HasHeads(folder);
                 var expected = ReadHead(folder, launch);
                 string[] faults = anchored ? new[] { Continuity(profile, false, log), Continuity(profile, true, log) } : [];
                 var fault = faults.Contains("coverage-break") ? "coverage-break" : faults.FirstOrDefault(f => f != "none") ?? "none";
@@ -580,6 +607,63 @@ public sealed partial class AgentAuditLog
     // is never a candidate. The age cutoff never runs ahead of the newest earlier file by more
     // than a day, so a clock that jumped forward can't age out the whole history. Deleting stops
     // at the first file that can't be deleted, so newer days are never lost while an older one stays.
+    // A run is ACTIVE when any row carries its run id and no gate.seal row for it exists; a run unsealed this long is counted as abandoned
+    // (counted and shown only, never expired here). A row whose run or seal cannot be read, or a file that cannot be read, holds its day.
+    static readonly TimeSpan AbandonedAfter = TimeSpan.FromDays(7);
+    sealed record ActiveRuns(int Active, int Abandoned, HashSet<string> Held);
+    static bool Member(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject()) { if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)) { value = property.Value; return true; } }
+        value = default;
+        return false;
+    }
+    // Said when it changes, not on every append (Retain runs after each one).
+    string? runsSaid;
+    void SayOnce(string line)
+    {
+        if (runsSaid != line) { runsSaid = line; log(line); }
+    }
+    ActiveRuns ScanRuns(string folder, DateTimeOffset now)
+    {
+        var days = new Dictionary<Guid, HashSet<string>>();
+        var newest = new Dictionary<Guid, DateTimeOffset>();
+        var sealedRuns = new HashSet<Guid>();
+        var unreadable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var launch in new[] { false, true })
+        {
+            foreach (var file in Files(folder, launch))
+            {
+                var name = Path.GetFileName(file);
+                try
+                {
+                    foreach (var line in File.ReadLines(file).Where(l => l.Length > 0))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(line);
+                            // The reader's own rules (Web defaults) match property names whatever their letter case, so this does too.
+                            if (!Member(doc.RootElement, "gate", out var gate)) { continue; }
+                            if (gate.ValueKind != JsonValueKind.Object || !Member(gate, "run", out var id) || !id.TryGetGuid(out var run)) { unreadable.Add(name); continue; }
+                            if (run == Guid.Empty) { continue; }
+                            (days.TryGetValue(run, out var set) ? set : days[run] = new(StringComparer.Ordinal)).Add(name);
+                            var at = Member(doc.RootElement, "at", out var when) && when.TryGetDateTimeOffset(out var parsed) ? parsed : now;
+                            if (!newest.TryGetValue(run, out var seen) || at > seen) { newest[run] = at; }
+                            // Any gate.seal control row for the run ends it, whatever its outcome (sealed or invalidated: a new run is needed either way).
+                            if (Member(gate, "phase", out var phase) && phase.GetString() == "control"
+                                && Member(doc.RootElement, "action", out var action) && action.GetString() == "gate.seal") { sealedRuns.Add(run); }
+                        }
+                        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) { unreadable.Add(name); }
+                    }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { unreadable.Add(name); }
+            }
+        }
+        var active = days.Keys.Where(r => !sealedRuns.Contains(r)).ToArray();
+        var held = new HashSet<string>(unreadable, StringComparer.Ordinal);
+        foreach (var run in active) { held.UnionWith(days[run]); }
+        return new(active.Length, active.Count(r => now - newest[r] > AbandonedAfter), held);
+    }
+
     int Retain(string folder, DateTimeOffset now, bool archive = false)
     {
         var expected = ReadHead(folder, false);
@@ -599,10 +683,16 @@ public sealed partial class AgentAuditLog
         var earlier = files.Where(f => f.Day < today).Select(f => f.Day).DefaultIfEmpty(today).Max();
         var anchor = earlier.AddDays(1) < today ? earlier.AddDays(1) : today;
         var count = 0;
+        // Read only once a day is a candidate: most appends have nothing to retire.
+        ActiveRuns? scanned = null;
         foreach (var (day, info) in files)
         {
             if (day >= today) { break; }
             if (day > anchor.AddDays(-KeepDays) && (archive || total <= maxBytes)) { break; }
+            // Active-run evidence never leaves the live files (#2971): not deleted and not archived. Stopping here keeps the oldest-first order.
+            var runs = scanned ??= ScanRuns(folder, now);
+            if (runs.Active > 0) { SayOnce($"agent audit: {runs.Active} active gate run(s), {runs.Abandoned} abandoned (no seal after {AbandonedAfter.TotalDays:0} days); none is expired"); }
+            if (runs.Held.Contains(info.Name)) { SayOnce($"agent audit retention kept {info.Name}: it holds rows of an active gate run ({runs.Active} active, {runs.Abandoned} abandoned)"); break; }
             var size = info.Length;
             string? destination = null;
             if (archive)

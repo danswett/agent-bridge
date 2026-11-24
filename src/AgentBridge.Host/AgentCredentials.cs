@@ -11,6 +11,8 @@ namespace AgentBridge.Host;
 
 // What a credential is bound to (design/agent-principals.md §3.3). Id names the grant in logs and
 // audit and is never the secret.
+public sealed record ScriptInfo(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch, DateTimeOffset? LastUse = null);
+
 public sealed record AgentCredential(string Id, string Session, string LaunchId, int RootPid, DateTimeOffset RootStartUtc,
     string Scope, int Depth, string[] Chain, DateTimeOffset IssuedAt, DateTimeOffset ExpiresAt,
     string Kind = "session", string? Principal = null)
@@ -77,6 +79,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly List<Record> records = [];
+    readonly Dictionary<string, string> scriptNames = new(StringComparer.Ordinal);
     readonly System.Runtime.CompilerServices.ConditionalWeakTable<IProtocolChannel, Connection> connections = new();
     string? problem;
 
@@ -88,20 +91,36 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     readonly IScriptTaskReader? tasks;
     readonly Func<int, ProcessAncestry> reread;
+    readonly ISessionJobs? jobs;
 
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null, IScriptTaskReader? tasks = null,
-        Func<int, ProcessAncestry>? reread = null)
+        Func<int, ProcessAncestry>? reread = null, ISessionJobs? jobs = null)
     {
         this.tasks = tasks;
         this.reread = reread ?? ProcessChain.Read;
+        this.jobs = jobs;
         LaunchGate = new AgentLaunchGate(folder);
-        FleetGrant = new FleetLaunchGrant(folder);
+        FleetGrant = new FleetLaunchGrant(folder, new ProfileDisk(folder, log: log));
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
         this.time = time ?? TimeProvider.System;
         this.log = log ?? (_ => { });
         Load();
+        ReenrollLive();
+    }
+
+    // After a host restart the sessions that are still running have lost their jobs (a job has no name and no handle left): each live root is
+    // enrolled again, so what it starts from now on is a member. Best effort, and never for a root that has gone.
+    void ReenrollLive()
+    {
+        if (jobs is null) { return; }
+        foreach (var r in records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0).ToArray())
+        {
+            if (!this.rootAlive(r.Credential.RootPid, r.Credential.RootStartUtc)) { continue; }
+            try { jobs.Enroll(r.Hash, r.Credential.RootPid, r.Credential.RootStartUtc); }
+            catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to a session that was running"); }
+        }
     }
 
     public string? Problem { get { lock (gate) { return problem; } } }
@@ -110,9 +129,47 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     internal FleetLaunchGrant FleetGrant { get; }
     internal bool IsScriptConnection(IProtocolChannel channel) => connections.TryGetValue(channel, out var c) && c.Script;
 
+    // When each script last authenticated, since this host started (not stored: the list says so, never claims more).
+    readonly Dictionary<string, DateTimeOffset> lastUse = [];
     public int Count { get { lock (gate) { return records.Count; } } }
 
     internal bool IsCredentialed(IProtocolChannel channel) => connections.TryGetValue(channel, out _);
+
+    internal string? ScriptPrincipal(IProtocolChannel channel) =>
+        connections.TryGetValue(channel, out var c) && c.Script ? c.Principal : null;
+
+    internal static string ScriptOperation(string op) =>
+        op is AgentProtocol.Hello or Fleet.FleetList.Op or Fleet.FleetList.FindOp or Lite.LiteAgentSend.Op or LaunchProtocol.Launch
+            ? op : "script.operation";
+
+    internal string? ScriptPrincipal(string? token)
+    {
+        if (token is not { Length: AgentProtocol.TokenLength } || !token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal)) { return null; }
+        var hash = Convert.FromHexString(Hash(token));
+        lock (gate)
+        {
+            string? principal = null;
+            foreach (var record in records)
+            {
+                if (record.Credential.Kind == "script"
+                    && CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(record.Hash)))
+                { principal = record.Credential.Principal; }
+            }
+            foreach (var entry in scriptNames)
+            {
+                if (CryptographicOperations.FixedTimeEquals(hash, Convert.FromHexString(entry.Key))) { principal = entry.Value; }
+            }
+            return principal;
+        }
+    }
+
+    // Audit-only attribution survives removal, bounded to the most recently remembered hashes.
+    // It never participates in authentication, including when a foreign store fails closed.
+    void RememberScript(Record record)
+    {
+        if (!scriptNames.ContainsKey(record.Hash) && scriptNames.Count >= MaxCredentials) { scriptNames.Remove(scriptNames.Keys.First()); }
+        scriptNames[record.Hash] = record.Credential.Principal!;
+    }
 
     // The launch id an adopted session's credential carries: it was not launched by the host.
     public const string AdoptedLaunch = "adopted";
@@ -219,6 +276,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             RevokeEnded(rootAlive);
             if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
             // One credential per session: a resume or a relaunch gets a new one and the old one is dead (§3.4).
+            foreach (var replaced in records.Where(r => r.Credential.Session == session)) { LetGo(replaced.Hash); }
             records.RemoveAll(r => r.Credential.Session == session);
             records.Add(new Record(Hash(token), credential));
             Save();
@@ -242,6 +300,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             log($"agent credentials: issuing script credential {credential.Id} for {credential.Principal}");
             Prune(now);
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
@@ -268,6 +327,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
                 // without its hash. The existing file is untouched until the atomic replacement.
                 Save();
                 File.Move(temp, final, overwrite: true);
+                RememberScript(records.Single(r => r.Credential.Id == credential.Id));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or CryptographicException)
             {
@@ -294,15 +354,25 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public void Bind(string launchId, int processId, DateTimeOffset startedAt)
     {
+        string key;
         lock (gate)
         {
             var i = records.FindIndex(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.RootPid == 0);
             if (i < 0) { return; }
             records[i] = records[i] with { Credential = records[i].Credential with { RootPid = processId, RootStartUtc = startedAt } };
+            key = records[i].Hash;
             try { Save(); }
             catch (IOException e) { Fault($"could not save: {e.Message}"); }
             catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
         }
+        // The session job (§3.4): best effort and outside the gate. A launch that gets none is still bound, and the ancestor rule alone applies.
+        if (jobs is null) { return; }
+        try { jobs.Enroll(key, processId, startedAt); }
+        catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to this session"); return; }
+        // Revoked or replaced while the job was being made: its Release found nothing, so this job would be held for a credential that is gone.
+        bool stale;
+        lock (gate) { stale = !records.Any(r => r.Hash == key); }
+        if (stale) { LetGo(key); }
     }
 
     public void Abandon(string launchId)
@@ -316,13 +386,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var presented = token is { Length: AgentProtocol.TokenLength } && token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal) ? Hash(token) : null;
         var now = time.GetUtcNow();
         AgentCredential? match = null;
+        string? matchKey = null;
         lock (gate)
         {
             if (problem is not null) { return Refused($"the credential store is unavailable: {problem}"); }
             // Compares every record, so how long the answer takes doesn't say which one matched.
             foreach (var r in records)
             {
-                if (presented is not null && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(r.Hash), Convert.FromHexString(presented))) { match = r.Credential; }
+                if (presented is not null && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(r.Hash), Convert.FromHexString(presented))) { match = r.Credential; matchKey = r.Hash; }
             }
             if (match is not null && match.ExpiresAt <= now)
             {
@@ -339,41 +410,59 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             var fresh = match.ScheduledTask is null || tasks is null ? ancestry
                 : ancestry.Processes is [{ Id: > 0, StartedAt: { } at } self, ..]
                     && reread(self.Id) is { Processes: [var again, ..] } current && again.Id == self.Id && again.StartedAt == at ? current : null;
-            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello"); }
+            if (fresh is null) { return Outside(match, "the script caller could not be read again at hello", ancestry); }
             lock (gate)
             {
                 var agents = records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0)
                     .Select(r => new KnownProcess(r.Credential.RootPid, r.Credential.RootStartUtc, "a credentialed session"))
                     .Concat(pending.Select(p => new KnownProcess(p.RootPid, p.RootStartUtc, "an adopted session"))).ToArray();
                 if (agentCaller || AgentAncestry.Find(ancestry.Processes, agents) is not null || AgentAncestry.Find(fresh.Processes, agents) is not null)
-                { return Outside(match, "a script credential cannot be used inside an agent session"); }
+                { return Outside(match, "a script credential cannot be used inside an agent session", ancestry); }
             }
             // Outside the gate (a bound one reads the Scheduler and ACLs); unbound needs the whole chain read.
             var why = match.ScheduledTask is { } binding ? binding.Refusal(fresh, tasks)
                 : !ancestry.Complete || ancestry.Processes.Count == 0 || ancestry.Processes.Any(ScriptTaskBinding.Unread)
                 ? "the script caller's ancestry could not be traced in full" : null;
-            if (why is not null) { return Outside(match, why); }
+            if (why is not null) { return Outside(match, why, ancestry); }
             return IsLive(match) ? new AgentHelloDecision(match, null) : Refused("no live credential matches that token");
         }
-        if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
+        if (match.RootPid <= 0) { return Outside(match, "its launch has not started", ancestry); }
         if (!ancestry.Complete)
         {
-            return Outside(match, "the caller's ancestry could only be read in part");
+            return Outside(match, "the caller's ancestry could only be read in part", ancestry);
         }
         var bound = ancestry.Processes.FirstOrDefault(p => p.Id == match.RootPid);
-        if (bound is null) { return Outside(match, "the session's process isn't among the caller's ancestors"); }
-        // Both sides must say when it started: an id alone could be a later process given the same one.
-        if (bound.StartedAt is not { } started || (started - match.RootStartUtc).Duration() > StartSlack)
+        if (bound is null)
         {
-            return Outside(match, "the process with the session's id is not the one that started it");
+            // A caller whose parent chain no longer reaches the root (a shell whose parent exited) can still be inside the session: it is a member
+            // of the job the host made for this launch. Any other caller is refused exactly as before.
+            if (!InSessionJob(matchKey!, match, ancestry)) { return Outside(match, "the session's process isn't among the caller's ancestors", ancestry); }
+        }
+        // Both sides must say when it started: an id alone could be a later process given the same one.
+        else if (bound.StartedAt is not { } started || (started - match.RootStartUtc).Duration() > StartSlack)
+        {
+            return Outside(match, "the process with the session's id is not the one that started it", ancestry);
         }
         // The ancestry was read when the pipe connected; the session may have ended since.
         if (!rootAlive(match.RootPid, match.RootStartUtc))
         {
             lock (gate) { Remove(r => r.Credential.Id == match.Id, "its session's process ended"); }
-            return Outside(match, "the session's process has ended");
+            return Outside(match, "the session's process has ended", ancestry);
         }
         return new AgentHelloDecision(match, null);
+    }
+
+    // Whether the caller (the first process of its ancestry, by pid and start time) is in this credential's own session job, which is
+    // believed only if the recorded root is in it too. Unreadable, absent or failing is "no": the ancestor rule is the only way in then.
+    bool InSessionJob(string key, AgentCredential match, ProcessAncestry ancestry)
+    {
+        if (jobs is null || ancestry.Processes is not [{ Id: > 0, StartedAt: { } at } caller, ..]) { return false; }
+        try { return jobs.Contains(key, match.RootPid, match.RootStartUtc, caller.Id, at); }
+        catch (Exception e)
+        {
+            log($"agent credentials: the session job could not be read ({e.GetType().Name}); the ancestor rule alone applies");
+            return false;
+        }
     }
 
     // Whether the process with this id is still the one that started at that time.
@@ -387,10 +476,20 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
-    AgentHelloDecision Outside(AgentCredential credential, string why)
+    AgentHelloDecision Outside(AgentCredential credential, string why, ProcessAncestry ancestry)
     {
-        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}; principal {PrincipalOf(credential)}");
+        log($"agent credentials: credential presented from outside its session ({why}); credential {credential.Id}; principal {PrincipalOf(credential)}; caller chain {Chain(ancestry)}");
         return AgentHelloDecision.Refused($"credential presented from outside its session: {why}");
+    }
+
+    // The caller's chain for the log: pids and image file names only (letters, digits and . _ - +, at most 40), never a command line, a
+    // path, an argument or a token; at most 12 processes.
+    static string Chain(ProcessAncestry ancestry)
+    {
+        // Cut at either separator by hand: Path.GetFileName only knows the running OS's, and an image path is whatever the peer's OS wrote.
+        static string File(string image) => image[(image.LastIndexOfAny(['\\', '/']) + 1)..];
+        static string Name(string? image) => image is null ? "?" : new string([.. File(image).Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '+').Take(40)]) is { Length: > 0 } n ? n : "?";
+        return string.Join(" <- ", ancestry.Processes.Take(12).Select(p => $"{p.Id} {Name(p.Image)}")) + (ancestry.Processes.Count > 12 ? " <- ..." : "") + (ancestry.Complete ? "" : " (partial)");
     }
 
     AgentHelloDecision Refused(string why)
@@ -407,6 +506,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         CheckScriptOperation(channel, AgentProtocol.Hello);
         var principal = PrincipalOf(credential);
         connections.AddOrUpdate(channel, new Connection(credential.Id, principal, credential.Kind == "script"));
+        if (credential.Kind == "script") { lock (gate) { lastUse[principal] = time.GetUtcNow(); } }
         return new AgentHelloResult(principal, credential.Scope);
     }
 
@@ -418,7 +518,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             ? "script credentials have read+reply scope: only fleet.list, fleet.find and agent.send are allowed; a script cannot raise its own scope"
             : Of(channel) is null ? "the script credential is no longer live" : null;
         if (why is null) { return; }
-        var line = $"refused {op} from {c.Principal}: {why}";
+        var line = $"refused {ScriptOperation(op)} from {c.Principal}: {why}";
         log($"agent credentials: {line}");
         refusalLog?.Invoke($"local pipe: {line}");
         throw new InvalidOperationException($"refused: {why}");
@@ -491,10 +591,87 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("agent credentials are unavailable"); }
+            BumpGeneration(name);
             var removed = Remove(r => r.Credential.Kind == "script" && r.Credential.Principal == principal, "revoked by a person at this machine");
             if (problem is not null) { throw new InvalidOperationException("could not save script revocation; the credential store is unavailable"); }
             return removed;
         }
+    }
+
+    // What the app lists for its Settings page: names and limits only, never a token, hash, path or credential id.
+    public IReadOnlyList<ScriptInfo> ListScripts()
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var prefix = $"script:{machine}/";
+            return records.Where(r => r.Credential.Kind == "script" && r.Credential.ExpiresAt > now && r.Credential.Principal!.StartsWith(prefix, StringComparison.Ordinal))
+                .GroupBy(r => r.Credential.Principal!)
+                .Select(g => new ScriptInfo(g.Key[prefix.Length..], g.First().Credential.Scope, g.Max(r => r.Credential.ExpiresAt), g.Count(),
+                    g.Any(r => r.Credential.FleetLaunch), lastUse.TryGetValue(g.Key, out var used) ? used : null))
+                .OrderBy(i => i.Name, StringComparer.Ordinal).ToList();
+        }
+    }
+
+    // A person's press needs a confirmation the host issued for exactly this action and script on this connection. Per script name the
+    // host keeps a generation counter, moved on by every press attempt (right or wrong) and by every change to the script's
+    // credentials: mint, revoke, rotation, expiry, tick and untick. At most ONE confirmation is outstanding for a name, bound to that
+    // generation. The generation check is the one guard against a state that returns to an earlier one; nothing else drops a held
+    // confirmation when the script changes. The value is derived from a random per-process salt and a fresh nonce, lives two
+    // minutes on the monotonic clock (a wall-clock step cannot stretch it), and is used up atomically under the store's lock
+    // (#3883 receipts 7099362785 and 7101860025).
+    public static readonly TimeSpan ScriptConfirmationLife = TimeSpan.FromMinutes(2);
+    public const int MaxScriptConfirmations = 64;
+    readonly byte[] confirmationSalt = RandomNumberGenerator.GetBytes(32);
+    readonly Dictionary<string, long> scriptGeneration = [];
+    readonly Dictionary<string, (string Token, string Op, long Generation, IProtocolChannel Channel, long Issued)> confirmations = [];
+
+    long GenerationOf(string name) => scriptGeneration.TryGetValue(name, out var g) ? g : 0;
+
+    // Called with the gate held: the script's credentials are no longer what an earlier confirmation was asked for.
+    void BumpGeneration(string name) => scriptGeneration[name] = GenerationOf(name) + 1;
+
+    static string NameOf(string principal) => principal[(principal.LastIndexOf('/') + 1)..];
+
+    internal string IssueScriptConfirmation(string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            foreach (var stale in confirmations.Where(c => time.GetElapsedTime(c.Value.Issued) >= ScriptConfirmationLife).Select(c => c.Key).ToList())
+            { confirmations.Remove(stale); }
+            while (!confirmations.ContainsKey(name) && confirmations.Count >= MaxScriptConfirmations)
+            { confirmations.Remove(confirmations.MinBy(c => c.Value.Issued).Key); }
+            var generation = GenerationOf(name);
+            var seed = System.Text.Encoding.UTF8.GetBytes($"{machine}|{op}|{name}|{generation}|").Concat(RandomNumberGenerator.GetBytes(16)).ToArray();
+            var token = BlobFormat.Base64Url(HMACSHA256.HashData(confirmationSalt, seed));
+            confirmations[name] = (token, op, generation, channel, time.GetTimestamp());
+            return token;
+        }
+    }
+
+    internal bool ConsumeScriptConfirmation(string? token, string op, string name, IProtocolChannel channel)
+    {
+        lock (gate)
+        {
+            // Used up by any presentation, right or wrong; the generation then moves on.
+            var found = confirmations.Remove(name, out var held);
+            var ok = found && token is not null
+                && CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(held.Token), System.Text.Encoding.ASCII.GetBytes(token))
+                && held.Op == op && ReferenceEquals(held.Channel, channel) && held.Generation == GenerationOf(name)
+                && time.GetElapsedTime(held.Issued) < ScriptConfirmationLife;
+            BumpGeneration(name);
+            return ok;
+        }
+    }
+
+    // The confirmation is consumed under the store's lock (ConsumeScriptConfirmation is the one atomic winner); the audit attempt and the
+    // change then run with no store lock held. Holding it across the audit append would stall every other store call for as long as that
+    // call waits on the audit log's own lock, up to two seconds (#3883 receipt 7101860025). The write itself takes the lock it needs.
+    internal T RunScriptPress<T>(string? token, string op, string name, IProtocolChannel channel, Func<T> act)
+    {
+        if (!ConsumeScriptConfirmation(token, op, name, channel))
+        { throw new InvalidOperationException("refused: this needs the person's press with a fresh confirmation for this action and script, used once within two minutes on the same connection; ask scripts.confirm again"); }
+        return act();
     }
 
     internal void SetFleetLaunch(string name, bool enabled)
@@ -502,6 +679,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         lock (gate)
         {
             if (problem is not null) { throw new InvalidOperationException("script credentials are unavailable"); }
+            BumpGeneration(name);
             var matches = records.FindAll(r => r.Credential.Kind == "script"
                 && r.Credential.Principal == $"script:{machine}/{name}" && r.Credential.ExpiresAt > time.GetUtcNow());
             if (matches.Count == 0) { throw new InvalidOperationException("no live script credential exists for that name"); }
@@ -536,11 +714,21 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var gone = records.Where(r => which(r)).ToList();
         if (gone.Count == 0) { return false; }
         records.RemoveAll(which);
+        // Revoke, expiry and rotation all end here: a script whose credentials changed is not what an earlier confirmation was asked for.
+        foreach (var r in gone.Where(r => r.Credential.Kind == "script" && r.Credential.Principal is not null)) { BumpGeneration(NameOf(r.Credential.Principal!)); }
         foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for {PrincipalOf(r.Credential)}: {why}"); }
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
         catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
+        // After the record is gone from disk, and guarded: a job that will not let go can never keep a revoked credential alive.
+        foreach (var r in gone) { LetGo(r.Hash); }
         return true;
+    }
+
+    void LetGo(string key)
+    {
+        try { jobs?.Release(key); }
+        catch (Exception e) { log($"agent credentials: a session job could not be let go ({e.GetType().Name})"); }
     }
 
     void Load()
@@ -552,6 +740,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             if (file.Length > 4 * 1024 * 1024) { throw new JsonException("store exceeds its byte bound"); }
             var saved = JsonSerializer.Deserialize<Saved>(file, Json) ?? throw new JsonException("empty store");
             if (saved.Version != 1 || saved.Records is null || saved.Records.Length > MaxCredentials) { throw new JsonException("unsupported store"); }
+            foreach (var r in saved.Records)
+            {
+                if (r?.Credential is { Kind: "script", Principal: { } principal } c && r.Hash is { Length: 64 } && IsHex(r.Hash)
+                    && principal.IndexOf('/') is var slash && slash > "script:".Length
+                    && ValidScript(c, principal["script:".Length..slash]))
+                { RememberScript(r); }
+            }
             var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var r in saved.Records)
             {

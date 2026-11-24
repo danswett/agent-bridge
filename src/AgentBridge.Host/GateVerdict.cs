@@ -21,8 +21,9 @@ internal enum GateVerdictKind { Pass = 0, Fail = 1, Incomplete = 2 }
 // so the future command must combine per-host readings and must not present one host's PASS as the gate.
 internal sealed record GateVerdict(GateVerdictKind Kind, IReadOnlyList<string> Reasons, IReadOnlyDictionary<string, int> Relay)
 {
-    const int Messages = 500;
-    static readonly (string Action, string Name, int Needed)[] Units =
+    internal const int Messages = 500;
+    // The floors, in the order the command prints them (audit gate).
+    internal static readonly (string Action, string Name, int Needed)[] Units =
         [("session.launch", "launch", 50), ("session.answer", "approval", 30), ("session.stop", "stop", 20)];
 
     internal int ExitCode => (int)Kind;

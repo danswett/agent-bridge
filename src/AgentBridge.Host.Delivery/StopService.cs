@@ -187,7 +187,7 @@ public sealed class StopService : ISessionStopper
             // Another press is ending it already.
             if (session.Status == SessionStatus.Ending) { return Busy(); }
 
-            if (ConfirmationHint(session) is { } doing)
+            if (ConfirmationHint(session, unaged: !personConfirmation) is { } doing)
             {
                 if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                 if (!Confirms(session.Id, request.Confirm, processId, startedAt, out var why))
@@ -254,7 +254,7 @@ public sealed class StopService : ISessionStopper
             if (probe.Active() is { } changed) { return Refused(changed); }
             if (source.Held is not null || source.GetForStop(session.Id) is not { Status: SessionStatus.Idle } current)
             { return new(StopOutcome.Confirm, "person-required"); }
-            if (ConfirmationHint(current) is not null) { return new(StopOutcome.Confirm, "person-required"); }
+            if (ConfirmationHint(current, unaged: true) is not null) { return new(StopOutcome.Confirm, "person-required"); }
             if (source.ProcessOf(session.Id) is not { StartedAt: { } bound } instance || instance.Id != pid || !Same(bound, startedAt)
                 || processes.GetAgentProcesses(current.Agent).FirstOrDefault(p => p.Id == pid) is not { StartedAt: { } live } || !Same(live, startedAt))
             { return Stale("the session's process has changed"); }
@@ -291,7 +291,7 @@ public sealed class StopService : ISessionStopper
                 // asking anything, or whose launch here has not seen its window ready, is
                 // terminated without them.
                 var asking = MayBeAsking(now, out var notReady);
-                if (!confirmed && ConfirmationHint(now, asking) is { } doing)
+                if (!confirmed && ConfirmationHint(now, asking, unaged: !personConfirmation) is { } doing)
                 {
                     if (!personConfirmation) { return new(StopOutcome.Confirm, "person-required"); }
                     if (beforeDispatch?.Invoke(pid, startedAt) == false) { return AuditRefused(); }
@@ -405,8 +405,8 @@ public sealed class StopService : ISessionStopper
         return session.Question is not null || notReady is not null || CopilotAsking(session);
     }
 
-    string? ConfirmationHint(Session session, bool? asking = null) =>
-        Doing(session) ?? ((asking ?? MayBeAsking(session, out _)) ? "this session may be asking a question" : null);
+    string? ConfirmationHint(Session session, bool? asking = null, bool unaged = false) =>
+        Doing(session, unaged) ?? ((asking ?? MayBeAsking(session, out _)) ? "this session may be asking a question" : null);
 
     async Task SetEndingAsync(string id, bool ending)
     {
@@ -416,12 +416,13 @@ public sealed class StopService : ISessionStopper
 
     // What a second press would interrupt, as agent-ha-bridge's Get-DaemonStopConfirmHint
     // says it; null for an idle session, which ends on one press.
-    static string? Doing(Session s) => s.Status switch
+    // unaged: an agent's End asks what the host still holds, not what the shown background dropped after Limits.BackgroundShellStale (#1396).
+    static string? Doing(Session s, bool unaged = false) => s.Status switch
     {
         SessionStatus.Working => "this session is still working",
         SessionStatus.Waiting => "this session is waiting on you",
-        _ when s.Activity.Background is { Agents: > 0 } => "this session is waiting for background agents it started",
-        _ when s.Activity.Background is not null => "this session is waiting for background commands it started",
+        _ when (unaged ? s.BackgroundUnaged ?? s.Activity.Background : s.Activity.Background) is { Agents: > 0 } => "this session is waiting for background agents it started",
+        _ when (unaged ? s.BackgroundUnaged ?? s.Activity.Background : s.Activity.Background) is not null => "this session is waiting for background commands it started",
         _ => null,
     };
 

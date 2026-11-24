@@ -25,6 +25,9 @@ public enum KeyStorage { Tpm, Dpapi, File }
 
 public sealed record DeviceKey(P256KeyPair Key, KeyStorage Storage, string? TpmKeyName);
 
+// A profile folder holds protected key material but no reference to it (#2673): nothing was created, changed or deleted.
+public sealed class DeviceKeyConflictException(string message) : InvalidOperationException(message);
+
 public static class DeviceKeys
 {
     const string RefFile = "device-key.json";
@@ -32,6 +35,9 @@ public static class DeviceKeys
     static readonly byte[] DpapiEntropy = "agent-bridge-device-key-v1"u8.ToArray();
 
     sealed record KeyRef(string Storage, string? Name);
+
+    // Test seam, per thread: runs after the key is generated and before the protected file is written (race test).
+    [ThreadStatic] internal static Action<string>? BeforeDpapiWrite;
 
     // Opens the key a profile folder already has, or creates one: in the TPM when there
     // is one, else DPAPI. A key never moves between storages: a TPM key that can no
@@ -52,6 +58,9 @@ public static class DeviceKeys
             };
         }
 
+        // A missing reference does not prove there is no key (#2673): protected material with no reference is never replaced.
+        if (File.Exists(Path.Combine(folder, DpapiFile))) { throw Conflict(); }
+
         var storage = prefer ?? (OperatingSystem.IsWindows() ? (TpmP256.IsAvailable(out _) ? KeyStorage.Tpm : KeyStorage.Dpapi) : KeyStorage.File);
         switch (storage)
         {
@@ -66,7 +75,7 @@ public static class DeviceKeys
                 {
                     using var e = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
                     var pkcs8 = e.ExportPkcs8PrivateKey();
-                    try { File.WriteAllBytes(Path.Combine(folder, DpapiFile), ProtectedData.Protect(pkcs8, DpapiEntropy, DataProtectionScope.CurrentUser)); }
+                    try { WriteNew(Path.Combine(folder, DpapiFile), ProtectedData.Protect(pkcs8, DpapiEntropy, DataProtectionScope.CurrentUser), folder); }
                     finally { CryptographicOperations.ZeroMemory(pkcs8); }
                     File.WriteAllText(refPath, JsonSerializer.Serialize(new KeyRef("dpapi", null)));
                     return new(LoadDpapi(folder), KeyStorage.Dpapi, null);
@@ -75,6 +84,17 @@ public static class DeviceKeys
                 throw new PlatformNotSupportedException($"{storage} keys are not available on this platform");
         }
     }
+
+    // Create-only: a file that appears between the check above and this write (another creator) is refused, never truncated.
+    static void WriteNew(string path, byte[] blob, string folder)
+    {
+        BeforeDpapiWrite?.Invoke(folder);
+        try { using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None); file.Write(blob); }
+        catch (IOException) when (File.Exists(path)) { throw Conflict(); }
+    }
+
+    static DeviceKeyConflictException Conflict() => new($"The protected device key file ({DpapiFile}) is in this profile folder but its reference file ({RefFile}) is missing, so no new key was made and nothing was changed. "
+        + "That key may still be recoverable: do not delete either file. Restore the reference file from a backup of this profile, or remove this device on purpose and pair it again.");
 
     public static bool Exists(string folder) => File.Exists(Path.Combine(folder, RefFile));
 

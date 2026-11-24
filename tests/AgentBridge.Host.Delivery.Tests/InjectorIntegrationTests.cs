@@ -601,7 +601,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true });
 
-        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on" });
+        var result = await replies.ReplyAsync(new AgentBridge.Protocol.ReplyRequest { Id = Id, Request = Guid.NewGuid().ToString(), Text = "go on", IntentSource = () => AgentBridge.Protocol.ReplyIntent.Steer });
 
         Assert.Equal((AgentBridge.Protocol.AnswerOutcome.Refused, "something is already typed in Copilot's input box at the machine (14 characters: \"half a thought\"); send or clear it there first"), (result.Outcome, result.Reason));
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));

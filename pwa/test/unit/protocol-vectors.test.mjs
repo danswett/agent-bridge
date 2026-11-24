@@ -55,7 +55,8 @@ const ROSTER = 'roster.json';
 const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS).sort().map((f) => [f, load(f)]);
+const ROLE_CLAIM = 'role-claim.json'; // A role claim's bytes, not records: RoleClaimVectorTests.cs replays them (C# only for now).
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS && f !== ROLE_CLAIM).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -111,7 +112,7 @@ async function shown(message) {
     notification: {
       title: n.title, body: n.body, tag: n.tag, lang: n.lang, silent: n.silent, navigate: n.data.url,
       // A group stands for no one session: the wire says "", which the worker reads as none.
-      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (n.data.kind === 'group' ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, reminder: n.data.reminder },
+      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (['group', 'failures'].includes(n.data.kind) ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, failures: n.data.failures, reminder: n.data.reminder },
     },
   };
 }
@@ -236,7 +237,7 @@ const READS = {
   // for progress sends (#600): read as the service gets them.
   DeliveryProgress: { read: readProgress },
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
-  ReplyResult: { read: readReplyResult },
+  ReplyResult: { read: readReplyResult, unread: ['input'] },
   ReplyAttachmentBinding: { read: readReplyAttachmentBinding },
   StopResult: { read: readStopResult },
   // session.history's page and the records in it, as the history store gets them (#292).
@@ -450,11 +451,12 @@ const BUILDS = {
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
+  MachineLoadFigures: 'the local pipe\'s load.get reply, for launch admission; the PWA only talks to the relay and never receives it',
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
-  PushNotify: 'part of PushSubscribeRequest; the PWA sends its Settings filters and pinned set with the Notifications slice (S3 of the push filters)',
+  PushNotify: 'part of PushSubscribeRequest; PushRegistrar builds it from the Settings filters and the pinned set (test/unit/push.test.mjs)',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
   PushSubscribeResult: 'the PWA does not read push.subscribe\'s result',
   PushUnsubscribeResult: 'the PWA does not read push.unsubscribe\'s result',
@@ -514,6 +516,7 @@ const NOT_REPLAYED = {
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
   ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
+  ComposerInput: 'what a refused reply shows of a full Copilot box: no PWA presentation yet (#804 slice 3)',
   DeliverySender: 'local authenticated sender helper, never accepted from the reply wire (#2568)',
   DeliveryHeader: 'local envelope metadata; the PWA has no delivery parser yet (#2568)',
   DeliveryEntry: 'local parser result; the PWA has no delivery parser yet (#2568)',

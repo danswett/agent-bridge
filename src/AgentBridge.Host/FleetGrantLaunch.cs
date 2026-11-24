@@ -24,13 +24,20 @@ internal sealed record FleetLaunchContext(FleetLaunchInput Input, GrantSubject S
 internal sealed class FleetLaunchDenied(string reason) : InvalidOperationException(reason);
 
 public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string?> account, string device,
-    AgentCredentials credentials, ISessionLauncher launcher)
+    AgentCredentials credentials, ISessionLauncher launcher, ProfileDisk? disk = null)
 {
     readonly GrantStore store = new(folder, key, new(folder), new([], [], [], [], [], [], [], []));
     readonly GrantCounters counters = new(new(folder, key, new(folder), new([], [], [], [], [], [], [], [])));
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     { PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
+
+    // A request that does not parse is left to the local path, which refuses and audits it.
+    internal static FleetLaunchInput? TryParse(JsonElement data)
+    {
+        try { return Parse(data); }
+        catch (Exception e) when (e is FleetLaunchDenied or JsonException) { return null; }
+    }
 
     internal static FleetLaunchInput Parse(JsonElement data)
     {
@@ -45,9 +52,16 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         { throw new FleetLaunchDenied("bad-argument"); }
         return input;
     }
-    internal async Task<FleetLaunchContext> PrepareAsync(AgentCredential caller, FleetLaunchInput input)
+    internal Task<FleetLaunchContext> PrepareAsync(AgentCredential caller, FleetLaunchInput input) =>
+        PrepareAsync(Subject(credentials, account() ?? "", device, caller), caller.Session, input);
+
+    // G9: a subject another host of this account attested after the receiver verified the signed envelope and own-peer
+    // trust. It never reaches a local credential path; a local source host, another account or a malformed tuple refuses.
+    internal Task<FleetLaunchContext> PrepareRemoteAsync(GrantSubject subject, FleetLaunchInput input) =>
+        PrepareAsync(RemoteSubject(subject), subject.Session, input);
+
+    async Task<FleetLaunchContext> PrepareAsync(GrantSubject subject, string session, FleetLaunchInput input)
     {
-        var subject = Subject(credentials, account() ?? "", device, caller);
         var binding = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
         var context = new FleetLaunchContext(input, subject, binding);
         var old = counters.Lookup(input.Grant, input.Request, subject, binding);
@@ -57,10 +71,10 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         var found = store.TryGetUsable(input.Grant);
         if (!found.Usable) { throw new FleetLaunchDenied(StoreReason(found.Problem)); }
         context = context with { Grant = found.Grant, Offered = await launcher.OptionsAsync() };
-        var effective = Evaluate(context, caller);
+        var effective = Evaluate(context, session);
         var reconciled = counters.Reconcile(input.Grant, row =>
         {
-            var principal = credentials.SessionPrincipal(row.Subject.Session);
+            var principal = Principal(row.Subject);
             var sourceRequest = AgentPipeLaunch.LaunchId(principal, row.Request.ToString("D")).ToString("D");
             var known = launcher.LaunchStatuses().SingleOrDefault(s => s.Principal == principal && s.SourceRequest == sourceRequest
                 && Guid.TryParse(s.Request, out var request) && request == row.Request);
@@ -73,17 +87,19 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
             Context = effective.Context, Profile = input.Agent == "agency" ? effective.Profile : null,
             Permissions = effective.Permission, Prompt = input.Prompt } };
     }
-    EffectiveLaunch Evaluate(FleetLaunchContext context, AgentCredential caller)
+    EffectiveLaunch Evaluate(FleetLaunchContext context, string session)
     {
         var input = context.Input;
         var (settings, problem) = HostSettings.Load(folder);
         if (problem is not null || settings.SectionProblems.Any()) { throw new FleetLaunchDenied("policy"); }
         if (settings.ReadOnly || !settings.Launch.Enabled || !settings.Agents.Enabled || !settings.Agents.LaunchEnabled)
         { throw new FleetLaunchDenied("kill-switch"); }
+        // Under 1 GiB free on the profile's disk (agent-launch-scope.md section 11); free space that cannot be read allows the launch.
+        if ((disk ?? credentials.FleetGrant.Disk).Refusal() is not null) { throw new FleetLaunchDenied("diskLow"); }
         var inbound = settings.Agents.InboundLocal.Launch;
         var agent = context.Offered!.Agents.SingleOrDefault(a => a.Id == input.Agent);
         if (inbound is null || agent is null || !inbound.Agents.Contains(input.Agent)
-            || settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(input.Name)
+            || settings.Agents.ExcludedSessions.Contains(session) || settings.Agents.ExcludedSessions.Contains(input.Name)
             || settings.Agents.ExcludedWorkspaces.Contains(input.Workspace)) { throw new FleetLaunchDenied("scope"); }
         if (input.Target is not null && input.Target != device && input.Target != "agent_bridge_" + device[..16])
         { throw new FleetLaunchDenied("target-offline"); }
@@ -99,14 +115,18 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
             input.Agent, input.Model, input.LaunchProfile, input.Effort, input.Context, input.Permissions), DateTimeOffset.UtcNow);
         return decision.Launch is { } launch ? launch : throw new FleetLaunchDenied("scope");
     }
-    internal string? Check(FleetLaunchContext context, AgentCredential caller)
+    internal string? Check(FleetLaunchContext context, AgentCredential caller) =>
+        credentials.IsLive(caller) ? Check(context, caller.Session) : "policy";
+    // The source host attested the live agent; there is no local credential to recheck for a remote subject.
+    internal string? CheckRemote(FleetLaunchContext context) => Check(context, context.Subject.Session);
+
+    string? Check(FleetLaunchContext context, string session)
     {
-        if (!credentials.IsLive(caller)) { return "policy"; }
         var latest = store.TryGetUsable(context.Input.Grant, context.Grant!.Generation);
         if (!latest.Usable) { return StoreReason(latest.Problem); }
         try
         {
-            var effective = Evaluate(context with { Grant = latest.Grant }, caller);
+            var effective = Evaluate(context with { Grant = latest.Grant }, session);
             var recorded = counters.Lookup(context.Input.Grant, context.Input.Request, context.Subject, context.Binding);
             if (recorded.Reservation?.Caps is not { } snapshot || recorded.Usage is not { } usage) { return "policy"; }
             var caps = snapshot.Intersect(effective.Caps);
@@ -130,7 +150,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         if (context.Admitted)
         {
             GrantCounterResult moved;
-            var principal = credentials.SessionPrincipal(context.Subject.Session);
+            var principal = Principal(context.Subject);
             var sourceRequest = AgentPipeLaunch.LaunchId(principal, context.Input.Request.ToString("D")).ToString("D");
             if (result.Outcome == LaunchOutcome.Started && result.Session is { } id
                 && GateLaunchAudit.Started(folder, sourceRequest, principal, context.Input.Grant.ToString("D"), id) is { } target
@@ -159,7 +179,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     internal static FleetLaunchReceipt Receipt(FleetLaunchContext? context, LaunchResult result, FleetLaunchInput? input, string? reason) =>
         new((input ?? context?.Input)?.Request ?? Guid.Empty, (input ?? context?.Input)?.Grant ?? Guid.Empty, context?.Grant?.Generation ?? 0,
             result, null, false, null, context?.Caps, reason);
-    static string Reason(LaunchResult result) => result.Reason is "scope" or "policy" or "kill-switch" ? result.Reason
+    static string Reason(LaunchResult result) => result.Reason is "scope" or "policy" or "kill-switch" or "diskLow" ? result.Reason
         : result.Reason is { } reason && reason.StartsWith("grant-", StringComparison.Ordinal) ? reason
         : result.Reason?.Contains("audit", StringComparison.OrdinalIgnoreCase) == true ? "audit-unavailable"
         : result.Reason?.Contains("fleetName", StringComparison.Ordinal) == true ? "name-gate" : "policy";
@@ -167,6 +187,13 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     { GrantCounterProblem.Full => "duplicate-store-full", GrantCounterProblem.Binding => "duplicate-id",
         GrantCounterProblem.Hourly or GrantCounterProblem.Daily or GrantCounterProblem.Live => "grant-exhausted",
         GrantCounterProblem.Clock => "grant-expired", _ => StoreReason(result.StoreProblem) };
+    GrantSubject RemoteSubject(GrantSubject s) => account() is { Length: > 0 } mine && s.Account == mine && s.SourceHost != device
+        && s.SourceHost.Length == 32 && s.SourceHost.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')
+        && !string.IsNullOrWhiteSpace(s.Session) && !string.IsNullOrWhiteSpace(s.Credential) && s.ProcessInstance.Pid > 0
+        ? s : throw new FleetLaunchDenied("policy");
+    // A local subject keeps the credential-store principal; a remote one is keyed by its own source host.
+    string Principal(GrantSubject s) => s.SourceHost == device ? credentials.SessionPrincipal(s.Session)
+        : AgentProtocol.Principal(s.SourceHost, s.Session);
     internal static GrantSubject Subject(AgentCredentials credentials, string account, string device, AgentCredential caller)
     {
         if (!credentials.IsLive(caller) || caller.Kind != "session" || caller.Scope != AgentProtocol.ScopeReadReplyLaunch

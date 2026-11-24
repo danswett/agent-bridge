@@ -18,19 +18,44 @@ public static class TaskAccess
 {
     // Task Scheduler checks a task's descriptor as a file's; changing one needs write.
     const int FileWriteData = 0x2;
+    // What changing, deleting or replacing a file takes, and what replacing something in a folder takes (a script credential's pinned
+    // files and the folders above them, docs/design/script-credentials.md section 6): adding a file or a subfolder replaces nothing.
+    const int AppendData = 0x4, DeleteChild = 0x40, Delete = 0x10000, WriteDac = 0x40000, WriteOwner = 0x80000;
+    const int ChangeFile = FileWriteData | AppendData | Delete | WriteDac | WriteOwner;
+    const int ChangeFolder = DeleteChild | Delete | WriteDac | WriteOwner;
     const int GenericAll = 0x10000000, GenericExecute = 0x20000000, GenericWrite = 0x40000000, GenericRead = unchecked((int)0x80000000);
     const int FileAllAccess = 0x1F01FF, FileGenericRead = 0x120089, FileGenericWrite = 0x120116, FileGenericExecute = 0x1200A0;
 
     // Null when the descriptor cannot be read as one. Groups are those enabled in the token;
     // denyOnly are those it holds for denial alone (an unelevated administrator's
     // Administrators), which Windows matches against deny entries but never allow ones.
-    public static bool? CanModify(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null)
+    public static bool? CanModify(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null) =>
+        Granted(sddl, user, groups, denyOnly, FileWriteData) is { } granted ? (granted & FileWriteData) != 0 : null;
+
+    // True when the user can neither change, delete nor replace a file (folder: nor delete or re-permission a folder or its children),
+    // false when it can, null when the descriptor cannot decide it. An owner may always change the permissions of what it owns
+    // unless an OWNER RIGHTS entry says otherwise, so an object the user owns is never locked.
+    public static bool? Unchangeable(string sddl, bool folder, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null)
     {
-        RawSecurityDescriptor descriptor;
+        var wanted = folder ? ChangeFolder : ChangeFile;
+        return Granted(sddl, user, groups, denyOnly, wanted) is { } granted ? (granted & wanted) == 0 : null;
+    }
+
+    public static bool? Unchangeable(string sddl, bool folder)
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        if (identity.User is not { } user) { return null; }
+        var denyOnly = identity.Claims.Where(c => c.Type == ClaimTypes.DenyOnlySid).Select(c => new SecurityIdentifier(c.Value)).ToList();
+        return Unchangeable(sddl, folder, user, identity.Groups?.OfType<SecurityIdentifier>() ?? [], denyOnly);
+    }
+
+    // The rights among `wanted` the descriptor grants, or null when an entry that could still decide one of them cannot be evaluated here.
+    static int? Granted(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly, int wanted)
+    {        RawSecurityDescriptor descriptor;
         try { descriptor = new RawSecurityDescriptor(sddl); }
         catch (Exception e) when (e is ArgumentException or FormatException) { return null; }
         // No discretionary list at all grants everyone everything.
-        if (descriptor.DiscretionaryAcl is not { } acl) { return true; }
+        if (descriptor.DiscretionaryAcl is not { } acl) { return wanted; }
         var who = new HashSet<SecurityIdentifier>(groups) { user };
         var denied = new HashSet<SecurityIdentifier>(who);
         denied.UnionWith(denyOnly ?? []);
@@ -38,8 +63,10 @@ public static class TaskAccess
         // rights; owning it grants no write of its own. An owner held for denial only meets its
         // denials alone, as any deny-only group does.
         var ownerRights = new SecurityIdentifier(WellKnownSidType.WinCreatorOwnerRightsSid, null);
+        var owns = false;
         if (descriptor.Owner is { } owner)
         {
+            owns = who.Contains(owner);
             if (who.Contains(owner)) { who.Add(ownerRights); }
             if (denied.Contains(owner)) { denied.Add(ownerRights); }
         }
@@ -55,12 +82,14 @@ public static class TaskAccess
             // A conditional entry (XA, XD) counts only when its expression holds for the token,
             // which is not evaluated here. Either one that could still decide write leaves it
             // unknown, so the scheduler decides instead: a false yes or no would mislead the preflight.
-            if (((applies && ace.IsCallback) || ownerUnknown) && (mask & FileWriteData & ~(granted | refused)) != 0) { return null; }
+            if (((applies && ace.IsCallback) || ownerUnknown) && (mask & wanted & ~(granted | refused)) != 0) { return null; }
             if (!applies || ace.IsCallback || ownerUnknown) { continue; }
             if (ace.AceQualifier == AceQualifier.AccessDenied) { refused |= mask & ~granted; }
             else { granted |= mask & ~refused; }
         }
-        return (granted & FileWriteData) != 0;
+        // An owner holds WRITE_DAC implicitly while no OWNER RIGHTS entry names the right.
+        if (owns && !acl.OfType<CommonAce>().Any(a => a.SecurityIdentifier == ownerRights)) { granted |= WriteDac & ~refused; }
+        return granted & wanted;
     }
 
     // The current user's answer, from this process's token: Groups holds only the enabled

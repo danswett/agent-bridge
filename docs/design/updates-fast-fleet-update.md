@@ -44,7 +44,7 @@ feed's SHA256 (src/AgentBridge.App/Platform.cs:95-97, :166-170).
 
 **Halt list.** `ReleaseEligibility` and `GitHubHaltListSource` exist (src/AgentBridge.Host/ReleaseEligibility.cs:19-113)
 but nothing in `src/` constructs them. The source takes the newest release and its `halts.json` digest
-from GitHub's HTTPS API (`?per_page=100`, no ETag, :80) and checks the body's SHA256 against it (:103-108).
+from GitHub's HTTPS API (`?per_page=10`, no ETag, :80; was 100 until Nov 23, when it ran past the 4 MiB cap) and checks the body's SHA256 against it (:103-108).
 
 **Modes** (src/AgentBridge.App.Core/Stores.cs:80-106, per machine and profile): `AutoUpdate` (default
 on); `WhenUpdateReady` is `RestartToUpdate` (default, #516) or `InstallBetweenTurns` (#689, 6-hour
@@ -125,7 +125,7 @@ IP, shared by every machine behind it. §4 sets the budget; no machine credentia
 check (seconds) = about 2-3 minutes, or 6-7 without the token. A held machine gets the same, inside its windows.
 
 **Limited or unreachable.** Release relay down: no hints; the normal check as today. GitHub limits the
-release relay: it serves stale with `Age`; clients reject a copy older than 1 hour (`CdnOldest`, :55).
+release relay: it serves stale with `Age`; clients reject a copy older than 1 hour (`CdnOldest`), and a copy older than 10 minutes (`CdnFreshFor`) may only offer a newer release, never say "up to date" (docs/app-windows.md).
 GitHub limits a machine: the hold stays; its end goes out as a UTC instant (`checksHeldUntil`, slice 3);
 the card says "Checked 20 minutes ago · checking again soon". **Offline:** on reconnect the relay sends
 the latest hint. **Mixed versions:** a host without `releaseHint` gets no frame and keeps the tick.
