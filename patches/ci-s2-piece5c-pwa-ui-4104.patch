@@ -1,12 +1,12 @@
-From 70770596cdfcdc4ebd2c8795ab085bdeaa396394 Mon Sep 17 00:00:00 2001
+From 2aa8fd89adbb3827c26f9c2cb03a693ec5fdbaac Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:21:45 -0800
+Date: Mon, 23 Nov 2026 22:32:39 -0800
 Subject: [PATCH] s 5c
 
 ---
  .../playwright-system-packages/download.sh    |   2 +-
  .../playwright-system-packages/test.sh        |   2 +-
- .github/workflows/ci.yml                      | 186 ++----------------
+ .github/workflows/ci.yml                      | 187 ++----------------
  .github/workflows/full.yml                    | 162 ++++++++++++++-
  quality/README.md                             |  12 +-
  quality/catalog.yml                           |  10 +-
@@ -17,7 +17,7 @@ Subject: [PATCH] s 5c
  .../HaValidationCoverageTests.cs              |   2 +-
  .../MergeRuleTests.cs                         |   8 +-
  .../PlanScriptTests.cs                        |   4 +-
- 13 files changed, 229 insertions(+), 219 deletions(-)
+ 13 files changed, 229 insertions(+), 220 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/download.sh b/.github/actions/playwright-system-packages/download.sh
 index 86c98cc7c..2474d91ff 100644
@@ -46,7 +46,7 @@ index 43b32c046..1b857889e 100644
  from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
  from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f930a1a52..85cbe77a3 100644
+index 46e2262ca..85cbe77a3 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -8,16 +8,12 @@ on:
@@ -150,7 +150,7 @@ index f930a1a52..85cbe77a3 100644
        # Without install scripts, as pages.yml builds the published site (#650), so a build that
        # needed one fails here first.
        - name: The PWA's packages
-@@ -1506,133 +1477,6 @@ jobs:
+@@ -1506,134 +1477,6 @@ jobs:
              echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
            fi
  
@@ -223,6 +223,7 @@ index f930a1a52..85cbe77a3 100644
 -          browsers: ${{ matrix.project }}
 -          working-directory: pwa
 -          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
+-          save: 'true'
 -      - run: npx playwright install "$PROJECT"
 -      - name: Save Playwright's browsers to main's cache
 -        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -284,7 +285,7 @@ index f930a1a52..85cbe77a3 100644
    quality-gate:
      # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
      # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
-@@ -1648,7 +1492,7 @@ jobs:
+@@ -1649,7 +1492,7 @@ jobs:
      # new gate's check only once every job it needs is done; under the same name, the draft's
      # green gate would stand for the whole head until then, and a merge could go through on it.
      name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
@@ -294,7 +295,7 @@ index f930a1a52..85cbe77a3 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index 5119350e3..7473199f8 100644
+index 4181e4b97..77a87beff 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -624,7 +625,7 @@ index bf10713d0..f10753641 100644
      {
          var (code, output) = RunGuard(critical, reason, reference, force);
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 2f130c50e..6e0653623 100644
+index bfa9311ed..9b9fc029a 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -638,7 +639,7 @@ index 2f130c50e..6e0653623 100644
      }
  
      [Fact]
-@@ -160,4 +160,38 @@ public class FullWorkflowTests
+@@ -164,4 +164,38 @@ public class FullWorkflowTests
              Assert.Contains(part, script, StringComparison.Ordinal);
          Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
      }
