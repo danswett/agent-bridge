@@ -115,6 +115,36 @@ public sealed record HostSettings(bool RemoteApproval)
     // read afresh on each call, and off for anything that cannot be read with confidence.
     public static AgentMessagingSettings CurrentAgentMessaging(string folder) => Load(folder).Settings.AgentMessaging;
 
+    // The session watch (#4262, docs/design/session-watch.md): OFF unless config.json says sessionWatch.enabled is exactly true. Read on its own,
+    // so nothing else in the file can turn it on and a file that cannot be read leaves it off; a newer schema version is not guessed at.
+    static JsonElement? Once(JsonElement obj, string name)
+    {
+        JsonElement? found = null;
+        foreach (var property in obj.EnumerateObject())
+        {
+            if (!property.NameEquals(name)) { continue; }
+            if (found is not null) { throw new JsonException(name + " is repeated"); }
+            found = property.Value;
+        }
+        return found;
+    }
+
+    public static bool SessionWatchEnabled(string folder)
+    {
+        try
+        {
+            using var stream = File.OpenRead(Path.Combine(folder, FileName));
+            if (stream.Length > 1024 * 1024) { return false; }
+            using var doc = JsonDocument.Parse(stream);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) { return false; }
+            // A repeated key is not guessed at (TryGetProperty would take the last one): it leaves the watch off.
+            if (Once(root, "version") is { } version && !(version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out var v) && v == Version)) { return false; }
+            return Once(root, "sessionWatch") is { ValueKind: JsonValueKind.Object } watch && Once(watch, "enabled") is { ValueKind: JsonValueKind.True };
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
+    }
+
     // What agents may do on this machine (#1295, design/agent-principals.md 5.1): off unless
     // turned on here, and off for everything whenever the section or the file cannot be read.
     // Changed only at the machine; agent launch policy reads it afresh before each check.

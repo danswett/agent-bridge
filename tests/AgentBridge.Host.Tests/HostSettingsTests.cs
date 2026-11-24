@@ -613,4 +613,22 @@ public sealed class HostSettingsTests : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
     }
+
+    // Session watch S4c (#4262): off unless config.json says sessionWatch.enabled is exactly true; anything unreadable is off, and says nothing else.
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":true}}", true)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":false}}", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":\"true\"}}", false)]
+    [InlineData("{\"sessionWatch\":{}}", false)]
+    [InlineData("{\"version\":2,\"sessionWatch\":{\"enabled\":true}}", false)]
+    [InlineData("{not json", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":true,\"enabled\":false}}", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":false,\"enabled\":true}}", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":true},\"sessionWatch\":{\"enabled\":false}}", false)]
+    public void The_session_watch_is_off_unless_the_file_says_true_and_a_bad_file_leaves_it_off(string? text, bool expected)
+    {
+        if (text is not null) { File.WriteAllText(Path.Combine(folder, HostSettings.FileName), text); }
+        Assert.Equal(expected, HostSettings.SessionWatchEnabled(folder));
+    }
 }
