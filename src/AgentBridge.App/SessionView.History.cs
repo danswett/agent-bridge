@@ -137,7 +137,7 @@ public sealed partial class SessionView
     void DrawEarlier()
     {
         if (follow.Held && HistoryAtEnd()) { historyDraw?.Stop(); return; }
-        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || ReaderScrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -203,10 +203,10 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
-        if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null) { return; }
+        if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null) { return; }
         var (session, releases, anchors) = (shownHistory, pinReleases, responseAnchors);
         bool Current() => session == shownHistory && releases == pinReleases && restoreReading is null
-            && scrollbarPointers.Count == 0 && !panning && (!scrolling || anchoring is not null)
+            && scrollbarPointers.Count == 0 && !panning && (!ReaderScrolling || anchoring is not null)
             && keyTarget is null && (opening || !follow.Held || !atEnd && !pinEnd);
         void Restore()
         {

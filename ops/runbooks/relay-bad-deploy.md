@@ -6,7 +6,7 @@ within an hour of a production deploy.
 **Rule: roll back first, diagnose after.** Rolling back returns production to an image it ran
 before the deploy, and costs each device one reconnect.
 
-## Roll back (Owner approves)
+## Roll back (SRE approves)
 
 1. Find the digest the deploy replaced. The production job's summary shows it under
    "roll back". Or list what production has run:
@@ -28,7 +28,7 @@ before the deploy, and costs each device one reconnect.
    ```powershell
    gh workflow run relay.yml -R danswett/agent-bridge --ref main -f rollback_to=sha256:<digest>
    ```
-   **Owner:** approve the `production` environment **only for the run whose job is
+   **SRE:** approve the `production` environment (the owner's account route, [docs/relay-deploy.md](../../docs/relay-deploy.md#who-approves-a-production-deploy); no owner approval is needed) **only for the run whose job is
    `rollback`**. `infra/rollback-target.sh` refuses any digest production hasn't run, and the
    smoke test runs after.
 4. Confirm: `pwsh ops/tools/relay-probe.ps1 -ExpectVersion <old sha>`.

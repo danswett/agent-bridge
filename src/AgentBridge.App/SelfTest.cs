@@ -306,6 +306,7 @@ static partial class SelfTest
                 && timingRecords.EnumerateArray().Any(r => r.GetProperty("Kind").GetString() == "check"),
                 "latest: records Windows view check timings");
             await CheckHistoryBottomBounce(window, main, demo, Check, outFile);
+            await CheckWheelNotches(window, main, demo, Check, outFile);
             await CheckHistoryScrollPreserve(window, main, demo, Check);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
@@ -902,7 +903,10 @@ static partial class SelfTest
         await Task.Delay(300);
         window.Search.Focus(FocusState.Keyboard);
         var hinted = await Until(() => Open().Any(t => t.Contains("Ctrl+K", StringComparison.Ordinal)), TimeSpan.FromSeconds(3));
-        check(hinted, $"names Ctrl+K in the search box's tooltip when Tab reaches it ({Said(Open())})");
+        // Said when it fails, for a runner where the tooltip never came (#4229/ARM64): is the window the foreground one, where is the keyboard focus, and
+        // does the search box have a tooltip at all. The wait and its bound are as they were.
+        var searchFocused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(xamlRoot) is DependencyObject now && Above<AutoSuggestBox>(now, b => b == window.Search) is not null;
+        check(hinted, $"names Ctrl+K in the search box's tooltip when Tab reaches it ({Said(Open())}{(hinted ? "" : $"; {ForegroundOwner()}; XAML focus: {FocusedName(window)}; focus in search: {searchFocused}; search tooltip set: {Microsoft.UI.Xaml.Controls.ToolTipService.GetToolTip(window.Search) is not null}")})");
         window.Search.Text = "";
         item?.Focus(FocusState.Programmatic);
     }
