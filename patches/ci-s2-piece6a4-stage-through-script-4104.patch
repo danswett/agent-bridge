@@ -1,17 +1,8 @@
-From 868a7be6b9352dd227a450579da368ea99884ce7 Mon Sep 17 00:00:00 2001
+From b8785cb7f7663a81b1919daa4e5c1d3036d1b07e Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:17:55 -0800
-Subject: [PATCH] CI S2, piece 6a4 (2/2): ci.yml and FULL stage the public
- self-test text through build/stage-selftest-text.ps1 (workflow part, Part of
- #4104)
+Date: Mon, 23 Nov 2026 21:33:14 -0800
+Subject: [PATCH] scratch 6a4
 
-ci.yml's two pasted staging blocks (app, app-installer) become calls to the script, so the refusals (links, control characters, dump/zip/ELF
-signatures, bad JSON) live in one place; step ids, if: always() and the upload steps are unchanged. FULL's app-selftest and app-installer get the
-same two staging steps and 7-day uploads with the same allow-lists. Tests: every staging step calls the script, runs always and is followed by a
-7-day upload of exactly what it stages; both workflows pass the same allow-list; no workflow holds the refusals inline. Sensitive (public uploads).
-Needs build/stage-selftest-text.ps1 from the 6a4 (1/2) PR.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/ci.yml                      | 54 +-----------
  .github/workflows/full.yml                    | 39 +++++++++
@@ -20,10 +11,10 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  create mode 100644 tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f8c5a457b..e9bac3f7c 100644
+index 85cbe77a3..a565cbd53 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -712,30 +712,8 @@ jobs:
+@@ -741,30 +741,8 @@ jobs:
          id: selftest-text
          shell: pwsh
          run: |
@@ -56,7 +47,7 @@ index f8c5a457b..e9bac3f7c 100644
        - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
          if: always() && steps.selftest-text.outcome == 'success'
          with:
-@@ -832,32 +810,8 @@ jobs:
+@@ -861,32 +839,8 @@ jobs:
          id: installed-selftest-text
          shell: pwsh
          run: |
