@@ -107,7 +107,7 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
    it: the role stays `quiescing(E)` and needs section 3's fresh person assignment. No new state is introduced.
 5. **Bounded in time and count.** `expiresAt` AND `maxUses` are both required; a grant without both is refused when it
    is signed. The ceiling is the owner's answer (S1.4), "30 days / 20 uses (Recommended)", which the record gives with no unit.
-   **Design proposal (not an owner decision):** a role has at most ONE live grant, and it is at most 30 days and 20 uses for
+   **Per role, as recorded:** a role has at most ONE live grant (enforced, check 8), and it is at most 30 days and 20 uses for
    that role: committing a grant with a higher `grantVersion` revokes the previous one in the same step, and what was left of its
    count is forfeited. With one live grant per role, "per role" and "per grant" mean the same thing, so there is nothing to
    ask. A new grant is a new person signature, never something an agent or a host can raise. Time uses
@@ -130,14 +130,18 @@ cannot activate; section 3's state then stays as it was). Any failure refuses an
    the admission and activation compare-and-swap carry the head digest and sequence they extend, so the ledger itself cannot
    skip or fork the head. The head is ANCHORED outside the authority: two other holders keep a check: the person device remembers the latest
    record digest it has seen per role and shows any shorter or different chain as a mismatch, and the successor's host
-   journals each activation it performs. Stated plainly, the audit is evidence against hosts and agents; against a compromised
+   journals each activation it performs. The person device is the comparator: it checks each chain it is shown against the
+   host journals it can read and against its own remembered head. The chain's first record (genesis) is the role's mint record,
+   with sequence 1 and a zero previous digest, signed like any other, so a chain that starts elsewhere is a mismatch. Stated plainly, the audit is evidence against hosts and agents; against a compromised
    authority it is evidence only as far as those two checks reach. It is visible to the owner: the person UI (slice 14) shows
    each record with the grant's remaining uses and expiry. Each admitted attempt also notifies the owner through the existing
    notification path, and refusals go through the existing audit and notification paths (section 6). A grant CANNOT be created
    or used until slice 14's activation view has shipped: slice 7a's create action is gated off until then, so the owner's
    condition ("visible audit") holds from the first use. Counts and identifiers only; never a prompt, a workspace or a path.
 8. **No fan-out.** One grant, one role, one successor per use, no sub-grants. A role's holder, a successor or an agent
-   cannot sign, copy, widen, extend or delegate a grant; one role has at most one pending succession at a time. The
+   cannot sign, copy, widen, extend or delegate a grant; one role has at most one pending succession at a time. A role has at
+   most ONE LIVE grant at a time, enforced in the ledger: creating a grant with a higher `grantVersion` revokes the previous one
+   in the same compare-and-swap, so two grants never coexist and the 30 days and 20 uses are the role's, as recorded. The
    grant authorizes no second role, no second holder, and no continuation of anything but the role it names.
 9. **Current holder only** (the owner's "Current lead only"). Two things are proved, by two named records.
    (a) The REQUESTER is the current holder: the request is signed by the holder's session through its enrolled host (the host's
@@ -170,7 +174,8 @@ the only way out is an explicit ABORT.
   generation, roleId, epoch E, successor session, nonce, request, issuedAt, commandExpiresAt`). The holder, the successor, a
   host, an agent or the relay alone cannot abort, so a holder cannot reopen a role that has drained.
 - **Result.** The ledger reads the old host's persisted fence in the same compare-and-swap. If it shows the old holder NOT
-  stopped, the role returns to `active(E)` with the old holder keeping it, old-epoch admission reopens, and the pending
+  stopped, the role returns to `active(E)` with the old holder keeping it, old-epoch admission reopens, the old host clears its persisted quiesce fence for epoch E in the same step (it refuses
+  to type for the role until the ledger's `active(E)` reaches it), and the pending
   successor and its request are refused for good. If it shows the old holder stopped, or nothing (an unknown outcome never
   counts as stopped), the role moves to `revoked(E+1)` and needs section 3's fresh person assignment; it never returns to
   `active(E)`.
@@ -190,6 +195,7 @@ the only way out is an explicit ABORT.
   grant never covers host move, host recovery, an approved resume or an `existingActivation` resume, so those stay person-approved,
   and section 5's "owner-approved successor procedure" and "owner-approved rebind" keep meaning a person signature. It follows from
   the owner's "Current lead only" (a dead or absent holder cannot be the requester, check 9), but no owner answer says it in words.
+  The 30 days and 20 uses are per role, as recorded, and a role has one live grant (check 8), so two grants cannot add up to 40.
 - **Continuity** (CHANGE C1-C2): a grant carries `presentation: separate` only. A succession that inherits presentation
   still needs the per-succession person approval C1-C2 describes, because the person must see the effect first.
 - **Slices 7 and 14** (the table) are edited in place; a new **slice 7a** holds the grant's ledger, signing and activation
@@ -198,11 +204,11 @@ the only way out is an explicit ABORT.
 ### S1.4 The owner's answers (Nov 23, 23:45 PT, recorded in slipgates-fleet #1351)
 
 1. **Who may use it:** "Current lead only (Recommended)": check 9.
-2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses for the role's one live grant (check 5).
+2. **The limits:** "30 days / 20 uses (Recommended)": at most 30 days and at most 20 uses PER ROLE, as the decision record has it; a role has at most one live grant at a time (checks 5 and 8), so the limits are the role's.
 3. **The residual risk:** "Accept, with visible audit (Recommended)": accepted on the condition of check 7.
 4. **Defaults that stand:** a grant never carries `presentation: inherit`; no drain starts before the grant check.
 
-Only the three quoted answers above are the owner's. Everything else in this CHANGE (the per-role grant rule, the abort path, the
+Only the three quoted answers above are the owner's. Everything else in this CHANGE (how one live grant per role is enforced, the abort path, the
 launch record, the two clocks, section 5's person-approved paths) is a **design proposal (not an owner decision)** until the owner approves it.
 
 ### S1.5 Interaction with the person enrollment (slice 2) and the published claim
