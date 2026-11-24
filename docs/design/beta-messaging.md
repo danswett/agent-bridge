@@ -71,11 +71,32 @@ gives them the person's other machines, through the host and nothing else:
 
 ## 5. The .NET MCP server
 
-The Node server (`mcp/`) is replaced by a .NET one so the installer ships it without a Node runtime. Same tool names, same arguments,
-same outcomes, same refusals; the existing `mcp/test` cases become the contract the port is tested against (tests first: each case
-runs against both servers until the Node one is deleted). Pipe discovery (`AGENT_BRIDGE_PIPE`, then the SID and profile rules),
-`AGENT_BRIDGE_TOKEN` in `agent.hello`, the capability-listed tools, "no host, no tools" and the unattributed-caller limits do not change.
-The Node server is deleted in the slice after parity is shown, not in the same one.
+**Engineering ruling (R10): port, do not bundle Node.** A clean beta machine, a Copilot-only one for example, may have no Node, and a
+bundled runtime would make us the owner of its security patches. The MCP server becomes a **.NET stdio server shipped in the app
+pack, started as a host or app subcommand**, and its tools are thin wrappers over existing host ops, as
+[fleet-tools-to-host.md](https://github.com/danswett/slipgates-fleet/blob/main/docs/fleet-tools-to-host.md) (slipgates-fleet) already says
+for send and find: one audited host implementation, an MCP tool for agents. The Node server (`mcp/`) **keeps working for the fleet
+until the .NET one has parity, then is retired**; the port never changes it.
+
+Same tool names, arguments, outcomes and refusals. The existing `mcp/test` cases are the contract (tests first: each case runs against
+both servers until Node is deleted). Pipe discovery (`AGENT_BRIDGE_PIPE`, then the SID and profile rules), `AGENT_BRIDGE_TOKEN` in
+`agent.hello`, capability-listed tools, "no host, no tools" and the unattributed-caller limits do not change. Node is deleted in the
+slice after parity is shown, not in the same one.
+
+**Parity list** (each must pass the shared contract cases before Node is retired):
+
+| Tool | Host op | Note |
+|---|---|---|
+| `list_agent_sessions` | `sessions.list` | cwd hidden by default; `scope: "fleet"` is PR5 |
+| `read_agent_session` | `session.get` | |
+| `reply_to_agent_session` | `session.reply` | `machine` argument is PR5 |
+| `launch_agent_session` | `session.launch` | omitted role sends `default` (README) |
+| `read_launch_result` | `launch.status` | |
+| `get_launch_options` | `launch.options` | |
+| `read_agent_usage` | `usage.get` | only with the exact `usage` capability |
+| `end_agent_session` | the host's stop op | **Added to the Node server by C4-LaunchStop; the .NET server must carry it too.** Its contract cases come from that slice; PR6 to PR8 take them when they land, and coordinate with its owner |
+
+Port size: see section 6. Its PRs come before PR3's registration step and are sent to the Engineering Lead as their own estimate.
 
 ## 6. Slices, order and what each needs
 
@@ -86,7 +107,7 @@ The Node server is deleted in the slice after parity is shown, not in the same o
 | PR3 | Installer builder | Setup registers and repairs the Slipgates MCP server for each agent CLI the app already sets up (Claude, Copilot), reversibly, and ships it in the app pack. **Registers the .NET server only after it ships; until then it must not register the Node one** | Section 5 (the command and arguments to register, and that it needs no Node) |
 | PR4 | Settings builder | A Settings control where a person sees and changes the scope (`same-person` / `off`), explaining in plain words who an agent may message; person-pressed only | Section 3 (key, values, legacy mapping, never an agent) |
 | PR5 | Pairing-Notify | MCP fleet list and remote reply (section 4), in the .NET server | PR2, the .NET server |
-| PR6 to PR8 | Pairing-Notify | The .NET server: tool surface and pipe client; the contract tests against Node; delete Node | Section 5 |
+| PR6 to PR8 | Pairing-Notify | The .NET server as a host or app subcommand: PR6 pipe client and `agent.hello` (about 380 lines); PR7 tool surface and stdio server (about 390, with `end_agent_session`); PR8 the shared contract tests against Node (about 390). Then a delete-Node PR, deletions only. Estimate about 1,400 whole lines in all | Section 5 |
 
 Each slice ships off or behind its gate and is under the 400-line cap against its parent. PR3 and PR4 can start once this design merges;
 PR3's registration step waits for the .NET server, PR4 does not.
