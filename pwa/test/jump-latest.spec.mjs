@@ -141,6 +141,29 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'smooth' }]);
     });
 
+    test('sending a message always goes to the end', async ({ page }) => {
+      const v = await session(page);
+      await wheel(page, v, -Math.round((await client(v)) * 3));
+      await expect(pill(v)).toBeVisible();
+      await v.locator('form.reply').getByRole('textbox', { name: 'Reply' }).fill('Sent from far up');
+      await recordScrolls(v);
+      await v.locator('form.reply').getByRole('button', { name: 'Send' }).click();
+      await expect.poll(() => gap(v)).toBeLessThan(4);
+      await expect(pane(v).getByText('Sent from far up')).toBeVisible();
+      // At once, not smooth: typing straight after Send would otherwise take a smooth scroll over, short of the end.
+      expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'auto' }]);
+    });
+
+    test('chosen from the keyboard, focus rests on the conversation, where the keys scroll it', async ({ page }) => {
+      const v = await session(page);
+      await wheel(page, v, -Math.round((await client(v)) * 3));
+      await pill(v).focus();
+      await page.keyboard.press('Enter');
+      await expect.poll(() => gap(v)).toBeLessThan(4);
+      await expect(pill(v)).toBeHidden();
+      await expect(pane(v)).toBeFocused();
+    });
+
     test('a wheel moves the conversation exactly as far as it says, the pill appearing or not (#4243)', async ({ page }) => {
       const v = await session(page);
       const box = await pane(v).boundingBox();
@@ -158,3 +181,45 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
     });
   });
 }
+
+test.describe('on a phone, in the cases that change it', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('it stays above the reply area when that is a bar', async ({ page }) => {
+    const v = await session(page);
+    const screen = await client(v);
+    await wheel(page, v, -Math.round(screen * 2));
+    await wheel(page, v, -Math.round(screen * 0.5));
+    await expect(v).toHaveAttribute('data-foot', 'compact');
+    const p = await pill(v).boundingBox();
+    expect(p.y + p.height).toBeLessThanOrEqual((await v.locator('.reply-bar').boundingBox()).y + 1);
+  });
+
+  test('in forced colours it is ButtonFace with a ButtonText outline', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'WebKit has no forced-colors emulation');
+    await page.emulateMedia({ forcedColors: 'active' });
+    const v = await session(page);
+    await wheel(page, v, -Math.round((await client(v)) * 3));
+    const probe = await page.evaluate(() => {
+      const p = document.createElement('div');
+      p.style.cssText = 'background:ButtonFace;color:ButtonText';
+      document.body.append(p);
+      const c = getComputedStyle(p);
+      const r = [c.backgroundColor, c.color];
+      p.remove();
+      return r;
+    });
+    const style = await pill(v).evaluate((el) => { const c = getComputedStyle(el); return [c.backgroundColor, c.borderTopColor, c.color, c.borderTopWidth]; });
+    expect(style).toEqual([probe[0], probe[1], probe[1], '1px']);
+  });
+
+  test('under reduced motion choosing it jumps to the end, with no smooth scroll', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const v = await session(page);
+    await wheel(page, v, -Math.round((await client(v)) * 3));
+    await recordScrolls(v);
+    await pill(v).click();
+    await expect.poll(() => gap(v)).toBeLessThan(4);
+    expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'auto' }]);
+  });
+});

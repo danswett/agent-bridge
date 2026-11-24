@@ -1791,7 +1791,7 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed() });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed(), onSent: () => this.#follow.jump('auto') });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
@@ -1991,7 +1991,14 @@ export class SessionCard {
   }
 
   #jump() {
+    const e = this.els;
+    const held = e.jump.ownerDocument.activeElement === e.jump;
     this.#follow.jump(scrollBehavior());
+    // Focus does not fall to the page when the pill goes: it is on the conversation, where the keys scroll.
+    if (held) {
+      e.scroll.tabIndex = -1;
+      e.scroll.focus({ preventScroll: true });
+    }
   }
 
   #showWaiting() {

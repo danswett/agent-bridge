@@ -148,6 +148,7 @@ export class ReplyBox {
   #onGoToQuestion = null;
   // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
   #onChange = null;
+  #onSent = null;
   #onReturn = () => {
     this.els.send.title = replyReturnHint();
     this.els.send.setAttribute('aria-description', replyReturnHint());
@@ -155,11 +156,13 @@ export class ReplyBox {
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
-  // phone notice's link, to the question the reply waits on. onChange: told when the words change.
-  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, uuid = () => globalThis.crypto.randomUUID() }) {
+  // phone notice's link, to the question the reply waits on. onChange: told when the words change. onSent: told when
+  // a reply has gone (the conversation goes to its end at once, ui.md §6.4 H3).
+  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, onSent = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
     this.#onGoToQuestion = onGoToQuestion;
     this.#onChange = onChange;
+    this.#onSent = onSent;
     this.replying = replying;
     this.uuid = uuid;
     this.idBase = `r${++seq}`;
@@ -211,6 +214,7 @@ export class ReplyBox {
 
   destroy() {
     this.#lifecycle.abort();
+    this.#onSent = null;
     this.#unwatch?.();
     this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
@@ -573,6 +577,7 @@ export class ReplyBox {
     if (!entry) { for (const f of files) { f.offered = false; } return; }
     this.#sent = { request: entry.request, text: entry.answer.text === sentText ? text : entry.answer.text, files: entry.answer.attachments };
     this.#show(this.entry);
+    this.#onSent?.();
   }
 
   #cancel() {
