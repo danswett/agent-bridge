@@ -15,7 +15,8 @@ static class Completeness
         IReadOnlyList<string> SolutionProjects,
         IReadOnlyDictionary<string, IReadOnlyList<string>> WorkflowJobs,
         IReadOnlyList<string> TrackedFiles,
-        string? CiWorkflow = null);
+        string? CiWorkflow = null,
+        IReadOnlyList<string>? MainGreenJobs = null);
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, ProjectGraph graph, Inputs inputs)
     {
@@ -49,6 +50,16 @@ static class Completeness
                 if (!covered.Contains((file, job)))
                     problems.Add(new("workflow-job", $"{file} job {job} isn't named in any suite's where:"));
 
+        // The merge waits on the FAST lane only (S2, #4104): every job main_green names is a ci.yml job, never one of full.yml's (the FULL lane never gates a merge).
+        if (inputs.MainGreenJobs is { } mainGreen && inputs.WorkflowJobs.TryGetValue("ci.yml", out var fastJobs))
+        {
+            inputs.WorkflowJobs.TryGetValue("full.yml", out var fullJobs);
+            foreach (var job in mainGreen.Where(j => !fastJobs.Contains(j.Split(" (")[0], StringComparer.Ordinal)))
+                problems.Add(new("main-green", fullJobs?.Contains(job.Split(" (")[0], StringComparer.Ordinal) == true
+                    ? $"merge-rule.yml's main_green names {job}, a FULL-lane job (full.yml): the merge waits only on the FAST lane's jobs"
+                    : $"merge-rule.yml's main_green names {job}, which is no ci.yml job"));
+        }
+
         if (inputs.CiWorkflow is not null)
             problems.AddRange(CiPlan.Check(catalog, inputs.CiWorkflow));
 
@@ -74,11 +85,13 @@ static class Completeness
             foreach (var file in Directory.EnumerateFiles(workflowDir).Where(f => f.EndsWith(".yml", StringComparison.Ordinal) || f.EndsWith(".yaml", StringComparison.Ordinal)))
                 workflows[Path.GetFileName(file)] = WorkflowJobs(File.ReadAllText(file));
         var ci = Path.Combine(workflowDir, "ci.yml");
+        var mergeRule = Path.Combine(root, "quality", "merge-rule.yml");
         return Check(catalog, graph, new Inputs(
             File.Exists(slnx) ? SolutionProjects(File.ReadAllText(slnx)) : [],
             workflows,
             ChangedFiles.Tracked(root),
-            File.Exists(ci) ? File.ReadAllText(ci) : null));
+            File.Exists(ci) ? File.ReadAllText(ci) : null,
+            File.Exists(mergeRule) ? MergeRuleConfig.Load(mergeRule).MainGreen.Jobs : null));
     }
 
     public static IReadOnlyList<string> SolutionProjects(string slnxXml) =>
