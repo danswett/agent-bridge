@@ -83,6 +83,17 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
         Assert.Single(logged, line => line.Contains(Op, StringComparison.Ordinal) && line.Contains(code, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task A_network_share_is_refused_with_its_closed_code()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await using var ch = await Connect();
+
+        var result = await ch.CallAsync(Op, new { path = @"\\server\share\work" });
+
+        Assert.Equal(("refused", "not-local"), (result.GetProperty("result").GetString(), result.GetProperty("code").GetString()));
+    }
+
     [Theory]
     [InlineData("""{"path":"$p","isolate":true}""")]
     [InlineData("""{"path":7}""")]
