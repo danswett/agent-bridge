@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace AgentBridge.Quality.Tests;
 
@@ -29,6 +30,8 @@ public class ResolveRehearsalAzureUserTests
             using var p = Process.Start(start)!;
             var text = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
             p.WaitForExit();
+            // pwsh colours and wraps error text on a runner: compare plain words only.
+            text = Regex.Replace(Regex.Replace(text, @"\[[0-9;]*m", ""), @"\s+", " ");
             return (p.ExitCode, text);
         }
         finally { Directory.Delete(dir, true); }
