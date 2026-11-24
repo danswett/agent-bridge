@@ -133,6 +133,35 @@ public sealed class FleetProvenanceTests : IDisposable
         Assert.Null(Open().RoleFor("quality-lead", $"agent:m/{coordinator}"));
     }
 
+    // Own lane: a fleet launch by a coordinator records that coordinator's ROLE (never its session) on the worker; nothing else records one.
+    [Fact]
+    public void A_fleet_launch_by_a_coordinator_records_its_role_as_the_workers_lane_and_only_that_does()
+    {
+        var store = Open();
+        const string coordinator = "99999999-9999-4999-8999-999999999999", builder = "55555555-5555-4555-8555-555555555555", worker = "66666666-6666-4666-8666-666666666666";
+        var own = Guid.NewGuid();
+        store.Preparing(own, coordinator, null, "quality-lead");
+        store.Bound(own, coordinator, Process);
+        var plain = Guid.NewGuid();
+        store.Preparing(plain, builder);
+        store.Bound(plain, builder, Process);
+        Assert.Equal("quality-lead", store.LaneFor(true, $"agent:m/{coordinator}"));
+        Assert.Null(store.LaneFor(false, $"agent:m/{coordinator}"));                 // not a fleet launch
+        Assert.Null(store.LaneFor(true, null));                                       // a person's launch
+        Assert.Null(store.LaneFor(true, $"script:m/{coordinator}"));                  // a script named like a coordinator's session id
+        Assert.Null(store.LaneFor(true, $"agent:m/{builder}"));                       // a session with no recorded role
+        Assert.Null(store.LaneFor(true, "agent:m/11111111-1111-4111-8111-111111111111"));
+        var launch = Guid.NewGuid();
+        store.Preparing(launch, worker, "fleet", null, lane: "quality-lead");
+        store.Bound(launch, worker, Process);
+        Assert.Equal("quality-lead", Open().LaneOf(worker));                          // durable
+        Assert.Null(Open().LaneOf(builder));                                          // no lane recorded
+        var again = Guid.NewGuid();                                                   // a record that disagrees fails closed
+        store.Preparing(again, worker, "fleet", null, lane: "engineering-lead");
+        store.Bound(again, worker, Process);
+        Assert.Null(Open().LaneOf(worker));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

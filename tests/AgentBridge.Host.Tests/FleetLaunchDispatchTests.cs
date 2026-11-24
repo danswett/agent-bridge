@@ -94,4 +94,31 @@ public sealed class FleetLaunchDispatchTests : LaunchFlowFixture
         Assert.True(result.Outcome == LaunchOutcome.Started, result.Reason);
         Assert.Null(launcher.LaunchRole(result.Session!));
     }
+
+    // Own lane (NOTE: production's only fleet=true launch is a script's, so this agent-principal path is not reached today; see the PR body): a fleet worker a coordinator launches records the coordinator's ROLE (never its session); a launcher with no recorded role records none.
+    [Theory]
+    [InlineData("quality-lead", "quality-lead")]
+    [InlineData(null, null)]
+    public async Task A_fleet_launch_by_a_coordinator_records_the_workers_lane(string? launcherRole, string? lane)
+    {
+        const string coordinator = "99999999-9999-4999-8999-999999999999";
+        locator.Installed["claude"] = @"C:ake\claude.exe";
+        Git(f.Root, "init", "-q", "-b", "main", app);
+        File.WriteAllText(Path.Combine(app, "README.md"), "fixture\n");
+        Git(app, "add", ".");
+        Git(app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture");
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(f.Root, "profile")).FullName, "launch-provenance.json"), JsonSerializer.Serialize(
+            new Dictionary<Guid, object> { [Guid.NewGuid()] = new { session = coordinator, process = new { id = 4242, startedAt = DateTimeOffset.Parse("2026-11-23T00:00:00Z") }, role = launcherRole } },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var profile = Path.Combine(f.Root, "fleet-profile");
+        var launcher = Launcher(Config(c => c with { Workspaces = [new("App", app, true)] }), credentials: new AgentCredentials(profile, "machine"),
+            agentWorktreeCheck: (workspace, made, _) => AgentLaunchWorktreeCheck.Check(workspace, made, "claude"));
+        var principal = "agent:machine/" + coordinator;
+        var result = await GateLaunchAudit.LaunchAsync(launcher, new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "claude", Workspace = "App",
+            Permissions = LaunchProtocol.AllowAll, Prompt = "fixture" }, principal, new AgentAuditLog(profile), new("local", "agent", principal, null), fleet: true, refusal: () => null);
+
+        Assert.True(result.Outcome == LaunchOutcome.Started, result.Reason);
+        Assert.Equal(lane, launcher.LaunchLane(result.Session!));
+        Assert.Null(launcher.LaunchRole(result.Session!));   // the worker itself is never a coordinator
+    }
 }

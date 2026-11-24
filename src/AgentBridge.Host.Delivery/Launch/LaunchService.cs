@@ -794,6 +794,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
     public bool WasFleetLaunched(string session) => provenance.WasFleetLaunched(session);
     public string? LaunchRole(string session) => provenance.RoleOf(session);
+    public string? LaunchLane(string session) => provenance.LaneOf(session);
     public LaunchConfig FleetConfig => Config;
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
@@ -1347,7 +1348,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
             provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
-                provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+                provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume,
+                lane: fleetResume || restoring && plan.Resume is not null ? provenance.LaneKept(sessionId) : provenance.LaneFor(fleet, agentPrincipal));
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

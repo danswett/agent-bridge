@@ -16,7 +16,7 @@ internal sealed class LaunchProvenance
     readonly HashSet<Guid> superseding = [];
     bool unavailable;
     // Role: the launch's own role name (a coordinator's role, #4318), kept so a later caller is judged by what was recorded, never by a name.
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null, string? Lane = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -29,7 +29,7 @@ internal sealed class LaunchProvenance
             if (stream.Length > MaxBytes) { throw new InvalidDataException(); }
             var stored = JsonSerializer.Deserialize<Dictionary<Guid, Origin>>(stream, Json)
                 ?? throw new InvalidDataException();
-            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Role is { } role && !RoleName.IsMatch(role) || o.Session is not { Length: <= 1024 } ||
+            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Role is { } role && !RoleName.IsMatch(role) || o.Lane is { } lane && !RoleName.IsMatch(lane) || o.Session is not { Length: <= 1024 } ||
                 (o.Process is not null && (o.Session.Length == 0 || o.Process is not { Id: > 0, StartedAt: not null }
                     || o.Process.StartedAt == default(DateTimeOffset)))))
             { throw new InvalidDataException(); }
@@ -46,7 +46,7 @@ internal sealed class LaunchProvenance
 
     // supersedes: a fleet worker resumed in place (#4318): its earlier records go when this one is bound, and only if every one of
     // them is a fleet launch (a session a person ever launched is never taken over).
-    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null, bool supersedes = false)
+    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null, bool supersedes = false, string? lane = null)
     {
         lock (gate)
         {
@@ -58,7 +58,7 @@ internal sealed class LaunchProvenance
                 { throw new InvalidOperationException("refused: only a fleet launch's own session is resumed in place"); }
                 superseding.Add(request);
             }
-            origins[request] = new(session, null, grant, role);
+            origins[request] = new(session, null, grant, role, lane);
             Save();
         }
     }
@@ -73,7 +73,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role, origins.GetValueOrDefault(request)?.Lane);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             if (superseding.Remove(request))
@@ -128,6 +128,36 @@ internal sealed class LaunchProvenance
             var roles = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).Select(o => o.Role).Distinct().ToArray();
             return roles is [{ } role] ? role : null;
         }
+    }
+
+    // The lane of a worker (own-lane resume): the ROLE of the coordinator that launched it, never that coordinator's session, so a one-for-one
+    // successor with the same role keeps its workers. The one lane every record of this session carries; none when there is no record,
+    // no lane, or two lanes (fail closed, as an older record has none).
+    public string? LaneOf(string session)
+    {
+        lock (gate)
+        {
+            Check();
+            Unfinished(session);
+            var lanes = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).Select(o => o.Lane).Distinct().ToArray();
+            return lanes is [{ } lane] ? lane : null;
+        }
+    }
+
+    // The lane a new launch records: only a FLEET launch by an agent session whose own recorded role is known records it, that role. A person's
+    // launch, a non-fleet launch and a session with no recorded role record none. Anything unreadable records none.
+    public string? LaneFor(bool fleet, string? agentPrincipal)
+    {
+        if (!fleet || agentPrincipal is null || !agentPrincipal.StartsWith("agent:", StringComparison.Ordinal)) { return null; }
+        try { return RoleOf(agentPrincipal[(agentPrincipal.LastIndexOf('/') + 1)..]); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    // A resumed or restored worker keeps the lane its own earlier record says.
+    public string? LaneKept(string session)
+    {
+        try { return LaneOf(session); }
+        catch (InvalidOperationException) { return null; }
     }
 
     // The role a launch may record (#4318): only a person's launch (no agent principal) records what it names. Owner decision of
