@@ -229,6 +229,82 @@ public sealed class McpServerTests
         Assert.Empty(noPrincipal.Ops);
     }
 
+    // --- C3 PR5b: the read-only fleet list (owner: "Yes, allow the list"): machine id, session id, state, how long, machine online ---
+
+    static JsonObject FleetAnswer() => new()
+    {
+        ["sessions"] = new JsonArray(
+            new JsonObject
+            {
+                ["machine"] = Machine, ["machineName"] = "Desk", ["node"] = Node, ["state"] = "working", ["since"] = "2026-11-23T10:00:00Z", ["secondsInState"] = 42,
+                ["machineOnline"] = true, ["name"] = "Fix the build", ["trust"] = "own-account", ["attention"] = new JsonObject { ["kind"] = "question" }, ["cwd"] = "C:\\secret", ["title"] = "t", ["prompt"] = "p",
+            },
+            new JsonObject { ["machine"] = "NOT-AN-ID", ["node"] = Node, ["state"] = "idle", ["since"] = "2026-11-23T10:00:00Z", ["secondsInState"] = 1, ["machineOnline"] = true },
+            new JsonObject { ["machine"] = Machine, ["node"] = "someone-elses", ["state"] = "idle", ["since"] = "2026-11-23T10:00:00Z", ["secondsInState"] = 1, ["machineOnline"] = true }),
+        ["machines"] = new JsonArray(new JsonObject { ["machine"] = Machine, ["state"] = "online", ["machineName"] = "Desk", ["lastSeen"] = "2026-11-23T10:00:00Z", ["complete"] = true }),
+    };
+
+    [Fact]
+    public async Task The_fleet_list_has_exactly_the_fields_the_owner_allowed_and_nothing_a_person_wrote_or_a_path_or_a_prompt()
+    {
+        var conn = new Conn("agent:m/s", "sessions.read") { Answer = op => FleetAnswer() };
+        var replies = await RunAsync(With(conn), Call(1, "list_agent_sessions", """{"scope":"fleet"}"""));
+        var result = replies[0]["result"]!["structuredContent"]!;
+        var row = result["sessions"]!.AsArray().Single()!.AsObject();
+        Assert.Equal(["machine", "node", "state", "since", "secondsInState", "machineOnline"], row.Select(p => p.Key));
+        Assert.Equal(Machine, (string?)row["machine"]);
+        Assert.Equal(["machine", "state", "complete"], result["machines"]![0]!.AsObject().Select(p => p.Key));
+        Assert.DoesNotContain("Desk", replies[0].ToJsonString());
+        Assert.DoesNotContain("secret", replies[0].ToJsonString());
+        Assert.DoesNotContain("Fix the build", replies[0].ToJsonString());
+        Assert.Equal(["fleet.list"], conn.Ops);
+        Assert.Empty(conn.Sent[0]!.AsObject());  // no include: names and content are never asked for
+    }
+
+    [Fact]
+    public async Task A_fleet_row_without_an_exact_machine_id_and_node_id_is_dropped_not_passed_on()
+    {
+        var conn = new Conn("agent:m/s", "sessions.read") { Answer = op => FleetAnswer() };
+        var replies = await RunAsync(With(conn), Call(1, "list_agent_sessions", """{"scope":"fleet"}"""));
+        Assert.Single(replies[0]["result"]!["structuredContent"]!["sessions"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task A_host_that_refuses_the_fleet_read_gives_an_error_and_nothing_falls_back_to_the_local_list()
+    {
+        var conn = new Conn("agent:m/s", "sessions.read") { Answer = op => throw new McpToolException("refused: notSameAccount: the host account changed", McpFailure.Refused) };
+        var replies = await RunAsync(With(conn), Call(1, "list_agent_sessions", """{"scope":"fleet"}"""));
+        Assert.True((bool?)replies[0]["result"]!["isError"]);
+        Assert.Contains("notSameAccount", (string?)replies[0]["result"]!["content"]![0]!["text"]);
+        Assert.Equal(["fleet.list"], conn.Ops);
+    }
+
+    [Theory]
+    [InlineData("""{"scope":"all"}""")]
+    [InlineData("""{"scope":"local"}""")]
+    [InlineData("""{"scope":"fleet","include":"content"}""")]
+    [InlineData("""{"scope":7}""")]
+    public async Task Any_other_scope_and_content_with_the_fleet_are_refused_before_anything_is_sent(string args)
+    {
+        var conn = new Conn("agent:m/s", "sessions.read");
+        var replies = await RunAsync(With(conn), Call(1, "list_agent_sessions", args));
+        Assert.True((bool?)replies[0]["result"]!["isError"]);
+        Assert.Empty(conn.Ops);
+    }
+
+    [Fact]
+    public async Task Without_a_scope_the_list_is_this_machines_as_before_and_the_fleet_read_needs_an_accepted_agent_principal()
+    {
+        var local = new Conn("agent:m/s", "sessions.read");
+        await RunAsync(With(local), Call(1, "list_agent_sessions"));
+        Assert.Equal(["sessions.list"], local.Ops);
+        // An unattributed connection may list this machine, never the fleet (mcp-fleet-mode.md): refused here, before the host is asked.
+        var unattributed = new Conn(null, "sessions.read") { Answer = op => FleetAnswer() };
+        var replies = await RunAsync(With(unattributed), Call(1, "list_agent_sessions", """{"scope":"fleet"}"""));
+        Assert.True((bool?)replies[0]["result"]!["isError"]);
+        Assert.Empty(unattributed.Ops);
+    }
+
     // Whatever it is asked, the server asks the host only for the ops of an agent's tools; the host classifies the caller by ancestry
     // and refuses the app-only ones to it (tests/AgentBridge.Host.Tests LocalApi), so this is the server's half of that.
     [Fact]
@@ -237,7 +313,7 @@ public sealed class McpServerTests
         var conn = new Conn("agent:m/s", "sessions.read", "sessions.reply", "sessions.launch", "usage");
         await RunAsync(With(conn), Call(1, "list_agent_sessions"), Call(2, "read_agent_session", """{"session_id":"s"}"""), Call(3, "reply_to_agent_session", """{"session_id":"s","text":"x"}"""),
             Call(4, "launch_agent_session", "{}"), Call(5, "get_launch_options"), Call(6, "read_agent_usage"), Call(7, "host.stop"), Call(8, "session.stop"), Call(9, "read_agent_session", """{"session_id":"host.stop"}"""), Call(10, "end_agent_session", """{"session_id":"11111111-1111-4111-8111-111111111111"}"""));
-        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "agent.send", "fleet.end"];
+        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "agent.send", "fleet.list", "fleet.end"];
         Assert.All(conn.Ops, op => Assert.Contains(op, allowed));
     }
 }

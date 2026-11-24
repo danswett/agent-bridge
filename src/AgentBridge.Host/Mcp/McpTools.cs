@@ -113,6 +113,41 @@ public static class McpTools
         return answer;
     }
 
+    // The read-only list of the same person's agent sessions across their machines (owner decision, "Yes, allow the list"): machine id, session
+    // id, state, how long, machine online, and nothing a person wrote or a path or a prompt. It asks the host's fleet.list without include, so no
+    // names are ever requested; a row without an exact machine id and node id is dropped, and so is every member outside the allowlist.
+    public static async Task<JsonObject> FleetListAsync(IMcpCalls host, CancellationToken ct = default)
+    {
+        var page = Node(await host.CallAsync("fleet.list", new { }, ct: ct))?.AsObject() ?? [];
+        var sessions = new JsonArray();
+        foreach (var row in page["sessions"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            if (!(Text(row, "machine") is { } machine && DeviceId.IsMatch(machine) && Text(row, "node") is { } node && NodeId.IsMatch(node))) { continue; }
+            var kept = new JsonObject();
+            foreach (var key in new[] { "machine", "node", "state", "since", "secondsInState", "machineOnline" })
+            {
+                if (row.TryGetPropertyValue(key, out var value) && value is JsonValue) { kept[key] = value.DeepClone(); }
+            }
+            sessions.Add(kept);
+        }
+        var machines = new JsonArray();
+        foreach (var row in page["machines"]?.AsArray().OfType<JsonObject>() ?? [])
+        {
+            if (Text(row, "machine") is not { } id || !DeviceId.IsMatch(id)) { continue; }
+            var kept = new JsonObject();
+            foreach (var key in new[] { "machine", "state", "complete" })
+            {
+                if (row.TryGetPropertyValue(key, out var value) && value is JsonValue) { kept[key] = value.DeepClone(); }
+            }
+            machines.Add(kept);
+        }
+        return new JsonObject { ["sessions"] = sessions, ["machines"] = machines };
+    }
+
+    static string? Text(JsonObject row, string key) => row[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+    internal static readonly System.Text.RegularExpressions.Regex DeviceId = new("^[0-9a-f]{32}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    internal static readonly System.Text.RegularExpressions.Regex NodeId = new("^agent_bridge_[0-9a-f]{16}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     // A message to a session on another of the same person's machines, through this host's agent.send (docs/design/beta-messaging.md
     // section 4). The host signs it, opens the relay channel and says what came of it; the receiver refuses another account's host. The
     // five outcomes (delivered, refused, undeliverable, unconfirmed, off) come back as the host gave them; none is retried here, and a

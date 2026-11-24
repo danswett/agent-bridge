@@ -89,16 +89,17 @@ Today `reply_to_agent_session` and `list_agent_sessions` act on this machine onl
 [local-pipe.md](../protocol/local-pipe.md), `mcp/README.md`). **Engineering proposal, not the owner's words:** slice PR5 gives them the
 person's other machines, through the host and nothing else. The record covers only the default scope (section 1); these tool changes
 stay departures that [mcp-fleet-mode.md](mcp-fleet-mode.md) lists. The Chief has confirmed row 5: a `machine` argument that targets the
-same person's sessions on any of that person's machines is inside the owner's Nov 23 scope (PR5a, built). The fleet list (`scope:
-"fleet"`, PR5b) is not settled and waits for the owner.
+same person's sessions on any of that person's machines is inside the owner's Nov 23 scope (PR5a, built). The owner has also allowed the fleet list (`scope:
+"fleet"`, PR5b: "Yes, allow the list", the owner's answer to an ask_user question from Chief S19, about 23:05 PT, relayed by Chief S19; see mcp-fleet-mode.md): read only, machine id, session id,
+state, how long and machine online, with no folders, titles, prompts or answers.
 
 - `reply_to_agent_session` takes an optional `machine` (the exact 32-hex device id from a fleet row). With it, `session_id` is the target's
   roster node id (`agent_bridge_` and 16 hex digits) and the text is at most 4096 characters (`agent.send`'s limit). The MCP server asks the
   **local host** for `agent.send`; without it, the call is exactly today's local reply. This is the one change the owner decision's
   substance (messaging same-person sessions on other machines) points at.
-- `list_agent_sessions` takes the opt-in `scope: "fleet"` already proposed in mcp-fleet-mode.md. That is a read surface with its own
-  open owner CHANGE items there (the C6 dependencies #1401 and #55, and `machineName` returned only with `include: "content"`); this design
-  does not settle them. Rows are the allowlisted `fleet.list` rows; `name` and `machineName` are untrusted text; no `cwd`.
+- `list_agent_sessions` takes the opt-in `scope: "fleet"`, allowed by the owner in the narrower form recorded in mcp-fleet-mode.md: read only,
+  for an accepted agent identity, rows of `machine`, `node`, `state`, `since`, `secondsInState` and `machineOnline` (and `machine`, `state`,
+  `complete` per machine). No name, `machineName`, folder, title or text is returned, with or without `include`.
 - **Whose authority.** The MCP process holds no relay credential and acts only as the agent: it is the **host binary** (section 5),
   started by the agent CLI as a stdio child of the session, so the host classes it by ancestry as that agent, with the agent's own
   `AGENT_BRIDGE_TOKEN`, and only agent ops. It never uses app-only pipe ops or a person's authority.

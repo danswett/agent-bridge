@@ -21,8 +21,6 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
     const int MaxText = 16 * 1024;
     // agent.send's own limit (UTF-16 code units), for a message to another machine.
     const int MaxRemoteText = 4096;
-    static readonly System.Text.RegularExpressions.Regex DeviceId = new("^[0-9a-f]{32}$", System.Text.RegularExpressions.RegexOptions.Compiled);
-    static readonly System.Text.RegularExpressions.Regex NodeId = new("^agent_bridge_[0-9a-f]{16}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     static readonly string Instructions = $"{Product.Name} messaging is connected on this machine. When you need to message, read or start another agent session, " +
         "use these tools instead of any other messaging route; they carry your identity and the permissions the owner gave you. " +
@@ -31,8 +29,8 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
     // name, capability needed, whether an unattributed connection may use it, description, input schema
     static readonly (string Name, string Needs, bool Unattributed, string Description, string Schema)[] Tools =
     [
-        ("list_agent_sessions", "sessions.read", true, "List the agent sessions on this machine: status, title, repository and branch (no working folder). include \"content\" adds the working folder (cwd), latest response and question of each session.",
-            """{"type":"object","properties":{"include":{"type":"string","enum":["content"],"description":"Add each session's latest response and question. Default: status only."}}}"""),
+        ("list_agent_sessions", "sessions.read", true, "List the agent sessions on this machine: status, title, repository and branch (no working folder). include \"content\" adds the working folder (cwd), latest response and question of each session. With scope \"fleet\", instead list the sessions of your own agents on all your machines, read only: machine id, session id (node), state, how long, and whether the machine is online; no names, folders, titles or text.",
+            """{"type":"object","properties":{"include":{"type":"string","enum":["content"],"description":"Add each session's latest response and question. Default: status only. Not with scope fleet."},"scope":{"type":"string","enum":["fleet"],"description":"fleet: your own sessions on all your machines (needs an accepted agent identity). Absent: this machine only."}}}"""),
         ("read_agent_session", "sessions.read", true, "Read a session's latest answer. Pass the since from reply_to_agent_session to never get a stale answer.",
             """{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string","description":"Session id from list_agent_sessions."},"since":{"type":"string","description":"The \"since\" reply_to_agent_session returned; the answer then waits for a newer turn."},"wait_seconds":{"type":"number","description":"Wait up to this long (max 600) for the turn to finish."}}}"""),
         ("reply_to_agent_session", "sessions.reply", false, "Send a message to another agent session on this machine, or with machine to a session on another of your own machines. A message to another machine is sent once and never retried: if the outcome is unconfirmed or unknown, do not send it again unasked.",
@@ -138,9 +136,10 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             if (tool.Name is null) { throw new McpToolException($"Unknown tool {name}."); }
             if (await ensure() is not { } conn) { throw new McpToolException($"{Product.Name} is not running on this machine.", McpFailure.Unavailable); }
             if (!Allowed(conn, tool)) { throw new McpToolException($"{name} is not available on this connection.", McpFailure.Refused); }
-            var a = Validate(name, args);
+            var a = Validate(name, args, conn.Principal);
             JsonObject value = name switch
             {
+                "list_agent_sessions" when a["scope"] is not null => await McpTools.FleetListAsync(conn, ct),
                 "list_agent_sessions" => await McpTools.ListSessionsAsync(conn, (string?)a["include"] == "content", ct),
                 "read_agent_session" => await McpTools.ReadSessionAsync(conn, (string)a["session_id"]!, (string?)a["since"], Math.Min(600, a["wait_seconds"] is JsonValue w && w.TryGetValue<double>(out var d) ? d : 0), ct: ct),
                 "reply_to_agent_session" when a["machine"] is JsonValue => await McpTools.SendAsync(conn, (string)a["machine"]!, (string)a["session_id"]!, (string)a["text"]!, ct),
@@ -157,7 +156,7 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
     }
 
     // The same rules mcp/src/server.mjs applies, before anything is sent to the host.
-    static JsonObject Validate(string tool, JsonNode args)
+    static JsonObject Validate(string tool, JsonNode args, string? principal)
     {
         if (args is not JsonObject a) { throw new McpToolException("Arguments must be an object."); }
         void Str(string key, int max = 512, bool optional = false)
@@ -181,6 +180,12 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
         }
         switch (tool)
         {
+            case "list_agent_sessions" when a.ContainsKey("scope"):
+                // The fleet list is the owner's "Yes, allow the list": read only, no names or content, and only for an accepted agent identity.
+                if (!(a["scope"] is JsonValue sc && sc.TryGetValue<string>(out var scope) && scope == "fleet")) { throw new McpToolException("scope must be \"fleet\" or absent."); }
+                if (a.ContainsKey("include")) { throw new McpToolException("include is not available with scope fleet: the list carries no names or content."); }
+                if (principal is null) { throw new McpToolException("scope fleet needs an accepted agent identity on this connection.", McpFailure.Refused); }
+                break;
             case "list_agent_sessions" when a.ContainsKey("include") && !(a["include"] is JsonValue iv && iv.TryGetValue<string>(out var inc) && inc == "content"):
                 throw new McpToolException("include must be \"content\".");
             case "read_agent_session":
@@ -189,8 +194,8 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
                 break;
             case "reply_to_agent_session" when a.ContainsKey("machine"):
                 // Another of this person's machines: an exact device id, that machine's roster node id, and agent.send's own text rules.
-                if (!(a["machine"] is JsonValue mv && mv.TryGetValue<string>(out var machine) && DeviceId.IsMatch(machine))) { throw new McpToolException("machine must be an exact device id: 32 lowercase hex digits."); }
-                if (!(a["session_id"] is JsonValue sv && sv.TryGetValue<string>(out var node) && NodeId.IsMatch(node))) { throw new McpToolException("With machine, session_id is that session's node id: agent_bridge_ and 16 lowercase hex digits."); }
+                if (!(a["machine"] is JsonValue mv && mv.TryGetValue<string>(out var machine) && McpTools.DeviceId.IsMatch(machine))) { throw new McpToolException("machine must be an exact device id: 32 lowercase hex digits."); }
+                if (!(a["session_id"] is JsonValue sv && sv.TryGetValue<string>(out var node) && McpTools.NodeId.IsMatch(node))) { throw new McpToolException("With machine, session_id is that session's node id: agent_bridge_ and 16 lowercase hex digits."); }
                 if (!(a["text"] is JsonValue tv && tv.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text) && !text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))) { throw new McpToolException("text must be a non-blank string without control characters other than tab, CR and LF."); }
                 if (text.Length > MaxRemoteText) { throw new McpToolException($"text is too long for another machine (max {MaxRemoteText} characters)."); }
                 break;
