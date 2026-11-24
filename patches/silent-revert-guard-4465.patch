@@ -1,0 +1,67 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 57d59bf1..382cd1a0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -148,6 +148,25 @@ jobs:
+           # two commits are enough. Main diffs from its last passed commit, which may be any
+           # number of commits back, so it fetches the whole history.
+           fetch-depth: ${{ github.event_name == 'push' && '0' || '2' }}
++      # The silent-revert guard (#4465), before anything from the change runs, and main's copy of it, so a pull request
++      # can't quiet it: every line the merge deletes from main is blamed on main, and one another merged pull request last
++      # changed is a warning, a deleted test method by name (#3968's merge of main deleted #4126's code and tests, and CI
++      # stayed green). It never fails the plan: the script always exits 0, the step continues on error, and 3 minutes
++      # bound it. 300 commits of history are fetched to blame against; a line older than that names no pull request.
++      - name: Flag lines this pull request removes from other merged pull requests (never fails)
++        if: github.event_name == 'pull_request'
++        continue-on-error: true
++        timeout-minutes: 3
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          PR_NUMBER: ${{ github.event.pull_request.number }}
++        run: |
++          $env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
++          $env:GIT_CONFIG_VALUE_0 = 'AUTHORIZATION: basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
++          try { git fetch --no-tags --quiet --deepen=300 origin "$env:GITHUB_REF" } finally { Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 }
++          git show 'HEAD^1:quality/silent-revert-guard.ps1' > "$env:RUNNER_TEMP/silent-revert-guard.ps1"
++          pwsh -NoProfile -File "$env:RUNNER_TEMP/silent-revert-guard.ps1" -Base 'HEAD^1' -Head HEAD -Pr $env:PR_NUMBER
+       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+         with:
+           dotnet-version: '10.0.x'
+@@ -1410,7 +1429,8 @@ jobs:
+     #    when it should (.github/actions/playwright-system-packages);
+     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
+     #    offline (lab-release-verify.yml);
+-    #  - docs-links: relative links and their #anchors in every Markdown file resolve.
++    #  - docs-links: relative links and their #anchors in every Markdown file resolve;
++    #  - silent-revert-guard: the guard plan runs on each pull request, offline in a throwaway repository (#4465).
+     # Not in plan's own runner: a failing check there would skip every job that needs the plan.
+     needs: plan
+     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.light == 'true'
+@@ -1435,6 +1455,10 @@ jobs:
+       - name: Connector read-contract mock
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
+         run: node --test tools/connector-conformance/mock-host.test.mjs
++      - name: The silent-revert guard flags another pull request's deleted lines and tests, and never fails
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'silent-revert-guard')) }}
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/test-silent-revert-guard.ps1
+       - name: The lab drafts plan only and refuse execution
+         # Against a stand-in for az: nothing reaches Azure.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index c6caee49..86071698 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -627,9 +627,8 @@ suites:
+     triggers: [quality/silent-revert-guard.ps1, quality/test-silent-revert-guard.ps1]
+     command: pwsh -NoProfile -File quality/test-silent-revert-guard.ps1
+     where: ci.yml light
+-    # planned until the ci.yml part lands (branch sg-r8b-revert-guard-patch, applied by Quality: the guard in the plan job
+-    # on every pull request, this test in light). Flip to exists with that patch.
+-    status: planned
++    # The guard itself runs in ci.yml's plan job on every pull request; this test runs in light.
++    status: exists
+   - id: ci-speed-script
+     validation_plan: native
+     kind: unit
