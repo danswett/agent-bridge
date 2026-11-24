@@ -536,7 +536,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or not (#4104), as long as main's head, read under the lock, still follows its commit (an
    unreadable or off-main head stops publishing); main's later run publishes its own higher
    version over it. When GitHub numbered a descendant's run lower, that version is refused and
-   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
+   its app change waits for main's next run: delayed, not lost (#938's trade). Releases are
+   spaced 15 minutes apart (owner decision; docs/app-windows.md, "Spacing"): a run inside that
+   publishes nothing and says `deferred=true`, its changes riding main's next run that passes,
+   unless Quality, on an owner or Chief call, dispatches `critical-release`. One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting

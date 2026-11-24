@@ -1059,15 +1059,23 @@ connector's Install button on a machine the dashboard drives.
   or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
   higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
   merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
-  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. There is no
-  minimum spacing between releases and no release window: the owner decided "As often as green" (Nov 23, ~13:30 PT, relayed
-  by Chief S18). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. Releases are
+  spaced 15 minutes apart (**Spacing**, below). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
   start in is not promised, which is why the checks above keep the order. With signing on, the
   `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
   once `sign` has succeeded, so it never falls back to the unsigned packages.
+* **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
+  S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
+  read under the publish lock. A run inside that publishes nothing, warns, and sets the step output `deferred=true`. Its
+  changes are never dropped: it leaves no release, draft or tag, and main's next run plans from the latest release (CI's
+  release debt), so they go out with the next run that passes, or with this run's re-run once 15 minutes have gone. Until
+  some run passes after it, they wait; nothing publishes them on a timer. Only the spacing is held: every other check
+  above runs first. **Critical fix:** `-SkipSpacing` publishes inside the 15 minutes, with a warning and a line in the
+  release notes naming the override and who ran it. CI passes it from the `critical-release` input of a `workflow_dispatch`
+  on `main` (the ci.yml change is Quality's to apply), which only Quality runs, on an owner or Chief call.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
