@@ -228,8 +228,9 @@ namespace AgentBridge.App
         public void DrawEarlierForProbe() => DrawEarlier();
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
-        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; }
+        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; anchorHeld = false; }
         public void LaidOutForProbe() => KeepAnchoredBlock();
+        public double BlockTopForProbe { set => ConversationList.BlockTop = value; }
         public void DrainForProbe() => DispatcherQueue.Drain();
         public Microsoft.UI.Dispatching.DispatcherQueueTimer DispatcherTimersForProbe => DispatcherQueue.Timers[^1];
         public void LapseWheelForProbe() { foreach (var timer in DispatcherQueue.Timers.Where(t => t.Interval == WheelStart).ToList()) { timer.Elapse(); } }
@@ -278,7 +279,8 @@ namespace AgentBridge.App
         {
             public object ItemsPanelRoot { get; } = new Microsoft.UI.Xaml.Controls.ItemsStackPanel();
             public bool Available = true;
-            public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = 40 } : null;
+            public double BlockTop { get; set; } = 40;
+            public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = BlockTop } : null;
             public void ScrollIntoView(object item) => Scrolled?.Invoke();
             public Action? Scrolled { get; set; }
         }

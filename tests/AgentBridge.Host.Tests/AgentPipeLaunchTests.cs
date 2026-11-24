@@ -1242,6 +1242,79 @@ public sealed class AgentPipeLaunchTests : IDisposable
         Assert.Equal(0, launcher.Launches);
     }
 
+    // #4170 (G9 receiver): fleet-grants.md says every refused use is audited. Once the envelope has verified, the caller is the authenticated
+    // peer device, and each refusal from there (binding or replay, grant missing or revoked, scope) writes one refused row for it.
+    string[] PeerRows(Remote r) => AuditRows().Where(l => l.Contains(r.Channel.PeerId)).ToArray();
+
+    [Fact]
+    public async Task A_remote_launch_refused_for_scope_writes_one_audit_row_for_the_peer()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var other = FleetActionEnvelope.SubjectDigest("123", r.Channel.PeerId, Guid.NewGuid().ToString("D"), "AQEBAQEBAQEBAQEBAQEBAQ", 4242, 1);
+        Assert.Equal("scope", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason);
+        var row = Assert.Single(PeerRows(r));
+        Assert.Contains("scope", row);
+        Assert.Contains(r.Request, row);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_remote_launch_for_a_revoked_or_unknown_grant_writes_an_audit_row_with_the_receipt_reason()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
+        Assert.True(store.Revoke(r.Grant.Id, r.Grant.Generation).Usable);
+        Assert.Equal("grant-revoked", (await r.Receiver.ReceiveAsync(r.Channel, r.Data())).Reason);
+        Assert.Contains("grant-revoked", Assert.Single(PeerRows(r)));
+
+        var unknown = Guid.NewGuid();
+        var input = new FleetLaunchInput(1, Guid.Parse(r.Request), unknown, "SG Builder 266", "App", "claude", Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello");
+        var body = new FleetActionBody("123", r.Channel.PeerId, FleetActionEnvelope.SubjectDigest(r.Subject.Account, r.Subject.SourceHost, r.Subject.Session,
+            r.Subject.Credential, r.Subject.ProcessInstance.Pid, r.Subject.ProcessInstance.StartedAt.UtcTicks), r.Channel.Self, "fleet.launch",
+            unknown.ToString("D"), 1, input.Request, FleetActionEnvelope.NewNonce(), DateTimeOffset.UtcNow.AddSeconds(60),
+            FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options)));
+        var missing = (await r.Receiver.ReceiveAsync(r.Channel, r.Data(input: input, body: body))).Reason;
+        Assert.NotNull(missing);
+        Assert.NotEqual("grant-revoked", missing);
+        Assert.Equal(2, PeerRows(r).Length);
+        Assert.Contains(missing!, PeerRows(r)[1]);
+        Assert.Equal(0, launcher.Launches);
+    }
+
+    [Fact]
+    public async Task A_verified_replay_is_audited_but_a_refusal_before_verification_is_not()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var data = r.Data();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.Receiver.ReceiveAsync(r.Channel, data)).Result.Outcome);
+        Assert.Empty(PeerRows(r));
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, data)).Reason);
+        Assert.Contains("policy", Assert.Single(PeerRows(r)));
+
+        // The caller is not yet authenticated for these, so no row names it.
+        var untrusted = OpenRemote(key, trusted: false);
+        Assert.Equal("policy", (await untrusted.Receiver.ReceiveAsync(untrusted.Channel, untrusted.Data())).Reason);
+        Assert.Equal("bad-argument", (await r.Receiver.ReceiveAsync(r.Channel, JsonSerializer.SerializeToElement(new { launch = 1 }))).Reason);
+        Assert.Equal("policy", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(audience: new string('c', 32)))).Reason);
+        Assert.Single(PeerRows(r));
+        Assert.Empty(PeerRows(untrusted));
+    }
+
+    [Fact]
+    public async Task A_remote_refusal_that_cannot_be_audited_says_audit_unavailable()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key);
+        var other = FleetActionEnvelope.SubjectDigest("123", r.Channel.PeerId, Guid.NewGuid().ToString("D"), "AQEBAQEBAQEBAQEBAQEBAQ", 4242, 1);
+        Assert.Equal("scope", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason);
+        using (new BlockedAuditFile(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "launches-*.jsonl").Single()))
+        { Assert.Equal("audit-unavailable", (await r.Receiver.ReceiveAsync(r.Channel, r.Data(subject: other))).Reason); }
+        Assert.Equal(0, launcher.Launches);
+    }
+
     sealed class FakeLauncher : ISessionLauncher
     {
         public int Launches;

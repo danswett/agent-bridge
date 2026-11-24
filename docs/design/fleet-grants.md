@@ -561,6 +561,12 @@ exact grant id and record verified caller principal, action, request id, ingress
 audience/generation, payload binding, cap decision, intent and terminal outcome.
 Every use, including refused attempts, writes the existing audit; unavailable
 audit refuses execution. Issue/revoke and reconciliation are recorded there too.
+The `fleet.launch` receiver writes a refused row for every refusal made after the envelope verified (binding or replay, grant missing,
+revoked or otherwise unusable, scope), for the authenticated peer device (principal `agent:<device>/unmatched`: the subject is not yet
+known to be named by a grant), through the same hourly limiter as other refused launches; if that row cannot be written the receipt
+reason is `audit-unavailable`. Refusals before verification (untrusted peer, rate cap, malformed body, failed verify) have no
+authenticated caller and write nothing, so a peer cannot fill the audit with junk. The nonce is spent when a grant or scope refusal
+follows the replay check (harmless: a retry uses a fresh envelope).
 Grant stop rows (`session.stop`, intent and terminal) carry three additive gate fields, all or none:
 `generation` (the grant generation), `payloadDigest` (SHA-256 hex of `fleet.end/1|request|grant|session|target`,
 a digest, never the content) and `caps` (the grant's hourly/daily/live caps in force). Rows written before

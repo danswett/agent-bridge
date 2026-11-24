@@ -79,6 +79,22 @@ public sealed class BusyQueueStoreTests
         Assert.Equal(BusyQueueStore.Begin.Started, s.TryBegin(Req(), "p", "another"));
     }
 
+    [Fact]
+    public void The_holder_of_a_slot_is_known_with_its_transcript_and_offset_until_the_slot_frees()
+    {
+        var s = Store(); var r = Req();
+        Assert.Null(s.Holder("sess1"));
+        s.TryBegin(r, "p", "sess1"); s.Track(r, "/t/a.jsonl", 42);
+        Assert.Equal(new BusyQueueStore.Holding(r, "/t/a.jsonl", 42, "p"), s.Holder("sess1"));
+        Assert.Null(s.Holder("sess2"));
+        s.KeysWent(r); s.Settle(r, BusyQueueStore.Queued, null, held: true);
+        Assert.Equal(r, s.Holder("sess1")!.Request);
+        s.Settle(r, BusyQueueStore.Delivered, null, held: false);
+        Assert.Null(s.Holder("sess1"));
+        var q = Req(); s.TryBegin(q, "p", "sess1"); s.Track(q, null, 0); s.Release(q);
+        Assert.Null(s.Holder("sess1"));
+    }
+
     // #3926 review P2: the store is keyed by peer + request, as the receiver's replay store is, so one peer reusing another's live request id is
     // neither refused for it nor able to touch its record. A lookup with no peer acts only when exactly one record has that request id.
     [Fact]
@@ -109,4 +125,5 @@ public sealed class BusyQueueStoreTests
         s.Settle(r, BusyQueueStore.Delivered, null, held: false);   // ambiguous: touches neither record
         Assert.Equal((BusyQueueStore.InFlight, BusyQueueStore.InFlight), (s.Get(r, "agent:m/a")!.State, s.Get(r, "agent:m/b")!.State));
         Assert.True(s.SlotHeld("sess1") && s.SlotHeld("sess2"));
-    }}
+    }
+}

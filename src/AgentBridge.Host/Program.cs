@@ -636,7 +636,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
+    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive, jobs: new WindowsSessionJobs()) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
     var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
@@ -644,6 +644,10 @@ async Task<int> ServeAsync(HostHandover handover)
     Func<string, bool> hooksNotSetUp = static _ => false;
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, id => hooksNotSetUp(id));
     launcher.SessionStarted += restore.Launched;
+    // Who launched each session, from the authenticated launch principal, for the session watch (#4262); kept 7 days past the last live look.
+    var launchOwners = new LaunchOwnerLog(identity.Folder, identity.Key, Log);
+    launchOwners.Prune(id => source.Get(id) is not null, DateTimeOffset.UtcNow);
+    launcher.SessionOwned += (session, principal) => launchOwners.Record(session, principal, DateTimeOffset.UtcNow);
     launcher.StartScanning();
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
