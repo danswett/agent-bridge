@@ -1,9 +1,13 @@
-From c4bae1cd62af45d92d6397de384e98980ae9372b Mon Sep 17 00:00:00 2001
+From 17c846afb908be16d44705c1b109c0a2fe8abbf8 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 23:23:23 -0800
 Subject: [PATCH] CI S2: split the Playwright system-packages action so FULL
  can never write a cache (CodeQL on #4254)
 
+PATCH BRANCH: sg-patch/ci-s2-action-split-4104 (danswett/agent-bridge): the branch's head commit carries this file as patches/ci-s2-action-split-4104.patch.
+BASE: #4254's head fd2410d9 (sg-ci/s2-piece4-4104). Apply with: git apply patches/ci-s2-action-split-4104.patch
+STACKS WITH: #4410 (the download hardening, head f2325653): this applies plainly on #4254's head with #4410 merged in, and the real test.sh passes on that combination.
+FOR: Quality Q10 (only Q10 applies action and workflow patches). 142 whole lines.
 CodeQL did not see through the save input that gated the cache save inside playwright-system-packages, which full.yml (privileged) calls. So the action is now
 RESTORE-ONLY: no save input, no cache/save step; it outputs the archives cache's exact key (cache-key) and whether the archives are ready (cache-ready). The save
 is a new action, playwright-system-packages-save, that holds only the cache/save step and is called ONLY by ci.yml: once after each restore call (pwa-ui, pwa-e2e),
