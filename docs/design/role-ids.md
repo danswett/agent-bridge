@@ -11,9 +11,12 @@ unique SESSION ID and successor-stable ROLE ID per fleet session (12:12).
 
 Owner decisions, Nov 19, 2026, 14:55 PT:
 1. Q1 holder claims are person-signed assignments only: a person-approved relay role-authority key plus an enrolled host key possession proof; self-appointed or unsigned claims are rejected.
+   **[CHANGE S1, pending owner approval: for a succession under a standing grant the person's signature is on the grant; see S1.5.]**
 2. Q2 succession needs per-successor owner approval plus a confirmed stop of the old holder; no autonomous or time-based takeover; an unknown-outcome never counts as stopped.
    **[CHANGE S1, pending owner approval: a standing person-signed succession grant per role would replace "per-successor owner approval" here; the confirmed stop and the rest stay.]**
 3. Q3 a new SESSION GUID per activation, a stable ROLE GUID across approved resume, move and host recovery; a compromised role is retired permanently.
+
+Proposed, NOT yet an owner decision of this document: Nov 23, 2026, 20:55 PT, relayed by the Chief, a standing person-signed succession grant per role in place of per-successor approval (CHANGE S1 below; the owner's approval of its wording is pending).
 
 ## CHANGE S1 (pending owner approval): a standing succession grant per role
 
@@ -25,6 +28,26 @@ rollout grant.**
 It changes one thing: who approves a succession and when. A person signs a bounded grant for ONE role once, instead of
 approving every successor each time. It removes none of section 3's safety: the confirmed stop of the old holder, the
 drain of every issued reservation, the compare-and-swap, and "an unknown outcome never counts as stopped" are unchanged.
+
+### S1.0 Source, and what does not change
+
+**Source.** Owner decision, 20:55 PT Nov 23, 2026, **relayed by the Chief**: replace per-successor owner approval with a
+standing, person-signed succession grant per role. This is the Chief's relay of the decision, not a verbatim owner quote;
+no owner-decisions entry or comment link has been supplied for it yet. The owner has not yet approved this wording.
+
+**Unchanged by this CHANGE, stated so Quality can check it:**
+- **The fencing.** Section 3's order is untouched: close old-epoch admission, cancel unissued sends, drain every issued
+  reservation to authenticated `delivered` or `notDelivered`, the old host persists its fence and confirms the old holder
+  STOPPED, and only then the compare-and-swap activates the successor at the higher epoch. Every reservation is still
+  checked online at injection (section 3), and no request can be delivered to both holders.
+- **The unknown-outcome rule.** An uncertain reservation or a missing confirmed stop blocks activation, potentially
+  indefinitely; an unknown outcome never counts as stopped; no timeout, expired claim, lost response or expired grant
+  shortens it. No autonomous or time-based takeover exists, with or without a grant.
+- **The failure contract** (section 6): every row, and the rule that all routing fails closed.
+- **Q3**: a new SESSION GUID per activation, a stable ROLE GUID, a compromised role retired permanently.
+- **What it replaces**: only who approves, and when (a grant signed ahead of time instead of each successor, in the
+  place of Q2's "per-successor owner approval"), and with it Q1's "person-signed assignment" for a succession that uses a
+  grant (see S1.5).
 
 ### S1.1 The grant
 
@@ -89,6 +112,31 @@ section 3's activation. Any failure refuses the succession and leaves section 3'
 2. Whether `presentation: inherit` may ever be part of a grant (proposed: no).
 3. Whether an agent's request for a succession may start the drain before the grant is checked (proposed: the grant is
    checked first, so no drain starts without a valid one).
+
+### S1.5 Interaction with the person enrollment (slice 2) and the published claim
+
+- **Slice 2 is unchanged and is a prerequisite.** A grant is accepted only under slice 2's pinned person delegation: the
+  enrolled authority key, account and roster generation. A wrong account, generation or key refuses, and an agent cannot
+  set one, exactly as slice 2's acceptance test says. A grant is signed by the same active enrolled person devices that
+  enroll the authority (section 2: presence `key` or `webauthn`, nonce, replay and lifetime gates).
+- **New person-command actions.** Section 2 already requires explicit new role-management actions for enrollment,
+  holder approval and revocation. The grant adds two of the same kind, create and revoke. Slice 7a defines them; slice 2
+  keeps its scope and budget. Neither can be `capSign` or `accept-host-sign`.
+- **Everything a grant depends on dies with its enrollment.** Authority re-enrollment, key rotation, roster-generation
+  change, a compromised authority, host or role, and retirement each end all affected grants (S1.2, check 4). Rotation
+  still needs pinned delegation continuity (section 5); a grant signed under the old key is not carried over.
+- **Q1 and the published claim.** Q1 says holder claims are person-signed assignments only. For a succession under a grant
+  the person's signature is on the grant, not on the exact successor, so Q1's wording changes in place for that case:
+  a claim is valid if it carries EITHER a section 2 person-signed assignment OR a valid grant use. A host's own
+  possession proof (`bindingProof`) is still required for the successor, and a host still cannot assign a role alone. The
+  claim's `assignmentDigest` then binds the grant use: the digest of the grant body, its use number, and the exact
+  predecessor and successor tuples; `assignmentVersion` still increases by one per use and never resets. Readers verify the
+  pinned grant signature, the use against `maxUses`, the host add and both proofs, as they verify an assignment today.
+- **Online authority, residual risk.** Today the relay authority acts only after a person has signed the exact successor in
+  the last 60 seconds. Under a grant it can activate a successor with no person present, inside the grant's role, time and
+  count. A compromised authority key could therefore use an open grant, but only for one role, within the bounds, and only
+  with an enrolled host's possession proof and a confirmed stop of the old holder; revoking or letting the grant lapse
+  closes it, and a short grant limits it. The owner should weigh this when setting the limits (S1.4).
 
 ## Existing work and the missing trust
 
@@ -367,7 +415,7 @@ Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 1
 | Order | Repo | Slice and maximum WHOLE lines | Depends on | Sensitive | Acceptance test |
 |---|---|---|---|---|---|
 | 1 (first) | Bridge | Protocol types/vectors, 180 | None | Yes | Distinct GUID fields, canonical claim bytes; wrong versions/purposes refuse |
-| 2 | Bridge | Person authority enrollment, 220 | 1 | Yes | Pinned person delegation; wrong account/generation/key and agent setters refuse |
+| 2 | Bridge | Person authority enrollment, 220 | 1 | Yes | Pinned person delegation; wrong account/generation/key and agent setters refuse (unchanged by CHANGE S1; a standing grant is accepted only under this delegation) |
 | 3 | Bridge | Host activation identity, 220 | 1 | Yes | Resume/restart mints new SESSION GUID; proven same-process continuity and cloned-state refusal |
 | 4 | Bridge | Signed session GUID publication/reading, 220 | 3, existing hostSign chain | Yes | Verify legacy locator mapping and enrolled host proof; never truncate GUIDs |
 | 5 | Bridge | Durable role ledger/CAS, 220 | 2 | Yes | Mint/tombstone/recovery, concurrent assignment and quorum-loss refusal |
