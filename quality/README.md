@@ -1121,7 +1121,8 @@ PR #3968's merge of main silently reverted #4126, its code and its four tests to
 [--head REF] [--pr N]` asks, for every line a change deletes against its base, which MERGED pull request last changed it: `git blame` at the base, the pull request from the trailing `(#N)` of the squash
 subject, the change's own number left out. It names the deleted test methods (a public method right after a deleted `[Fact]` or `[Theory]`, in a test file) and prints a job summary and a
 `::warning` annotation per pull request: "this PR removes lines from #4126". **It only warns, and exits 0**: the point is that a reader looks. The builder's own rule stays (after a merge of main, run
-`git diff main...HEAD --stat` and confirm it removes nothing that is not yours); this is the automatic backstop. The CI step is a step of the plan job, which has no secrets.
+`git diff main...HEAD --stat` and confirm it removes nothing that is not yours); this is the automatic backstop. It is **bounded** (#4490): the step fetches only the base's last 1000 commits, a line older than that
+is reported as not checked (never blamed on the shallow boundary), and a 90 s time box and a 20,000-line budget stop it and say what it left.
 
 ## 5. Coverage, timing, flakes and reports
 

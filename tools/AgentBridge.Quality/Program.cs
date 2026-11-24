@@ -18,10 +18,12 @@ static class Program
               catalog, a catalog project doesn't exist, a tracked file is claimed by no rule, or
               ci.yml's wiring to the plan (gated jobs, the plan's JOBS, quality-gate's and
               publish-gate's needs, the suite ids steps test for) has drifted.
-          silent-revert --base REF [--head REF] [--pr N] [--repo DIR] [--summary FILE]
+          silent-revert --base REF [--head REF] [--pr N] [--repo DIR] [--summary FILE] [--max-seconds N] [--max-lines N]
               The silent-revert guard (#4465): for every line this change deletes against its merge base,
               names the merged pull request that last changed it (git blame, the "(#N)" of the squash
               subject) and the deleted test methods. A warning only: it exits 0. --pr leaves out its own.
+              Bounded: a hard time box (--max-seconds, 90) and line budget (--max-lines, 20000), and lines older
+              than a shallow clone are reported as not checked, not blamed on its boundary commit.
           flakes --results DIR [--issues FILE] [--owner LOGIN] [--run-url URL] [--commit SHA]
                  [--plan FILE] [--summary FILE] [--dry-run]
               The flake hunt's reporter: classifies each test in DIR/<os>/run-<i>/*.trx (a TRX
@@ -125,7 +127,7 @@ static class Program
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner",
-        "runners", "jobs", "max-queued", "max-wait", "min-online", "now" , "pr" };
+        "runners", "jobs", "max-queued", "max-wait", "min-online", "now" , "pr", "max-seconds", "max-lines" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX

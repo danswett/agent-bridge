@@ -3,35 +3,8 @@ using Xunit;
 
 // #4465: PR #3968's merge of main silently reverted #4126 (its code and its four HoldOf tests), and CI stayed green because the tests went with the code. The guard asks, for every line a pull
 // request deletes, which merged PR last changed it, and says so. It only warns: the point is that a reader looks.
-public sealed class SilentRevertTests : IDisposable
+public sealed class SilentRevertTests : GitRepoTestBase
 {
-    readonly string repo = Path.Combine(Path.GetTempPath(), $"revert-{Guid.NewGuid():N}");
-
-    public SilentRevertTests()
-    {
-        Directory.CreateDirectory(repo);
-        Git("init", "-q", "-b", "main");
-    }
-
-    public void Dispose()
-    {
-        foreach (var file in Directory.EnumerateFiles(repo, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
-        Directory.Delete(repo, true);
-    }
-
-    string Git(params string[] args) => ChangedFiles.Git(repo, ["-c", "user.name=guard-test", "-c", "user.email=guard-test@example.invalid", "-c", "commit.gpgsign=false", .. args]);
-
-    void Commit(string subject, params (string Path, string Text)[] files)
-    {
-        foreach (var (path, text) in files)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(repo, path))!);
-            File.WriteAllText(Path.Combine(repo, path), text.Replace("\r\n", "\n", StringComparison.Ordinal));
-        }
-        Git("add", "-A");
-        Git("commit", "-q", "-m", subject);
-    }
-
     const string Source = "class Lite {\n  void Deliver() {\n    held = Hold(node);\n  }\n  void Other() { }\n}\n";
     const string Tests = "public class LiteTests {\n  [Fact]\n  public void HoldOf_resolves_a_node() { }\n\n  [Fact]\n  public void HoldOf_refuses_an_unknown_node() { }\n\n  [Fact]\n  public void Unrelated() { }\n}\n";
 
@@ -78,13 +51,13 @@ public sealed class SilentRevertTests : IDisposable
         Commit("Remove the hold tests and the hold call", ("src/Lite.cs", Source.Replace("    held = Hold(node);\n", "", StringComparison.Ordinal)),
             ("tests/X/LiteTests.cs", Tests.Replace("  [Fact]\n  public void HoldOf_resolves_a_node() { }\n\n", "", StringComparison.Ordinal)));
 
-        var found = SilentRevert.Find(repo, "main", "HEAD", ownPr: null);
+        var found = SilentRevert.Find(Repo, "main", "HEAD", ownPr: null);
 
         Assert.Equal([1, 2], found.Select(r => r.Pr).Order());
         var first = found.Single(r => r.Pr == 1);
         Assert.Equal(["HoldOf_resolves_a_node"], first.Tests.Select(t => t.Name));
         Assert.Equal(["src/Lite.cs"], found.Single(r => r.Pr == 2).Files);                                // the line #2 changed
-        Assert.Equal([1], SilentRevert.Find(repo, "main", "HEAD", ownPr: 2).Select(r => r.Pr));        // the PR itself is not blamed on itself
+        Assert.Equal([1], SilentRevert.Find(Repo, "main", "HEAD", ownPr: 2).Select(r => r.Pr));        // the PR itself is not blamed on itself
     }
 
     [Fact]
@@ -94,24 +67,8 @@ public sealed class SilentRevertTests : IDisposable
         Git("switch", "-q", "-c", "feature");
         Commit("Add more", ("src/Lite.cs", Source + "// new\n"));
 
-        Assert.Empty(SilentRevert.Find(repo, "main", "HEAD", ownPr: null));
+        Assert.Empty(SilentRevert.Find(Repo, "main", "HEAD", ownPr: null));
         Assert.Contains("No lines", SilentRevert.Render([]), StringComparison.Ordinal);
-    }
-
-    // The ::warning lines are workflow commands for the log; written into the job summary they would show as literal text.
-    [Fact]
-    public void The_job_summary_gets_the_report_without_the_warning_commands()
-    {
-        Commit("Add the lite delivery (#4126)", ("src/Lite.cs", Source));
-        Git("switch", "-q", "-c", "feature");
-        Commit("Revert quietly", ("src/Lite.cs", Source.Replace("    held = Hold(node);\n", "", StringComparison.Ordinal)));
-        var summary = Path.Combine(repo, "summary.md");
-
-        Program.Run(["silent-revert", "--repo", repo, "--base", "main", "--summary", summary], new StringWriter());
-
-        var written = File.ReadAllText(summary);
-        Assert.Contains("this PR removes lines from #4126", written, StringComparison.Ordinal);
-        Assert.DoesNotContain("::warning", written, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -121,14 +78,17 @@ public sealed class SilentRevertTests : IDisposable
         Git("switch", "-q", "-c", "feature");
         Commit("Revert quietly", ("src/Lite.cs", Source.Replace("    held = Hold(node);\n", "", StringComparison.Ordinal)),
             ("tests/X/LiteTests.cs", Tests.Replace("  [Fact]\n  public void HoldOf_resolves_a_node() { }\n\n", "", StringComparison.Ordinal)));
-        var output = new StringWriter();
+        var (output, summary) = (new StringWriter(), Path.Combine(Repo, "summary.md"));
 
-        var exit = Program.Run(["silent-revert", "--repo", repo, "--base", "main"], output);
+        var exit = Program.Run(["silent-revert", "--repo", Repo, "--base", "main", "--summary", summary], output);
 
         Assert.Equal(0, exit);                                                                             // flags, never fails on its own
         var text = output.ToString();
         Assert.Contains("this PR removes lines from #4126", text, StringComparison.Ordinal);
         Assert.Contains("HoldOf_resolves_a_node", text, StringComparison.Ordinal);
         Assert.Contains("::warning", text, StringComparison.Ordinal);
+        // the ::warning lines are workflow commands for the log; in the job summary they would show as literal text
+        Assert.Contains("this PR removes lines from #4126", File.ReadAllText(summary), StringComparison.Ordinal);
+        Assert.DoesNotContain("::warning", File.ReadAllText(summary), StringComparison.Ordinal);
     }
 }
