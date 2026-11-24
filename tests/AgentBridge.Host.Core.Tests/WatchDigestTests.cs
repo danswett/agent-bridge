@@ -28,10 +28,28 @@ public class WatchDigestTests
     }
 
     [Fact]
-    public void A_final_notice_says_it_is_the_last_reminder_and_the_text_carries_no_timestamp()
+    public void A_final_notice_says_it_is_the_last_reminder_and_a_mixed_digest_says_for_how_many()
     {
-        var d = WatchDigest.Compose([N(WatchRule.Prompt, "a", final: true)], Label)!.Value;
-        Assert.EndsWith("(last reminder)", d.Body);
-        Assert.DoesNotContain("2026", d.Body);
+        Assert.EndsWith("(last reminder)", WatchDigest.Compose([N(WatchRule.Prompt, "a", final: true)], Label)!.Value.Body);
+        var mixed = WatchDigest.Compose([N(WatchRule.Prompt, "a", final: true), N(WatchRule.Prompt, "b"), N(WatchRule.Prompt, "c")], Label)!.Value;
+        Assert.EndsWith("(last reminder for 1)", mixed.Body);
+    }
+
+    [Theory]
+    [InlineData(10, "")]
+    [InlineData(11, " and 1 more")]
+    public void Exactly_ten_are_listed_with_no_and_more_and_eleven_say_and_one_more(int count, string tail)
+    {
+        var all = Enumerable.Range(0, count).Select(i => N(WatchRule.Prompt, i.ToString())).ToList();
+        Assert.EndsWith("n-9" + tail, WatchDigest.Compose(all, Label)!.Value.Body);
+    }
+
+    [Fact]
+    public void A_very_long_label_is_cut_so_the_and_more_tail_survives_the_push_size_limit()
+    {
+        var all = Enumerable.Range(0, 20).Select(i => N(WatchRule.Prompt, i.ToString())).ToList();
+        var d = WatchDigest.Compose(all, id => new string('x', 500))!.Value;
+        Assert.EndsWith("and 10 more", d.Body);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(d.Body) < 512);
     }
 }

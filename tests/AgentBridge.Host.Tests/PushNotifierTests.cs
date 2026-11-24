@@ -1024,6 +1024,19 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_device_that_does_not_want_questions_gets_no_watch_digest()
+    {
+        Start();
+        Subscribe(Phone, notify: Filters(questions: false));
+        Subscribe(Laptop);
+
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(Laptop, Assert.Single(Received()).Device);
+    }
+
+    [Fact]
     public async Task A_newer_watch_digest_replaces_one_that_has_not_gone_yet()
     {
         Start();
