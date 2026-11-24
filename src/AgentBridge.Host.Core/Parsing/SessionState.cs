@@ -26,6 +26,8 @@ internal sealed class SessionState
     // drawing the latest turn must not put that reply under the new prompt.
     public string? ResponseTurn;
     public string? ResponseId;
+    // activity.responseRef (#4245): which reply the latest one is, kept when ResponseId is lost.
+    public string? ResponseRef;
     public HistoryTurn? Notice;
     public string? Reasoning;
     // The sub-agent that wrote Response or Reasoning, null for the main agent's own.
@@ -136,7 +138,7 @@ internal sealed class SessionState
         FirstUserMessage = null;
         AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null; Effort = null; Context = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
-        Notice = null; ResponseId = null;
+        Notice = null; ResponseId = null; ResponseRef = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;

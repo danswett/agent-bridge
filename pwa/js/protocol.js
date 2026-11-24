@@ -277,6 +277,8 @@ export function readActivity(raw) {
     // The turn the main agent's latest reply is of: the latest turn's own only when it equals turn.
     responseTurn: str(a.responseTurn),
     responseId: str(a.responseId),
+    // Which reply the latest is, for a client that has no id for it (#4245): equal only for updates of one reply.
+    responseRef: str(a.responseRef),
     ...(a.kind === undefined || a.kind === null ? {} : { kind: readTurnKind(a.kind) }),
     notice: readNotice(a.notice),
     turnCount: num(a.turnCount),

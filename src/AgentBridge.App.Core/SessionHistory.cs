@@ -19,6 +19,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     readonly object gate = new();
     readonly List<HistoryTurn> held = [];
     readonly Dictionary<string, Dictionary<string, long>> live = [];
+    // The host's activity.responseRef of each id-less live part (#4245), by part id: equality only, to tell a new reply from an update of one.
+    readonly Dictionary<string, string> liveRefs = [];
     readonly Dictionary<string, Dictionary<string, (DateTimeOffset? At, string? Text)>> revisions = [];
     readonly HashSet<string> identified = [];
     long observed;
@@ -155,7 +157,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 // reply part has an id, it starts a new part and never rewrites that one.
                 var lastReply = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
                 var last = !string.IsNullOrEmpty(a.ResponseId) ? parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId)
-                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
+                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) && SameReply(parts[lastReply].Id, a.ResponseRef) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
                 var mutable = session.Agent == AgentKind.Codex && !string.IsNullOrEmpty(a.ResponseId);
                 var items = revisions.GetValueOrDefault(a.ResponseTurn);
                 var prior = items?.GetValueOrDefault(a.ResponseId ?? "") ?? default;
@@ -167,11 +169,12 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 {
                     var part = new HistoryPart
                     {
-                        Id = a.ResponseId ?? (last >= 0 ? parts[last].Id : parts.Any(p => p.Id == $"{turn.Id}:live") ? $"{turn.Id}:live{parts.Count}" : $"{turn.Id}:live"),
+                        Id = a.ResponseId ?? (last >= 0 ? parts[last].Id : NextLiveId(turn.Id, parts)),
                         Kind = HistoryPartKind.Response, At = last < 0 ? default : parts[last].At,
                         Text = voice.Response, Truncated = voice.ResponseTruncated ? true : null,
                     };
                     if (last < 0) { parts.Add(part); } else { parts[last] = part; }
+                    if (string.IsNullOrEmpty(a.ResponseId) && !string.IsNullOrEmpty(a.ResponseRef)) { liveRefs[part.Id] = a.ResponseRef; }
                     while (parts.Count(p => p.Kind == HistoryPartKind.Response) > HistoryLimits.TextsPerTurn)
                     {
                         parts.RemoveAt(parts.FindIndex(p => p.Kind == HistoryPartKind.Response));
@@ -191,6 +194,22 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         if (changed) { Changed?.Invoke(); }
     }
 
+    // An id-less reply updates the last live part in place unless the host says, by a responseRef different from the one that part was made under, that it is
+    // another reply (#4245). With no ref now, or none kept for the part (an older host), it is the one live slot, as it always was (#2667, #3649).
+    bool SameReply(string partId, string? reference) =>
+        string.IsNullOrEmpty(reference) || !liveRefs.TryGetValue(partId, out var held) || held == reference;
+
+    void ForgetRefs(string turnId)
+    {
+        foreach (var key in liveRefs.Keys.Where(k => k.StartsWith($"{turnId}:live", StringComparison.Ordinal)).ToList()) { liveRefs.Remove(key); }
+    }
+
+    static string NextLiveId(string turnId, List<HistoryPart> parts)
+    {
+        var id = $"{turnId}:live";
+        for (var n = parts.Count; parts.Any(p => p.Id == id); n++) { id = $"{turnId}:live{n}"; }
+        return id;
+    }
     // StartReached only rules out older pages: the newest page can still be read again for what the session has grown.
     bool Begin(bool newest)
     {
@@ -224,7 +243,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     {
         var over = held.Count - HistoryLimits.Kept;
         if (over <= 0) { return; }
-        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); }
+        foreach (var turn in held.Take(over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); ForgetRefs(turn.Id); }
         held.RemoveRange(0, over);
         before = null;
         OldestDropped = true;
@@ -368,7 +387,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var over = held.Count - HistoryLimits.Kept;
                 if (over > 0)
                 {
-                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); }
+                    foreach (var turn in held.Skip(held.Count - over)) { live.Remove(turn.Id); identified.Remove(turn.Id); revisions.Remove(turn.Id); ForgetRefs(turn.Id); }
                     held.RemoveRange(held.Count - over, over);
                     NewestDropped = true;
                 }

@@ -324,6 +324,7 @@ format without a last-whole-line position are stale too.
 | `turn` | string? | **New (#292).** The id of the latest turn: the one `userMessage`, `reasoning`, `currentTool` and `question` belong to. The same id `session.history` gives that turn. Absent before the first prompt, when the host could not read where the latest turn began (a transcript longer than it reads at first sight), and after a record that may have started a turn but could not be read (not JSON, or a line longer than the host reads), until the next prompt it can read: history shows that turn as `unreadable`. Never trimmed by the session budget |
 | `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply was written in: `own.response` when `source.response` names a delegate, else `response`. It is `turn` once the latest turn has replied; until then the reply still showing is an earlier turn's, as today's clients show it. Absent with no such reply, or when the host does not know its turn. Never trimmed |
 | `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude/Codex replies: the main reply's response-part id in `responseTurn`. It is derived from the assistant record's identity and response part index, exactly as history derives it. Different ids are distinct replies, even with equal text; updates to one id replace only that streaming slot |
+| `responseRef` | string? | Optional (#4245), Claude: which reply the latest main reply is, as an opaque token (equality only), present whether or not `responseId` is. See `responseRef` in [v1-sessions.md](v1-sessions.md) |
 
 **Reply retention (#2667; owner-approved 14:34 PT Nov 21, 2026).** Distinct history
 response-part ids are the source of truth within a turn. Clients retain them in order
@@ -333,6 +334,10 @@ second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
 single-live-reply fallback is unchanged; older hosts omit it. A client applies it to an id-less last part only: a reply with no
 id that follows an identified one starts a new part and never rewrites that one (#3649).
+When the host cannot say which part a reply is, it sends no id, and two such replies in a row would be one live slot, the second rewriting the first (#4245). So a host sends
+`responseRef`, an opaque token that differs for each reply and is the same for updates of one: a client with no id starts a new live part when it differs from the one the last live part
+was made under, and updates in place when it is the same. That is the host saying a reply is new, not the client inferring it from text. With no `responseRef` the legacy
+single-slot fallback is unchanged.
 Older clients ignore the optional field and continue reading `response`/`own.response`.
 Codex can revise the same identified slot after a full history page: a part's time
 and non-truncated text are not completion markers. Clients accept newer live

@@ -525,6 +525,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                         S.ResponseId = !identified ? null
                             : append ? (S.ResponseTurn == S.TurnId ? S.ResponseId : null)
                             : Conversation.TurnIds.Part(record!, part);
+                        // Which reply it is, whether or not the history part is known (#4245): a growing composite keeps its first part's, anything else is a new reply.
+                        // An opaque token from the record it began in, so it is the same after a host restart; clients compare it for equality and read nothing in it.
+                        S.ResponseRef = append && S.ResponseTurn == S.TurnId && S.ResponseRef is not null ? S.ResponseRef
+                            : record is null ? Guid.NewGuid().ToString("N") : Conversation.TurnIds.Part(record, part);
                         part++;
                     }
                     S.Response = append ? S.Response + "\n\n" + text : text;
