@@ -141,6 +141,14 @@ internal sealed class LaunchProvenance
         catch (InvalidOperationException) { return null; }
     }
 
+    // The role a resumed or restored session keeps (#4318): what its own earlier record says, so a resume never drops the role it
+    // is judged by. None when unknown or unreadable.
+    public string? RoleKept(string session)
+    {
+        try { return RoleOf(session); }
+        catch (InvalidOperationException) { return null; }
+    }
+
     void Unfinished(string session)
     {
         if (origins.Values.Any(o => o.Process is null && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))
