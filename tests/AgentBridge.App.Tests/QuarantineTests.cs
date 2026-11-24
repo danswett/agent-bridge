@@ -13,7 +13,14 @@ public sealed class QuarantineTests
 {
     // Method names (class.method), each with the rows or cases skipped. Expiry is in the reason, not checked against the clock:
     // a quarantine that lapses must not turn main red by itself.
-    static readonly string[] Expected = ["WindowsMiniDumpTests.With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said"];
+    // Every WindowsMiniDumpTests test that calls MiniDumpWriteDump on the test process itself, which Microsoft warns can
+    // deadlock while other threads run, and hangs the test host: the real dump, the keep-newest one, the low-disk rows that write.
+    static readonly string[] Expected =
+    [
+        "WindowsMiniDumpTests.A_dump_is_a_real_minidump_named_for_its_time_and_process_and_far_smaller_than_a_full_one",
+        "WindowsMiniDumpTests.Only_the_newest_few_dumps_are_kept",
+        "WindowsMiniDumpTests.With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said",
+    ];
     const int Largest = 3;
 
     static List<(string Test, string Reason)> Quarantined() =>
