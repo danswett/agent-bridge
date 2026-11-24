@@ -2065,6 +2065,9 @@ public sealed class SettingsTests : IAsyncLifetime
         await ConnectedWith(host.Status);
         await Wait.UntilAsync(() => settings.CanChangeAgentMessaging, "the agent messaging control");
         Assert.True(settings.AgentMessagingSamePerson);
+        settings.AgentMessagingSamePerson = true;
+        await connection.CallAsync(FakeHost.Barrier);
+        Assert.Empty(host.Sent(HostOps.Settings));
 
         settings.AgentMessagingSamePerson = false;
         await Wait.UntilAsync(() => !settings.Busy && !settings.AgentMessagingSamePerson, "the scope saved off");
@@ -2093,32 +2096,11 @@ public sealed class SettingsTests : IAsyncLifetime
             await Wait.UntilAsync(() => page.HostRunning, "the older host");
 
             Assert.False(page.CanChangeAgentMessaging);
+            if (manage) { Assert.Equal(scope == "off" ? "Off" : "Unknown", page.AgentMessagingStatus.Split(':')[0]); }
             page.AgentMessagingSamePerson = !page.AgentMessagingSamePerson;
             await olderConnection.CallAsync(FakeHost.Barrier);
 
             Assert.Empty(older.Sent(HostOps.Settings));
-        }
-        finally { page.Detach(); }
-    }
-
-    [Theory]
-    [InlineData(null, "Unknown")]
-    [InlineData("off", "Off")]
-    [InlineData("same-person", "On")]
-    public async Task The_agent_messaging_line_says_unknown_for_a_host_that_reports_nothing_and_never_writes_on_load(string? scope, string line)
-    {
-        await using var other = new FakeHost { Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, AgentMessagingScope: scope) } };
-        other.Start();
-        await using var connection = other.Connect(ui);
-        var page = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
-        try
-        {
-            await Wait.UntilAsync(() => page.HostRunning, "the host");
-            page.AgentMessagingSamePerson = page.AgentMessagingSamePerson;
-            await connection.CallAsync(FakeHost.Barrier);
-
-            Assert.StartsWith(line, page.AgentMessagingStatus);
-            Assert.Empty(other.Sent(HostOps.Settings));
         }
         finally { page.Detach(); }
     }

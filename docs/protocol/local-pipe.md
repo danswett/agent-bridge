@@ -510,8 +510,9 @@ sending an unsupported write.
 
 `host.settings` also accepts `agentMessagingScope: "same-person" | "off"`, writing the
 `agentMessaging.scope` key (docs/design/beta-messaging.md section 3). `HostSettingsView.agentMessagingScope`
-reports the effective scope (`AgentMessagingSettings.Scope`) in settings replies, `host.status` and
-subscription events. Unknown write values and an `agentMessaging` section that is not an object are
+reports the effective scope in settings replies, `host.status` and subscription events: `off` also while a
+recorded kill (`lite-kill-epoch.json`) is in force without `agentMessaging.remote` set to `own-account`, with
+`agentMessagingOffBy: "kill"` saying so; `same-person` is refused then too. Unknown write values and an `agentMessaging` section that is not an object are
 refused before any part of the request is saved. The host checks that the proposed file reads back as
 requested, so `same-person` is refused while `agentMessaging.remote` is `"off"` (a kill keeps it off until
 a person turns that back on with `config set`). The scope is read afresh for each message, so no restart is
