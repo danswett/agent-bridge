@@ -2,31 +2,30 @@ using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace AgentBridge.Hooks;
 
-// #1003 PR C: the hook's end of approval.wait (docs/design/claude-approval-channel.md). Over the host's local pipe (a 4-byte little-endian length, then
-// UTF-8 JSON, docs/protocol/local-pipe.md) the hook says hello, sends the Claude PermissionRequest event with approval.wait, and takes the verdict from
-// the one reply. Anything but exactly allow or deny in a successful reply to that request is none. It sends NOTHING until it has verified that the
-// server it reached is the host's own program; any failure, refusal, timeout or hang-up is none, so Claude shows its own prompt. AOT-safe: no reflection.
+// #1003 PR C: the hook's end of approval.wait (docs/design/claude-approval-channel.md). Over the host's local pipe (4-byte little-endian length, then UTF-8 JSON,
+// docs/protocol/local-pipe.md) it says hello, sends the Claude PermissionRequest event with approval.wait, and takes the verdict from the one reply: anything but
+// exactly allow or deny in a successful reply to that request is none. It sends NOTHING until it has verified that the server is the host's own program, and
+// any failure, refusal, timeout or hang-up is none, so Claude shows its own prompt. AOT-safe: no reflection.
 public static class ApprovalClient
 {
     public const int MaxEventBytes = 16 * 1024;
     const int MaxFrame = 65519;
 
-    // The host's own pipe name (LocalEndpoint.For): the first 16 hex digits of SHA-256 of "<user SID>|<profile folder, lower case>".
+    // The host's own pipe name (LocalEndpoint.For): 16 hex digits of SHA-256 of "<user SID>|<profile folder, lower case>".
     public static string PipeName(string userSid, string profileFolder) =>
         "AgentBridge.Host." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{userSid}|{profileFolder.ToLowerInvariant()}")), 0, 8).ToLowerInvariant();
 
-    // The server's program is the host's: the same full path as the one the hook was installed with, never on a missing path.
+    // The server runs the host's program: the same full path the hook was installed with, never on a missing one.
     public static bool IsHostImage(string? serverImage, string? expectedHostExe) =>
-        !string.IsNullOrEmpty(serverImage) && !string.IsNullOrEmpty(expectedHostExe) && string.Equals(serverImage, expectedHostExe, StringComparison.OrdinalIgnoreCase);
+        !string.IsNullOrEmpty(serverImage) && string.Equals(serverImage, expectedHostExe, StringComparison.OrdinalIgnoreCase);
 
-    // The check the hook uses on a real connection: the process serving the pipe runs the host's program at `expectedHostExe` (Windows; anywhere else it
-    // verifies nothing, so nothing is ever asked). Not covered by a unit test: it needs a real Windows pipe server in another process.
-    public static Func<NamedPipeClientStream, bool> HostVerifier(string? expectedHostExe) =>
-        pipe => OperatingSystem.IsWindows() && IsHostImage(ServerImage(pipe), expectedHostExe);
+    // The check on a real connection (Windows; elsewhere it verifies nothing, so nothing is asked). No unit test: it needs a pipe server in another process.
+    public static Func<NamedPipeClientStream, bool> HostVerifier(string? expectedHostExe) => pipe => OperatingSystem.IsWindows() && IsHostImage(ServerImage(pipe), expectedHostExe);
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     static unsafe string? ServerImage(NamedPipeClientStream pipe)
@@ -48,7 +47,7 @@ public static class ApprovalClient
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern unsafe int QueryFullProcessImageNameW(IntPtr process, uint flags, char* buffer, ref uint size);
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern int CloseHandle(IntPtr handle);
 
-    // Connects (a missing host is none after connectWait), verifies the server, and asks. Null for anything but a verdict of allow or deny.
+    // Connects (no host is none after connectWait), verifies the server, and asks. Null for anything but a verdict of allow or deny.
     public static async Task<string?> AskHostAsync(string pipeName, Func<NamedPipeClientStream, bool> verifyServer, string eventText, TimeSpan wait, TimeSpan connectWait)
     {
         if (Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
@@ -58,7 +57,7 @@ public static class ApprovalClient
             using (var connect = new CancellationTokenSource(connectWait)) { await pipe.ConnectAsync(connect.Token); }
             return verifyServer(pipe) ? await AskAsync(pipe, eventText, wait) : null;
         }
-        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException or UnauthorizedAccessException or ObjectDisposedException or InvalidOperationException) { return null; }
+        catch (Exception e) when (e is IOException or OperationCanceledException or UnauthorizedAccessException or ObjectDisposedException or InvalidOperationException) { return null; }
     }
 
     public static async Task<string?> AskAsync(Stream pipe, string eventText, TimeSpan wait)
@@ -70,30 +69,13 @@ public static class ApprovalClient
             await WriteAsync(pipe, "{\"id\":1,\"op\":\"hello\",\"data\":{}}", limit.Token);
             using var hello = await ReplyAsync(pipe, 1, limit.Token);
             if (hello is null || !Succeeded(hello, out _)) { return null; }
-            await WriteAsync(pipe, Request(eventText), limit.Token);
+            await WriteAsync(pipe, $"{{\"id\":2,\"op\":\"approval.wait\",\"data\":{{\"event\":\"{JavaScriptEncoder.Default.Encode(eventText)}\"}}}}", limit.Token);
             using var answer = await ReplyAsync(pipe, 2, limit.Token);
             if (answer is null || !Succeeded(answer, out var result)) { return null; }
-            if (result.ValueKind != JsonValueKind.Object || !result.TryGetProperty("verdict", out var v) || v.ValueKind != JsonValueKind.String) { return null; }
-            var verdict = v.GetString();
+            var verdict = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("verdict", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
             return verdict is "allow" or "deny" ? verdict : null;
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or ObjectDisposedException or JsonException or InvalidOperationException) { return null; }
-    }
-
-    static string Request(string eventText)
-    {
-        using var stream = new MemoryStream();
-        using (var w = new Utf8JsonWriter(stream))
-        {
-            w.WriteStartObject();
-            w.WriteNumber("id", 2);
-            w.WriteString("op", "approval.wait");
-            w.WriteStartObject("data");
-            w.WriteString("event", eventText);
-            w.WriteEndObject();
-            w.WriteEndObject();
-        }
-        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     static bool Succeeded(JsonDocument reply, out JsonElement result)
@@ -126,8 +108,7 @@ public static class ApprovalClient
 
     static async Task<bool> ReadAsync(Stream pipe, byte[] buffer, CancellationToken ct)
     {
-        var read = 0;
-        while (read < buffer.Length)
+        for (var read = 0; read < buffer.Length;)
         {
             var n = await pipe.ReadAsync(buffer.AsMemory(read), ct);
             if (n == 0) { return false; }
