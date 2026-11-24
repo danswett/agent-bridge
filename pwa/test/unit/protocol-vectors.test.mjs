@@ -56,7 +56,8 @@ const ROSTER_STATE = 'roster-state.json';
 // The roster's vetoes, person commands and attestations: test/unit/roster-commands.test.mjs replays them.
 const ROSTER_COMMANDS = 'roster-commands.json';
 const ROLE_CLAIM = 'role-claim.json'; // A role claim's bytes, not records: RoleClaimVectorTests.cs replays them (C# only for now).
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS && f !== ROLE_CLAIM).sort().map((f) => [f, load(f)]);
+const ORDER_RECORDS = 'order-records.json'; // The sealed order record's plaintext, not records: order-record.test.mjs replays it.
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ENVELOPE && f !== FLEET_SIGNING && f !== ROSTER && f !== ROSTER_STATE && f !== ROSTER_COMMANDS && f !== ROLE_CLAIM && f !== ORDER_RECORDS).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 

@@ -17,6 +17,7 @@ public sealed record ScriptTaskBinding(string Task, string Definition, ScriptTas
     {
         if (!ValidTask(task)) { throw new ArgumentException("a task is named by its full path, such as \\Folder\\Task", nameof(task)); }
         if (!reader.TaskLocked(task)) { throw new InvalidOperationException($"refused: the task {task} can be changed without elevation"); }
+        if (!reader.LoggedOnOnly(task)) { throw new InvalidOperationException($"refused: the task {task} can run logged off or with a stored password; a bound task runs only while its user is logged on"); }
         var definition = reader.Definition(task) ?? throw new InvalidOperationException($"refused: the task {task} could not be read");
         // The program the action runs comes first: an accepted engine must be that program.
         var paths = reader.ActionFiles(task) is { Count: > 0 } action ? action.Concat(extra).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
@@ -44,6 +45,7 @@ public sealed record ScriptTaskBinding(string Task, string Definition, ScriptTas
     {
         if (reader is null) { return "the bound task cannot be checked on this host"; }
         if (!reader.TaskLocked(Task) || Files.Any(f => !reader.FileLocked(f.Path))) { return "the bound task or a file it runs can be changed without elevation"; }
+        if (!reader.LoggedOnOnly(Task)) { return "the bound task is not logged-on-only (its principal must be InteractiveToken)"; }
         if (!Same(reader.Definition(Task), Definition) || Files.Any(f => !Same(reader.FileSha256(f.Path), f.Sha256)))
         { return "the bound task or a file it runs has changed since it was bound"; }
         var engines = reader.RunningEngines(Task);
@@ -85,4 +87,6 @@ public interface IScriptTaskReader
     // The same for a file and the folders above it.
     bool FileLocked(string path);
     string? FileSha256(string path);
+    // True only when the task runs while its user is logged on and nothing else (its one principal is InteractiveToken): no stored password, no S4U.
+    bool LoggedOnOnly(string task);
 }

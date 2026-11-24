@@ -11,16 +11,25 @@ public static class WheelNotchRule
     public const double PerNotchOnAverage = 1;
     public const int MinimumNotches = 4;
 
+    // Judged in tenths of a pixel, what the self-test measures: a sum that is exactly on the edge must not fail because the doubles added up to a hair past it (#4521). Both edges are inclusive.
+    static double Tenths(double difference) => Math.Round(Math.Abs(difference), 1, MidpointRounding.AwayFromZero);
+
     /// <summary>Null when the notches pass; otherwise which rule failed and the numbers.</summary>
     public static string? Failure(IReadOnlyList<double> moved, double notch)
     {
         static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         if (moved.Count < MinimumNotches) { return $"too few notches measured ({moved.Count}, need {MinimumNotches})"; }
+        // A NaN is false against every limit below and would pass both rules, so a value that is not a finite number is a failed measurement (#4557).
+        if (!double.IsFinite(notch)) { return $"the notch distance is not a finite number ({N(notch)})"; }
         for (var i = 0; i < moved.Count; i++)
         {
-            if (Math.Abs(moved[i] - notch) > PerNotch) { return $"per-notch rule: notch {i + 1} moved {N(moved[i])}, more than {N(PerNotch)} from {N(notch)}"; }
+            if (!double.IsFinite(moved[i])) { return $"notch {i + 1} moved {N(moved[i])}, not a finite number"; }
+        }
+        for (var i = 0; i < moved.Count; i++)
+        {
+            if (Tenths(moved[i] - notch) > PerNotch) { return $"per-notch rule: notch {i + 1} moved {N(moved[i])}, more than {N(PerNotch)} from {N(notch)}"; }
         }
         var (sum, expected, allowed) = (moved.Sum(), moved.Count * notch, moved.Count * PerNotchOnAverage);
-        return Math.Abs(sum - expected) > allowed ? $"sum rule: the {moved.Count} notches moved {N(sum)} together, more than {N(allowed)} from {N(expected)}" : null;
+        return Tenths(sum - expected) > allowed ? $"sum rule: the {moved.Count} notches moved {N(sum)} together, more than {N(allowed)} from {N(expected)}" : null;
     }
 }
