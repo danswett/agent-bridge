@@ -26,6 +26,7 @@ public sealed class ScriptAdmissionTests : IDisposable
         public bool TaskLocked(string task) => true;
         public bool FileLocked(string path) => true;
         public string? FileSha256(string path) => new string('b', 64);
+        public bool LoggedOnOnly(string task) => true;
     }
 
     sealed class Clock(DateTimeOffset now) : TimeProvider { public override DateTimeOffset GetUtcNow() => now; }
