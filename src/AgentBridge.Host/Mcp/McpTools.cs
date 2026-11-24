@@ -114,10 +114,8 @@ public static class McpTools
     }
 
     const string NoGrant = "00000000-0000-0000-0000-000000000000";
-
     // Ends a session the host's own launch record shows an agent started (#4286), by the host's fleet.end with no grant. Thin on purpose:
-    // every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is "unknown" and keeps its request:
-    // send the same request again, never a new one, to learn what happened.
+    // every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is "unknown": resend the SAME request.
     public static async Task<JsonObject> EndAsync(IMcpCalls host, string id, string? request, CancellationToken ct = default)
     {
         request ??= Guid.NewGuid().ToString();
