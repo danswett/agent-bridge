@@ -153,11 +153,11 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 if (!string.IsNullOrEmpty(a.ResponseId)) { identified.Add(a.ResponseTurn); }
                 var turn = Held(a.ResponseTurn);
                 var parts = turn.Parts.ToList();
-                // #3649: a reply with no id may update only an id-less (live) last part, or restate the last reply's words; if the last
+                // #3649, #4245: a reply with no id may update only an id-less (live) last part that is the same reply (the same responseRef, or none: the legacy slot), or restate the words of a part a page stored; if the last
                 // reply part has an id, it starts a new part and never rewrites that one.
                 var lastReply = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
                 var last = !string.IsNullOrEmpty(a.ResponseId) ? parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId)
-                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) && SameReply(parts[lastReply].Id, a.ResponseRef) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
+                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) ? SameReply(parts[lastReply].Id, a.ResponseRef) : parts[lastReply].Text == voice.Response) ? lastReply : -1;
                 var mutable = session.Agent == AgentKind.Codex && !string.IsNullOrEmpty(a.ResponseId);
                 var items = revisions.GetValueOrDefault(a.ResponseTurn);
                 var prior = items?.GetValueOrDefault(a.ResponseId ?? "") ?? default;
