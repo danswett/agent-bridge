@@ -530,6 +530,10 @@ public sealed record Activity
     public string? ResponseTurn { get; init; }
     // The main reply's session.history response-part id; updates to it remain one message.
     public string? ResponseId { get; init; }
+    // Which reply the main reply is (#4245): an opaque token the host makes from the record the reply began in, equal only for updates of one reply.
+    // Present whether or not ResponseId is (the host cannot always say which history part a reply is), so a client with no id can still tell a new
+    // reply from an update without inferring anything from its text (#2667). Equality only; not an id of anything.
+    public string? ResponseRef { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there

@@ -59,27 +59,49 @@ test('id-less streaming updates stay in one part', async (t) => {
   assert.equal(currentReply(store.get('h', ID), last), 'Partial answer');
 });
 
-// #4245: the host sends no id for a reply it cannot identify (after a gap, a long turn or an unreadable line); two such replies in a row were one
-// live slot, so the second rewrote the first. An id-less reply is an update only of a reply it continues.
-test('two id-less replies that do not continue each other are two parts, and the second still grows in place', async (t) => {
+// #4245 (#2667, #3649): the host sends no id for a reply it cannot identify, so two such replies in a row were one live slot and the second rewrote the
+// first. responseRef is the host saying, not the text, whether a reply is a new one; used only when present, so an older host behaves as before.
+const sayRef = (responseId, response, responseRef) => readSession({
+  id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), ...(responseId ? { responseId } : {}), ...(responseRef ? { responseRef } : {}), response, userMessage: 'Question' },
+});
+
+test('with a response ref two id-less replies are two parts, and the second still grows in place', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);
-  store.live('h', saySession(null, 'First reply.'));
-  store.live('h', saySession(null, 'Second reply, after the tools.'));
+  store.live('h', sayRef(null, 'First reply.', 'r1'));
+  store.live('h', sayRef(null, 'Second reply, after the tools.', 'r2'));
   assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools.']);
-  store.live('h', saySession(null, 'Second reply, after the tools. And a little more.'));
+  store.live('h', sayRef(null, 'Second reply, after the tools. And a little more.', 'r2'));
   assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools. And a little more.']);
   assert.equal(new Set(shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.id)).size, 2);
 });
 
-test('a truncated id-less reply that grows with its start cut is still one part', async (t) => {
+test('without a response ref an id-less reply is the legacy single slot, as before', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);
-  const full = Array.from({ length: 30 }, (_, i) => `sentence number ${String(i).padStart(2, '0')}. `).join('');
-  const grown = (text) => readSession({ id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), response: text, responseTruncated: true, userMessage: 'Question' } });
-  store.live('h', grown(full.slice(0, 400).slice(40)));
-  store.live('h', grown(full.slice(0, 460).slice(100)));
-  assert.deepEqual(replyTexts(store), [full.slice(0, 460).slice(100)]);
+  store.live('h', sayRef(null, 'Partial'));
+  store.live('h', sayRef(null, 'Complete answer'));
+  assert.deepEqual(replyTexts(store), ['Complete answer']);
+});
+
+test('a response ref changes nothing for a reply that has an id', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef('a', 'one', 'r1'));
+  store.live('h', sayRef('a', 'one two', 'r2'));
+  assert.deepEqual(replyTexts(store), ['one two']);
+  store.live('h', sayRef('b', 'Another', 'r2'));
+  assert.deepEqual(replyTexts(store), ['one two', 'Another']);
+});
+
+test('a live part seen without a ref is updated by the first reply that has one, and then a new ref is a new part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', sayRef(null, 'First reply, as an older host said it.'));
+  store.live('h', sayRef(null, 'First reply, as an older host said it. More.', 'r1'));
+  assert.deepEqual(replyTexts(store), ['First reply, as an older host said it. More.']);
+  store.live('h', sayRef(null, 'A different reply.', 'r2'));
+  assert.deepEqual(replyTexts(store), ['First reply, as an older host said it. More.', 'A different reply.']);
 });
 test('the same id updates one part', async (t) => {
   const { store } = await setup(t);

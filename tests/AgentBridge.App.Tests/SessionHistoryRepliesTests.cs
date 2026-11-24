@@ -82,33 +82,56 @@ public sealed class SessionHistoryRepliesTests
         Assert.Equal(["Partial answer"], Replies(history));
     }
 
-    // #4245: the host sends no id for a reply it cannot identify (after a gap, a long turn or an unreadable line), and two such replies in a row were
-    // one live slot: the second rewrote the first and the owner lost a reply he had read. An id-less reply is an update only of a reply it continues.
+    // #4245 (#2667, #3649): the host sends no id for a reply it cannot identify, so two such replies in a row were one live slot and the second rewrote the
+    // first. responseRef is the host saying, not the text, whether a reply is a new one; used only when present, so an older host behaves as before.
+    static Session SaidRef(string? id, string text, string? reference) =>
+        Said(id, text) with { Activity = Said(id, text).Activity with { ResponseRef = reference } };
+
     [Fact]
-    public async Task Two_id_less_replies_that_do_not_continue_each_other_are_two_parts_and_the_second_still_grows_in_place()
+    public async Task With_a_response_ref_two_id_less_replies_are_two_parts_and_the_second_still_grows_in_place()
     {
         await using var host = Serving(() => 0);
         var history = await OpenAsync(host);
-        history.Observe(Said(null, "First reply."));
-        history.Observe(Said(null, "Second reply, after the tools."));
+        history.Observe(SaidRef(null, "First reply.", "r1"));
+        history.Observe(SaidRef(null, "Second reply, after the tools.", "r2"));
         Assert.Equal(["First reply.", "Second reply, after the tools."], Replies(history));
-        history.Observe(Said(null, "Second reply, after the tools. And a little more."));
+        history.Observe(SaidRef(null, "Second reply, after the tools. And a little more.", "r2"));
         Assert.Equal(["First reply.", "Second reply, after the tools. And a little more."], Replies(history));
         Assert.Equal(2, history.Turns.Single().Parts.Select(p => p.Id).Distinct().Count());
     }
 
     [Fact]
-    public async Task A_truncated_id_less_reply_that_grows_with_its_start_cut_is_still_one_part()
+    public async Task Without_a_response_ref_an_id_less_reply_is_the_legacy_single_slot_as_before()
     {
         await using var host = Serving(() => 0);
         var history = await OpenAsync(host);
-        string Cut(string text, int skip) => text[skip..];
-        var full = string.Concat(Enumerable.Range(0, 30).Select(i => $"sentence number {i:D2}. "));
-        Session Grown(string text) => Said(null, text) with { Activity = Said(null, text).Activity with { ResponseTruncated = true } };
-        history.Observe(Grown(Cut(full[..400], 40)));
-        history.Observe(Grown(Cut(full[..460], 100)));
-        Assert.Single(Replies(history));
-        Assert.Equal(Cut(full[..460], 100), Replies(history)[0]);
+        history.Observe(SaidRef(null, "Partial", null));
+        history.Observe(SaidRef(null, "Complete answer", null));
+        Assert.Equal(["Complete answer"], Replies(history));
+    }
+
+    [Fact]
+    public async Task A_response_ref_changes_nothing_for_a_reply_that_has_an_id()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(SaidRef("a", "one", "r1"));
+        history.Observe(SaidRef("a", "one two", "r2"));
+        Assert.Equal(["one two"], Replies(history));
+        history.Observe(SaidRef("b", "Another", "r2"));
+        Assert.Equal(["one two", "Another"], Replies(history));
+    }
+
+    [Fact]
+    public async Task A_live_part_seen_without_a_ref_is_updated_by_the_first_reply_that_has_one_and_then_a_new_ref_is_a_new_part()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(SaidRef(null, "First reply, as an older host said it.", null));
+        history.Observe(SaidRef(null, "First reply, as an older host said it. More.", "r1"));
+        Assert.Equal(["First reply, as an older host said it. More."], Replies(history));
+        history.Observe(SaidRef(null, "A different reply.", "r2"));
+        Assert.Equal(["First reply, as an older host said it. More.", "A different reply."], Replies(history));
     }
 
     [Fact]
@@ -116,8 +139,8 @@ public sealed class SessionHistoryRepliesTests
     {
         await using var host = Serving(() => 0);
         var history = await OpenAsync(host);
-        history.Observe(Said(null, "First reply."));
-        history.Observe(Said(null, "Second reply, after the tools."));
+        history.Observe(SaidRef(null, "First reply.", "r1"));
+        history.Observe(SaidRef(null, "Second reply, after the tools.", "r2"));
         host.On(HistoryProtocol.Op, (JsonElement d) => new HistoryResult
         {
             Turns = [new HistoryTurn { Id = "t1", At = T0, Prompt = new HistoryPrompt { Text = "Question" }, Parts = [
