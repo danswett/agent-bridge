@@ -44,14 +44,15 @@ public sealed class LiteKill : ILiteMode
 
     // Reading the record each time lets an unreadable one latch the mode off, and a kill made by
     // another process (`agents lite kill`) cancel the sends in flight here. Once any kill is recorded,
-    // the default (an absent key) does not count: unsetting the "off" a kill wrote keeps the mode off.
+    // the default (an absent key) does not count: unsetting the "off" a kill wrote keeps the mode off. Neither does agentMessaging.scope:
+    // only an explicit remote "own-account" turns it back on (docs/design/beta-messaging.md section 3).
     public bool On
     {
         get
         {
             var epoch = ReadEpoch();
             var settings = HostSettings.CurrentAgentMessaging(folder);
-            return !off && !latched && !held && settings.RemoteEnabled && (settings.RemoteSet || epoch == 0);
+            return !off && !latched && !held && settings.RemoteEnabled && (settings.RemoteKeyOn || epoch == 0);
         }
     }
 

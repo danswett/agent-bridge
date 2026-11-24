@@ -60,10 +60,10 @@ One person-held setting replaces owner-only AP5-lite as the thing a person sees 
   not an object and an unreadable file are `off`, as today. `allowAllTargets`, `allowAllTargetSessions` and `allowAllLaunchedTargets`
   are unchanged and are not scopes: they decide which of the person's sessions accept text, not whose.
 - **Kill and re-enable.** `agents lite kill` writes `agentMessaging.remote: "off"` and a kill epoch (`lite-kill-epoch.json`), not `scope`.
-  Re-enabling is unchanged: `config set agentMessaging.remote own-account`, run by a person. After a recorded kill only an **explicit**
-  value turns messaging back on, never an absent key; an explicit `scope: "same-person"` counts as that explicit value only when
-  `remote` is not `"off"` (off from either key wins, so setting `scope` alone does not undo a kill). `allowAllTargets`,
-  `allowAllTargetSessions`, `allowAllLaunchedTargets`, `laneDelivery` and `claudeBusyQueue` still need that explicit on.
+  **The one rule: after a recorded kill, the only thing that turns messaging back on is a person setting `agentMessaging.remote` to
+  `own-account` at that machine.** `agentMessaging.scope` (even `"same-person"`), an absent key and `config unset agentMessaging.remote`
+  never do, in any order. Off from either key still wins. Before any kill, an explicit `scope: "same-person"` counts as the explicit on that
+  `allowAllTargets`, `allowAllTargetSessions`, `allowAllLaunchedTargets`, `laneDelivery` and `claudeBusyQueue` need.
 - **Who may change it:** a person at this machine, through the app (slice PR4) or `config set` run by a person. "Never an agent" is the #67
   refusal inside an agent session (`security.roster` has the same), which is a safety rail and not a security boundary
   ([local-pipe.md](../protocol/local-pipe.md)). The setting is safe because **no value wider than `same-person` exists**: a later, wider value
@@ -155,7 +155,7 @@ between `same-person` and `off`; it needs the app's `host.settings` path extende
 - **PR2:** another account's envelope is `notSameAccount`; the same account from another machine is delivered to a fenced target;
   `scope: off`, a kill, an unknown value, a non-object section and an unreadable file send and receive nothing; `remote: "off"` wins
   over `scope: same-person`; an absent key is `same-person` only with a signed-in host and a present same-account peer; an agent session
-  cannot change the scope; a stale value is not cached across messages; after a recorded kill an absent key and a `scope: "same-person"` alone stay off, and only an explicit `remote: "own-account"` re-enables.
+  cannot change the scope; a stale value is not cached across messages; after a recorded kill an absent key, a `scope: "same-person"` and `config unset agentMessaging.remote`, in any order, all stay off (the probe from #4316's receipt), and only an explicit `remote: "own-account"` re-enables.
 - **PR5:** a fleet list returns only the allowlisted fields; a remote reply goes through `agent.send` and the local host's audit; an
   unattributed caller, a caller without `reply`, and a host that is off are refused; no Home Assistant reference appears in the path.
 - **PR6 to PR8:** every `mcp/test` case passes against the .NET server; the server is refused every app-only pipe op and acts only with the agent's own credential; plus a launch, stop and approval tool still never reaches another machine.
