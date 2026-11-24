@@ -45,7 +45,7 @@ public class SessionWatchStarterTests
     // notice for an owned session that vanishes, but ONLY for an agent that can say it ended cleanly (Codex today). A Claude vanish never does.
     [Theory]
     [InlineData(AgentKind.Codex, true)]
-    [InlineData(AgentKind.Claude, false)]
+    [InlineData(AgentKind.Claude, true)]
     [InlineData(AgentKind.Copilot, false)]
     public async Task R3_in_the_started_watch_raises_for_a_vanished_owned_session_only_when_its_agent_has_a_clean_end_signal(AgentKind agent, bool raises)
     {

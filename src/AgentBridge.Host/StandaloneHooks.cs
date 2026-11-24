@@ -259,6 +259,8 @@ public sealed class StandaloneHooks(
         var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: false);
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
+        // Shown to the person (owner decision, Nov 23 about 23:05 PT): what is added, where, that only this product's own entries are touched, and the way back.
+        if (agent == "claude") { output.WriteLine($"Changes to {path}: adds this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd) and nothing else; your other settings and hooks are not touched. The original is kept once at {Path.Combine(HookFolder, "backups", "claude-settings.json")}. Remove restores it, taking out only these entries. No token is written."); }
         if (dryRun) { return; }
         if (agent == "claude" && before is not null)
         {
@@ -427,6 +429,8 @@ public sealed class StandaloneHooks(
             {
                 ("PreToolUse", "AskUserQuestion", "ask", 30), ("Notification", "", "notification", 30),
                 ("Stop", "", "stop", 30), ("SessionStart", "", "register", 15), ("UserPromptSubmit", "", "register", 15),
+                // The clean end the session watch needs (owner decision, Nov 23 about 23:05 PT: "Yes, with backup + notice"): short, prints nothing.
+                ("SessionEnd", "", "end", 5),
             })
             {
                 Add(hooks, name, new JsonObject { ["matcher"] = matcher, ["hooks"] = new JsonArray(new JsonObject
@@ -473,7 +477,7 @@ public sealed class StandaloneHooks(
 
     string ClaudeCommand(string name) => $"'{Hook.Replace("'", "'\\''")}' claude {name}";
 
-    bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register" }
+    bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register", "end" }
         .Any(n => string.Equals(command, ClaudeCommand(n), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
             || string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
 

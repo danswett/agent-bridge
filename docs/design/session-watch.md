@@ -59,12 +59,14 @@ records the deliberate ends and the clean exits it sees, and anything else alarm
 2. **A clean end the host can see**: the CLI's own `SessionEnd` hook, which the session source reads as positive "ended" evidence when it removes the
    session (`SessionSource.EndedByHook`). The owner's words were "CLI exit code 0", but the host cannot observe an exit code: the source finds sessions by
    snapshotting processes (`SessionSource`, `ProcessInspector`) and holds no process handle for a CLI. `SessionEnd` is the observable equivalent.
-   Only Codex has the hook installed today.
+   Codex has the hook. Claude has it once setup adds it (owner decision, Nov 23 about 23:05 PT, "Yes, with backup + notice": setup may add its own entries to
+   the CLI settings, backing the file up first, adding only its own entries, showing the person the change, removable, and writing no tokens). Copilot has none yet.
 
-R3 fires only for an owned session whose agent has such a signal (Codex today). A Claude or Copilot session never raises R3, because it would alarm on every
-normal exit; the log says "no clean-end signal". Adding a `SessionEnd` hook for Claude and Copilot changes their installed hooks, so it is a separate
-decision and slice; until it lands they stay out of R3. R3 also needs the owner record, so it stays quiet until that is hooked in. The watch itself
-stays default off.
+R3 fires only for an owned session whose agent has such a signal (Codex and Claude). A Copilot session never raises R3, because it would alarm on every normal
+exit; the log says "no clean-end signal". A hook is loaded when a session starts, so a Claude session that was already running when setup added the hook never
+loaded it, and its normal exit would read as a vanish: before R3 is turned on for a machine, either those sessions have ended, or R3 for Claude is limited to
+sessions that started after the hook was added (a follow-up, not built). R3 also needs the owner record, so it stays quiet until that is hooked in. The watch
+itself stays default off.
 
 ### "Delivered": the signal that exists
 

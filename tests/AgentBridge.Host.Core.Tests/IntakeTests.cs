@@ -364,6 +364,30 @@ public sealed class IntakeTests : IDisposable
         Assert.Equal("idle", Registration("agent-bridge-claude", "s1").GetProperty("HookStatus").GetString());
     }
 
+    // Session watch S6 (docs/design/session-watch.md, R3 end sources): Claude's own SessionEnd hook marks its registration Ended, the clean-end signal discovery reads.
+    [Fact]
+    public void A_Claude_SessionEnd_marks_the_registration_ended_and_discovery_then_lists_it_as_ended_not_live()
+    {
+        _f.Processes.Run(AgentKind.Claude, 30);
+        Spooled("0001", "claude", "register", new { session_id = "s1", hook_event_name = "SessionStart" }, 30);
+        Spooled("0002", "claude", "end", new { session_id = "s1", hook_event_name = "SessionEnd", reason = "prompt_input_exit" }, 30);
+        Intake().Pass();
+
+        Assert.True(Registration("agent-bridge-claude", "s1").GetProperty("Ended").GetBoolean());
+        var ended = new Dictionary<string, Registration>();
+        Assert.Empty(RegistrationDiscovery.Find(AgentKind.Claude, [_f.ClaudeRegistrations], _f.Processes.GetAgentProcesses(AgentKind.Claude), _ => null, ended: ended));
+        Assert.True(ended.ContainsKey("s1"));
+    }
+
+    [Fact]
+    public void A_Claude_session_that_has_not_ended_has_no_Ended_member()
+    {
+        _f.Processes.Run(AgentKind.Claude, 30);
+        Spooled("0001", "claude", "register", new { session_id = "s1", hook_event_name = "SessionStart" }, 30);
+        Intake().Pass();
+        Assert.False(Registration("agent-bridge-claude", "s1").TryGetProperty("Ended", out _));
+    }
+
     [Fact]
     public void A_Claude_tool_other_than_AskUserQuestion_and_an_event_without_a_session_record_nothing()
     {

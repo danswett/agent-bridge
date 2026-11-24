@@ -184,17 +184,22 @@ public class SessionWatchTests
         new(new WatchSettings(), id => owned.Contains(id) ? Boss : null, ended);
 
     [Fact]
-    public void An_owned_Claude_or_Copilot_session_that_vanishes_never_raises_missing_and_the_log_says_why_once()
+    public void An_owned_Copilot_session_that_vanishes_never_raises_missing_and_the_log_says_why_once()
     {
         var log = new List<string>();
         var w = new SessionWatch(new WatchSettings(), id => Boss, _ => false, log.Add);
-        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Copilot })
-        {
-            w.Evaluate([S(SessionStatus.Working, T.AddHours(-1), agent.ToString()) with { Agent = agent }], T.AddMinutes(-1));
-            Assert.Empty(w.Evaluate([], T));
-            Assert.Empty(w.Evaluate([], T.AddHours(1)));
-        }
-        Assert.Equal(2, log.Count(l => l.Contains("no clean-end signal")));
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1), "cop") with { Agent = AgentKind.Copilot }], T.AddMinutes(-1));
+        Assert.Empty(w.Evaluate([], T));
+        Assert.Empty(w.Evaluate([], T.AddHours(1)));
+        Assert.Single(log, l => l.Contains("no clean-end signal"));
+    }
+
+    [Fact]
+    public void A_Claude_vanish_with_no_session_end_raises_missing_now_that_Claude_has_a_SessionEnd_hook()
+    {
+        var w = WatchEnded(_ => false, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1)) with { Agent = AgentKind.Claude }], T.AddMinutes(-1));
+        Assert.Equal(WatchRule.Missing, Assert.Single(w.Evaluate([], T)).Rule);
     }
 
     [Fact]

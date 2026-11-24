@@ -98,7 +98,7 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(dir, fileName ?? pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json"), json.ToJsonString());
     }
 
-    public void ClaudeRegistration(string id, int pid, string? transcript, string? hookStatus = null, DateTimeOffset? hookAt = null, string? fileName = null)
+    public void ClaudeRegistration(string id, int pid, string? transcript, string? hookStatus = null, DateTimeOffset? hookAt = null, string? fileName = null, bool ended = false, DateTimeOffset? updated = null)
     {
         Directory.CreateDirectory(ClaudeRegistrations);
         var json = new JsonObject
@@ -107,10 +107,11 @@ internal sealed class Fixture : IDisposable
             ["ProcessId"] = pid,
             ["TranscriptPath"] = transcript ?? "",
             ["WorkingDirectory"] = "/work/repo",
-            ["Updated"] = T0.ToString("o"),
+            ["Updated"] = (updated ?? T0).ToString("o"),
             ["HookStatus"] = hookStatus ?? "",
             ["HookStatusAt"] = hookAt?.ToString("o") ?? "",
         };
+        if (ended) { json["Ended"] = true; }
         File.WriteAllText(Path.Combine(ClaudeRegistrations, fileName ?? id + ".json"), json.ToJsonString());
     }
 

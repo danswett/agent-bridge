@@ -15,9 +15,10 @@ public sealed record WatchSettings
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(20);
     // R4: a delivered session idle this long is OFFERED for ending (the host ends nothing).
     public TimeSpan FinishedAfter { get; init; } = TimeSpan.FromMinutes(30);
-    // R3 only watches agents that can say they ended cleanly (their own SessionEnd hook): Codex today. A Claude or Copilot session has no such
-    // signal, so it never raises a missing alarm (it would alarm on every normal exit) and the log says so.
-    public IReadOnlySet<AgentKind> CleanEndAgents { get; init; } = new HashSet<AgentKind> { AgentKind.Codex };
+    // R3 only watches agents that can say they ended cleanly (their own SessionEnd hook): Codex, and Claude once setup has added its SessionEnd hook
+    // (owner decision, Nov 23 about 23:05 PT). A Copilot session has no such signal yet, so it never raises a missing alarm (it would alarm on every
+    // normal exit) and the log says so.
+    public IReadOnlySet<AgentKind> CleanEndAgents { get; init; } = new HashSet<AgentKind> { AgentKind.Codex, AgentKind.Claude };
     // R3: a missing session is forgotten this long after it was first noticed missing.
     public TimeSpan MissingForget { get; init; } = TimeSpan.FromHours(24);
     // The same episode is not noticed again within this long (#4262: 30 minutes).
