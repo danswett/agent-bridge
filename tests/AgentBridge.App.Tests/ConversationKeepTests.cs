@@ -21,6 +21,13 @@ public sealed class ConversationKeepTests
         Assert.Equal(18477, ConversationKeep.PrependBaseline(pendingTarget: 18477, offset: 17437));
     }
 
+    // The existing probe (ConversationEndPinTests.A_prepend_during_our_own_pending_correction_compensates_the_added_rows) has the view at 200 and a correction pending toward 150, behind it: unchanged.
+    [Fact]
+    public void A_pending_target_behind_the_view_is_not_taken_as_the_baseline()
+    {
+        Assert.Equal(200, ConversationKeep.PrependBaseline(pendingTarget: 150, offset: 200));
+    }
+
     // The trace of the lost draw: the first prepend grew the extent by 1040 and is animating the offset from 17437 to 18477; the second grew it by 998 before that finished.
     [Fact]
     public void Two_prepends_that_overlap_move_the_place_by_both_heights_where_the_old_baseline_lost_the_second()
