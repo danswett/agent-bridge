@@ -21,13 +21,17 @@ public sealed class McpHost : IAsyncDisposable
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     // What of the host's own words reaches an agent in an exception message (#4450): at most this many characters, flattened, with anything token-shaped redacted.
     public const int MaxHostText = 512;
+    const int MinExactToken = 6;
 
     readonly LocalChannel channel;
     readonly TimeSpan timeout;
     readonly HashSet<string> capabilities;
+    // The token this server sent, kept only to redact it from a later refusal (it is already this process's own AGENT_BRIDGE_TOKEN; nothing new is exposed).
+    readonly string? sentToken;
 
-    McpHost(LocalChannel channel, HelloResult hello, string? principal, TimeSpan timeout)
+    McpHost(LocalChannel channel, HelloResult hello, string? principal, TimeSpan timeout, string? token)
     {
+        sentToken = token;
         this.channel = channel;
         this.timeout = timeout;
         Hello = hello;
@@ -61,7 +65,7 @@ public sealed class McpHost : IAsyncDisposable
                 var accepted = await Guard("agent.hello", wait, () => channel.CallAsync("agent.hello", new { token }, wait, ct), token);
                 principal = accepted.ValueKind == JsonValueKind.Object && accepted.TryGetProperty("principal", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
             }
-            return new McpHost(channel, hello, principal, wait);
+            return new McpHost(channel, hello, principal, wait, token);
         }
         catch (LocalRefusedException e)
         {
@@ -99,7 +103,7 @@ public sealed class McpHost : IAsyncDisposable
     }
 
     public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        Guard(op, timeout ?? this.timeout, () => channel.CallAsync(op, data ?? new { }, timeout ?? this.timeout, ct));
+        Guard(op, timeout ?? this.timeout, () => channel.CallAsync(op, data ?? new { }, timeout ?? this.timeout, ct), sentToken);
 
     public ValueTask DisposeAsync() => channel.DisposeAsync();
 
@@ -109,11 +113,18 @@ public sealed class McpHost : IAsyncDisposable
     public static string Scrub(string? text, string? token)
     {
         if (string.IsNullOrEmpty(text)) { return ""; }
-        var flat = System.Text.RegularExpressions.Regex.Replace(new string([.. text.Select(c => char.IsControl(c) ? ' ' : c)]), @"\s{2,}", " ").Trim();
-        if (!string.IsNullOrEmpty(token)) { flat = flat.Replace(token, "[redacted]", StringComparison.Ordinal); }
+        var plain = AnsiSequence.Replace(text, "");
+        var flat = System.Text.RegularExpressions.Regex.Replace(new string([.. plain.Select(c => char.IsControl(c) || IsInvisible(c) ? ' ' : c)]), @"\s{2,}", " ").Trim();
+        if (token is { Length: >= MinExactToken }) { flat = flat.Replace(token, "[redacted]", StringComparison.Ordinal); } // a shorter value would redact ordinary letters; real tokens are far longer
         flat = TokenShaped.Replace(flat, m => m.Value.StartsWith("abat1_", StringComparison.Ordinal) || (!Uuid.IsMatch(m.Value) && m.Value.Distinct().Count() >= 10) ? "[redacted]" : m.Value);
-        return flat.Length <= MaxHostText ? flat : flat[..MaxHostText] + "…";
+        if (flat.Length <= MaxHostText) { return flat; }
+        var cut = char.IsHighSurrogate(flat[MaxHostText - 1]) ? MaxHostText - 1 : MaxHostText; // never half of a surrogate pair
+        return flat[..cut] + "…";
     }
+
+    // Line and paragraph separators, bidi controls and zero-width characters are not words: they become spaces, and a terminal escape sequence goes whole.
+    static bool IsInvisible(char c) => c is '\u2028' or '\u2029' or '\uFEFF' or (>= '\u200B' and <= '\u200F') or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069');
+    static readonly System.Text.RegularExpressions.Regex AnsiSequence = new(@"\u001B\[[0-9;?]*[ -/]*[@-~]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     static readonly System.Text.RegularExpressions.Regex TokenShaped = new(@"abat1_[A-Za-z0-9_\-]+|[A-Za-z0-9_\-+/]{32,}={0,2}", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     static readonly System.Text.RegularExpressions.Regex Uuid = new(@"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);

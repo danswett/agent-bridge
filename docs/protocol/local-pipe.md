@@ -428,7 +428,7 @@ of its own session, so its ancestry includes the credential's root process. It k
 agent-ha-bridge's tool names (`list_agent_sessions`, `read_agent_session`,
 `reply_to_agent_session`, `launch_agent_session`, `read_launch_result`, `get_launch_options`) and
 maps them to `sessions.list`, `session.get`, `session.reply`, `session.launch` and
-`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (on Windows one local pipe name, or `\\.\pipe\` plus one, with no separator, colon, `..` or trailing dot; elsewhere an absolute socket path with no `..` or control character) or, on
+`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (the rule that follows is the .NET MCP server's (`McpEndpoint`); the Node server `mcp/src/server.mjs`, until it is retired, still accepts any name or path; on Windows one local pipe name, or `\\.\pipe\` plus one, with no separator, colon, `..` or trailing dot; elsewhere an absolute socket path with no `..` or control character) or, on
 Windows, as above from the user's SID and the profile folder (`AGENT_BRIDGE_ROOT`, then
 `AGENT_BRIDGE_PROFILE`, default `default`). `AGENT_BRIDGE_TOKEN` is the credential, sent in
 `agent.hello`. It lists only the tools whose capability `hello` names, and none when no host
