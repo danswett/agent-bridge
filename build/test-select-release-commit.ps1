@@ -94,12 +94,13 @@ function Invoke-ReleaseGh {
     if ($call -match 'actions/runs/200/artifacts') { if ($call -notmatch '--paginate') { throw 'the artifacts call is not paginated' }; return $script:mockArtifacts }
     $null
 }
-$good = @('agent-bridge-windows-0.1.103', 'agent-bridge-windows-arm64-0.1.103', 'sbom-win-x64-0.1.103', 'sbom-win-arm64-0.1.103')
+$good = @('agent-bridge-windows-0.1.103', 'agent-bridge-windows-arm64-0.1.103', 'sbom-win-x64-0.1.103', 'sbom-win-arm64-0.1.103', 'agent-bridge-windows-installer-input-0.1.103', 'agent-bridge-windows-arm64-installer-input-0.1.103')
 function Gather($rows, $artifacts) { $script:mockFullRows = $rows; $script:mockArtifacts = $artifacts; @(Get-ReleaseRuns 'o/r' 1)[0] }
 $rowPush = "200`tsuccess`tsha103`tpush`tmain"
 Check 'wiring: a FULL run for this commit with complete packages and SBOMs is complete' (Gather @($rowPush) $good).Full.ArtifactsUnexpired $true
 Check 'wiring: the version is 0.1.<the FAST number>' (Gather @($rowPush) $good).Version '0.1.103'
 Check 'wiring: a missing Arm64 SBOM makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'sbom-win-arm64-0.1.103' })).Full.ArtifactsUnexpired $false
+Check 'wiring: a missing installer input makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'agent-bridge-windows-arm64-installer-input-0.1.103' })).Full.ArtifactsUnexpired $false
 Check 'wiring: a missing x64 package makes it incomplete' (Gather @($rowPush) ($good | Where-Object { $_ -ne 'agent-bridge-windows-0.1.103' })).Full.ArtifactsUnexpired $false
 Check 'wiring: more than a page of unrelated artifacts does not hide the packages' (Gather @($rowPush) (@(1..150 | ForEach-Object { "logs-$_" }) + $good)).Full.ArtifactsUnexpired $true
 Check 'wiring: a FULL run whose head_sha is another commit is not this commit''s' ((Gather @("200`tsuccess`tshaOther`tpush`tmain") $good).Full -eq $null) $true
@@ -116,13 +117,16 @@ Check 'a FULL run whose full-gate failed (a WebKit job skipped) is not selectabl
 Check 'a FULL run whose full-gate was skipped is not selectable' (Pick @((Run 'sha103' 103 -fullMore @{ 'full-gate' = 'skipped' }), (Run 'sha102' 102))) 'sha102'
 Check 'the version floor is the FAST run number, not the FULL run''s own' (Pick @((Run 'sha099b' 99 -fullNumber 5000), (Run 'sha102' 102))) 'sha102'
 Check 'the FULL run''s own small number does not lower it' (Pick @((Run 'sha103' 103 -fullNumber 1))) 'sha103'
-function Names([string]$v, [string[]]$except = @()) { @("agent-bridge-windows-0.1.$v", "agent-bridge-windows-arm64-0.1.$v", "sbom-win-x64-0.1.$v", "sbom-win-arm64-0.1.$v") | Where-Object { $_ -cnotin $except } }
+function Names([string]$v, [string[]]$except = @()) { @("agent-bridge-windows-0.1.$v", "agent-bridge-windows-arm64-0.1.$v", "sbom-win-x64-0.1.$v", "sbom-win-arm64-0.1.$v", "agent-bridge-windows-installer-input-0.1.$v", "agent-bridge-windows-arm64-installer-input-0.1.$v") | Where-Object { $_ -cnotin $except } }
 Check 'FULL packages complete: both packages and both SBOMs under the FAST run number' (Get-FullPackages (Names 103) 103).Complete $true
 Check 'FULL packages: the version is 0.1.<the FAST run number>' (Get-FullPackages (Names 103) 103).Version '0.1.103'
 Check 'FULL packages: no Arm64 SBOM is incomplete' (Get-FullPackages (Names 103 @('sbom-win-arm64-0.1.103')) 103).Complete $false
 Check 'FULL packages: no Arm64 package is incomplete' (Get-FullPackages (Names 103 @('agent-bridge-windows-arm64-0.1.103')) 103).Complete $false
 Check 'FULL packages: no x64 SBOM is incomplete' (Get-FullPackages (Names 103 @('sbom-win-x64-0.1.103')) 103).Complete $false
 Check 'FULL packages: packages under FULL''s own run number are not the FAST run''s' (Get-FullPackages (Names 7) 103).Complete $false
+Check 'FULL packages: no x64 installer input is incomplete (the train''s verify downloads it)' (Get-FullPackages (Names 103 @('agent-bridge-windows-installer-input-0.1.103')) 103).Complete $false
+Check 'FULL packages: no Arm64 installer input is incomplete' (Get-FullPackages (Names 103 @('agent-bridge-windows-arm64-installer-input-0.1.103')) 103).Complete $false
+Check 'FULL packages: the missing installer input is named' ((Get-FullPackages (Names 103 @('agent-bridge-windows-installer-input-0.1.103')) 103).Missing -join ',') 'agent-bridge-windows-installer-input-0.1.103'
 Check 'FULL packages: none at all is incomplete and names what is missing' ((Get-FullPackages @() 103).Missing.Count -gt 0) $true
 Check 'the FULL run is looked up by head_sha' ((Get-FullRunsPath 'o/r' ('a' * 40)) -match 'workflows/full\.yml/runs\?head_sha=a{40}') $true
 Check 'the FULL run is never looked up by branch' ((Get-FullRunsPath 'o/r' ('a' * 40)) -match 'branch=') $false
@@ -179,5 +183,17 @@ Check "signing unset may publish" (Signed "") "published"
 foreach ($v in "True", "TRUE", " true", "true ", "yes", "1") { Check "signing $v refuses" (Signed $v) "refused" }
 foreach ($v in "false", "False", " FALSE ", $null) { Check "signing $v may publish" (Signed $v) "published" }
 
+# What the train's pick job hands its other jobs (S2, #4104): the commit, the version (0.1.<the FAST run's number>), the FAST run's id and number, the FULL run's
+# id (where the packages, SBOMs and installer input are: the FAST run builds none of them) and the waived-Arm64 notice for the publish summary. One line each.
+$pick = [pscustomobject]@{ Id = 4101; Sha = 'sha103'; Number = 103; Version = '0.1.103'; Full = [pscustomobject]@{ Id = 4202; Conclusion = 'success'; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'failure'; 'app-selftest (win-arm64)' = 'success' }; ArtifactsUnexpired = $true } }
+$lines = @(Get-PickOutputs $pick)
+Check 'pick outputs: the commit, the version and the FAST run' ($lines[0..3] -join '|') 'sha=sha103|version=0.1.103|run=4101|number=103'
+Check 'pick outputs: the FULL run id, where the packages are' $lines[4] 'full-run=4202'
+Check 'pick outputs: the waived Arm64 result is named for the summary' ($lines[5] -match '^waived=Arm64 checks waived for this release, which was published: .*app-installer \(win-arm64\): failure') $true
+Check 'pick outputs: one line each, nothing multi-line to quote' (@($lines | Where-Object { $_ -match "[`r`n]" }).Count) 0
+$clean = [pscustomobject]@{ Id = 1; Sha = 's'; Number = 5; Version = '0.1.5'; Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'success'; 'app-selftest (win-arm64)' = 'success' } } }
+Check 'pick outputs: nothing waived is an empty notice' (@(Get-PickOutputs $clean)[5]) 'waived='
+$threw = $false; try { Get-PickOutputs ([pscustomobject]@{ Id = 1; Sha = 's'; Number = 5; Version = '0.1.5'; Full = $null }) | Out-Null } catch { $threw = $true }
+Check 'pick outputs: a pick with no FULL run id is an error, never a guess' $threw $true
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'all passed'

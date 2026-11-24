@@ -96,8 +96,9 @@ function Select-FullRunRow([string[]]$Rows, [string]$Sha) {
 function Get-FullPackages([string[]]$ArtifactNames, [int]$Number) {
     $prefix = @($ArtifactNames | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$Number$") { $Matches[1] } }) | Select-Object -First 1
     if (-not $prefix) { return [pscustomobject]@{ Version = ''; Complete = $false; Missing = @("agent-bridge-windows-<version>.$Number") } }
-    $missing = @("agent-bridge-windows-$prefix.$Number", "agent-bridge-windows-arm64-$prefix.$Number", "sbom-win-x64-$prefix.$Number", "sbom-win-arm64-$prefix.$Number" |
-        Where-Object { $ArtifactNames -cnotcontains $_ })
+    # Both packages, both SBOMs (the Arm64 one is what attestation needs) and both installer inputs, which the train's verify downloads and checks byte for byte.
+    $missing = @("agent-bridge-windows-$prefix.$Number", "agent-bridge-windows-arm64-$prefix.$Number", "sbom-win-x64-$prefix.$Number", "sbom-win-arm64-$prefix.$Number",
+        "agent-bridge-windows-installer-input-$prefix.$Number", "agent-bridge-windows-arm64-installer-input-$prefix.$Number" | Where-Object { $ArtifactNames -cnotcontains $_ })
     [pscustomobject]@{ Version = "$prefix.$Number"; Complete = ($missing.Count -eq 0); Missing = $missing }
 }
 
@@ -150,6 +151,16 @@ function Select-ReleaseCommit {
     }
     if ($Explain) { return ($why -join "`n") }
     $null
+}
+
+# What the train's pick job hands its other jobs (S2, #4104): the commit, the version (0.1.<the FAST run's number>), the FAST run's id and number, the FULL run's id
+# (where the packages, SBOMs and installer input are: the FAST run builds none of them, so a download from its id finds nothing) and the waived-Arm64 notice for the
+# publish summary ('' when nothing was waived). One line each, name=value, for the workflow to append to GITHUB_OUTPUT.
+function Get-PickOutputs($run) {
+    $fullId = if ($run.Full -and $run.Full.PSObject.Properties['Id']) { [string]$run.Full.Id } else { '' }
+    if (-not $fullId) { throw "the picked run $($run.Sha) has no FULL run id, so there is nowhere to download its packages from" }
+    $notice = Format-WaivedNotice $run
+    "sha=$($run.Sha)", "version=$($run.Version)", "run=$($run.Id)", "number=$($run.Number)", "full-run=$fullId", "waived=$(if ($notice) { $notice } else { '' })"
 }
 
 # The train refuses while the app is signed: it has no sign step yet, and an unsigned release
