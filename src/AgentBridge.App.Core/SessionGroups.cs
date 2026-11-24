@@ -46,25 +46,30 @@ public sealed class SessionGroups
 {
     readonly Dictionary<string, GroupRegister> groups;
     readonly Dictionary<string, GroupRegister> membership;
+    readonly Dictionary<string, DateTimeOffset> listed;
     readonly string deviceTag;
     readonly TimeProvider time;
     readonly Action save;
     readonly Action<string> prepend;
     readonly Action<IReadOnlyCollection<string>> lift;
     readonly Func<IReadOnlyList<string>> unpinned;
+    DateTimeOffset listingSavedAt;
+    internal bool ListingDirty { get; private set; }
 
     internal SessionGroups(Dictionary<string, GroupRegister> groups, Dictionary<string, GroupRegister> membership,
-        string deviceTag, TimeProvider time, Action save, Action<string> prepend,
+        Dictionary<string, DateTimeOffset> listed, string deviceTag, TimeProvider time, Action save, Action<string> prepend,
         Action<IReadOnlyCollection<string>> lift, Func<IReadOnlyList<string>> unpinned)
     {
         this.groups = groups;
         this.membership = membership;
+        this.listed = listed;
         this.deviceTag = deviceTag;
         this.time = time;
         this.save = save;
         this.prepend = prepend;
         this.lift = lift;
         this.unpinned = unpinned;
+        listingSavedAt = time.GetUtcNow();
         foreach (var map in new[] { groups, membership })
         {
             foreach (var (key, r) in map.ToArray())
@@ -131,6 +136,7 @@ public sealed class SessionGroups
         if (id is not null) { Require(id); }
         if (GroupOf(key) == id) { return; }
         Write(membership, key, id);
+        if (id is null) { listed.Remove(key); } else { listed[key] = time.GetUtcNow(); }
         prepend(key);
         save();
     }
@@ -143,8 +149,37 @@ public sealed class SessionGroups
         foreach (var key in members)
         {
             Write(membership, key, null);
+            listed.Remove(key);
         }
         Write(groups, id, null, tombstone: true);
         save();
+    }
+
+    internal void Saved() { ListingDirty = false; listingSavedAt = time.GetUtcNow(); }
+
+    // Keep exact listing times in memory; batch automatic saves, never the retention clock.
+    internal bool Remember(IReadOnlyList<OrderEntry> entries)
+    {
+        var live = entries.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
+        var now = time.GetUtcNow();
+        var changed = false;
+        foreach (var key in membership.Keys.ToArray())
+        {
+            if (GroupOf(key) is null) { continue; }
+            var stamped = listed.TryGetValue(key, out var last);
+            if (live.Contains(key) || !stamped)
+            {
+                ListingDirty |= !stamped || last != now;
+                listed[key] = now;
+                changed |= !stamped;
+            }
+            else if (now - last > TimeSpan.FromDays(30))
+            {
+                Write(membership, key, null);
+                listed.Remove(key);
+                changed = true;
+            }
+        }
+        return changed || ListingDirty && now - listingSavedAt >= TimeSpan.FromDays(1);
     }
 }
