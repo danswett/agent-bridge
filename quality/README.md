@@ -471,11 +471,18 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
      outside these network retry budgets; dpkg is deliberately not wrapped in the network
      timeout. These fakes establish bounds/branches, not hosted cold-run success.
-     **The by-hand proof of that fallback has no trigger today.** `ci.yml` no longer runs `pwa-ui` (S2 piece 5c moved it to `full.yml`, #4104), and `full.yml`'s `workflow_dispatch` takes no input at
-      all (#4254's CodeQL fix), so there is no `force-apt-fallback` to pass and no guard that checks a branch's commit. The follow-up (#4508) adds one boolean input with its guard; its text here then
-      gives the command and the rules (a throwaway branch's own new commit, never `main`'s head or an open pull request's, because the checks land on that commit and the merge rule reads the latest run per head,
-      so on a pull request's head they would stand in for its own run; a run started there by mistake leaves a failed run on that head, and re-running the pull request's older run does not clear it: stop and
-      report it, and recover only as Quality or Engineering authorizes). Once it can be run, each `pwa-ui` leg takes the Azure mirror
+     To prove that fallback once without waiting for a slow mirror, make a new commit of its own on a throwaway branch from `main` (an empty one,
+     `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
+     request at that commit, and run
+     `gh workflow run full.yml --ref <branch> -f force-apt-fallback=true` (the run tests that branch's tip: no input names a commit)
+     (`pwa-ui` moved to `full.yml` in S2 piece 5c, #4104; `full.yml`'s dispatch takes this one boolean and no commit input, #4254). Its `trigger` job fails any
+     run by hand, before a job runs, that asks for the fallback on `main` or a tag, or on `main`'s
+     head or any open pull request's, and one that does not ask for it unless it is on the `main` ref: its checks, `full-gate` among them,
+     land on the commit, and the merge rule reads the latest run per head, so on a pull
+     request's head they would stand in for its own run. One started there by mistake still
+     leaves a failed CI run on that head, and since the merge rule takes the newest run,
+     re-running the pull request's older run doesn't clear it: stop and report it, and recover
+     only as Quality or Engineering authorizes. Each `pwa-ui` leg then takes the Azure mirror
      off before downloading anything (the action's `force-apt-fallback`; `pwa-e2e` and
      `spikes-linux` download as before), says in its log that it was forced and not timed out,
      fails if apt still fetches a package from Azure, and counts the packages that came from
@@ -925,7 +932,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   was given, and each job's `actions/checkout` is that sha, so a run that tested another commit than the one it is found for is visible. The first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
-  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof has no trigger until the follow-up (#4508) gives `full.yml`'s dispatch its one boolean `force-apt-fallback` (`ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof's trigger is `full.yml`'s dispatch with its one boolean `force-apt-fallback` (#4508; `ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names, done. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
