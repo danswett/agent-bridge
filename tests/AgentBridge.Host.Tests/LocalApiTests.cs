@@ -47,6 +47,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<IReadOnlyList<string>> approved = [];
     readonly List<bool> keptAwake = [];
     DevBoxStatus? devBox;
+    SessionWatchStatus? sessionWatch;
     string? haRefused;
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
@@ -102,6 +103,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             ApplyDevBoxKeepAwake = on => { lock (applied) { keptAwake.Add(on); } },
             DevBox = () => devBox,
+            SessionWatch = () => sessionWatch,
             HomeAssistant = () => Volatile.Read(ref haRefused),
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
@@ -663,6 +665,22 @@ public sealed class LocalApiTests : IAsyncLifetime
         var status = await ch.CallAsync<HostStatus>(HostOps.Status);
         Assert.Equal(("failed", true), (status.DevBox!.Last!.Outcome, status.DevBox.Last.Alarming));
         Assert.False(status.RestartRequired);
+    }
+
+    // Session watch S4d (#4262): the heartbeat is an optional member of host.status, in the shape of DevBox and FleetPublication: absent when the watch is off.
+    [Fact]
+    public async Task The_session_watch_heartbeat_is_in_host_status_when_the_watch_is_on_and_absent_when_it_is_off()
+    {
+        var ch = await ConnectAsync();
+        Assert.Null((await ch.CallAsync<HostStatus>(HostOps.Status)).SessionWatch);
+
+        var at = new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero);
+        sessionWatch = new SessionWatchStatus(true, at);
+        var on = (await ch.CallAsync<HostStatus>(HostOps.Status)).SessionWatch!;
+        Assert.Equal((true, at, false), (on.On, on.LastPassAt, on.Stopped));
+
+        sessionWatch = new SessionWatchStatus(true, at, Stopped: true);
+        Assert.True((await ch.CallAsync<HostStatus>(HostOps.Status)).SessionWatch!.Stopped);
     }
 
     // A file the host rejects for another setting reads as all defaults, keep-awake off: saved and

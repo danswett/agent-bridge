@@ -53,6 +53,7 @@ public sealed class HostControlOptions
     public Action<bool>? ApplyDevBoxKeepAwake { get; init; }
     // The Dev Box keep-awake's state for the status; null when this is not a Dev Box.
     public Func<DevBoxStatus?> DevBox { get; init; } = () => null;
+    public Func<SessionWatchStatus?> SessionWatch { get; init; } = () => null;
     // Other devices' presses of Check and Install, carried to the app in the status, and the
     // app's reports of its updater (host.update.report); null where there is nothing to carry.
     public UpdateService? Updates { get; init; }
@@ -187,6 +188,7 @@ public sealed class HostControl
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
             DevBox = options.DevBox(),
+            SessionWatch = options.SessionWatch(),
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
             SignInDevices = options.SignInDevices?.Invoke(Volatile.Read(ref appDevice)),

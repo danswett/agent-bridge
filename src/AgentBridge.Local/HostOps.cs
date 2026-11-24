@@ -127,6 +127,10 @@ public sealed record HostAccount(string Login, string AccountId);
 // this profile. Refused: the relay turned the account down; sign in again.
 public sealed record RelayStatus(RelayState State, string? Url = null, string? Detail = null, DateTimeOffset? Since = null);
 
+// The session watch (#4262, docs/design/session-watch.md "When the watch itself fails"): its heartbeat for the app. On: the watch runs. LastPassAt: when its
+// last pass finished (null before the first), so the app can show a stale watch. Stopped: the loop ended and stays down until the host restarts.
+public sealed record SessionWatchStatus(bool On, DateTimeOffset? LastPassAt = null, bool Stopped = false);
+
 public sealed record FleetPublicationStatus(string Result, int SkippedInvalidIds = 0, int Failures = 0, DateTimeOffset? NextRetry = null, string? Failure = null);
 
 public sealed record HostSigningStatus(string Result, string? Storage = null, string? KeyId = null);
@@ -205,6 +209,8 @@ public sealed record HostStatus
     public string? ReadOnly { get; init; }
     // The Dev Box keep-awake, absent when this machine is not a Dev Box.
     public DevBoxStatus? DevBox { get; init; }
+    // The session watch heartbeat, absent when the watch is off and on an older host.
+    public SessionWatchStatus? SessionWatch { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
     public AgentReadinessReport? Agents { get; init; }
     public AgentInstallProgress? AgentInstallation { get; init; }
