@@ -1,16 +1,8 @@
-From 953acf81e90d62ad16d39fd96a446f5e83cc502d Mon Sep 17 00:00:00 2001
+From 90a3d4d3367b06a7ffe43ffadcd47a6caa8fc116 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 19:31:28 -0800
-Subject: [PATCH] CI S2, piece 6a1: FULL packs the app on both architectures at
- the FAST run's version (additive; Part of #4104)
+Date: Mon, 23 Nov 2026 21:33:11 -0800
+Subject: [PATCH] scratch 6a1
 
-full.yml gets app-pack (win-x64, win-arm64): publish and pack with Velopack, the publish folder for the self-test, the installer input
-(the commit under test and FULL's run id) and the CycloneDX SBOM, under the artifact names the release selector looks for, versioned
-0.1.<the FAST run's number> (workflow_run.run_number, or the new ci_run_number input on a run by hand), a release host exactly for main of this
-repository. Nothing here uses github.sha or github.run_number, which under workflow_run are the default branch's tip and FULL's own number.
-Additive: ci.yml's app job still packs and publishes. The app-pack-full catalog suite; full-gate needs the job. Tests first.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/full.yml                    | 102 +++++++++++++++++-
  quality/catalog.yml                           |  13 +++
@@ -142,10 +134,10 @@ index dcaca6ade..3f61e9c13 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 50903dd0f..965e2801d 100644
+index d1f5c80df..075cca234 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1193,6 +1193,19 @@ suites:
+@@ -1224,6 +1224,19 @@ suites:
      lane: full
      status: exists
  
@@ -166,7 +158,7 @@ index 50903dd0f..965e2801d 100644
    - id: lab-nightly
      validation_plan: native
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index d0304f7e1..0c47b0c70 100644
+index 04feee120..0a69625a1 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -187,8 +179,8 @@ index d0304f7e1..0c47b0c70 100644
          Assert.Equal(["boolean", "false"], [Scalar(inputs["force-apt-fallback"], "type"), Scalar(inputs["force-apt-fallback"], "default")]);
          foreach (var rule in new[] { "refs/heads/main", "main's head", "open pull request's head", "INPUT_SHA", "force-apt-fallback" })
              Assert.Contains(rule, script, StringComparison.Ordinal);
-@@ -149,4 +149,46 @@ public class FullWorkflowTests
-         Assert.False(((YamlMappingNode)ci["on"]).Children.ContainsKey("workflow_dispatch"));
+@@ -150,4 +150,46 @@ public class FullWorkflowTests
+         Assert.Equal(["critical-release", "critical-reason"], ciInputs.Children.Keys.Select(k => k.ToString()));
          Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
      }
 +
