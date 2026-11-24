@@ -634,6 +634,30 @@ public sealed class FleetStopTests : IDisposable
         Directory.CreateDirectory(folder);
         Assert.True(UnpushedWork.Pending(folder));
     }
+    [Fact]
+    public void Untracked_work_counts_as_pending_even_when_the_repository_hides_untracked_files()
+    {
+        var remote = Path.Combine(f.Root, "remote.git");
+        var work = Path.Combine(f.Root, "clone");
+        void Git(string folder, params string[] args)
+        {
+            var info = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = folder, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false" }.Concat(args)) { info.ArgumentList.Add(a); }
+            using var git = System.Diagnostics.Process.Start(info)!;
+            git.WaitForExit();
+            Assert.Equal(0, git.ExitCode);
+        }
+        Directory.CreateDirectory(remote); Directory.CreateDirectory(work);
+        Git(remote, "init", "--bare", "-b", "main");
+        Git(work, "init", "-b", "main");
+        File.WriteAllText(Path.Combine(work, "a.txt"), "a");
+        Git(work, "add", "a.txt"); Git(work, "commit", "-m", "a");
+        Git(work, "remote", "add", "origin", remote); Git(work, "push", "-u", "origin", "main");
+        Assert.False(UnpushedWork.Pending(work));
+        Git(work, "config", "status.showUntrackedFiles", "no");
+        File.WriteAllText(Path.Combine(work, "new.txt"), "work in progress");
+        Assert.True(UnpushedWork.Pending(work));
+    }
     sealed class Worker(Func<string, SessionProcess?, bool> fleetWorker) : ISessionLauncher
     {
         public bool Available => false;

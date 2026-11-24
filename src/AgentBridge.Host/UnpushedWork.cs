@@ -11,7 +11,8 @@ internal static class UnpushedWork
     {
         try
         {
-            if (Run(folder, "status", "--porcelain") is not { Length: 0 }) { return true; }
+            // The repository's own config must not hide work: untracked files and submodule changes always count.
+            if (Run(folder, "-c", "status.showUntrackedFiles=all", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none") is not { Length: 0 }) { return true; }
             return Run(folder, "rev-list", "--count", "@{upstream}..HEAD") != "0";
         }
         catch (Exception e) when (e is IOException or InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
