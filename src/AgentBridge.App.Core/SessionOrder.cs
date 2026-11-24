@@ -66,6 +66,8 @@ public sealed class SessionOrder
         public List<string> Pinned { get; set; } = [];
         public List<string> Order { get; set; } = [];
         public Dictionary<string, string?> SeenTurns { get; set; } = [];
+        public GroupRecordSet GroupRecords { get; set; } = new();
+        public string? GroupDeviceTag { get; set; }
     }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -81,7 +83,21 @@ public sealed class SessionOrder
         state = Load(path, out var failure);
         Failure = failure;
         if (!Usable) { state.Sort = SessionSort.Recent; }
+        if (!Guid.TryParseExact(state.GroupDeviceTag, "N", out _)) { state.GroupDeviceTag = Guid.NewGuid().ToString("N"); }
+        state.GroupRecords ??= new();
+        Groups = new(state.GroupRecords.Groups ??= [], state.GroupRecords.Membership ??= [],
+            state.GroupDeviceTag, this.time, Save, key =>
+            {
+                if (!IsPinned(key)) { state.Order.Remove(key); state.Order.Insert(0, key); }
+            }, members =>
+            {
+                var moved = state.Order.Where(members.Contains).ToList();
+                state.Order.RemoveAll(members.Contains);
+                state.Order.InsertRange(0, moved);
+            }, () => shownSessions);
     }
+
+    public SessionGroups Groups { get; }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
@@ -227,7 +243,8 @@ public sealed class SessionOrder
         if (changed) { Save(); }
     }
 
-    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions : null;
+    List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
+        : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
     // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
     // hasn't finished sending, nor past one.
@@ -253,6 +270,7 @@ public sealed class SessionOrder
     public bool Place(string key, string target, bool after)
     {
         if (Sort != SessionSort.Yours || key == target || GroupOf(key) is null || GroupOf(target) is null || pending.Contains(key) || pending.Contains(target)) { return false; }
+        if (!IsPinned(key) && !IsPinned(target) && Groups.GroupOf(key) != Groups.GroupOf(target)) { return false; }
         Insert(key, target, after);
         return true;
     }

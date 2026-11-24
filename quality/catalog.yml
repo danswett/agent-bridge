@@ -338,7 +338,7 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: local
     project: tests/AgentBridge.Quality.Tests
-    triggers: [tools/measure-ci-waste.ps1, tests/fixtures/ci-waste/runs.json, quality/test-pages-gate.ps1, quality/pages-rollback.ps1]
+    triggers: [tools/measure-ci-waste.ps1, tests/fixtures/ci-waste/runs.json]
     command: dotnet test tests/AgentBridge.Quality.Tests -c Release
     where: ci.yml product
     status: exists
@@ -630,6 +630,19 @@ suites:
     # Flip to exists with that patch.
     status: planned
 
+  - id: stale-pwa-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The stale-PWA alarm's decision (#4369 Fix 3, #4104): app.slipgates.com's served build (config.js APP_VERSION and BUILT_AT) against main's newest PWA-changing
+    # commit; more than 24 h behind fails loudly, and anything unreadable fails closed. On files, offline: no request, no token.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/stale-pwa.ps1, quality/test-stale-pwa.ps1]
+    command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
+    where: ci.yml light, stale-pwa.yml check
+    status: exists
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
