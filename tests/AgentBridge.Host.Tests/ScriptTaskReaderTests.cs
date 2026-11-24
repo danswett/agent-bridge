@@ -145,6 +145,32 @@ public class ScriptTaskReaderTests
     }
 
     [Theory]
+    [InlineData(@"\Slipgates\Counts", true)]
+    [InlineData(@"\Counts", true)]
+    [InlineData(@"Slipgates\Counts", false)]
+    [InlineData(@"\", false)]
+    [InlineData(@"\Slipgates\", false)]
+    [InlineData(@"\Slipgates\..\Other", false)]
+    [InlineData(@"\Slipgates\.\Other", false)]
+    [InlineData(@"\Slipgates\*", false)]
+    [InlineData(@"\Slip?ates\Counts", false)]
+    [InlineData("\\Slipgates\\Co\nunts", false)]
+    [InlineData(@"\Slipgates\\Counts", false)]
+    public void A_task_is_named_by_its_full_path_without_traversal_wildcards_or_control_characters(string name, bool valid)
+    {
+        Assert.Equal(valid, ScriptTaskXml.ValidTaskName(name));
+    }
+
+    [Fact]
+    public void Text_that_looks_like_markup_cannot_hash_the_same_as_real_markup()
+    {
+        var text = Task.Replace(Args, "<Arguments>&lt;b&gt;&lt;/b&gt;</Arguments>");
+        var element = Task.Replace(Args, "<Arguments><b></b></Arguments>");
+
+        Assert.NotEqual(ScriptTaskXml.Definition(text), ScriptTaskXml.Definition(element));
+    }
+
+    [Theory]
     [InlineData("<Command>pwsh.exe</Command>", "relative program")]
     [InlineData("<Command>C:\\%ProgramFiles%\\pwsh.exe</Command>", "environment variable")]
     [InlineData("<Command>C:\\$env\\pwsh.exe</Command>", "dollar variable")]
@@ -218,5 +244,12 @@ public class ScriptTaskReaderTests
         Assert.Null(reader.ActionFiles(none));
         Assert.Empty(reader.RunningEngines(none));
         Assert.False(reader.TaskLocked(none));
+        foreach (var bad in new[] { @"\..\Windows", @"\Microsoft\*", @"relative", @"\Slipgates\" })
+        {
+            Assert.Null(reader.Definition(bad));
+            Assert.Null(reader.ActionFiles(bad));
+            Assert.Empty(reader.RunningEngines(bad));
+            Assert.False(reader.TaskLocked(bad));
+        }
     }
 }
