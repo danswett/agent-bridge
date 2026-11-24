@@ -1913,6 +1913,43 @@ public class MergeRuleTests
         if (runCount > 21) Assert.Contains("deeper than 20", posted, StringComparison.Ordinal);
     }
 
+    // #4604 (P2-1 of #3974): each hop of the reliance walk used to restart from main's newest run and read the job lists down to the parent again.
+    // One evaluation now reads each run's jobs, each plan-base record, each parent lookup and each page of main's runs once: the fake counts the calls.
+    static (string Posted, List<string> MainReads) RelianceReads(string runs, params (long Run, string Record)[] plans)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, planRecords: plans.ToDictionary(p => p.Run, p => p.Record));
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain, utcNow: () => MainNow);
+            return (Assert.Single(github.Posted), github.RestPaths.Where(p => p.Contains("/actions/", StringComparison.Ordinal) || p.Contains("/check-runs/", StringComparison.Ordinal)).ToList());
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData(21, 70)]
+    [InlineData(100, 500)]
+    public void A_chain_of_reliance_reads_each_run_once_however_many_hops_it_has(int windowRuns, int mostCalls)
+    {
+        // A 21-run adjacent chain (20 parents), then the same 20 parents at the oldest end of a 100-run window: the worst case for the walk.
+        var first = 201;
+        var runs = MainRunsAged(MainNow, Enumerable.Range(first, windowRuns).Reverse().Select(id => ((long)id, "completed", (string?)"success", 1, first + windowRuns - id)).ToArray());
+        var newest = first + windowRuns - 1;
+        var plans = Enumerable.Range(first, windowRuns)
+            .Select(id => ((long)id, id == first ? RelyNone : id <= first + 19 ? Relies(id - 1) : id == newest ? Relies(first + 19) : RelyNone)).ToArray();
+
+        var (posted, reads) = RelianceReads(runs, plans);
+
+        Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
+        var twice = reads.GroupBy(p => p, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        Assert.True(twice.Count == 0, $"read more than once in one evaluation: {string.Join(", ", twice)}");
+        Assert.InRange(reads.Count, 1, mostCalls);
+    }
+
     // A record that is not in the shape is an error, never a guess that the run relied on nothing. Its raw text reaches the log, so
     // its control characters are shown as escapes and its length is capped: it can't add a workflow command.
     [Fact]
