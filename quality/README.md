@@ -493,7 +493,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
+     job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
+     docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
      `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
@@ -536,7 +537,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or not (#4104), as long as main's head, read under the lock, still follows its commit (an
    unreadable or off-main head stops publishing); main's later run publishes its own higher
    version over it. When GitHub numbered a descendant's run lower, that version is refused and
-   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
+   its app change waits for main's next run: delayed, not lost (#938's trade). Releases are
+   spaced 15 minutes apart (owner decision; docs/app-windows.md, "Spacing"): a run inside that
+   publishes nothing and says `deferred=true`; `publish-pending.yml` re-runs that publish job
+   once the window opens, even with main idle, unless a later run publishes first. Quality, on
+   an owner or Chief call, may dispatch `critical-release` with a reason. One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting

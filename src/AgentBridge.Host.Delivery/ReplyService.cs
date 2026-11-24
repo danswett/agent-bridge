@@ -239,7 +239,19 @@ public sealed partial class ReplyService : ISessionReplier
             owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
     }
 
+    // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
+    sealed class KeyTrack { public bool MayHaveBeenSent; }
+
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
+    {
+        var track = new KeyTrack();
+        var result = await DeliverCoreAsync(request, key, peer, timeline, track);
+        // NoKeysSent only where the code proves no key went: every return before a typing attempt, and an attempt that reports KeysWent false. An
+        // exception inside an attempt leaves it MayHaveBeenSent. Never inferred from the refusal or its reason.
+        return result with { KeyDisposition = track.MayHaveBeenSent ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
+    }
+
+    async Task<ReplyResult> DeliverCoreAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline, KeyTrack track)
     {
         Typed typed;
         IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
@@ -278,10 +290,12 @@ public sealed partial class ReplyService : ISessionReplier
                     (claim, var problem) = attachments!.Claim(peer, refs);
                     if (problem is not null) { return Refused(problem); }
                 }
+                track.MayHaveBeenSent = true;   // from here a key could go; an attempt that reports KeysWent false narrows it again
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
                     : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing, request.RequireEmptyBox);
                 keysWent = outcome.KeysWent;
+                track.MayHaveBeenSent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
                 if (claim is not null && session.Agent is AgentKind.Copilot or AgentKind.Claude)
