@@ -63,6 +63,8 @@ public sealed class HostControlOptions
     // just before it stops the host for an install a device asked for.
     public Func<string?> ReadOnly { get; init; } = () => null;
     public Func<string?>? ReadOnlyNow { get; init; }
+    // HostStatus.Disk: what ProfileDisk says of the profile's disk; null when fine.
+    public Func<string?> Disk { get; init; } = () => null;
     public AgentReadinessService? Agents { get; init; }
     public AgentSetupService? AgentSetup { get; init; }
     public AgentInstallService? AgentInstall { get; init; }
@@ -92,6 +94,11 @@ public sealed class HostControl
     internal object WorkspaceFleetWorkers(JsonElement data)
     {
         lock (settingsGate) { return FleetWorkerSettings.Handle(options.Folder, data, log); }
+    }
+
+    internal object WorkspaceAdd(JsonElement data)
+    {
+        lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
     }
 
     readonly Action<string> log;
@@ -187,6 +194,7 @@ public sealed class HostControl
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
+            Disk = options.Disk(),
             DevBox = options.DevBox(),
             SessionWatch = options.SessionWatch(),
             Agents = options.Agents?.Snapshot,

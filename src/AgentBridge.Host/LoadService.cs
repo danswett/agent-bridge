@@ -35,6 +35,13 @@ public sealed class LoadService
         return record;
     }
 
+    // The local pipe's answer (#2982): the four figures launch admission reads, cut from the same record the relay gets, so it is as fresh and as stale.
+    public AgentBridge.Protocol.MachineLoadFigures Figures()
+    {
+        var record = MachineLoadMapper.Map(current(), clock.GetUtcNow(), TimeSpan.FromSeconds(15));
+        return new() { State = record.State, AgeMs = record.AgeMs, RunQueueAvg = record.RunQueueAvg, StaleAfterMs = record.StaleAfterMs };
+    }
+
     public async Task<object?> HandleAsync(IProtocolChannel channel, string op)
     {
         if (op == "load.get") { return Current(); }

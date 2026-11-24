@@ -2,7 +2,7 @@
 
 Design for [#2384](https://github.com/danswett/agent-bridge/issues/2384), S4-2 of
 [#1396](https://github.com/danswett/agent-bridge/issues/1396). Source instrumentation
-is staged; qualifying runs remain held.
+has landed in part (see "Status at main" below); a counter is not retirement evidence until the windowed verdict runs.
 This measures item 2 of fleet `docs/ha-retirement-parity.md` section 3:
 one continuous run with at least 500 messages, 50 launches, 30 approvals and
 20 stops, and zero HA fallbacks. It does not approve retirement or replace
@@ -27,7 +27,7 @@ under `src/AgentBridge.Host`, plus that commit's changes to `Program.cs`,
 `docs/host-config.md` and `tests/AgentBridge.Host.Tests/AuditCommandsTests.cs`.
 Engineering supplied the full #2384/#1401 issues and #2066 body/both receipts;
 those messages were read. No other PR review comments or unlisted source ranges
-were read. Engineering reports #2066 unmerged with both receipts on that head.
+were read. Engineering reported #2066 unmerged with both receipts on that head (it has since merged; see "Status at main").
 These are source observations, not live verification or receipt claims.
 
 #1401 supplies owner-only daily `agents-*.jsonl` and `launches-*.jsonl`,
@@ -39,20 +39,25 @@ row allow-list does not expose proposed gate fields. It is not a gate reader.
 A3 #2009 supplies chain/folder-lock verification; A4 #2010 supplies launch/stop
 wiring; A5 #2011 supplies answer/lookup wiring. A6a is #2064 / PR #2066,
 not the remaining A6 durable-head/archive/pruning work. The gate must not claim
-integrity before A3 lands. Existing hash links alone cannot prove no tail was lost.
+integrity before A3 lands (A3 has landed; see "Status at main"). Existing hash links alone cannot prove no tail was lost.
 
-### Status at main 0416b9d7b (S1 definition of the remaining #1401 and row 25 work)
+### Status at main 0416b9d7b (remaining #1401 and row 25 work)
 
-Checked against source and commit subjects only; not a live run.
+Checked against source and commit subjects only; not a live run. This status supersedes the
+older lines above and below where they disagree. Slice labels: S4 and 7b here are this design's
+own slices (table in the last section); S5, S7 and S8 mean the epic slices in fleet
+`docs/ha-retirement.md` (S5 there is Agent identity).
 
 * **#1401 dependencies landed:** A3 #2009 (#2222), A4 #2010 (#2017), A5 #2011 (#2013) and
   A6a #2064 (#2066, merged; the "unmerged" statement above is out of date). Later audit
-  work also landed: archive (#3162), person-signed rotation (#3566, #3580, #3551).
+  work also landed: archive (#3162), person-signed rotation (#3621 audit rotation core, which closed the #3566 findings, and #3580). #3551 is the
+  grant store, not rotation.
 * **Counter source in code:** `src/AgentBridge.Host/GateAudit.cs` defines the `path`
   (`relay`, `local`, `legacy-ha`), `actorKind` and control phases (`gate.start`, `gate.pause`,
   `gate.reset`, `gate.seal`); launch, approval and stop wiring exist in `GateLaunchAudit.cs`,
-  `PhoneApprovalEvidence.cs`, `StopAudit.cs` and `HaRunning.cs` (red tests #2570, #2588,
-  #2596, #2629).
+  `SessionService.cs` (`AnswerGate`, the approval wiring), `StopAudit.cs` and `HaRunning.cs`.
+  `PhoneApprovalEvidence.cs` is a read-only projection, not wiring. #2570, #2588, #2596 and #2629
+  were the red-test PRs for these slices; they are not the wiring.
 * **Landed state (source, not a live run):** present are the durable audit head and
   `AgentAuditLog.Continuity` (slice 9, with continuity and checkpoint-recovery tests),
   `GateAuditProjection.Read/Project`, used by the launch, approval and stop wiring, and,
@@ -76,9 +81,10 @@ Checked against source and commit subjects only; not a live run.
   pass, and the remedy is a later start date. A hard need for a run boundary would return only
   as a temporary op deleted with the HA connector (S7), as a new change.
 * **Row 25 gap in fleet:** fleet `ops/ha-retirement` scanned PowerShell only, so live Python
-  that talks to HA was invisible; `pump/fleet_pump/wake.py` is not an HA caller. Fleet slice S5
-  scans live `.py` too and allowlists today's live findings (24: 19 PowerShell and 5 Python),
-  defined in fleet `docs/ha-retirement.md`.
+  that talks to HA was invisible; `pump/fleet_pump/wake.py` is not an HA caller. The
+  no-new-call-site gate in fleet `docs/ha-retirement.md` (row 25) scans live `.py` too and allowlists
+  the live findings; read the counts there, since open fleet #1282 revises the inventory. Fleet's S5
+  is Agent identity and does not define this work.
 
 ## 2. Authority and path
 
@@ -242,8 +248,12 @@ Reads change no bytes; permitted appends may extend files, not rewrite pre-exist
 fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
 of missing evidence, clean suffix, automatic reset/start, new store/journal or
 repair command. Repair/reset execution remains outside 9A; reset alone does not
-restore evidence health. Archive enumeration and active-run preservation remain
-9B; neither cut completes #2524 alone or admits a qualifying run.
+restore evidence health. Active-run preservation is 9B (#2971): a run is ACTIVE when any row carries its
+run id and no `gate.seal` row for it exists (every unsealed run counts, so two overlapping runs are both kept; a row or file whose
+run or seal cannot be read counts as active). Retention and `audit archive` never delete or move a day holding rows of an active
+run, so active-run evidence stays in the live files, and the head model is unchanged: archived days are not replayed, because
+archiving already advances `Root` and `RetiringRoot`. Runs unsealed for over 7 days are counted as abandoned and the count is logged
+with the active count; nothing is expired here. Consequences stated plainly: an unparseable line (a torn write) holds its day, and retention stops at the first held day, so one old held day also pauses later days until it is repaired or its run is sealed; the first-grant rotation (`retired/`) is a separate path that copies whole days and is not changed here. Neither cut completes #2524 alone or admits a qualifying run.
 
 This explicitly clarifies previously unspecified append policy, based on section 4
 lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
