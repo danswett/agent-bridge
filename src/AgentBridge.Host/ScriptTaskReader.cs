@@ -49,6 +49,7 @@ internal static class ScriptTaskXml
         if (Root(xml) is not { } task || Part(task, "Actions")?.Elements().ToList() is not [{ } exec] || exec.Name.LocalName != "Exec") { return null; }
         var program = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim().Trim('"');
         if (program is null || !Pinnable(program)) { return null; }
+        if (Launcher.Equals(program[(program.LastIndexOfAny(['\\', '/']) + 1)..], StringComparison.OrdinalIgnoreCase)) { return LauncherFiles(task, exec, program); }
         var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
         if (args.Count == 0) { return [program]; }
         if (!Interpreters.Contains(program[(program.LastIndexOfAny(['\\', '/']) + 1)..])) { return null; }
@@ -65,6 +66,38 @@ internal static class ScriptTaskXml
         }
         return null;
     }
+
+    const string Launcher = "script-run.exe";
+
+    // The action of a task bound through the admin-locked launcher (design/script-credentials-run.md sections 2, 3 and 4):
+    // `script-run <name> -- <absolute program> [-NoProfile -NonInteractive -File <absolute script>]`. It pins the launcher, the child program AND the script, never
+    // optionally, and only when the task is logged-on-only (the owner's answer to Q-run-2: no stored password). Anything else, inline code included, is null.
+    static IReadOnlyList<string>? LauncherFiles(XElement task, XElement exec, string launcher)
+    {
+        if (Part(task, "Principals")?.Elements().ToList() is not [{ } principal]
+            || principal.Elements().SingleOrDefault(e => e.Name.LocalName == "LogonType")?.Value.Trim() != "InteractiveToken") { return null; }
+        var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
+        if (args.Count < 3 || args[1] != "--" || !ScriptName.IsMatch(args[0]) || args[0] is "." or ".." || !Pinnable(args[2])) { return null; }
+        var child = args[2];
+        if (!Interpreters.Contains(child[(child.LastIndexOfAny(['\\', '/']) + 1)..])) { return args.Count == 3 ? [launcher, child] : null; }
+        bool noProfile = false, nonInteractive = false;
+        for (var i = 3; i < args.Count; i++)
+        {
+            if (args[i].Length < 2 || args[i][0] is not ('-' or '/')) { return null; }
+            var name = args[i][1..].ToLowerInvariant();
+            if (name.Length <= 4 && "file".StartsWith(name, StringComparison.Ordinal))
+            {
+                return noProfile && nonInteractive && i + 1 < args.Count && Pinnable(args[i + 1]) ? [launcher, child, args[i + 1]] : null;
+            }
+            if (name == "noprofile") { noProfile = true; }
+            else if (name == "noninteractive") { nonInteractive = true; }
+            else if (ValuedSwitches.Contains(name)) { i++; }
+            else if (!PlainSwitches.Contains(name)) { return null; }
+        }
+        return null;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex ScriptName = new(@"^[A-Za-z0-9._-]{1,64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     static readonly HashSet<string> Interpreters = new(["pwsh.exe", "powershell.exe"], StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> PlainSwitches = ["noprofile", "nologo", "noninteractive", "mta", "sta"];
