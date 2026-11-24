@@ -102,11 +102,15 @@ static partial class SelfTest
                 high = Math.Max(high, scroll.VerticalOffset);
                 offsets.Add(Math.Round(scroll.VerticalOffset, 1));
             }
-            phase = "quiet";
-            var gap = 0.0;
-            for (var n = 0; n < 60; n++) { await Frame(); gap = Math.Max(gap, scroll.ScrollableHeight - scroll.VerticalOffset); }
-            check(back <= 1.5 && gap <= 1.5,
-                $"wheel down to the end: never moves back up and stays at the end (worst back {back:0.#}, quiet gap {gap:0.#}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+            // Judged by STATE, not by how long the view takes: the worst distance from the end over a fixed 60 frames failed about one main run in three on a loaded hosted runner (quiet gap 771,
+            // 1833) while the worst back stayed 0. Settled = a run of rendered frames at the end, not moving, offset and extent unchanged; never moving back up stays strict, across the
+            // notches above and every frame here (ScrollSettle, tested in App.Tests). The wall clock is only a backstop so a view that never arrives fails instead of hanging the run.
+            phase = "settle";
+            var settle = new ScrollSettle(high, back);
+            var giveUp = clock.Elapsed + TimeSpan.FromSeconds(90);
+            while (!settle.Done && clock.Elapsed < giveUp) { await Frame(); settle.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
+            check(settle.Passed,
+                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
         }
         finally
         {
