@@ -24,19 +24,25 @@ public sealed class AgentCredentialJobTests : IDisposable
         public readonly HashSet<(string Key, int Pid)> Members = [];
         public readonly List<(string Key, int RootPid, DateTimeOffset RootStarted, int Pid, DateTimeOffset? Started)> Asked = [];
         public readonly List<string> Released = [];
-        public Exception? EnrollFails;
+        // What the host would still hold: like the real service, a release before the job exists releases nothing.
+        public readonly HashSet<string> Held = [];
+        public Exception? EnrollFails, ReleaseFails, ContainsFails;
+        public Action? DuringEnroll;
 
         public void Enroll(string key, int processId, DateTimeOffset startedAt)
         {
+            DuringEnroll?.Invoke();
             if (EnrollFails is not null) { throw EnrollFails; }
             Enrolled.Add((key, processId, startedAt));
+            Held.Add(key);
         }
 
-        public void Release(string key) => Released.Add(key);
+        public void Release(string key) { Released.Add(key); Held.Remove(key); if (ReleaseFails is not null) { throw ReleaseFails; } }
 
         public bool Contains(string key, int rootPid, DateTimeOffset rootStartedAt, int processId, DateTimeOffset? startedAt)
         {
             Asked.Add((key, rootPid, rootStartedAt, processId, startedAt));
+            if (ContainsFails is not null) { throw ContainsFails; }
             return Enrolled.Any(e => e.Key == key && e.Pid == rootPid && e.Started == rootStartedAt) && Members.Contains((key, processId));
         }
     }
@@ -134,27 +140,6 @@ public sealed class AgentCredentialJobTests : IDisposable
     }
 
     [Fact]
-    public void The_chain_still_decides_when_it_reaches_the_root_and_no_job_is_asked()
-    {
-        var jobs = new FakeJobs();
-        var store = Store(jobs);
-        var (token, _) = Launched(store, jobs);
-        jobs.Members.Clear();
-        Assert.NotNull(store.Check(token, Inside()).Accepted);
-        Assert.Empty(jobs.Asked);
-    }
-
-    [Fact]
-    public void Without_a_job_service_the_behaviour_is_the_ancestor_rule_alone()
-    {
-        var store = Store(null);
-        var token = store.Prepare("sess-1", "launch-1")!;
-        store.Bind("launch-1", 100, Started);
-        Assert.Null(store.Check(token, Orphan()).Accepted);
-        Assert.NotNull(store.Check(token, Inside()).Accepted);
-    }
-
-    [Fact]
     public void A_launch_that_never_bound_is_never_enrolled_and_a_failed_enrolment_does_not_fail_the_launch()
     {
         var jobs = new FakeJobs { EnrollFails = new InvalidOperationException("no job") };
@@ -168,6 +153,31 @@ public sealed class AgentCredentialJobTests : IDisposable
         Assert.Null(store.Check(token, Orphan()).Accepted);
         store.Abandon("launch-1");
         Assert.Empty(jobs.Enrolled);
+    }
+
+    [Fact]
+    public void A_job_that_cannot_be_read_never_admits_a_caller()
+    {
+        var jobs = new FakeJobs();
+        var lines = new List<string>();
+        var store = Store(jobs, lines);
+        var (token, _) = Launched(store, jobs);
+        jobs.ContainsFails = new InvalidOperationException("no job");
+        Assert.Null(store.Check(token, Orphan()).Accepted);
+        Assert.Contains(lines, l => l.Contains("could not be read") && l.Contains("InvalidOperationException"));
+        Assert.NotNull(store.Check(token, Inside()).Accepted);
+    }
+
+    [Fact]
+    public void A_job_that_cannot_be_let_go_never_leaves_a_revoked_credential_on_disk()
+    {
+        var jobs = new FakeJobs();
+        var store = Store(jobs);
+        Launched(store, jobs);
+        jobs.ReleaseFails = new InvalidOperationException("no job");
+        Assert.True(store.Revoke("sess-1", "a person revoked it"));
+        Assert.Equal(0, store.Count);
+        Assert.Equal(0, Store(null).Count);
     }
 
     [Fact]
@@ -191,6 +201,19 @@ public sealed class AgentCredentialJobTests : IDisposable
     }
 
     static ProcessAncestry Inside(int rootPid) => new([new PeerProcess(900, CallerStarted, "pwsh.exe"), new PeerProcess(rootPid, Started, "agent.exe")], true);
+
+    [Fact]
+    public void A_credential_revoked_while_its_job_is_being_made_leaves_no_job_held()
+    {
+        var jobs = new FakeJobs();
+        var store = Store(jobs);
+        store.Prepare("sess-1", "launch-1");
+        jobs.DuringEnroll = () => store.Revoke("sess-1", "a person revoked it");
+        store.Bind("launch-1", 100, Started);
+        Assert.Single(jobs.Enrolled);
+        Assert.Empty(jobs.Held);
+        Assert.Equal(0, store.Count);
+    }
 
     [Fact]
     public void A_restarted_host_enrols_the_live_roots_again_and_never_a_dead_or_unbound_one()

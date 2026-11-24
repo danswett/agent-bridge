@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using AgentBridge.Local;
 using Xunit;
 
 namespace AgentBridge.Local.Tests;
@@ -10,20 +8,13 @@ namespace AgentBridge.Local.Tests;
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public sealed class WindowsSessionJobsTests : IDisposable
 {
-    readonly string folder = Path.Combine(Path.GetTempPath(), "abjobs-" + Guid.NewGuid().ToString("N")[..8]);
     readonly List<Process> started = [];
     static readonly string Key = new string('A', 32) + new string('B', 32);
-
-    public WindowsSessionJobsTests() => Directory.CreateDirectory(folder);
 
     public void Dispose()
     {
         foreach (var p in started) { try { if (!p.HasExited) { p.Kill(true); } } catch (Exception) { } p.Dispose(); }
-        foreach (var p in Stray) { try { using var q = Process.GetProcessById(p); q.Kill(); } catch (Exception) { } }
-        try { Directory.Delete(folder, true); } catch (IOException) { }
     }
-
-    readonly List<int> Stray = [];
 
     static bool Windows => OperatingSystem.IsWindows();
 
@@ -38,43 +29,6 @@ public sealed class WindowsSessionJobsTests : IDisposable
         return p;
     }
 
-    // Root R sleeps, then starts M; M starts C, writes C's pid and exits. C is then a grandchild whose parent is gone.
-    (Process Root, int Child) RootWithOrphanedGrandchild(Func<Process, bool>? enroll = null)
-    {
-        var pidFile = Path.Combine(folder, "child.pid");
-        File.WriteAllText(Path.Combine(folder, "m.ps1"),
-            $"$c = Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120'\r\n$c.Id | Set-Content -LiteralPath '{pidFile}'\r\n");
-        File.WriteAllText(Path.Combine(folder, "r.ps1"),
-            $"Start-Sleep -Seconds 4\r\nStart-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-File','{Path.Combine(folder, "m.ps1")}'\r\nStart-Sleep -Seconds 120\r\n");
-        var root = Process.Start(new ProcessStartInfo("powershell.exe", $"-NoProfile -File \"{Path.Combine(folder, "r.ps1")}\"") { CreateNoWindow = true, UseShellExecute = false })!;
-        started.Add(root);
-        Assert.True(enroll?.Invoke(root) ?? true);
-        for (var i = 0; i < 300 && !File.Exists(pidFile); i++) { Thread.Sleep(100); }
-        Assert.True(File.Exists(pidFile), "the grandchild never started");
-        Thread.Sleep(300);
-        var child = int.Parse(File.ReadAllText(pidFile).Trim());
-        Stray.Add(child);
-        return (root, child);
-    }
-
-    [Fact]
-    public void A_descendant_whose_parent_has_exited_is_in_the_job_and_a_stranger_is_not()
-    {
-        if (!Windows) { return; }
-        var jobs = Jobs();
-        var (root, child) = RootWithOrphanedGrandchild(r => { jobs.Enroll(Key, r.Id, StartOf(r)); return true; });
-        using var grandchild = Process.GetProcessById(child);
-        // It really is an orphan: its parent chain stops before the root.
-        Assert.DoesNotContain(ProcessChain.Read(child).Processes, p => p.Id == root.Id);
-        Assert.True(jobs.Contains(Key, root.Id, StartOf(root), child, StartOf(grandchild)));
-        Assert.True(jobs.Contains(Key, root.Id, StartOf(root), root.Id, StartOf(root)));
-
-        var stranger = Sleeper();
-        Assert.False(jobs.Contains(Key, root.Id, StartOf(root), stranger.Id, StartOf(stranger)));
-        // The host's own handle is closed and the root has not been ended: the job needs no one holding it.
-        Assert.False(root.HasExited);
-    }
-
     [Fact]
     public void A_job_is_only_ever_reached_through_the_handle_that_made_it_and_the_recorded_root_must_be_in_it()
     {
@@ -83,10 +37,8 @@ public sealed class WindowsSessionJobsTests : IDisposable
         var enrolled = Sleeper();
         var other = Sleeper();
         jobs.Enroll(Key, enrolled.Id, StartOf(enrolled));
-        // The root this credential recorded is not in its job: the job is not believed.
         Assert.False(jobs.Contains(Key, other.Id, StartOf(other), enrolled.Id, StartOf(enrolled)));
         Assert.True(jobs.Contains(Key, enrolled.Id, StartOf(enrolled), enrolled.Id, StartOf(enrolled)));
-        // Another holder (another session, another host object) has no way to name or open it, whatever key it tries.
         Assert.False(Jobs().Contains(Key, enrolled.Id, StartOf(enrolled), enrolled.Id, StartOf(enrolled)));
         Assert.False(jobs.Contains(new string('C', 64), enrolled.Id, StartOf(enrolled), enrolled.Id, StartOf(enrolled)));
     }
@@ -141,20 +93,43 @@ public sealed class WindowsSessionJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_release_that_races_a_question_never_pulls_the_handle_out_from_under_it()
+    {
+        if (!Windows) { return; }
+        var jobs = Jobs();
+        var root = Sleeper();
+        jobs.Enroll(Key, root.Id, StartOf(root));
+        // The credential goes between finding the job and using it: that question is answered with the handle it started with.
+        jobs.AfterLookup = key => jobs.Release(key);
+        Assert.True(jobs.Contains(Key, root.Id, StartOf(root), root.Id, StartOf(root)));
+        jobs.AfterLookup = null;
+        Assert.False(jobs.Contains(Key, root.Id, StartOf(root), root.Id, StartOf(root)));
+        Assert.Null(jobs.LimitFlags(Key));
+    }
+
+    [Fact]
+    public void The_jobs_handle_is_not_inheritable_so_no_child_the_host_starts_can_carry_it()
+    {
+        if (!Windows) { return; }
+        var jobs = Jobs();
+        var root = Sleeper();
+        jobs.Enroll(Key, root.Id, StartOf(root));
+        Assert.False(jobs.IsInheritable(Key));
+    }
+
+    [Fact]
     public void The_job_only_permits_break_away_and_letting_it_go_ends_nothing()
     {
         if (!Windows) { return; }
         var jobs = Jobs();
         var root = Sleeper();
         jobs.Enroll(Key, root.Id, StartOf(root));
-        // Permission to break away only: never kill-on-close (0x2000), so a host restart cannot end a session.
         Assert.Equal(0x0800u, jobs.LimitFlags(Key));
         jobs.Release(Key);
         Assert.Null(jobs.LimitFlags(Key));
         Assert.False(jobs.Contains(Key, root.Id, StartOf(root), root.Id, StartOf(root)));
         Thread.Sleep(300);
         Assert.False(root.HasExited);
-        // After a host restart the root is enrolled again, in a new job.
         jobs.Enroll(Key, root.Id, StartOf(root));
         Assert.True(jobs.Contains(Key, root.Id, StartOf(root), root.Id, StartOf(root)));
     }

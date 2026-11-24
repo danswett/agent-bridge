@@ -5,22 +5,15 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AgentBridge.Local;
 
-// The Windows session job (design/agent-principals.md §3.4). One job per launch, made when the host binds the credential to the launch's
-// root process, and kept as an open handle in this host for as long as the credential lives:
-//   * the job has NO NAME. A named job disappears from its namespace when the last handle closes (the host restarting), and a name can be
-//     squatted or opened by any process of the user; an unnamed job can be reached only through this handle, or by inheriting membership.
-//     So no other session can open it, assign itself to it or guess it, and there is no name to trust;
-//   * its only limit is permission to break away: never kill-on-close (a host restart must not end sessions), and a child that asks to
-//     break away still starts, outside the job, and then has only the ancestor rule;
-//   * children inherit it, and a nested job the agent makes for its own children counts (IsProcessInJob is true for a job's descendants);
-//   * Contains asks about the credential's own job, and believes it only if the recorded root (pid and start time) is in it.
-// After a host restart the old job has no handle and no name, so each live root is enrolled again in a new one: processes started from
-// then on are members, and shells started before the restart have the ancestor rule alone until the session is relaunched.
-[SupportedOSPlatform("windows")]
+// The Windows session job (design/agent-principals.md §3.4): one job per launch root, held by the host as an open handle while the
+// credential lives. UNNAMED (a named job vanishes when the last handle closes, and anything of the user can open or squat a name), so
+// nothing else can open, join or trust it; only inherited membership gets in. Its one limit is permission to break away (never
+// kill-on-close); nested jobs count. Contains believes a job only with the recorded root (pid and start time) in it. After a restart the
+// host enrols live roots again in new jobs: later processes are members, shells started before keep the ancestor rule until relaunched.[SupportedOSPlatform("windows")]
 public sealed class WindowsSessionJobs : ISessionJobs
 {
     const uint ProcessTerminate = 0x0001, ProcessSetQuota = 0x0100, ProcessQueryLimitedInformation = 0x1000;
-    const uint JobObjectLimitBreakawayOk = 0x0800, StillActive = 259;
+    const uint JobObjectLimitBreakawayOk = 0x0800, StillActive = 259, HandleFlagInherit = 1;
     const int JobObjectExtendedLimitInformation = 9;
     static readonly TimeSpan StartSlack = TimeSpan.FromSeconds(1);
 
@@ -55,11 +48,28 @@ public sealed class WindowsSessionJobs : ISessionJobs
     public bool Contains(string key, int rootPid, DateTimeOffset rootStartedAt, int processId, DateTimeOffset? startedAt)
     {
         if (startedAt is not { } caller || processId <= 0 || rootPid <= 0) { return false; }
+        // Referenced under the lock: a Release while this is asked cannot close the handle, or let its value be recycled, until it is answered.
         Handle? job;
-        lock (gate) { held.TryGetValue(key, out job); }
-        if (job is null || job.IsClosed) { return false; }
-        return In(job, rootPid, rootStartedAt) && In(job, processId, caller);
+        var added = false;
+        lock (gate)
+        {
+            if (!held.TryGetValue(key, out job)) { return false; }
+            job.DangerousAddRef(ref added);
+        }
+        try
+        {
+            AfterLookup?.Invoke(key);
+            return In(job, rootPid, rootStartedAt) && In(job, processId, caller);
+        }
+        finally { if (added) { job.DangerousRelease(); } }
     }
+
+    // For tests: runs between finding the job and using it.
+    internal Action<string>? AfterLookup { get; set; }
+
+    // For tests: whether the job's handle can be inherited by a child process; null when there is no job.
+    internal bool? IsInheritable(string key)
+    { Handle? job; lock (gate) { held.TryGetValue(key, out job); } return job is not null && GetHandleInformation(job, out var flags) ? (flags & HandleFlagInherit) != 0 : null; }
 
     public void Release(string key)
     {
@@ -143,6 +153,10 @@ public sealed class WindowsSessionJobs : ISessionJobs
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool GetProcessTimes(nint process, out long created, out long exited, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool GetHandleInformation(nint handle, out uint flags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
