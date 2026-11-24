@@ -1065,11 +1065,12 @@ public class MergeRuleTests
     //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
     //                               branch's tip, never a pull request's head, and it cannot be dispatched.
     //   Re-run known flakes         the same trigger, the same reason.
+    //   Full red                    workflow_run, completed Full on main only (Full is itself a workflow_run of CI on main), the same reason.
     //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
     //                               on a pull request's branch ends skipped, which the judge counts as passing.
     // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
     // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
-    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Re-run known flakes", "Upload release halt policy"];
 
     // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
     // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
@@ -2970,15 +2971,17 @@ public class MergeRuleTests
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
-        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
+        // The jobs the merge waits on are the FAST lane's (S2, #4104): product, ha-integration, light and the app build. The browser jobs are
+        // the FULL lane's, so the node-setup family stands in for them here (light's infra_steps); a step of another family is the wrong job.
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
-            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
+            : scenario == "wrong-job" ? "ha-integration" : "light";
         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
             : scenario == "npm-ci" ? "Run npm ci"
             : scenario == "system-packages" ? "Download Playwright's system packages"
-            : "Playwright's browsers from main's cache";
+            : scenario == "wrong-job" ? "Playwright's browsers from main's cache"
+            : "Run actions/setup-node@v6";
         var steps = new List<object>
         {
             Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),

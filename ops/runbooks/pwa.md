@@ -7,8 +7,8 @@ failing to install (a release the worker could not keep whole; #650).
 
 ## How the PWA ships
 
-`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI completion.
-Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed; other jobs do not gate.
+`pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI or Full completion.
+Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed, each in the CI run or in the same commit's Full run (full.yml; a Pages deploy waits for FULL, never deploys on CI alone); other jobs do not gate.
 Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
 Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
