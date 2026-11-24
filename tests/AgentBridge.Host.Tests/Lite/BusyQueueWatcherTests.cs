@@ -152,4 +152,17 @@ public sealed class BusyQueueWatcherTests
         await w.WatchAsync(r).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Null(s.Get(r));
         Assert.False(s.SlotHeld("sess1"));
+    }
+
+    // #3968 review (lane 2): the delivered report is atomic too. A send freed elsewhere (its session ended) while the watcher reads the prompt as taken
+    // is left as that settle made it, never turned into delivered.
+    [Fact]
+    public async Task A_send_freed_elsewhere_while_its_prompt_is_read_as_taken_is_left_as_it_was_settled()
+    {
+        var (s, r) = Held();
+        var w = new BusyQueueWatcher(s, clock) { Taken = (_, _, _) => { s.Settle(r, BusyQueueStore.Unconfirmed, "sessionEnded", held: false); return true; } };
+        await w.WatchAsync(r).WaitAsync(TimeSpan.FromSeconds(5));
+        var rec = s.Get(r)!;
+        Assert.Equal((BusyQueueStore.Unconfirmed, "sessionEnded", false), (rec.State, rec.Reason, rec.Held));
+        Assert.False(s.SlotHeld("sess1"));
     }}
