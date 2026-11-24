@@ -961,6 +961,7 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentHaBridge = agentHaCached,
         HomeAssistant = () => haAuth.Problem,
         FleetPublication = () => fleetPublication.Status,
+        SessionWatch = () => SessionWatchHealth.Of(sessionWatch),
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
         Disk = new ProfileDisk(serveFolder!, log: Log).StatusLine,
