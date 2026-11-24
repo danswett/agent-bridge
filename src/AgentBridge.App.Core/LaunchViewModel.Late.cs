@@ -125,7 +125,7 @@ public sealed partial class LaunchViewModel
         if (lost is not null || last is not { } e || e.Request != l.Request) { return; }
         startedLate = l.Request;
         if (l.Question is { } q && askedBy.TryGetValue(l.Machine.Key, out var by) && SameQuestion(by.Question, q)) { askedBy.Remove(l.Machine.Key); }
-        if (e.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+        if (e.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; CoordinatorRole = ""; }
         if (shown && machine == l.Machine) { main.Open(l.Machine.Key, l.Session, untilItArrives: true); }
         Show();
     }

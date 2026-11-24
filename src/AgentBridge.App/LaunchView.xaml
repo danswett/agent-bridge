@@ -151,6 +151,12 @@
                         ItemsSource="{x:Bind ViewModel.PermissionChoices}" SelectedItem="{x:Bind ViewModel.Permissions, Mode=OneWay}"
                         SelectionChanged="OnPicked" />
                     <TextBox
+                        Header="Role (coordinators only)"
+                        AutomationProperties.AutomationId="LaunchCoordinatorRole"
+                        PlaceholderText="Leave blank for a worker. A lead, Quality or SRE session: its role name"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.ShowCoordinatorRole), Mode=OneWay}"
+                        Text="{x:Bind ViewModel.CoordinatorRole, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox
                         Header="First message"
                         AutomationProperties.AutomationId="LaunchPrompt"
                         AcceptsReturn="True" TextWrapping="Wrap" MinHeight="110" MaxHeight="320"
