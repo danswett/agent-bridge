@@ -848,7 +848,7 @@
         "workspace": "elsewhere"
       },
       "refused": true,
-      "note": "Unknown workspace - this machine has agent-bridge, scratch"
+      "note": "Unknown workspace 'elsewhere' - this machine has agent-bridge, scratch"
     },
     "unknownProfile": {
       "settings": {

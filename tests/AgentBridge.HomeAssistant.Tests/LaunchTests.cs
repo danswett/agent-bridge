@@ -381,10 +381,13 @@ public sealed class LaunchTests : IDisposable
         await Launch(c, AgentUser);
         if (recorded["refused"]!.GetValue<bool>())
         {
+            // The one departure from the daemon's recorded words (#1901): it echoed the rejected workspace, this connector does not. The fixture stays as
+            // the daemon recorded it (the parity check compares it with agent-ha-bridge), so this refusal is checked against the closed sentence instead.
+            var expected = name == "unknownWorkspace" ? UnknownWorkspaceNote : recorded["note"]!.GetValue<string>();
             Assert.Empty(launched);
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Note);
+            Assert.Equal(expected, Note);
             Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Outcome()["note"]!.GetValue<string>());
+            Assert.Equal(expected, Outcome()["note"]!.GetValue<string>());
         }
         else
         {
