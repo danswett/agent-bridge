@@ -81,6 +81,18 @@ public sealed class UnpushedWorkTests : IDisposable
         Assert.True(UnpushedWork.Pending(Work));
     }
     [Fact]
+    public void A_git_descendant_that_outlives_git_holding_its_pipe_is_refused_within_one_overall_bound()
+    {
+        // A clean filter that backgrounds a process still holding git's stderr: git itself exits at once, but its
+        // stderr pipe stays open for 30 s. Reading it must not outlast the one 5 s bound (the fleet.end lock is held meanwhile).
+        File.WriteAllText(Path.Combine(Work, ".gitattributes"), "a.txt filter=slow\n");
+        Git(Work, "config", "filter.slow.clean", "cat; (sleep 30 >/dev/null &)");
+        File.WriteAllText(Path.Combine(Work, "a.txt"), "b"); // same size as the committed "a", so git must hash it and run the filter
+        var clock = Stopwatch.StartNew();
+        Assert.True(UnpushedWork.Pending(Work));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(9), $"took {clock.Elapsed}");
+    }
+    [Fact]
     public void A_folder_git_cannot_read_is_pending_never_clean()
     {
         Assert.True(UnpushedWork.Pending(root));

@@ -63,7 +63,7 @@ limited to the sessions that caller started. It cannot end its own session.
 Work is never ended over: the host reads git in the session's folder, once per request, and refuses with
 `policy` on uncommitted or untracked files (whatever `status.showUntrackedFiles` says), a stash, a commit
 on any local branch that has not been pushed, a local branch with no upstream, or git that cannot be read
-or does not answer in 5 s (the process tree is killed). An open pull request is GitHub's to say and the host
+or does not finish, pipes included, inside one 5 s deadline for the whole check (the git process tree is killed, and the refusal is the answer). An open pull request is GitHub's to say and the host
 makes no GitHub call, so a caller that must not end such a session checks it first (follow-up for program C).
 
 ## Answering `launch.options` without waiting for Agency (#1527)
