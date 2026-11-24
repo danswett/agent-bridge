@@ -124,7 +124,7 @@ non-mutating name validation, shared with create/rename, and counts of current u
 rows. It adds no storage key or membership record; edits still use the existing order API.
 
 Windows G4 (#1617) keeps the same registers locally in `SessionOrder`, with group operations in `SessionGroups`; nothing syncs yet.
-Membership changes prepend unpinned rows; retention uses exact last listings from all known-live machines, independent of the picker, with pending timestamps persisted by `Flush`.
+Registers are stored under `groupRecords` in the PWA's shape. Membership changes prepend unpinned rows; deleting a group lifts its unpinned members, in their order, to the top of Sessions, as the PWA does. Retention (30 days unlisted) follows in G4b.
 
 G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only in the device's
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search

@@ -160,8 +160,7 @@ public sealed partial class MainViewModel
         byId.Values.Where(Visible).Select(c => new OrderEntry(owner[c].Key, c.Session)).ToList(),
         nameOf: k => MachineOf(k)?.Name,
         shows: k => MachineOf(k) is { } m && Shows(m),
-        settled: k => MachineOf(k)?.Host.Sessions.Complete != false,
-        knownLive: byId.Values.Select(c => new OrderEntry(owner[c].Key, c.Session)).ToList());
+        settled: k => MachineOf(k)?.Host.Sessions.Complete != false);
 
     // "ended 3m ago" moves on with the clock.
     void RefreshEnded() => SyncEnded(Arranged().Ended);

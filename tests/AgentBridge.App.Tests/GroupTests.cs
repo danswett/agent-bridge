@@ -65,23 +65,6 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
-    public void Deleting_a_group_returns_every_member_in_place_without_deleting_sessions()
-    {
-        var order = new SessionOrder(FilePath);
-        OrderEntry[] rows = [E("a"), E("b"), E("c")];
-        order.Arrange(rows);
-        var id = order.Groups.Create("Work");
-        order.Groups.SetGroup(K("a"), id);
-        order.Groups.SetGroup(K("c"), id);
-        var before = order.Arrange(rows).Sessions.Select(e => e.Key).ToArray();
-        order.Groups.Delete(id);
-        var again = new SessionOrder(FilePath);
-        Assert.Empty(again.Groups.Items);
-        Assert.All(rows, e => Assert.Null(again.Groups.GroupOf(e.Key)));
-        Assert.Equal(before, again.Arrange(rows).Sessions.Select(e => e.Key));
-    }
-
-    [Fact]
     public void Pin_boundary_drops_keep_membership_while_unpinned_moves_stay_in_their_group()
     {
         var order = new SessionOrder(null);
@@ -106,108 +89,25 @@ public sealed class GroupTests : IDisposable
     }
 
     [Fact]
-    public void Membership_expires_only_after_30_days_unlisted_even_after_order_pruning()
-    {
-        var clock = new FakeTimeProvider(Make.T0);
-        var order = new SessionOrder(FilePath, clock);
-        var id = order.Groups.Create("Work");
-        order.Arrange([E("a")]);
-        order.Groups.SetGroup(K("a"), id);
-        order.Arrange(Enumerable.Range(0, 301).Select(i => E($"row-{i}")).ToArray());
-        clock.Advance(TimeSpan.FromDays(30));
-        order.Arrange([]);
-        Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        clock.Advance(TimeSpan.FromTicks(1));
-        order = new SessionOrder(FilePath, clock);
-        order.Arrange([]);
-        Assert.Null(new SessionOrder(FilePath, clock).Groups.GroupOf(K("a")));
-        Assert.Single(order.Groups.Items);
-    }
-
-    [Fact]
-    public void Live_members_keep_their_group_and_refresh_retention_after_30_days()
-    {
-        var clock = new FakeTimeProvider(Make.T0);
-        var order = new SessionOrder(FilePath, clock);
-        var id = order.Groups.Create("Work");
-        order.Groups.SetGroup(K("a"), id);
-        clock.Advance(TimeSpan.FromDays(31));
-        order.Arrange([E("a")]);
-        Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        clock.Advance(TimeSpan.FromDays(29));
-        order = new SessionOrder(FilePath, clock);
-        order.Arrange([]);
-        Assert.Equal(id, order.Groups.GroupOf(K("a")));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Listing_stamps_throttle_saves_but_keep_exact_retention_in_memory_and_after_flush(bool reload)
-    {
-        var clock = new FakeTimeProvider(Make.T0);
-        var order = new SessionOrder(FilePath, clock);
-        var id = order.Groups.Create("Work");
-        order.Arrange([E("a")]);
-        order.Groups.SetGroup(K("a"), id);
-        var before = System.IO.File.ReadAllText(FilePath);
-        order.MarkSeen(K("a"), "reply");
-        clock.Advance(TimeSpan.FromHours(23));
-        order.Arrange([E("a")]);
-        Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
-        Assert.True(new SessionOrder(FilePath).Unread(K("a"), "reply"));
-        clock.Advance(TimeSpan.FromHours(2));
-        order.Arrange([E("a")]);
-        Assert.NotEqual(before, System.IO.File.ReadAllText(FilePath));
-        Assert.False(new SessionOrder(FilePath).Unread(K("a"), "reply"));
-        before = System.IO.File.ReadAllText(FilePath);
-        clock.Advance(TimeSpan.FromHours(23));
-        order.Arrange([E("a")]);
-        Assert.Equal(before, System.IO.File.ReadAllText(FilePath));
-        if (reload) { order.Flush(); order = new SessionOrder(FilePath, clock); }
-        clock.Advance(TimeSpan.FromDays(29) + TimeSpan.FromHours(2));
-        order.Arrange([]);
-        Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        clock.Advance(TimeSpan.FromHours(22) + TimeSpan.FromTicks(1));
-        order.Arrange([]);
-        Assert.Null(order.Groups.GroupOf(K("a")));
-    }
-
-    [Fact]
-    public async Task Filtered_machines_refresh_membership_without_affecting_visible_counts()
+    public async Task The_view_model_creates_renames_moves_counts_removes_and_deletes_groups()
     {
         var clock = new FakeTimeProvider(Make.T0);
         var ui = new LockedDispatcher();
         await using var local = new HostConnection(_ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline test")), ui);
-        await using var remote = new HostConnection(_ => Task.FromException<AgentBridge.Local.LocalChannel>(new InvalidOperationException("Offline test")), ui);
         Machine M(string key, HostConnection host) => new(key, host, new CardContext { Host = host, Deliveries = new Deliveries(host, ui), Folds = new FoldStore(null), Capabilities = () => host.Capabilities });
         var main = new MainViewModel(M(Machine.LocalKey, local), new UsageViewModel(clock), order: new SessionOrder(null, clock));
-        main.Add(M("remote", remote));
         local.Sessions.BeginSnapshot();
-        remote.Sessions.BeginSnapshot();
         local.Sessions.Upsert(Make.Session("a"));
-        remote.Sessions.Upsert(Make.Session("b"));
+        local.Sessions.Upsert(Make.Session("b"));
         local.Sessions.EndSnapshot();
-        remote.Sessions.EndSnapshot();
         var id = main.CreateGroup("Work");
-        var key = SessionOrder.KeyOf("remote", "b");
         var card = main.AllCards.Single(c => c.Id == "b");
-        card.Editing = true;
         main.MoveToGroup(card, id);
         Assert.Equal(1, main.GroupCounts[id]);
-        Assert.False(main.CanMove(card, -1));
         main.RenameGroup(id, "Renamed");
         Assert.Equal("Renamed", Assert.Single(main.Groups).Name);
-        main.SelectedMachine = main.Machines.Single(m => m.Key == Machine.LocalKey);
-        clock.Advance(TimeSpan.FromDays(31));
-        remote.Sessions.Upsert(Make.Session("b"));
-        Assert.Equal(id, main.Order.Groups.GroupOf(key));
-        Assert.Equal(0, main.GroupCounts[id]);
-        Assert.Equal("a", Assert.Single(main.Sessions).Id);
-        main.SelectedMachine = main.Machines[0];
         main.RemoveFromGroup(card);
-        Assert.Equal(["b", "a"], main.Sessions.Select(c => c.Id));
-        Assert.False(main.Move(card, -1));
+        Assert.Equal(0, main.GroupCounts[id]);
         main.DeleteGroup(id);
         Assert.Empty(main.Groups);
     }
@@ -228,16 +128,73 @@ public sealed class GroupTests : IDisposable
     public void Registers_raise_counters_above_loaded_names_and_membership_and_keep_the_device_tag()
     {
         Directory.CreateDirectory(folder);
-        System.IO.File.WriteAllText(FilePath, """{"groups":{"g":{"value":"Work","counter":90,"deviceTag":"00000000000000000000000000000001"}},"membership":{"other":{"value":"g","counter":100,"deviceTag":"00000000000000000000000000000002"}}}""");
+        System.IO.File.WriteAllText(FilePath, """{"groupRecords":{"groups":{"g":{"value":"Work","counter":90,"deviceTag":"00000000000000000000000000000001"}},"membership":{"other":{"value":"g","counter":100,"deviceTag":"00000000000000000000000000000002"}}}}""");
         var order = new SessionOrder(FilePath);
         order.Groups.Rename("g", "Renamed");
         order = new SessionOrder(FilePath);
         order.Groups.SetGroup(K("a"), "g");
         using var json = JsonDocument.Parse(System.IO.File.ReadAllText(FilePath));
-        var name = json.RootElement.GetProperty("groups").GetProperty("g");
-        var member = json.RootElement.GetProperty("membership").GetProperty(K("a"));
+        var name = json.RootElement.GetProperty("groupRecords").GetProperty("groups").GetProperty("g");
+        var member = json.RootElement.GetProperty("groupRecords").GetProperty("membership").GetProperty(K("a"));
         Assert.Equal(101, name.GetProperty("counter").GetInt64());
         Assert.Equal(102, member.GetProperty("counter").GetInt64());
         Assert.Equal(name.GetProperty("deviceTag").GetString(), member.GetProperty("deviceTag").GetString());
+    }
+
+    [Fact]
+    public void Registers_are_stored_under_groupRecords_in_the_PWA_shape()
+    {
+        var order = new SessionOrder(FilePath);
+        order.Arrange([E("a")]);
+        var work = order.Groups.Create("Work");
+        order.Groups.SetGroup(K("a"), work);
+        order.Groups.SetGroup(K("a"), null);
+        var gone = order.Groups.Create("Gone");
+        order.Groups.Delete(gone);
+        using var json = JsonDocument.Parse(System.IO.File.ReadAllText(FilePath));
+        var records = json.RootElement.GetProperty("groupRecords");
+        static string Keys(JsonElement r) => string.Join(",", r.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal("counter,deviceTag,value", Keys(records.GetProperty("groups").GetProperty(work)));
+        Assert.Equal("counter,deviceTag,tombstone", Keys(records.GetProperty("groups").GetProperty(gone)));  // a tombstone has no value
+        var removal = records.GetProperty("membership").GetProperty(K("a"));
+        Assert.Equal("counter,deviceTag,value", Keys(removal));  // a removal is a null value, not a tombstone
+        Assert.Equal(JsonValueKind.Null, removal.GetProperty("value").ValueKind);
+        Assert.DoesNotContain("collapsed", System.IO.File.ReadAllText(FilePath), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Deleting_a_group_returns_its_unpinned_members_to_the_top_of_Sessions_in_their_order()
+    {
+        var order = new SessionOrder(FilePath);
+        OrderEntry[] rows = [E("a"), E("b"), E("c"), E("d")];
+        order.Arrange(rows);
+        var id = order.Groups.Create("Team");
+        foreach (var s in new[] { "c", "b", "d" }) { order.Groups.SetGroup(K(s), id); }
+        order.SetPinned(K("d"), true);
+        rows = [.. rows, E("e")];
+        order.Arrange(rows);  // a new session lands above the members
+        order.Groups.Delete(id);
+        var arranged = new SessionOrder(FilePath).Arrange(rows);
+        Assert.Equal(["b", "c", "e", "a"], arranged.Sessions.Select(e => e.Session.Id));
+        Assert.Equal(["d"], arranged.Pinned.Select(e => e.Session.Id));
+        Assert.Empty(order.Groups.Items);  // no session was deleted with it, and none keeps a group
+        Assert.All(rows, e => Assert.Null(order.Groups.GroupOf(e.Key)));
+    }
+
+    [Fact]
+    public void Loading_drops_a_group_whose_name_is_unusable_and_keeps_any_hex_device_tag()
+    {
+        Directory.CreateDirectory(folder);
+        var long41 = new string('x', 41);
+        System.IO.File.WriteAllText(FilePath, "{\"groupRecords\":{\"groups\":{"
+            + "\"blank\":{\"value\":\" \",\"counter\":1,\"deviceTag\":\"ab\"},"
+            + $"\"long\":{{\"value\":\"{long41}\",\"counter\":2,\"deviceTag\":\"ab\"}},"
+            + "\"ok\":{\"value\":\"Work\",\"counter\":3,\"deviceTag\":\"0A1b2c3d\"}},"
+            + "\"membership\":{\"m\":{\"value\":\"blank\",\"counter\":4,\"deviceTag\":\"ab\"}}}}");
+        var groups = new SessionOrder(FilePath).Groups;
+        Assert.Equal(["Work"], groups.Items.Select(g => g.Name));
+        Assert.Null(groups.GroupOf("m"));
+        groups.Rename("ok", "Renamed");
+        Assert.Equal("Renamed", Assert.Single(groups.Items).Name);
     }
 }
