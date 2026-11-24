@@ -19,6 +19,12 @@ public static class WheelNotchRule
     {
         static string N(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
         if (moved.Count < MinimumNotches) { return $"too few notches measured ({moved.Count}, need {MinimumNotches})"; }
+        // A NaN is false against every limit below and would pass both rules, so a value that is not a finite number is a failed measurement (#4557).
+        if (!double.IsFinite(notch)) { return $"the notch distance is not a finite number ({N(notch)})"; }
+        for (var i = 0; i < moved.Count; i++)
+        {
+            if (!double.IsFinite(moved[i])) { return $"notch {i + 1} moved {N(moved[i])}, not a finite number"; }
+        }
         for (var i = 0; i < moved.Count; i++)
         {
             if (Tenths(moved[i] - notch) > PerNotch) { return $"per-notch rule: notch {i + 1} moved {N(moved[i])}, more than {N(PerNotch)} from {N(notch)}"; }

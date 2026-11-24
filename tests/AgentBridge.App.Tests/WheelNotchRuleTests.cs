@@ -72,6 +72,23 @@ public sealed class WheelNotchRuleTests
         Assert.Contains("per-notch rule", WheelNotchRule.Failure([52.1, 48, 48, 48, 48, 48, 48, 48], 48), StringComparison.Ordinal);
     }
 
+    // #4557: a NaN compares false against every limit, so it used to pass both rules. Any value that is not a finite number is a failed measurement.
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void A_notch_that_is_not_a_finite_number_fails_and_names_it(double notch)
+    {
+        var failure = WheelNotchRule.Failure([48, 48, notch, 48, 48, 48, 48, 48], 48);
+
+        Assert.Contains("not a finite number", failure, StringComparison.Ordinal);
+        Assert.Contains("notch 3", failure, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_notch_distance_that_is_not_a_finite_number_fails() =>
+        Assert.Contains("not a finite number", WheelNotchRule.Failure(Steady, double.NaN), StringComparison.Ordinal);
+
     [Fact]
     public void Too_few_notches_fail()
     {
