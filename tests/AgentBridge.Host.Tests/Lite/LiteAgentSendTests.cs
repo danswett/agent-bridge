@@ -33,6 +33,27 @@ public sealed class LiteAgentSendTests : IDisposable
     const string Device = "33333333333333333333333333333333";
     const string Body = """{"machine":"33333333333333333333333333333333","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
 
+    // #4435: a tool that retries a busy send may pass the time of its first request. It is optional and only ever ordering and display:
+    // a time more than two minutes ahead, over a day old or not whole Unix seconds is ignored (the send goes as if none was given), never trusted.
+    [Fact]
+    public async Task The_first_request_time_is_passed_on_when_in_bounds_and_ignored_otherwise()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var ok in new[] { now - 600, now + 60 })
+        {
+            await Send(hello, $$"""{"machine":"{{Device}}","session":"{{Sess}}","text":"hi","sentAt":{{ok}}}""");
+            Assert.Equal(ok, sender.Calls[^1].Input.SentAt);
+        }
+        foreach (var bad in new[] { (now + 3600).ToString(), (now - 90_000).ToString(), "\"soon\"", "1.5", "null" })
+        {
+            await Send(hello, $$"""{"machine":"{{Device}}","session":"{{Sess}}","text":"hi","sentAt":{{bad}}}""");
+            Assert.Null(sender.Calls[^1].Input.SentAt);
+        }
+        await Send(hello, Body);
+        Assert.Null(sender.Calls[^1].Input.SentAt);
+        Assert.Equal(8, sender.Calls.Count);
+    }
+
     [Theory, InlineData("m2"), InlineData("m"), InlineData("33333333")]
     public async Task A_name_or_fragment_is_refused_with_its_id_before_audit_or_sender(string machine)
     {

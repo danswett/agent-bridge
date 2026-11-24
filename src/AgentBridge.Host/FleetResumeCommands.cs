@@ -9,14 +9,13 @@ namespace AgentBridge.Host;
 
 public sealed record FleetResumeInput(int Version, Guid Request, string Session);
 public sealed record FleetResumeReceipt(Guid Request, string Outcome, string? Reason, string? SessionId = null);
-
 // fleet.resume (#4318, docs/design/agent-resume.md): a coordinator resumes a fleet worker in place. The caller is a live agent
 // session at depth 0 with launch scope whose own recorded launch role the person listed in agents.resume.roles; the session is
 // one the launch record shows a fleet launch, ended, never the caller's own, resumed with the settings it was launched with.
 // Everything else refuses before anything starts, with a closed reason.
 public sealed class FleetResumeCommands(string folder, AgentCredentials credentials, Func<string, string?> launchRole,
     Func<string, bool> wasFleetLaunched, Func<string, bool> running, Func<string, RestoreLaunch?> recorded,
-    Func<ResumeAsk, CancellationToken, Task<LaunchResult>> resume)
+    Func<ResumeAsk, CancellationToken, Task<LaunchResult>> resume, Func<string, string?>? fleetName = null)
 {
     public const string Op = "fleet.resume";
     const int Remembered = 256;
@@ -28,7 +27,6 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
     // is simply running, which refuses.
     readonly Dictionary<(string, Guid), FleetResumeReceipt> answered = [];
     readonly Queue<(string, Guid)> order = new();
-
     public async Task<FleetResumeReceipt> HandleAsync(AgentCredential caller, JsonElement data)
     {
         await serial.WaitAsync();
@@ -41,7 +39,7 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 var receipt = new FleetResumeReceipt(input?.Request ?? Guid.Empty, outcome, reason, session);
                 var written = audit.Append(new AgentAuditEntry("local", receipt.Request.ToString(), principal, caller.Chain, Op, session ?? "",
                     outcome, reason ?? "none"));
-                if (input is not null)
+                if (input is not null && reason != "busy")   // busy is a wait: asking again with the same id is tried again
                 {
                     answered[(principal, input.Request)] = receipt;
                     order.Enqueue((principal, input.Request));
@@ -50,7 +48,6 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 return written || outcome == "refused" ? receipt : receipt with { Outcome = "unconfirmed", Reason = "audit-unavailable" };
             }
             FleetResumeReceipt Refused(string reason, string? session = null) => Done("refused", reason, session);
-
             try
             {
                 if (data.ValueKind != JsonValueKind.Object || ProtocolJson.ByteCount(data) > 4096
@@ -70,13 +67,15 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 if (role is null || !settings.Agents.ResumeRoles.Contains(role, StringComparer.Ordinal)) { return Refused("policy"); }
                 var session = input.Session;
                 if (string.Equals(session, caller.Session, StringComparison.OrdinalIgnoreCase)
-                    || settings.Agents.ExcludedSessions.Contains(session)) { return Refused("scope", session); }
+                    || settings.Agents.ExcludedSessions.Contains(session) || settings.Agents.ExcludedSessions.Contains(caller.Session)
+                    || settings.Agents.ExcludedSessions.Contains(fleetName?.Invoke(session) ?? "")) { return Refused("scope", session); }   // the person's "no agent may reach" lists, as fleet.end
                 bool fleet;
                 try { fleet = wasFleetLaunched(session); } catch (InvalidOperationException) { fleet = false; }
                 if (!fleet) { return Refused("scope", session); }
                 if (running(session)) { return Refused("running", session); }
                 // The original settings or nothing: never the caller's, and never the machine's defaults.
                 if (recorded(session) is not { } launch) { return Refused("policy", session); }
+                if (settings.Launch.Workspaces.All(w => w.Label != launch.Workspace) || settings.Agents.ExcludedWorkspaces.Contains(launch.Workspace!)) { return Refused("scope", session); }
                 var result = await resume(new ResumeAsk(session, Enum.TryParse<AgentKind>(launch.Launcher, true, out var kind) ? kind : AgentKind.Copilot, launch, principal),
                     CancellationToken.None);
                 return result.Outcome switch

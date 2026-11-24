@@ -292,6 +292,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // is decided; a handler that throws costs only itself.
     public event Action<string, LaunchedWith>? SessionStarted;
 
+    // The launching principal of a started session, told once with it (session watch S1b, #4262): the AUTHENTICATED principal of the
+    // launch call, never a request field. The owner record keeps only an agent principal.
+    public event Action<string, string>? SessionOwned;
+
     // A launch already answered Unconfirmed (its window not seen ready in time) whose window is seen
     // ready later, while it is still followed: the restore record counts and shows it restored then
     // (#780). Raised once per launch; a handler that throws costs only itself.
@@ -1784,10 +1788,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
             { log($"launch {Short(p.Key)}: process provenance could not be bound: {e.Message}"); }
         }
-        if (p.NotedId == id || SessionStarted is not { } started) { return; }
+        if (p.NotedId == id || (SessionStarted is null && SessionOwned is null)) { return; }
         p.NotedId = id;
-        try { started(id, p.Launched); }
+        try { SessionStarted?.Invoke(id, p.Launched); }
         catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the restore record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
+        try { SessionOwned?.Invoke(id, p.Principal); }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch: the owner record could not note session {id[..Math.Min(8, id.Length)]}: {e.Message}"); }
     }
 
     // agent-ha-bridge's Test-DaemonTrustAwaitingPress: a launched agent asking whether to trust

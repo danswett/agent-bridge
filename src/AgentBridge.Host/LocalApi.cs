@@ -20,12 +20,14 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
         RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
-        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null, FleetResumeCommands? fleetResume = null) =>
-                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, fleetResume);
+        AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null, FleetResumeCommands? fleetResume = null,
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null) =>
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, fleetResume, remoteLaunch);
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
-        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop, FleetResumeCommands? fleetResume) => async (channel, op, data) =>
+        AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop, FleetResumeCommands? fleetResume,
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch) => async (channel, op, data) =>
     {
         try
         {
@@ -69,6 +71,13 @@ public static class LocalApi
             if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
+        }
+        if (op == HostOps.WorkspaceAdd)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "person-only: only the person in the local app may approve a folder", log); }
+            return control.WorkspaceAdd(data);
         }
         if (op == SamePcPinProtocol.Op)
         {
@@ -220,6 +229,9 @@ public static class LocalApi
             && grantIssuer.Of(channel) is { Kind: "session" } grantee)
         {
             if (!grantIssuer.IsLive(grantee)) { throw Refuse(op, granted, "the credential is no longer live", log); }
+            // G9c2: a target that is another host goes to the remote sender (one signed send, no HA); anything else stays local.
+            if (remoteLaunch is not null && FleetGrantLaunch.TryParse(data) is { } named && remoteLaunch.IsRemote(named.Target))
+            { return await remoteLaunch.SendAsync(grantee, named, CancellationToken.None); }
             return await grantLaunch.LaunchGrantedAsync(grantee, data);
         }
         if (op is LaunchProtocol.Launch or LaunchProtocol.Options
@@ -291,7 +303,7 @@ public static class LocalApi
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
-            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability, HostOps.WorkspacesCapability,
                 .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability, HostOps.ScriptCredentialsCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
