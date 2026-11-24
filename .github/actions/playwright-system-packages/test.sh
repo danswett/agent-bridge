@@ -146,8 +146,8 @@ while [ $# -gt 0 ]; do
 done
 seen=$(grep -cxF "$url" "$CURL_LOG" || true); echo "$url" >> "$CURL_LOG"; echo "$args" >> "$CURL_ARGS"
 host=${url#*://}; host=${host%%/*}; path=${url#*://"$host"}
-case " ${CURL_DOWN_HOSTS:-} " in *" $host "*) exit 28 ;; esac
-[ "$seen" -ge "${CURL_FAIL_FIRST:-0}" ] || exit 28
+case " ${CURL_DOWN_HOSTS:-} " in *" $host "*) [ -z "${CURL_SLOW_SECONDS:-}" ] || /usr/bin/sleep "$CURL_SLOW_SECONDS"; exit 28 ;; esac
+[ "$seen" -ge "${CURL_FAIL_FIRST:-0}" ] || { [ -z "${CURL_SLOW_SECONDS:-}" ] || /usr/bin/sleep "$CURL_SLOW_SECONDS"; exit 28; }
 file="$CURL_FIXTURES/$host$path"
 [ -f "$file" ] || exit 22
 case " ${CURL_BAD_HOSTS:-} " in *" $host "*) size=$(wc -c < "$file"); file=$CURL_FIXTURES/corrupt; head -c "$size" /dev/zero | tr '\0' X > "$file" ;; esac
@@ -189,7 +189,7 @@ reset() {
   unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
-  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE
+  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE CURL_SLOW_SECONDS
   export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false; rm -rf "$CURL_FIXTURES"; mkdir -p "$CURL_FIXTURES"; : > "$CURL_LOG"; : > "$CURL_ARGS"
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
@@ -344,11 +344,20 @@ deadline_cases() {
   expect "worst case $worst s (deadline $deadline + longest attempt $longest + plan 60 + install 180) plus 900 s for the job's own work fits its smallest cap ($job_limit s)" '[ "$((worst + 900))" -le "$job_limit" ]'
   expect "the header shows the arithmetic" 'grep -q "worst case" "$here/download.sh"'
   reset "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0 PLAYWRIGHT_APT_ATTEMPTS=6 APT_DOWNLOAD_TIMEOUTS=99; dl
-  expect "no new attempt starts once the deadline is spent, and the error says so" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 1 ] && grep -q "^::error::apt download failed (exit 124): network or timeout.*deadline" "$work/out"'
+  expect "no download attempt starts once the deadline is spent (the first one included), and the error says so" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 0 ] && grep -q "^::error::apt download failed (exit 124): network or timeout.*deadline" "$work/out"'
   reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
   export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_DEADLINE=0
   dl
   expect "the prefetch never outlasts the deadline: with none left it fetches nothing" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && grep -q budget "$work/out"'
+  # Review P2/P3 on #4410 (#4458): the budgets are checked before every try and every package, and an empty mirror list still has Canonical. (The clock starts before the plan call, and a spawn here can take a second, so the budget is 2 s and a slow try 3 s: wide enough not to flake.)
+  reset "$azure" "$canonical"; local a b; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_PREFETCH_BUDGET=2 CURL_SLOW_SECONDS=3 CURL_DOWN_HOSTS='azure.archive.ubuntu.com archive.ubuntu.com'
+  dl
+  expect "a try that spends the prefetch budget ends that package's tries, and the next package is not started" '[ "$(wc -l < "$CURL_LOG")" -eq 1 ] && grep -q "left to apt.*liba_1_amd64.deb.*libb_1_amd64.deb" "$work/out" && grep -q "budget" "$work/out"'
+  reset "" ; a=$(deb liba_1_amd64.deb 'package a')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"
+  dl
+  expect "an empty mirror list still fetches from Canonical's archive, the one mirror that is always asked last" '[ "$(curls "//archive.ubuntu.com/ubuntu/pool/main/liba")" -ge 1 ] && [ "$(curls "azure.archive")" -eq 0 ]'
 }
 robust_cases() { index_cases; prefetch_cases; uri_cases; cause_cases; stall_cases; deadline_cases; }
 if [ "${1:-}" = --robust ]; then

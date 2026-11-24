@@ -163,6 +163,12 @@ retry() {
   network_failed=false
   log=$(mktemp)
   while true; do
+    # The deadline gates the FIRST download attempt too (#4458 P2): after the update (and after leaving Azure) the step may already be past it, and one more attempt of up to 210 s would
+    # make the real worst case about 1200 s, not the 1050 s of the header. So no download attempt starts at all once it is spent.
+    if [ "$n" -eq 1 ] && [ "$phase" = download ] && [ "$SECONDS" -ge "$deadline" ]; then
+      deadline_hit=true; network_failed=true; rc=124
+      echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::the step's ${deadline} s deadline is spent before the first download attempt; none is started"; break
+    fi
     echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::apt attempt $n of $max: $*"
     rc=0; LC_ALL=C "$@" 2>&1 | tee "$log" || rc=$?
     if [ "$rc" -eq 0 ] && ! grep -qE '^[EW]:' "$log"; then break; fi
