@@ -112,6 +112,9 @@ internal static class ScriptTaskXml
     // The argv Windows' CommandLineToArgvW (which pwsh uses) would hand the program, or null when this reading could differ from it. A backslash-quote is a literal
     // quote there but a toggle here, so it is refused; a quote may only wrap a WHOLE token (opening at its start, closing at its end), and anything else is refused, so
     // what the reader pinned is exactly what the program runs (#4524).
+    // CommandLineToArgvW separates arguments on a space or a tab and NOTHING else (not NBSP, a newline, U+0085, U+2003, U+2028, U+3000): the reader must split the same way.
+    static bool IsSeparator(char c) => c is ' ' or '\t';
+
     static List<string>? Tokens(string line)
     {
         if (line.Contains("\\\"", StringComparison.Ordinal)) { return null; }
@@ -119,17 +122,17 @@ internal static class ScriptTaskXml
         var i = 0;
         while (i < line.Length)
         {
-            if (char.IsWhiteSpace(line[i])) { i++; continue; }
+            if (IsSeparator(line[i])) { i++; continue; }
             if (line[i] == '"')
             {
                 var close = line.IndexOf('"', i + 1);
-                if (close < 0 || (close + 1 < line.Length && !char.IsWhiteSpace(line[close + 1]))) { return null; }
+                if (close < 0 || (close + 1 < line.Length && !IsSeparator(line[close + 1]))) { return null; }
                 tokens.Add(line[(i + 1)..close]);
                 i = close + 1;
                 continue;
             }
             var start = i;
-            while (i < line.Length && !char.IsWhiteSpace(line[i]))
+            while (i < line.Length && !IsSeparator(line[i]))
             {
                 if (line[i] == '"') { return null; }
                 i++;
