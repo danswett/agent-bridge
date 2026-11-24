@@ -1083,9 +1083,10 @@ public class MergeRuleTests
     //   verdict and a finished one needn't re-judge anything, #2454),
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
     //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
+    //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
-        "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
         "Full", "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
     ];
 
