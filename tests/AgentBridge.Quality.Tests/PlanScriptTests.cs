@@ -200,7 +200,8 @@ public class PlanScriptTests
                              function global:gh {
                                  $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 }
                                  if ($env:CI_PLAN_TEST_RUNS -eq 'release-debt') {
-                                     if ($args[1] -like '*actions/workflows/*') { "1`t$(git rev-parse HEAD^1)" }
+                                     if ($args[1] -like '*head_sha=*') { }
+                                     elseif ($args[1] -like '*actions/workflows/*') { "1`t$(git rev-parse HEAD^1)" }
                                      elseif ($args[1] -like '*/jobs?*' -or $args[1] -like '*/annotations?*') { }
                                      elseif ($args[1] -like '*releases?*') { 'v0.1.1' }
                                      else { throw "Unexpected offline gh call: $($args -join ' ')" }
