@@ -111,6 +111,17 @@ internal sealed class LaunchProvenance
         }
     }
 
+    // The role a launch may record (#4318, R10 guards): a person's launch (no agent principal) records what it names; an agent's
+    // launch records it only when it equals the role the launching session itself was recorded with, so a session can never
+    // set or raise its own role and a builder can never record a coordinator role. Anything unclear records none.
+    public string? RoleFor(string? requested, string? agentPrincipal)
+    {
+        if (requested is null) { return null; }
+        if (agentPrincipal is null) { return requested; }
+        try { return RoleOf(agentPrincipal[(agentPrincipal.LastIndexOf('/') + 1)..]) is { } own && own == requested ? requested : null; }
+        catch (InvalidOperationException) { return null; }
+    }
+
     void Unfinished(string session)
     {
         if (origins.Values.Any(o => o.Process is null && (o.Session.Length == 0 || string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase))))

@@ -1330,7 +1330,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (auditRegistered is null) { return Refused("the launch audit could not be written durably"); }
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
-            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, plan.Role);
+            provenance.Preparing(key, sessionId, fleet ? "fleet" : null, provenance.RoleFor(plan.Role, agentPrincipal));
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)

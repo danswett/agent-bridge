@@ -79,6 +79,28 @@ public sealed class FleetProvenanceTests : IDisposable
         Assert.Null(Open().RoleOf(second));
     }
 
+    [Fact]
+    public void A_role_is_recorded_only_for_a_person_launch_or_a_launch_within_the_launching_sessions_own_role()
+    {
+        var store = Open();
+        const string coordinator = "99999999-9999-4999-8999-999999999999", builder = "55555555-5555-4555-8555-555555555555";
+        var own = Guid.NewGuid();
+        store.Preparing(own, coordinator, null, "quality-lead");
+        store.Bound(own, coordinator, Process);
+        var plain = Guid.NewGuid();
+        store.Preparing(plain, builder);
+        store.Bound(plain, builder, Process);
+        var reopened = Open();
+        Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", null));                      // a person's launch
+        Assert.Null(reopened.RoleFor(null, null));
+        Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", $"agent:m/{coordinator}")); // a coordinator within its own role
+        Assert.Null(reopened.RoleFor("chief", $"agent:m/{coordinator}"));                          // never a higher or other role
+        Assert.Null(reopened.RoleFor("quality-lead", $"agent:m/{builder}"));                       // a builder never records a coordinator role
+        Assert.Null(reopened.RoleFor("quality-lead", "agent:m/11111111-1111-4111-8111-111111111111")); // an unknown session has none
+        store.Preparing(Guid.NewGuid(), "");                                                       // an unreadable record: none, not a throw
+        Assert.Null(Open().RoleFor("quality-lead", $"agent:m/{coordinator}"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

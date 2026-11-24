@@ -32,8 +32,15 @@ The host keeps no coordinator marker today: the launch record keeps no launcher 
 display text. This change records, at launch, the launch's `role` (the validated role name the request already carries, in
 `LaunchProvenance`), and adds a person-set host setting `agents.resume.roles` (the role names that count as coordinators on
 this machine). A caller is a coordinator only when its own session's recorded role is in that list. The default is an empty
-list, so resume is off until the person lists the roles (fail closed); a caller with no recorded role, or one launched by a
+list, so resume is off until the person lists the roles (fail closed; setting `agents.resume.roles` is the owner's step); a caller with no recorded role, or one launched by a
 person without a role, is refused. No name, title or fleet-name lookup is ever used.
+
+A role is recorded only by a PERSON launch, or by a coordinator launching within its own role (the launch's role must equal
+the role the launching session was itself recorded with). A session can never set or raise its own role, and a builder
+launch can never record a coordinator role: an agent launch naming any other role records none. Both are tests.
+
+**Known limit:** sessions launched before this ships have NO recorded role, so nobody can resume them by this op (fail
+closed) until they are relaunched; the owner resumes those by hand meanwhile.
 
 ## Rules (each is a test)
 
