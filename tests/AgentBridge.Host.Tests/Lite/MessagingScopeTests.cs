@@ -124,6 +124,29 @@ public sealed class MessagingScopeTests
         finally { Directory.Delete(root, true); }
     }
 
+    // The ONE rule (docs/design/beta-messaging.md section 3): once a kill is recorded, only an explicit remote "own-account" turns messaging
+    // back on. A scope of same-person never does, and neither does unsetting the remote key a kill wrote (receipt: #4316 comment 7124772690).
+    [Fact]
+    public void After_a_kill_a_scope_of_same_person_with_the_remote_key_unset_does_not_turn_messaging_back_on()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scope-unset-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.scope", "same-person"], root, TextWriter.Null, TextWriter.Null));
+            var kill = new LiteKill(root);
+            kill.Kill();
+            Assert.False(kill.On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "unset", "agentMessaging.remote"], root, TextWriter.Null, TextWriter.Null));
+            Assert.False(new LiteKill(root).On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.scope", "same-person"], root, TextWriter.Null, TextWriter.Null));
+            Assert.False(new LiteKill(root).On);
+            Assert.Equal(0, ConfigCommands.Run(["config", "set", "agentMessaging.remote", "own-account"], root, TextWriter.Null, TextWriter.Null));
+            Assert.True(new LiteKill(root).On);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void An_upgrade_default_is_not_an_explicit_on()
     {

@@ -39,6 +39,9 @@ public sealed record AgentMessagingSettings
     public string Remote { get; init; } = Off;
     // Whether config.json names remote itself. After a kill, the default alone never turns the mode back on.
     public bool RemoteSet { get; init; }
+    // Whether the remote key itself says "own-account". The one thing that turns messaging back on after a recorded kill: a scope of
+    // same-person never does, and neither does unsetting the "off" a kill wrote (docs/design/beta-messaging.md section 3).
+    public bool RemoteKeyOn { get; init; }
     public bool AllowAllTargets { get; init; }
     public bool AllowAllLaunchedTargets { get; init; }
     public bool LaneDelivery { get; init; }
@@ -63,7 +66,7 @@ public sealed record AgentMessagingSettings
         if (s.TryGetProperty("remote", out var remote) && remote.ValueKind != JsonValueKind.Null)
         {
             var value = remote.ValueKind == JsonValueKind.String ? remote.GetString() : null;
-            settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true };
+            settings = settings with { Remote = value == OwnAccount ? OwnAccount : Off, RemoteSet = true, RemoteKeyOn = value == OwnAccount };
             if (value is not (OwnAccount or Off)) { problems.Add($"agentMessaging.remote is not \"{Off}\" or \"{OwnAccount}\", so remote agent messaging is off"); }
         }
         // scope (docs/design/beta-messaging.md section 3): "same-person" is an explicit on, "off" is off, and anything else is off and
@@ -74,7 +77,7 @@ public sealed record AgentMessagingSettings
             if (value == SamePerson) { settings = settings with { Remote = settings.RemoteSet ? settings.Remote : OwnAccount, RemoteSet = true }; }
             else
             {
-                settings = settings with { Remote = Off, RemoteSet = true };
+                settings = settings with { Remote = Off, RemoteSet = true, RemoteKeyOn = false };
                 if (value != Off) { problems.Add($"agentMessaging.scope is not \"{Off}\" or \"{SamePerson}\", so remote agent messaging is off"); }
             }
         }
