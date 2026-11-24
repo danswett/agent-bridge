@@ -4,8 +4,13 @@ using AgentBridge.Host.Delivery.Launch;
 
 namespace AgentBridge.Host;
 
-public sealed class FleetLaunchGrant(string profileFolder)
+public sealed class FleetLaunchGrant(string profileFolder, ProfileDisk? disk = null)
 {
+    readonly ProfileDisk disk = disk ?? new(profileFolder);
+    // diskLow: null when there is room (or it cannot be read); each fleet launch and turning the grant on ask this.
+    public string? CheckDisk() => disk.Refusal();
+    public ProfileDisk Disk => disk;
+
     public string? CheckDispatch(LaunchConfig actual, LaunchRequest request)
     {
         if (request.Agent is null) { return "fleet launch must name its agent"; }
@@ -23,7 +28,7 @@ public sealed class FleetLaunchGrant(string profileFolder)
         { return "launch:fleet requires a script credential with only read+reply scope"; }
         if (!script.FleetLaunch) { return "launch:fleet grant is off; no fallback"; }
         var (policy, problem) = HostSettings.CurrentAgents(profileFolder);
-        return problem ?? (policy.Enabled ? null : "agents.enabled is off");
+        return problem ?? (policy.Enabled ? CheckDisk() : "agents.enabled is off");
     }
 
     public string? CheckLaunch(AgentCredential script, ProcessAncestry caller, LaunchRequest request)

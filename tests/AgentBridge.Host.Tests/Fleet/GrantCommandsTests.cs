@@ -28,6 +28,20 @@ public sealed class GrantCommandsTests : IDisposable
         StringWriter? output = null) => GrantCommands.Run(args, refused ?? (() => false), Audit,
         () => Store, () => Policy, _ => json, confirm ?? (digest => digest), key, output ?? new(), new StringWriter(), clock);
 
+    // #2771: turning the fleet grant on is refused with diskLow under 1 GiB free on the profile's disk; enough room issues it as before.
+    [Theory]
+    [InlineData(1L, 4, false)]
+    [InlineData(5L << 30, 0, true)]
+    public void Issuing_a_grant_is_refused_with_diskLow_under_1_GiB_free(long free, int code, bool issued)
+    {
+        Directory.CreateDirectory(Folder);
+        var error = new StringWriter();
+        Assert.Equal(code, GrantCommands.Run(["grants", "issue", "document.json"], () => false, Audit, () => Store, () => Policy,
+            _ => JsonSerializer.Serialize(Grant(), ProtocolJson.Options), d => d, key, new StringWriter(), error, clock, new ProfileDisk(Folder, _ => free)));
+        if (!issued) { Assert.Contains("diskLow", error.ToString()); }
+        Assert.Equal(issued, File.Exists(Path.Combine(Folder, GrantStore.FileName)));
+    }
+
     [Fact]
     public void Production_caller_guard_refuses_a_script_parent_before_revoke_opens_the_store()
     {
