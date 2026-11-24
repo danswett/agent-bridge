@@ -1,16 +1,32 @@
+using System.Diagnostics;
 using AgentBridge.App.Core;
 using Microsoft.Extensions.Time.Testing;
+using Microsoft.Win32.SafeHandles;
 using Xunit;
 
 namespace AgentBridge.App.Tests;
 
+// The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, but never of the test process itself:
+// MiniDumpWriteDump of the process that is running other tests can deadlock with their threads and kill the test host (#4351). The real
+// dump is of a child process; every other case replaces the dump with a fake that only records the call.
+//
 // The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, from the test process itself.
 // MiniDumpWriteDump on its own process suspends its other threads, which Microsoft warns can deadlock, and this assembly's test host
 // hung on CI three times with this class in flight in one: so it runs ALONE, in a collection with no parallelism (xunit runs it after
 // the parallel ones have finished), and keeps its coverage. QuarantineTests lists it. That removes one suspected cause of the hang.
+// The four lines just above, which say the dump is of the test process itself, are stale since #4351: no test dumps the test host any more, so running
+// alone is redundant for the dump. The collection stays because QuarantineTests pins this list; the class is not removed from it.
 [Collection(nameof(WindowsMiniDumpTests))]
 public sealed class WindowsMiniDumpTests : IDisposable
 {
+    int dumps;
+    bool FakeDump(Process process, SafeFileHandle file)
+    {
+        dumps++;
+        RandomAccess.Write(file, "MDMP fake"u8, 0);
+        return true;
+    }
+
     readonly string folder = Path.Combine(Path.GetTempPath(), "abdump-" + Guid.NewGuid().ToString("N"));
     readonly FakeTimeProvider time = new(new DateTimeOffset(2026, 11, 23, 12, 0, 0, TimeSpan.Zero));
 
@@ -20,11 +36,13 @@ public sealed class WindowsMiniDumpTests : IDisposable
     }
 
     [Fact]
-    public void A_dump_is_a_real_minidump_named_for_its_time_and_process_and_far_smaller_than_a_full_one()
+    public void A_dump_is_a_real_minidump_of_a_child_process_named_for_its_time_and_far_smaller_than_a_full_one()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-
-        var path = new WindowsMiniDump(folder, time).Write();
+        using var child = Process.Start(new ProcessStartInfo("cmd.exe", "/k") { RedirectStandardInput = true, UseShellExecute = false, CreateNoWindow = true })!;
+        string? path;
+        try { path = new WindowsMiniDump(folder, time, freeBytes: () => 50L << 30, dump: (_, file) => WindowsMiniDump.Native(child, file)).Write(); }
+        finally { child.Kill(true); child.WaitForExit(); }
 
         Assert.NotNull(path);
         Assert.Equal(folder, Path.GetDirectoryName(path));
@@ -43,7 +61,7 @@ public sealed class WindowsMiniDumpTests : IDisposable
         for (var day = 1; day <= 7; day++) { File.WriteAllText(Path.Combine(folder, $"AgentBridge-hang-2026110{day}-000000-1.dmp"), "old"); }
         File.WriteAllText(Path.Combine(folder, "someone-elses.dmp"), "not ours");
 
-        var path = new WindowsMiniDump(folder, time, keep: 3).Write();
+        var path = new WindowsMiniDump(folder, time, keep: 3, freeBytes: () => 50L << 30, dump: FakeDump).Write();
 
         var kept = Directory.EnumerateFiles(folder, "AgentBridge-hang-*.dmp").Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(3, kept.Length);
@@ -61,16 +79,18 @@ public sealed class WindowsMiniDumpTests : IDisposable
     public void With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said(long freeBytes, bool writes)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var dumper = new WindowsMiniDump(folder, time, freeBytes: () => freeBytes);
+        var dumper = new WindowsMiniDump(folder, time, freeBytes: () => freeBytes, dump: FakeDump);
 
         if (writes)
         {
             Assert.NotNull(dumper.Write());
+            Assert.Equal(1, dumps);
             return;
         }
 
         var skipped = Assert.Throws<HangDumpSkipped>(() => dumper.Write());
         Assert.Contains("1 GB", skipped.Message, StringComparison.Ordinal);
+        Assert.Equal(0, dumps);
         Assert.False(Directory.Exists(folder) && Directory.EnumerateFiles(folder).Any());
     }
 
@@ -82,7 +102,8 @@ public sealed class WindowsMiniDumpTests : IDisposable
         var blocked = Path.Combine(folder, "AgentBridge-hang-20261123-120000-" + Environment.ProcessId + ".dmp");
         File.WriteAllText(blocked, "already here");
 
-        Assert.ThrowsAny<IOException>(() => new WindowsMiniDump(folder, time).Write());
+        Assert.ThrowsAny<IOException>(() => new WindowsMiniDump(folder, time, freeBytes: () => 50L << 30, dump: FakeDump).Write());
+        Assert.Equal(0, dumps);
     }
 }
 

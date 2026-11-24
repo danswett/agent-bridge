@@ -306,6 +306,7 @@ accepts a caller that is a member of that job when the chain does not reach the 
   named job vanishes from its namespace when the last handle closes (a host restart), and any process of the user can open, squat or
   guess a name. With no name there is nothing another session can open, join or trust; the only ways in are this handle and inheriting
   membership from a process already in the job. A job is never believed by name.
+* **The handle is not inheritable**, and no limit or security attribute is set that would make it so: a child the host starts (with handle inheritance on) does not receive it. Process start times are checked on the handle each call opened (`Enroll` before the process is assigned, `Contains` for the root and for the caller), never on a separate lookup, so the process that is checked is the process that is asked about. `Contains` holds a reference to the job's handle for the whole question, so a release that races it cannot close the handle or let its value be recycled. A credential revoked while its job is being made leaves no job held: `Bind` lets it go.
 * **Believed only with the recorded root in it.** `Contains` asks about this credential's own job and requires the recorded root
   (`rootPid` with `rootStartUtc`) to be in it, and the caller by pid *and* start time, and neither to have exited. A recycled id, a
   missing start time, a partial ancestry read, a dead root, or another credential's job each refuse. A job never overrides step 2's
@@ -323,6 +324,7 @@ accepts a caller that is a member of that job when the chain does not reach the 
   its processes do and nothing is ended.
 * **Foreign callers.** A process in neither the chain nor the job is refused exactly as before, with the same log line. Another
   session's job does not admit a caller to this one. Adopted sessions and macOS/Linux are unchanged (no job, ancestor rule).
+  A refusal logs the caller's chain as pids and image file names only (sanitised, at most 12), never a command line, path or token.
 **macOS and Linux.** See step 2: no agent credentials there until peer identification and
 ancestry exist. That is a prerequisite for launched and adopted sessions alike.
 

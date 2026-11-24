@@ -40,7 +40,7 @@ export function readMachineLoad(raw) {
     sessions = [...sessions].sort((a, b) => (b.workingSetBytes ?? -Infinity) - (a.workingSetBytes ?? -Infinity)).slice(0, 200);
     if (state === 'fresh') { state = 'partial'; }
   }
-  const read = { state, sessions, ...fields(data, { ageMs: int64, staleAfterMs: int64 }) };
+  const read = { state, sessions, ...fields(data, { ageMs: int64, staleAfterMs: int64, runQueueAvg: Number.isFinite }) };
   const sampledAt = field(data, 'sampledAt');
   if (isProtocolTime(sampledAt)) {
     const time = new Date(sampledAt), year = time.getUTCFullYear();

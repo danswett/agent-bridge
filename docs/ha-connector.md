@@ -54,6 +54,13 @@ HA integration. Keep current credentials,
 contract fixtures, reversible migration and G5/G6/G7 until reviewed retirement
 slices disposition them; this design neither passes the gate nor changes them.
 
+**Retirement blocker: no F7 launch path through Home Assistant (#1396).** The fleet
+dispatcher launches builders through `script/agent_bridge_launch_payload` today
+(`Invoke-WorkerLaunch` in slipgates-fleet `dispatcher/FleetLaunch.psm1`). It must move
+to `launch:fleet` ([slipgates-fleet #1366](https://github.com/danswett/slipgates-fleet/issues/1366))
+before the HA cut-over. It depends on #2770 (admission and caps) and on the owner
+switching `launch:fleet` on. Until then HA stays on for that path.
+
 Everything below remains the **current compatibility contract**, not an
 alternative authorization path for the optional client.
 

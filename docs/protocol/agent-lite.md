@@ -4,7 +4,7 @@ A temporary mode (#728, owner decision of 14:06 PT on 2026-11-08) that lets the 
 own machines message each other host to host over the relay until the signed roster (#55) exists.
 Legacy fleet messenger fallback is described below; the host does not perform it.
 Since the owner's decision of Nov 19, 2026, 22:07 PT it is **on by default**
-for a host signed in to the account: with no `agentMessaging.remote` key it is `own-account`, and it does anything
+for a host signed in to the account: with neither `agentMessaging.remote` nor `agentMessaging.scope` it is `own-account` (`same-person`), and it does anything
 only with a present same-account peer, by the trust rule below. A host with no signed-in account sends and receives
 nothing. An explicit `"off"`, an unreadable setting or a kill keeps it off; the kill switch stays. It is removed or
 folded into the roster path when that lands. It is built by slices L1 to L7 (#1349 to #1355, #1369, #1371).
@@ -83,6 +83,14 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a present own host is typed into a session there that is idle (or a working Claude with the proposed flag on), has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
+### Optional `sentAt` (additive, #4435; no version change)
+
+The relay message may carry `sentAt`: the Unix seconds when the sender FIRST asked to send, kept by a tool that retries a busy send.
+It sits beside the envelope, unsigned, and a host that does not know it ignores it. A receiver uses it only to order messages from the
+same authenticated sender to the same session and to print `STALE: sent HH:mm PT, ...` on an older one that arrives after a newer one;
+never for authorization, expiry, dedupe or anything else. It is believed only within two minutes after and a day before the envelope's
+own `issuedAt`; otherwise it is ignored and the header says `send time not given`. Absent, `issuedAt` is used and nothing changes.
+
 ## Receipt lookup for an unconfirmed send (design; slices 1 to 3)
 
 When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
@@ -151,7 +159,7 @@ journal is **memory only, 150 s**: a restart forgets it, and a lookup after one 
 
 1. Nothing to set for the mode itself: a signed-in host with no `agentMessaging.remote` key is `own-account`
    ([host-config](../host-config.md)). A machine that was killed or set to `"off"` needs a person there to set
-   `agentMessaging.remote` to `own-account`; changes need no restart.
+   `agentMessaging.remote` to `own-account` (`agentMessaging.scope` alone does not re-enable a killed machine); changes need no restart.
    On an owner-approved receiving machine, set `agentMessaging.remote` to `own-account` explicitly. For the existing list path, set `agentMessaging.allowAllTargets` to `true` and list exact session ids in `agentMessaging.allowAllTargetSessions`. Alternatively, have the person at that machine set `agentMessaging.allowAllLaunchedTargets` to `true` to reach all live allow-all launches recorded by this host without maintaining ids. The new switch defaults false and never admits hand-started sessions. Setting it back to `false` leaves only the existing master-plus-list grants; disabling both paths refuses all allow-all targets. Neither changes launch authority, trust or person-only prompt answers.
 2. Nothing to pin: every other host signed in to the same account and present on the relay is a peer. The legacy
    `peers` commands and `own-peers.json` no longer decide who may send or kill.
@@ -170,10 +178,11 @@ journal is **memory only, 150 s**: a restart forgets it, and a lookup after one 
    answers with an error or has not taken the epoch. A kill is believed only from such a host whose channel key
    matches its device id (no pin), through the push, the epoch on a lite send, or an ack; it only ever turns the
    mode off. A machine offline at the kill learns it at its next lite send, so run the kill there as well.
-3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message, and the default never
-   overrides an explicit `"off"`.
+3. One machine only: set `agentMessaging.remote` (or `agentMessaging.scope`) to `off`; it holds from the next message, and the
+   default never overrides an explicit `"off"` in either key.
 4. Turning back on takes a person at that machine setting `agentMessaging.remote` to `own-account`. Nothing remote
-   can, and after a recorded kill removing the key (`config unset`) does not either.
+   can, and after a recorded kill removing the key (`config unset`) does not either, nor does `agentMessaging.scope`
+   (even `same-person`): that explicit `remote` value is the only thing that does.
 
 **Roll back at once** on any one of: more than 1 percent of messages late or lost; p99 delivery over 250 ms for
 10 minutes; the relay down for more than 2 minutes; or any message delivered to the wrong session. Then tell the

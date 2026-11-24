@@ -129,7 +129,7 @@ public static class ProtocolVectors
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
-        MachineLoadRecords(catalog.File("machine-load.json", "v1-machine-load.md#1-machineload-1150", "Numerical machine and session load on the relay channel."));
+        MachineLoadRecords(catalog.File("machine-load.json", "v1-machine-load.md#1-machineload-1150", "Numerical machine and session load on authenticated channels; subscriptions are relay-only."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
@@ -157,7 +157,7 @@ public static class ProtocolVectors
         var session = new SessionLoad { Session = SessionId, Agent = LoadAgentKind.Agency, Processes = 3, CpuPercent = 12.5, WorkingSetBytes = 104857600, Handles = 42, HandleKind = LoadHandleKind.Handles, State = SessionLoadState.Fresh };
         var full = new MachineLoad
         {
-            SampledAt = T0, AgeMs = 100, State = MachineLoadState.Fresh, StaleAfterMs = 15000,
+            SampledAt = T0, AgeMs = 100, RunQueueAvg = 2.5, State = MachineLoadState.Fresh, StaleAfterMs = 15000,
             Cpu = new(25, 8), Memory = new(17179869184, 8589934592, 50), Sessions = [session], Unattributed = new(1, 1048576),
         };
         f.Record<MachineLoadCpu>(Host).Valid("whole-machine", full.Cpu).Valid("no-figure", new());
@@ -169,10 +169,16 @@ public static class ProtocolVectors
             .Valid("no-figure", new SessionLoad { Session = SessionId })
             .Valid("descriptors", session with { Agent = LoadAgentKind.Direct, HandleKind = LoadHandleKind.Fds })
             .Reads("unknown-enums", """{"session":"s-1","agent":"future","state":"future","handleKind":"future"}""");
-        f.Record<MachineLoad>(Host)
+        // The local pipe's reply (#2982): only the four figures launch admission reads, never a session list or machine totals.
+        f.Record<MachineLoadFigures>(Host)
+            .Valid("fresh", new MachineLoadFigures { State = MachineLoadState.Fresh, AgeMs = 100, RunQueueAvg = 2.5, StaleAfterMs = 15000 })
+            .Valid("stale-no-figure", new MachineLoadFigures { State = MachineLoadState.Stale, AgeMs = 16000, StaleAfterMs = 15000 })
+            .Valid("unavailable", new MachineLoadFigures())
+            .Reads("unknown-state", """{"state":"future"}""")
+            .Reads("mixed-case-names", """{"STATE":"stale","AGEMs":16000,"runQUEUEavg":2.5,"sTaleAfterMS":15000}""");        f.Record<MachineLoad>(Host)
             .Valid("full", full)
             .Valid("partial", full with { State = MachineLoadState.Partial, Memory = null })
-            .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
+            .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000, RunQueueAvg = null })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
             .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
@@ -648,10 +654,16 @@ public static class ProtocolVectors
         f.Record<ClearedComposer>(Host)
             .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
             .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
+        // What a refused reply shows of a full Copilot box (#804): escaped, capped, digest of the whole text; never clearable yet.
+        var shownBox = ComposerInput.From("rerun the build‮ gol");
+        f.Record<ComposerInput>(Host)
+            .Valid("a-plain-box", ComposerInput.From("rerun the tests"))
+            .Valid("an-escaped-box", shownBox);
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
             .Valid("refused-without-bindings", new ReplyResult(AnswerOutcome.Refused, "the session is asking a question"))
+            .Valid("refused-with-the-box", new ReplyResult(AnswerOutcome.Refused, "something is already typed") { Input = shownBox })
             .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
             .Reads("unreadable-bindings-are-absent", """{"outcome":"delivered","attachments":"wrong"}""")
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
