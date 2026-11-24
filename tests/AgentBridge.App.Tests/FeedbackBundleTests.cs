@@ -394,6 +394,13 @@ public class FeedbackBundleTests
     [InlineData("password: \"horse battery staple\"", "battery")]
     [InlineData("run --token abcd1234efgh now", "abcd1234efgh")]
     [InlineData("run --password x now", " x ")]
+    // #1345: a quoted CLI value is taken whole, spaces and all (the unquoted \S+ stopped at its first space and left the rest).
+    [InlineData("run --password \"horse battery staple\" now", "battery")]
+    [InlineData("run --password \"horse battery staple\" now", "staple")]
+    [InlineData("run --password 'horse battery staple' now", "battery")]
+    [InlineData("run --token \"ab \\\"cd\\\" SECRETWORD\" now", "SECRETWORD")]
+    [InlineData("run --password=\"horse battery staple\" now", "battery")]
+    [InlineData("run --api-key 'it\'s a SECRETWORD' now", "SECRETWORD")]
     [InlineData("API_KEY=zzz111 AUTHORIZATION=qqq222", "zzz111")]
     [InlineData("see /home/dan/.ssh", "dan")]
     [InlineData("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", "abc")]

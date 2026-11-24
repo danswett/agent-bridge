@@ -263,7 +263,8 @@ public static partial class FeedbackRedactor
     [GeneratedRegex(@"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([""'\\/nrt]))", RegexOptions.None, TimeoutMs)]
     private static partial Regex EscapeSequence();
 
-    [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
+    // A quoted value is taken whole, spaces and escaped quotes included (#1345); an unquoted one ends at its first space.
+    [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)(?:""(?:[^""\\\r\n]|\\.)*""|'(?:[^'\\\r\n]|\\.)*'|\S+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex CliFlag();
 
     [GeneratedRegex(@"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", RegexOptions.None, TimeoutMs)]
