@@ -43,11 +43,12 @@ a **reply to a same-person session on another machine** is the one item proposed
 row 5, for the Chief to confirm); stop and launch, keys and every other bullet stay owner CHANGES. `scope: "fleet"` (a read) and
 `machineName` stay Engineering proposals with their own open rows 1 to 4.
 
-## Owner decision on the fleet list (about 23:05 PT, Nov 23, via the Chief)
+## Owner decision on the fleet list (owner, about 23:05 PT, Nov 23)
 
-The owner chose the option labelled "Yes, allow the list" on rows 1 to 4 below. The terms are the Engineering Lead's relay of the Chief's
-answer, not the owner's words, and `owner-decisions.md` did not record it when this was written: a **read-only list of the same person's
-agent sessions across their machines (machine id, session id, state, how long, machine online), with no folders, titles, prompts or answers.**
+The owner answered "Yes, allow the list" to an ask_user question from Chief S19 about rows 1 to 4 below, relayed by Chief S19; no comment
+link exists. This records the decision only, not the code. What it allows, in the terms the question gave and `owner-decisions.md` did not yet
+record when this was written: a **read-only list of the same person's agent sessions across their machines (machine id, session id, state, how
+long, machine online), with no folders, titles, prompts or answers.**
 
 So `list_agent_sessions` takes `scope: "fleet"`, and the rows are narrower than the proposal above: `machine`, `node`, `state`, `since`,
 `secondsInState`, `machineOnline` for a session, and `machine`, `state`, `complete` for a machine (so a partial machine is not read as empty).

@@ -87,7 +87,7 @@ Today `reply_to_agent_session` and `list_agent_sessions` act on this machine onl
 person's other machines, through the host and nothing else. The record covers only the default scope (section 1); these tool changes
 stay departures that [mcp-fleet-mode.md](mcp-fleet-mode.md) lists. The Chief has confirmed row 5: a `machine` argument that targets the
 same person's sessions on any of that person's machines is inside the owner's Nov 23 scope (PR5a, built). The owner has also allowed the fleet list (`scope:
-"fleet"`, PR5b: "Yes, allow the list", about 23:05 PT, relayed by the Engineering Lead; see mcp-fleet-mode.md): read only, machine id, session id,
+"fleet"`, PR5b: "Yes, allow the list", the owner's answer to an ask_user question from Chief S19, about 23:05 PT, relayed by Chief S19; see mcp-fleet-mode.md): read only, machine id, session id,
 state, how long and machine online, with no folders, titles, prompts or answers.
 
 - `reply_to_agent_session` takes an optional `machine` (the exact 32-hex device id from a fleet row). With it, `session_id` is the target's
