@@ -1,18 +1,10 @@
-From 34e10664ccfc60ac0de06e13ee64b6348296c079 Mon Sep 17 00:00:00 2001
+From 9250e3a513e910db96e7453952cf175cecb04281 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 17:34:25 -0800
-Subject: [PATCH] CI S2, piece 5b: pwa-e2e moves to full.yml; Pages watches
- Full and reads the FULL run (Part of #4104)
+Date: Mon, 23 Nov 2026 22:32:15 -0800
+Subject: [PATCH] s 5b
 
-pwa-e2e (the dev-stack e2e specs, Chromium and WebKit) moves from ci.yml to full.yml with the commit under test checked out;
-full-gate needs it. ci.yml loses the job, its plan output, JOBS entry, quality-gate's need and PR_OFF's entry; the catalog marks the
-suite lane full (its post-merge tier is moot: FULL never gates a merge); merge-rule.yml's main_green no longer waits on it. pages.yml
-watches Full as well as CI and passes pages-candidate.ps1 its -GetFull lookup (the release train's Get-FullRunsPath and
-Select-FullRunRow), so Pages deploys only when the PWA jobs passed in the same commit's FULL run. Tests first.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
- .github/workflows/ci.yml                      | 79 +------------------
+ .github/workflows/ci.yml                      | 80 +------------------
  .github/workflows/full.yml                    | 76 +++++++++++++++++-
  .github/workflows/pages.yml                   | 14 +++-
  ops/runbooks/pwa.md                           |  4 +-
@@ -25,13 +17,13 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
  .../FullWorkflowTests.cs                      |  6 +-
  .../HaValidationCoverageTests.cs              |  2 +-
  .../PlanScriptTests.cs                        |  4 +-
- 13 files changed, 123 insertions(+), 102 deletions(-)
+ 13 files changed, 123 insertions(+), 103 deletions(-)
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index bafee7708..7e00b4d2f 100644
+index ec401b488..46e2262ca 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -82,7 +82,6 @@ jobs:
+@@ -91,7 +91,6 @@ jobs:
        app-installer: ${{ steps.select.outputs.app-installer }}
        light: ${{ steps.select.outputs.light }}
        pwa-ui: ${{ steps.select.outputs.pwa-ui }}
@@ -39,7 +31,7 @@ index bafee7708..7e00b4d2f 100644
        suites: ${{ steps.select.outputs.suites }}
        test-projects: ${{ steps.select.outputs.test-projects }}
        # The whole ring is the whole solution on all three runners, without asking the selector.
-@@ -236,7 +235,7 @@ jobs:
+@@ -255,7 +254,7 @@ jobs:
            # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
            # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
            # quality-gate's needs disagree (quality/README.md §4.7).
@@ -48,7 +40,7 @@ index bafee7708..7e00b4d2f 100644
          run: |
            $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
            if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
-@@ -1612,78 +1611,6 @@ jobs:
+@@ -1635,79 +1634,6 @@ jobs:
            if-no-files-found: warn
            retention-days: 7
  
@@ -99,6 +91,7 @@ index bafee7708..7e00b4d2f 100644
 -        with:
 -          browsers: chromium webkit
 -          working-directory: pwa
+-          save: 'true'
 -      - run: npx playwright install chromium webkit
 -      - name: Save Playwright's browsers to main's cache
 -        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -127,7 +120,7 @@ index bafee7708..7e00b4d2f 100644
    quality-gate:
      # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
      # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
-@@ -1699,7 +1626,7 @@ jobs:
+@@ -1723,7 +1649,7 @@ jobs:
      # new gate's check only once every job it needs is done; under the same name, the draft's
      # green gate would stand for the whole head until then, and a merge could go through on it.
      name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
@@ -136,7 +129,7 @@ index bafee7708..7e00b4d2f 100644
      if: always()
      runs-on: ubuntu-latest
      timeout-minutes: 5
-@@ -1762,7 +1689,7 @@ jobs:
+@@ -1786,7 +1712,7 @@ jobs:
            # The waiver's needs when it waived something, otherwise the real ones.
            NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
            # Whole jobs the catalog makes post-merge: they skip pull requests, which aren't gated on them.
@@ -146,7 +139,7 @@ index bafee7708..7e00b4d2f 100644
            echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
            bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index 02fb4d633..b5023117e 100644
+index ea7f81eb5..4181e4b97 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -158,7 +151,7 @@ index 02fb4d633..b5023117e 100644
  on:
    # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
    # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
-@@ -190,11 +190,83 @@ jobs:
+@@ -201,11 +201,83 @@ jobs:
          working-directory: spikes
          run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
  
@@ -180,7 +173,7 @@ index 02fb4d633..b5023117e 100644
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
-+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          ref: ${{ needs.trigger.outputs.sha }}
 +          persist-credentials: false
 +      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
 +        with:
@@ -291,10 +284,10 @@ index 179efbf1d..db02c12cc 100644
  Manual rollback below remains exempt. The build job holds no publishing token; the deploy
  job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 diff --git a/quality/README.md b/quality/README.md
-index fff002877..dc91cb747 100644
+index eb5793265..1ce9829c3 100644
 --- a/quality/README.md
 +++ b/quality/README.md
-@@ -608,7 +608,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+@@ -613,7 +613,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
       classification-skipped product family also passes it over. A newer main head still running
       does not block; the pull request's own running checks still do. The single
       `main_green.jobs` list pins exact display names for ha-integration,
@@ -303,7 +296,7 @@ index fff002877..dc91cb747 100644
       dynamic family: at least one entry must exist and every present instance must pass; runners
       omitted by the plan are not required. Entirely absent families still hold.
       Optional `main_green.leg_families` adds lists of exact alternative check names to
-@@ -884,7 +884,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
+@@ -889,7 +889,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
    publish, which is safe but must be seen once), and the first train run is read by a person.
  * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
    (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
@@ -313,10 +306,10 @@ index fff002877..dc91cb747 100644
  **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
  `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 6e4c3bbab..4944108eb 100644
+index ab7f51698..5dd95d30e 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -930,10 +930,9 @@ suites:
+@@ -948,10 +948,9 @@ suites:
      # project graph can't see those links; they're named here.
      triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
      command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
@@ -462,7 +455,7 @@ index 5cdc97e00..a3e331bc6 100644
          var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
          Assert.Equal(new[] { "plan", "app" },
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 624d6ced6..20ade2d3c 100644
+index 9d7e0d0d4..bfa9311ed 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -26,10 +26,10 @@ public class FullWorkflowTests
