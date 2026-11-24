@@ -1082,10 +1082,11 @@ public class MergeRuleTests
     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
     //   verdict and a finished one needn't re-judge anything, #2454),
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+        "Full", "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
