@@ -999,6 +999,7 @@ async Task<int> ServeAsync(HostHandover handover)
     launcher.NamedLaunch = new AgentBridge.Host.Fleet.FleetLaunchNames(launcher, source, fleetNames, fleetRoster, identity.Folder, Log).RunAsync;
     AgentPipeLaunch? grantPipe = null;
     FleetStopCommands? fleetStop = null;
+    FleetResumeCommands? fleetResume = null;
     if (agentCredentials is { } grantCredentials)
     {
         var (grantRequests, grantRequestsProblem) = homeAssistant is { } ha ? (ha.LaunchRequests, ha.LaunchRequestsProblem)
@@ -1015,8 +1016,11 @@ async Task<int> ServeAsync(HostHandover handover)
             fleetStop = new FleetStopCommands(identity.Folder, identity.Key, () => identity.Account?.AccountId,
                 Wire.DeviceId(identity.Key.Public), grantCredentials, service, source, fleetStopper);
         }
+        // Resume in place for a coordinator (#4318): the launch record decides who is a coordinator and what the session was.
+        fleetResume = new FleetResumeCommands(identity.Folder, grantCredentials, launcher.LaunchRole, launcher.WasFleetLaunched,
+            id => source.Get(id) is not null, restore.RecordedLaunch, (ask, ct) => launcher.ResumeFleetAsync(ask, ct));
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

@@ -47,6 +47,14 @@ This reconciles the predecessor provenance work for
 [agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
 host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
 
+Resume (#4318, [agent-resume.md](design/agent-resume.md)): `fleet.resume {version:1, request, session}` on the agent's pipe
+resumes a fleet worker in place for a coordinator, the same pipe guard as `fleet.end`. The caller's own recorded launch role
+must be listed in `agents.resume.roles` (the person sets it; empty = off); the session must be one the launch record shows
+a fleet launch, ended, and not the caller's own; it restarts with the settings the host recorded for it, never wider and
+never the machine's defaults (none recorded refuses). The launch record keeps one fleet record per session: the resume's
+replaces the old when its process is bound. Refusals use `scope`, `policy`, `kill-switch`, `bad-argument`, `running`,
+`busy`; every request is audited. Sessions launched before this shipped have no recorded role, so they cannot resume.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so

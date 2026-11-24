@@ -415,6 +415,23 @@ public sealed class RestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task What_a_session_was_launched_with_is_read_back_by_its_id_even_after_it_has_gone()
+    {
+        await using var r = Recorder();
+        r.Start();
+        Assert.Null(r.RecordedLaunch("a"));
+        r.Launched("a", new LaunchedWith { Agent = "copilot", Workspace = "Bridge", Permissions = "allowAll" });
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+        var recorded = new RestoreLaunch("copilot", "Bridge", null, null, null, null, null, "allowAll");
+        Assert.Equal(recorded, r.RecordedLaunch("a"));
+        source.Remove("a");
+        Time.Advance(RestoreRecorder.Coalesce);
+        Assert.Equal(recorded, r.RecordedLaunch("a"));
+        Assert.Null(r.RecordedLaunch("someone-else"));
+    }
+
+    [Fact]
     public void A_copilot_session_ended_only_when_its_main_agent_shut_down_after_the_last_thing_typed_and_claude_only_when_its_registration_says_so()
     {
         var ended = SessionEnds.For(f.Options());

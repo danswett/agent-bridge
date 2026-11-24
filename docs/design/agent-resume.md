@@ -58,13 +58,16 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
    PT: "every fleet launch is `Allow all`"; Nov 15: every launched session explicitly uses `Allow all`; pipeline-rules.md
    line 93). So a resumed Allow-all builder stays Allow-all and can work unattended; a session launched under Ask resumes
    under Ask.
-4. **Counts as a launch.** It takes a live-launch slot under the same agent limits as a launch, and frees it when the
-   session ends, so resumes cannot exceed the cap.
+4. **No double launch.** A session already running refuses (`running`), the launcher's one-start-per-session guard and
+   single-launch gate hold, and one request id resumes once. **Known limit (follow-up):** a resume does not yet take a slot
+   under the host's live agent-launch limit; the shared builder cap (26) is the dispatcher's, outside the host.
 5. **Logged and audited.** One audit row per request under the agent's principal and chain (`fleet.resume`: session,
-   outcome, closed reason code), a host log line, and a durable intent row first, so a repeat of the same request id returns
-   what was recorded and never resumes twice.
+   outcome, closed reason code) and a host log line. A repeat of a request id returns the first answer from memory and
+   resumes nothing twice; after a host restart the session is simply running, which refuses. (No durable intent row: the
+   resume is not an op the gate audit knows; a follow-up if Quality wants it.)
 6. **Receipt.** `{request, outcome: resumed | refused | unconfirmed, reason?, session}`. Closed reasons reuse the fleet set
-   (`scope`, `policy`, `kill-switch`, `bad-argument`, `duplicate-id`, `audit-unavailable`) plus `running`.
+   (`scope`, `policy`, `kill-switch`, `bad-argument`, `audit-unavailable`) plus `running` and `busy`; a launcher failure is
+   `unconfirmed` / `failed`.
 
 ## Defaults taken (owner CHANGE if wrong)
 
