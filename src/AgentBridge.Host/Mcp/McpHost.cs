@@ -48,7 +48,7 @@ public sealed class McpHost : IAsyncDisposable
         LocalChannel channel;
         try { channel = await LocalClient.ConnectAsync(endpoint, wait < TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct); }
         catch (HostNotRunningException) { throw Unreachable(); }
-        catch (LocalRefusedException e) { throw new McpToolException($"The Slipgates host refused this process: {e.Message}", McpFailure.Refused); }
+        catch (LocalRefusedException e) { throw new McpToolException($"The {Product.HostName} refused this process: {e.Message}", McpFailure.Refused); }
         try
         {
             var hello = await channel.HelloAsync(ct);
@@ -63,7 +63,7 @@ public sealed class McpHost : IAsyncDisposable
         catch (LocalRefusedException e)
         {
             await channel.DisposeAsync();
-            throw new McpToolException($"The Slipgates host refused this process: {e.Message}", McpFailure.Refused);
+            throw new McpToolException($"The {Product.HostName} refused this process: {e.Message}", McpFailure.Refused);
         }
         catch (Exception e) when (e is IOException or TimeoutException or HostErrorException)
         {
@@ -82,15 +82,15 @@ public sealed class McpHost : IAsyncDisposable
 
     public ValueTask DisposeAsync() => channel.DisposeAsync();
 
-    static McpToolException Unreachable() => new("The Slipgates host is not reachable.", McpFailure.Unavailable);
+    static McpToolException Unreachable() => new($"The {Product.HostName} is not reachable.", McpFailure.Unavailable);
 
     // The host's own words for a refusal; an unavailable host or a closed pipe is "unavailable", so a caller never reads it as a refusal.
     static async Task<JsonElement> Guard(string op, TimeSpan wait, Func<Task<JsonElement>> call)
     {
         try { return await call(); }
         catch (HostErrorException e) { throw new McpToolException(e.Message, McpFailure.Refused); }
-        catch (TimeoutException) { throw new McpToolException($"The Slipgates host did not answer {op} in time.", McpFailure.Unavailable); }
-        catch (IOException) { throw new McpToolException("The connection to the Slipgates host closed.", McpFailure.Unavailable); }
+        catch (TimeoutException) { throw new McpToolException($"The {Product.HostName} did not answer {op} in time.", McpFailure.Unavailable); }
+        catch (IOException) { throw new McpToolException($"The connection to the {Product.HostName} closed.", McpFailure.Unavailable); }
         catch (MessageTooLargeException) { throw new McpToolException("The message is too large for the host pipe."); }
     }
 }
