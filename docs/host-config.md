@@ -620,7 +620,8 @@ agent-bridge-host workspace remove Bridge
 ```
 
 `add` refuses a folder that does not exist, a system folder, one already approved, a label in
-use, a 65th folder, and `--isolate` outside a git repository. The check is one function
+use, a 65th folder, a folder not on one of this machine's fixed drives (Windows: a network
+share, a removable or optical drive; folders approved before this are not removed), and `--isolate` outside a git repository. The check is one function
 (`WorkspaceApproval`) with one closed code per refusal, so a later in-app Add folder can ask the
 same check. Every command takes `--profile <name>`.
 

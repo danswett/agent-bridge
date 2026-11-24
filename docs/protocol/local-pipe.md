@@ -114,6 +114,19 @@ Every call requires a freshly classified local app on the pipe, without an agent
 credential. Agents, other processes (including the host CLI) and remote channels
 are refused with a reason. This slice adds no app view or launch-policy enforcement.
 
+`host.workspace.add` approves a folder for launching, so the app needs no terminal; it is the
+same check as `agent-bridge-host workspace add` (`WorkspaceApproval`). Its data is exactly
+`{ "path": "<absolute path>", "label": "<optional>" }`: the exact folder only. The result is
+`{ "result": "added", "label", "path", "restartRequired": true }` or `{ "result": "refused", "code" }`,
+the code one of `not-a-path`, `missing`, `system-folder`, `not-git`, `already-approved`,
+`label-in-use`, `too-many`, `unwritable`, `not-local` (a network share, or a drive that is not a
+fixed one of this machine), `busy` (the config file was being changed elsewhere for 10 seconds; try
+again), `invalid-request` or `config-unreadable`; no text from the
+request comes back. Workspaces are read when the host starts, so a new one applies after a restart.
+It is a person's act: a freshly classified local app without an agent credential. An agent, another
+process (the host CLI included), a script credential or a remote channel is refused with
+`person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
+
 `host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
 "genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
 `{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
