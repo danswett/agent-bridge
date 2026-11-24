@@ -329,7 +329,7 @@ public sealed class SessionService
             case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
                 return await Diagnostics.HandleAsync(channel, data);
             case "load.get" when LoadEnabled() && Load is not null && Direct(channel):
-                return await Load.HandleAsync(channel, op);
+                return Load.Figures();                                  // only the figures launch admission reads, never the relay's full record (#2982)
             case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
                 return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:

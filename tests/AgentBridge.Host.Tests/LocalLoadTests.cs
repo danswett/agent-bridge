@@ -71,7 +71,15 @@ public sealed class LocalLoadTests
             Load = new LoadService(source, () => report, () => true, time: time),
         };
         var endpoint = LocalEndpoint.For(fixture.Root);
-        await using var server = LocalServer.Start(endpoint, LocalApi.Handler(service, null!, new FixedCallerGuard(new(kind, "fixture caller"))));
+        // The app's hello offers host.manage, so it needs a real host control; the other caller classes never touch it.
+        var control = new HostControl(new HostControlOptions
+        {
+            Profile = "test", Folder = fixture.Root, Version = "0.1.0", Running = new(false),
+            Machine = new("machine", "Fixture", "windows", "0.1.0"),
+            SignIn = (_, _, _) => throw new NotSupportedException(), SignedIn = (_, _) => { },
+            Stop = () => { }, Restart = () => { },
+        });
+        await using var server = LocalServer.Start(endpoint, LocalApi.Handler(service, control, new FixedCallerGuard(new(kind, "fixture caller"))));
         await using var pipe = await LocalClient.ConnectAsync(endpoint, TimeSpan.FromSeconds(10));
         await pipe.HelloAsync();
         var response = await pipe.RequestAsync("load.get", new { });

@@ -38,6 +38,15 @@ public sealed record MachineLoad
     public UnattributedLoad? Unattributed { get; init; }
 }
 
+// What the local pipe's load.get answers (#2982): only what launch admission reads. No session list, nothing per session, no CPU or memory
+// totals, no sample time. The owner's clearance for the full record (#1150) was for the relay channel and is not widened to local processes.
+public sealed record MachineLoadFigures
+{
+    public MachineLoadState State { get; init; }
+    public long? AgeMs { get; init; }
+    public double? RunQueueAvg { get; init; }
+    public long? StaleAfterMs { get; init; }
+}
 public sealed record MachineLoadCpu(double? Percent = null, int? Cores = null);
 public sealed record MachineLoadMemory(long? TotalBytes = null, long? AvailableBytes = null,
     double? CommittedPercent = null, double? UsedPercent = null);

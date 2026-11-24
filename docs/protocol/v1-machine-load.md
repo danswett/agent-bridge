@@ -28,11 +28,27 @@ update per second. Nothing waits, refuses or recovers because an interval elapse
 sampler is measurement only: it keeps a short in-memory ring so an event's record can show the
 minutes before it, and a last-resort timer is a documented alarm reported as a fault, never a
 trigger. `load.get` also works on the OS-authenticated local pipe for launch admission
-([#2982](https://github.com/danswett/agent-bridge/issues/2982)), using the same sampler and host freshness.
-The pipe's OS peer check is unchanged and decides who may ask: any process it admits may read this record, as it may read `sessions.list`; it is read-only and acts on nothing. Subscriptions, updates and the
+([#2982](https://github.com/danswett/agent-bridge/issues/2982)), but there it answers only four figures ([below](#the-local-pipes-load)), never this record. Subscriptions, updates and the
 `load` capability remain relay-only; a connection may hold one subscription, and
 `load.unsubscribe` `{}` ends it. `seq` is the channel's.
 
+### The local pipe's load
+
+`load.get` on the OS-authenticated local pipe answers a `MachineLoadFigures` ([#2982](https://github.com/danswett/agent-bridge/issues/2982)),
+for launch admission and nothing more, from the same sampler and the same host freshness as the relay's record:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | `unavailable`, `fresh`, `partial` or `stale` | As in [MachineLoad](#machineload) |
+| `ageMs` | number? | The sample's age, host-computed; absent with no sample |
+| `runQueueAvg` | number? | The mean run queue; absent for a stale or unavailable sample, never a 0 |
+| `staleAfterMs` | number? | The host's stale limit for a sample |
+
+There is no `sessions`, nothing per session, no `cpu`, `memory`, `sampledAt` or `unattributed`. The owner's clearance for load
+(#1150) is for the relay channel; the local pipe is not a widening of it, which is why the reply is cut to these figures. Every
+caller the pipe admits gets exactly them (the app, the host's command line, a process inside an agent session, anything else of the
+user's); a script credential is refused `load.get`, as it is every op but `fleet.list`, `fleet.find`, `agent.send` and the fleet
+launch. It is served only when `load.enabled` is on; `load.subscribe` and `load.unsubscribe` are refused on the pipe.
 ### MachineLoad
 
 | Field | Type | Notes |
