@@ -849,8 +849,10 @@ path-filter extension, the reused-machine rules, the cost figures and the order 
 one project, `Host.Tests`, is 417 s of that, so shards split by **test class** inside the big projects (`Host.Tests`, `App.Tests`), each shard job building
 for itself (build once and hand the output over as an artifact is decided after the artifact transfer is measured). A shard runs `dotnet test --no-build --filter`
 with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
-is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, so classes like
-that are one unit and travel together (3 of Host.Tests' 139). The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
+is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, and VSTest's
+`~` is a **case-insensitive** contains (`Foo.ATests.` is inside `Foo.aTests.`), so classes like that, by case too, are one unit and travel together (3 of Host.Tests' 175
+classes, 20 pairs across all projects, in run 45303208572's TRX); the planner compares with `OrdinalIgnoreCase` and sorts ordinally. An empty shard's filter is empty text,
+which `dotnet test` reads as no filter, so a caller skips an empty shard (`shard-filter` prints `none` for it, never empty text). The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
 the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. **No discovery step:** a scan of
 the source missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no shard, and `dotnet test --list-tests` takes 222 s on Host.Tests alone.
 So `quality/test-shards.json` has shards 1 to N-1 **list** their classes per project, and **shard N is the remainder**: it runs everything not listed, by a negated
@@ -859,7 +861,6 @@ whole in a shard; a project listed nowhere runs whole in the remainder. `agent-b
 filter, and `--check` reads the plan alone. **What the plan must keep true, refused when it is read:** no class in two lists, no two classes in different shards whose
 terms match each other's tests (they would run twice), no class name the filter language would misread, and every filter under 24,000 characters (Windows' command line
 is 32 K). The weights file, the shard legs and `quality-gate` failing on a missing or skipped shard are later pieces.
-
 **What gates main: two lanes (decided, owner, Nov 23, S2, #4104; the design, not yet built: what exists today is one `ci.yml`, whose `app`
 job self-tests and packs, and the pieces below build it, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
 one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on

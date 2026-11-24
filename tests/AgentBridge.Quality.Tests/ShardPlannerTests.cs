@@ -81,16 +81,22 @@ public sealed class ShardPlannerTests
         }
     }
 
-    [Fact]
-    public void Shard_weights_differ_by_no_more_than_the_heaviest_unit()
+    // Longest-first onto the lightest shard leaves the shards within one unit of each other. Names with no look-alikes, so every class is its own unit; weights from a seeded generator
+    // (string.GetHashCode is randomized per process, so a test built on it changes between runs).
+    [Theory]
+    [InlineData(1, 4)]
+    [InlineData(2, 3)]
+    [InlineData(3, 8)]
+    public void Shard_weights_differ_by_no_more_than_the_heaviest_class(int seed, int shards)
     {
-        var classes = Classes(200, seed: 11);
-        var weights = classes.ToDictionary(c => c, c => (double)(Math.Abs(c.GetHashCode()) % 90 + 1));
+        var random = new Random(seed);
+        var classes = Enumerable.Range(0, 150).Select(i => $"Ns{i % 7}.Case{i:D3}Tests").ToArray();
+        var weights = classes.ToDictionary(c => c, _ => Math.Round(random.NextDouble() * 90 + 1, 2));
 
-        var plan = ShardPlanner.Plan(classes, weights, 4);
+        var plan = ShardPlanner.Plan(classes, weights, shards);
 
         var totals = plan.Shards.Select(s => s.Sum(c => weights[c])).ToArray();
-        Assert.True(totals.Max() - totals.Min() <= weights.Values.Max() * 3, $"shards {string.Join(", ", totals)}");
+        Assert.True(totals.Max() - totals.Min() <= weights.Values.Max() + 1e-9, $"shards {string.Join(", ", totals)}");
     }
 
     [Fact]
@@ -118,7 +124,7 @@ public sealed class ShardPlannerTests
     }
 
     [Fact]
-    public void More_shards_than_classes_leaves_shards_empty_whose_filter_matches_nothing()
+    public void More_shards_than_classes_leaves_shards_empty_with_empty_filter_text_which_the_caller_must_skip_not_pass_to_dotnet_test()
     {
         var plan = ShardPlanner.Plan(["OnlyTests"], NoWeights, 3);
 
@@ -136,6 +142,110 @@ public sealed class ShardPlannerTests
         var plan = ShardPlanner.Plan(["Zed.BTests", "Zed.ATests"], NoWeights, 1);
 
         Assert.Equal("FullyQualifiedName~Zed.ATests.|FullyQualifiedName~Zed.BTests.", plan.Filter(0));
+    }
+
+    // P1 (review of #4317): VSTest's "FullyQualifiedName~X" is a case-INSENSITIVE contains, so "Foo.ATests." is inside "Foo.aTests.". The check is made on the real filter TEXT,
+    // not the planner's own matcher: each test must run under exactly one shard's filter, as VSTest reads it.
+    static int[] RunsUnder(ShardPlan plan, string test) =>
+        [.. Enumerable.Range(0, plan.Shards.Count).Where(i => plan.Filter(i).Split('|', StringSplitOptions.RemoveEmptyEntries)
+            .Any(t => test.Contains(t["FullyQualifiedName~".Length..], StringComparison.OrdinalIgnoreCase)))];
+
+    [Theory]
+    [InlineData("Foo.ATests", "Foo.aTests")]
+    [InlineData("AnswerFlowTests", "AGENTanswerflowTests")]
+    [InlineData("Ns.XTests", "ns.xtests")]
+    public void Classes_that_differ_only_by_case_are_one_unit_because_VSTest_ignores_case(string first, string second)
+    {
+        string[] classes = [first, second, "Bar.One", "Bar.Two", "Bar.Three", "Bar.Four"];
+        var weights = classes.ToDictionary(c => c, _ => 10.0);
+
+        var plan = ShardPlanner.Plan(classes, weights, 2);
+
+        Assert.Equal(1, plan.Shards.Count(s => s.Contains(first)));
+        Assert.Equal(plan.Shards.Single(s => s.Contains(first)), plan.Shards.Single(s => s.Contains(second)));
+        foreach (var c in classes) { Assert.Single(RunsUnder(plan, $"{c}.A_test")); }
+        foreach (var c in classes) { Assert.Single(plan.ShardsMatching($"{c}.A_test")); }
+    }
+
+    [Fact]
+    public void A_class_name_inside_another_with_different_case_travels_with_it()
+    {
+        var plan = ShardPlanner.Plan(["AnswerFlowTests", "AGENTanswerflowTests", "Other1", "Other2", "Other3"], NoWeights, 3);
+
+        Assert.Equal(1, plan.Shards.Count(s => s.Contains("AnswerFlowTests") || s.Contains("AGENTanswerflowTests")));
+        Assert.Single(RunsUnder(plan, "AGENTanswerflowTests.M"));
+    }
+
+    // P2: what makes every shard job compute the same plan. A fixed input with its exact plan, so a change to the tie-break or the order fails here.
+    [Fact]
+    public void The_plan_for_a_fixed_input_is_exactly_this()
+    {
+        string[] classes = ["H", "G", "F", "E", "D", "C", "B", "A"];
+        var weights = new Dictionary<string, double> { ["A"] = 10, ["B"] = 9, ["C"] = 8, ["D"] = 7, ["E"] = 6, ["F"] = 5, ["G"] = 5, ["H"] = 1 };
+
+        var plan = ShardPlanner.Plan(classes, weights, 3);
+
+        Assert.Equal(["A|F|G", "B|E|H", "C|D"], plan.Shards.Select(s => string.Join('|', s)));
+    }
+
+    [Fact]
+    public void Units_of_equal_weight_go_in_name_order_ascending_to_the_lowest_shard()
+    {
+        var plan = ShardPlanner.Plan(["B5", "A5"], new Dictionary<string, double> { ["A5"] = 5, ["B5"] = 5 }, 2);
+
+        Assert.Equal(["A5", "B5"], plan.Shards.Select(s => string.Join('|', s)));
+    }
+
+    [Fact]
+    public void A_class_with_no_time_weighs_the_median_of_those_that_have_one()
+    {
+        // Known 30, 20, 10: the median is 20, so the unknown U weighs 20 and sorts after B (equal weight, later name).
+        var plan = ShardPlanner.Plan(["A", "B", "C", "U"], new Dictionary<string, double> { ["A"] = 30, ["B"] = 20, ["C"] = 10 }, 2);
+
+        Assert.Equal(["A|C", "B|U"], plan.Shards.Select(s => string.Join('|', s)));
+    }
+
+    [Theory]
+    [InlineData(-50.0)]
+    [InlineData(0.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void A_weight_that_is_not_a_positive_finite_number_counts_as_unknown(double bad)
+    {
+        string[] classes = ["A", "B", "C", "U"];
+        var known = new Dictionary<string, double> { ["A"] = 30, ["B"] = 20, ["C"] = 10 };
+
+        var withBad = ShardPlanner.Plan(classes, new Dictionary<string, double>(known) { ["U"] = bad }, 2);
+        var without = ShardPlanner.Plan(classes, known, 2);
+
+        Assert.Equal(without.Shards.Select(s => string.Join('|', s)), withBad.Shards.Select(s => string.Join('|', s)));
+    }
+
+    [Fact]
+    public void The_simulation_of_a_filter_ignores_case_as_VSTest_does()
+    {
+        var plan = new ShardPlan([["Foo.aTests"], ["Other"]]);
+
+        Assert.Equal([0], plan.ShardsMatching("Foo.ATests.M"));
+        Assert.Equal([0], plan.ShardsMatching("FOO.ATESTS.M"));
+        Assert.Empty(plan.ShardsMatching("Foo.aTestsX.M"));
+    }
+
+    [Fact]
+    public void A_class_named_twice_is_planned_once()
+    {
+        var plan = ShardPlanner.Plan(["A", "A", "B", "A"], NoWeights, 2);
+
+        Assert.Equal(["A", "B"], Flatten(plan).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void The_filter_sorts_its_terms_whatever_order_the_shard_holds_them_in()
+    {
+        var plan = new ShardPlan([["Zed.B", "Zed.A", "Alpha"]]);
+
+        Assert.Equal("FullyQualifiedName~Alpha.|FullyQualifiedName~Zed.A.|FullyQualifiedName~Zed.B.", plan.Filter(0));
     }
 
     [Theory]
