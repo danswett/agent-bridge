@@ -1,30 +1,23 @@
-From e39b7ec28e6417ce5f1330045ad1555f8cdcf159 Mon Sep 17 00:00:00 2001
+From 9fe7b2899152ff34ee19bda617be757ea019d057 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 17:19:09 -0800
-Subject: [PATCH] CI S2, piece 7a: full-red.yml runs full-red.ps1 after each
- Full run (Part of #4104)
+Date: Mon, 23 Nov 2026 21:37:00 -0800
+Subject: [PATCH] scratch 7a
 
-The workflow: a workflow_run of Full on main, guarded to this repository's own run made by workflow_run or by hand (a fork's pull request
-whose branch is named main also matches the branches filter), queued (queue: max) so a burst drops no alert, issues: write only. The
-ci.yml light step that runs the script's offline test, the catalog suite flipped to exists and naming full-red.yml report, Full red in
-the merge rule's exclusion list, and FullRedWorkflowTests (the if: against a fork, a pull_request run, push, another branch).
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/ci.yml                      |  6 ++
  .github/workflows/full-red.yml                | 46 +++++++++++++++
- quality/catalog.yml                           |  6 +-
+ quality/catalog.yml                           | 14 +++++
  .../FullRedWorkflowTests.cs                   | 58 +++++++++++++++++++
  .../MergeRuleTests.cs                         |  3 +-
- 5 files changed, 114 insertions(+), 5 deletions(-)
+ 5 files changed, 126 insertions(+), 1 deletion(-)
  create mode 100644 .github/workflows/full-red.yml
  create mode 100644 tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 17f2db33c..cad5bdcaa 100644
+index 85cbe77a3..42a24cc1b 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -1380,6 +1380,7 @@ jobs:
+@@ -1222,6 +1222,7 @@ jobs:
      #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
      #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
      #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
@@ -32,7 +25,7 @@ index 17f2db33c..cad5bdcaa 100644
      #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
      #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
      #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
-@@ -1427,6 +1428,11 @@ jobs:
+@@ -1269,6 +1270,11 @@ jobs:
          if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'wake-watch-script')) }}
          shell: pwsh
          run: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
@@ -98,22 +91,30 @@ index 000000000..c8e2f1d7d
 +        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
 \ No newline at end of file
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 5f966a022..7a8e1260a 100644
+index d1f5c80df..ac7dd68c5 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -620,10 +620,8 @@ suites:
-     runner: local
-     triggers: [quality/full-red.ps1, quality/test-full-red.ps1]
-     command: pwsh -NoProfile -File quality/test-full-red.ps1
--    where: ci.yml light
--    # planned until full-red.yml and its ci.yml step land (patches/ci-s2-piece7a-full-red-4104.patch, applied by Quality). Flip to
--    # exists, and add full-red.yml report to the where, with that patch.
--    status: planned
+@@ -627,6 +627,20 @@ suites:
+     # Flip to exists with that patch.
+     status: planned
+ 
++  - id: full-red-script
++    validation_plan: native
++    kind: unit
++    ring: 0
++    select: affected
++    # The alert for a red FULL lane (S2, #4104): one open issue per red job, labelled full-red, with the blocking and the waived (Arm64
++    # self-test, tests, installer) red jobs apart, on a stub gh. Nothing reaches GitHub.
++    platforms: [win-x64, linux-x64]
++    runner: local
++    triggers: [quality/full-red.ps1, quality/test-full-red.ps1]
++    command: pwsh -NoProfile -File quality/test-full-red.ps1
 +    where: ci.yml light, full-red.yml report
 +    status: exists
- 
++
    - id: arm64-waiver-script
      validation_plan: native
+     kind: unit
 diff --git a/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 new file mode 100644
 index 000000000..ec75887ca
@@ -179,7 +180,7 @@ index 000000000..ec75887ca
 +    }
 +}
 diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
-index 6777ce769..24eb9202e 100644
+index 5b0893f22..943f7b1fc 100644
 --- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
 @@ -1065,11 +1065,12 @@ public class MergeRuleTests
