@@ -1,0 +1,336 @@
+From 5e251c7f519e0ce25ac997b3fffa78ae729038e9 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 11:10:26 -0800
+Subject: [PATCH] CI S2: prime-playwright-cache.yml fills the apt archives
+ cache FULL restores, automatically, on main only, saving the exact key only
+ after every deb verified (Part of #4104)
+
+Prime-cache, its own workflow patch for Quality. Patch branch: sg-patch/ci-s2-prime-cache-4104.
+BASE: apply on ci/s2-combined3 at its head 58e2a977dd06d2574d9d929d14c11d3e1b893bc7 (#4503 with Q10's merge of main and the stale-PWA text fix), or on main once #4503 has merged.
+
+AUTOMATIC: a push to main that changes the system-packages action, this workflow or a package lock (paths-filtered), a DAILY schedule, and workflow_dispatch. NO pull_request, pull_request_target or
+workflow_run. Permissions: contents: read only (actions: write is NOT needed: actions/cache saves through the runner's cache service; only the REST delete API needs it). The job runs only on refs/heads/main, so a
+dispatch from a branch runs nothing: the README says to dispatch on main. Concurrency: one group, cancel-in-progress false. The save key is exactly the restore key (cache-key is steps.debs.outputs.cache-primary-key);
+the save step is the step right after the download, runs on success() and cache-ready, and download.sh says cache-ready only after the last check of every .deb against the signed index, so a download that did
+not verify is never saved. action.yml's text (lines 8 and 27) now says prime-playwright-cache.yml saves, not ci.yml. Pinned by PrimeCacheWorkflowTests (red first; mutations caught).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../playwright-system-packages/action.yml     |   4 +-
+ .github/workflows/prime-playwright-cache.yml  |  71 +++++++++
+ quality/README.md                             |   2 +-
+ quality/catalog.yml                           |   3 +-
+ .../MergeRuleTests.cs                         |  12 +-
+ .../PrimeCacheWorkflowTests.cs                | 141 ++++++++++++++++++
+ 6 files changed, 228 insertions(+), 5 deletions(-)
+ create mode 100644 .github/workflows/prime-playwright-cache.yml
+ create mode 100644 tests/AgentBridge.Quality.Tests/PrimeCacheWorkflowTests.cs
+
+diff --git a/.github/actions/playwright-system-packages/action.yml b/.github/actions/playwright-system-packages/action.yml
+index c7e4ecbf7..8e94cbb45 100644
+--- a/.github/actions/playwright-system-packages/action.yml
++++ b/.github/actions/playwright-system-packages/action.yml
+@@ -5,7 +5,7 @@ description: >
+   debs cache hits verify package hashes against live signed indexes before installing offline.
+   Jobs then run browser-only `playwright install`, without another apt update. Linux runners only.
+   It only RESTORES the archives cache and never writes one: full.yml (a workflow_run, in the default branch's context) uses only this action;
+-  ci.yml saves with ../playwright-system-packages-save.
++  prime-playwright-cache.yml (push to main, daily, by hand) saves with ../playwright-system-packages-save.
+ 
+ inputs:
+   browsers:
+@@ -24,7 +24,7 @@ inputs:
+ 
+ outputs:
+   cache-key:
+-    description: The archives cache's exact key, for ../playwright-system-packages-save (ci.yml only; this action never writes a cache).
++    description: The archives cache's exact key, for ../playwright-system-packages-save (prime-playwright-cache.yml only; this action never writes a cache).
+     value: ${{ steps.debs.outputs.cache-primary-key }}
+   cache-ready:
+     description: 'true when the archives are downloaded and verified and may be saved by the save action.'
+diff --git a/.github/workflows/prime-playwright-cache.yml b/.github/workflows/prime-playwright-cache.yml
+new file mode 100644
+index 000000000..f46be743a
+--- /dev/null
++++ b/.github/workflows/prime-playwright-cache.yml
+@@ -0,0 +1,71 @@
++name: Prime Playwright cache
++
++# Fills the Playwright system-package archives cache that the FULL lane restores, on main only (S2, #4104). full.yml runs from a workflow_run, in the default branch's context, so it only RESTORES
++# caches and never writes one (CodeQL's cache-poisoning alerts). A cold key is therefore filled here, from main's own checked-in code, in main's cache scope, where FULL reads it.
++#
++# It runs on a push to main that can change a key (the action, this file, a package lock that moves Playwright's version), daily (the runner image rolls without a repository change, and a key
++# carries the image's version), and by hand. NEVER for a pull request or a workflow_run. A dispatch on any ref but main runs nothing (the job is main-only): a run from a branch would write only
++# that ref's cache scope, which FULL never reads, so the way to prime it by hand is `gh workflow run prime-playwright-cache.yml --ref main`.
++#
++# The download is the same bounded, mirror-rotating one every job uses (.github/actions/playwright-system-packages): every .deb is checked against the hash the signed index gave before the step
++# says cache-ready, and the save step is the very next step, runs only on success, and saves exactly the key the restore used (the action's cache-key output), so a download that did not verify is
++# never saved. The token is read-only: actions/cache saves through the runner's cache service, which needs no token scope (`actions: write` is only for the REST API that deletes caches, unused here).
++on:
++  push:
++    branches: [main]
++    paths:
++      - .github/actions/playwright-system-packages/**
++      - .github/actions/playwright-system-packages-save/**
++      - .github/workflows/prime-playwright-cache.yml
++      - pwa/package-lock.json
++      - spikes/s2-noise-interop/package-lock.json
++      - spikes/s4-relay/package-lock.json
++  schedule:
++    - cron: '41 5 * * *'
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++# One run at a time, never cancelled mid-save: two runs of this workflow cannot race the same key.
++concurrency:
++  group: prime-playwright-cache
++  cancel-in-progress: false
++
++jobs:
++  prime:
++    # Only main: a run by hand on another branch would write that branch's scope, which FULL never reads.
++    if: github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
++    name: prime (${{ matrix.dir }}, ${{ matrix.browsers }})
++    runs-on: ubuntu-24.04
++    timeout-minutes: 45
++    strategy:
++      fail-fast: false
++      matrix:
++        # Exactly the sets full.yml restores: the PWA's legs (one browser each, and both for pwa-e2e) and the two spikes.
++        include:
++          - { dir: pwa, browsers: chromium }
++          - { dir: pwa, browsers: webkit }
++          - { dir: pwa, browsers: chromium webkit }
++          - { dir: spikes/s2-noise-interop, browsers: chromium webkit }
++          - { dir: spikes/s4-relay, browsers: chromium webkit }
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++        working-directory: ${{ matrix.dir }}
++      - name: Download Playwright's system packages
++        id: system-packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: ${{ matrix.browsers }}
++          working-directory: ${{ matrix.dir }}
++      - name: Save Playwright's system-package archives
++        if: success() && steps.system-packages.outputs.cache-ready == 'true'
++        uses: ./.github/actions/playwright-system-packages-save
++        with:
++          key: ${{ steps.system-packages.outputs.cache-key }}
+\ No newline at end of file
+diff --git a/quality/README.md b/quality/README.md
+index 42053f11d..d74452f33 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -497,7 +497,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      `pwa-ui` and `pwa-e2e`, and the archives-only apt cache, through the restore-only `playwright-system-packages` action. It runs from a `workflow_run` in the default branch's context, so it never writes a cache (CodeQL's cache-poisoning alerts, S2 piece 4), and no job in `ci.yml` calls the `-save` action any more
+       (the jobs that wrote those keys moved into FULL). **The apt archives cache is written by one workflow, `prime-playwright-cache.yml`** (S2; it lands right after this one): automatically on a push to `main` that
+       changes the action or a package lock, daily, and by hand (`gh workflow run prime-playwright-cache.yml --ref main`); it reads the repository only and saves exactly the key FULL restores, once every `.deb`
+-      passed its signed-index check. Until it merges nothing writes that cache, so every FULL job that needs Playwright's system packages (`pwa-ui`, `pwa-e2e`, `spikes-linux`) downloads them all: slower, still correct. A pull request's cache entry cannot seed what the FULL lane restores.
++      passed its signed-index check. A dispatch from a branch runs nothing (a run there would write only that ref's cache scope, which FULL never reads): dispatch it on `main`. Until it merges nothing writes that cache, so every FULL job that needs Playwright's system packages (`pwa-ui`, `pwa-e2e`, `spikes-linux`) downloads them all: slower, still correct. A pull request's cache entry cannot seed what the FULL lane restores.
+      `app` and `publish` restore nothing:
+      the package main publishes is built from what the feeds serve.
+    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index d90da9edc..a32f41d0e 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1007,7 +1007,8 @@ suites:
+     # after matching live signed indexes, and package errors fail at once.
+     triggers: [.github/actions/playwright-system-packages/**]
+     command: bash .github/actions/playwright-system-packages/test.sh
+-    where: ci.yml light
++    # prime-playwright-cache.yml fills a cold archives key on main (FULL only restores): the same download, saved once it has verified.
++    where: ci.yml light, prime-playwright-cache.yml prime
+     status: exists
+ 
+   - id: pwa-pages
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 26dd6f186..231957254 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1070,7 +1070,7 @@ public class MergeRuleTests
+     //                               on a pull request's branch ends skipped, which the judge counts as passing.
+     // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
+     // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
+-    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Re-run known flakes", "Upload release halt policy"];
++    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Prime Playwright cache", "Re-run known flakes", "Upload release halt policy"];
+ 
+     // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
+     // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
+@@ -1140,6 +1140,16 @@ public class MergeRuleTests
+                 Assert.All(jobs.Children.Values.Cast<YamlMappingNode>(),
+                     job => Assert.Contains("refs/heads/main", job.Children[new YamlScalarNode("if")].ToString(), StringComparison.Ordinal));
+             }
++            else if (name == "Prime Playwright cache")
++            {
++                // push to main (paths-filtered), a schedule and dispatch: never a pull request, and every job runs only on the main ref (S2, #4104)
++                Assert.All(triggers, t => Assert.Contains(t, new[] { "push", "schedule", "workflow_dispatch" }));
++                var push = (YamlMappingNode)on.Children[new YamlScalarNode("push")];
++                Assert.Equal(["main"], ((YamlSequenceNode)push.Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString()));
++                var jobs = (YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")];
++                Assert.All(jobs.Children.Values.Cast<YamlMappingNode>(),
++                    job => Assert.Contains("refs/heads/main", job.Children[new YamlScalarNode("if")].ToString(), StringComparison.Ordinal));
++            }
+             else
+             {
+                 Assert.Equal(["workflow_run"], triggers);
+diff --git a/tests/AgentBridge.Quality.Tests/PrimeCacheWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/PrimeCacheWorkflowTests.cs
+new file mode 100644
+index 000000000..cb3b40ab8
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/PrimeCacheWorkflowTests.cs
+@@ -0,0 +1,141 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// prime-playwright-cache.yml (S2, #4104): full.yml restores Playwright's system-package archives but never writes a cache (it runs in the default branch's context), so a cold key is filled here, from
++/// main's own checked-in code in main's cache scope, where FULL reads it. The workflow must be that and nothing more: it can never run for a pull request or from a branch, it only reads the repository,
++/// it saves exactly the key the restore used and only after every .deb was verified against the signed indexes, and two runs never race.
++/// </summary>
++public class PrimeCacheWorkflowTests
++{
++    const string Restore = "./.github/actions/playwright-system-packages", Save = "./.github/actions/playwright-system-packages-save";
++    const string File_ = "prime-playwright-cache.yml";
++
++    static string Root => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
++
++    static YamlMappingNode Load(string path)
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(File.ReadAllText(Path.Combine(Root, path))));
++        return (YamlMappingNode)stream.Documents[0].RootNode;
++    }
++
++    static YamlMappingNode Workflow() => Load($".github/workflows/{File_}");
++
++    static string Scalar(YamlNode node, string key) => ((YamlScalarNode)((YamlMappingNode)node)[key]).Value!;
++
++    static YamlMappingNode Prime() => (YamlMappingNode)((YamlMappingNode)Workflow()["jobs"])["prime"];
++
++    static List<YamlMappingNode> Steps(YamlMappingNode job) => ((YamlSequenceNode)job["steps"]).Children.OfType<YamlMappingNode>().ToList();
++
++    static bool Uses(YamlMappingNode s, string action) => s.Children.ContainsKey("uses") && Scalar(s, "uses") == action;
++
++    [Fact]
++    public void It_runs_only_on_a_push_to_main_on_a_schedule_and_by_hand_never_for_a_pull_request_or_a_workflow_run()
++    {
++        var on = (YamlMappingNode)Workflow()["on"];
++        var push = (YamlMappingNode)on["push"];
++
++        Assert.Equal(["push", "schedule", "workflow_dispatch"], on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["main"], ((YamlSequenceNode)push["branches"]).Children.Select(c => c.ToString()));
++        // only a change that can change a key: the action, this workflow, and a package lock that moves Playwright's version
++        var paths = ((YamlSequenceNode)push["paths"]).Children.Select(c => c.ToString()).ToList();
++        Assert.Contains(".github/actions/playwright-system-packages/**", paths);
++        Assert.Contains(".github/workflows/prime-playwright-cache.yml", paths);
++        Assert.Contains("pwa/package-lock.json", paths);
++        Assert.NotEmpty(((YamlSequenceNode)on["schedule"]).Children);
++        // the image rolls without a repository change, so a schedule re-primes a key that went cold
++        Assert.Matches(@"^\d+ \d+ \* \* \*$", Scalar(((YamlSequenceNode)on["schedule"]).Children[0], "cron")); // daily
++    }
++
++    [Fact]
++    public void It_reads_the_repository_only_holds_no_secret_runs_only_on_main_and_checks_out_without_credentials()
++    {
++        var workflow = Workflow();
++        var job = Prime();
++
++        Assert.Equal(["contents"], ((YamlMappingNode)workflow["permissions"]).Children.Keys.Select(k => k.ToString())); // no actions: write: the cache service needs no token scope, only the REST delete API does
++        Assert.Equal("read", Scalar(workflow["permissions"], "contents"));
++        Assert.False(job.Children.ContainsKey("permissions"));
++        Assert.Contains("github.ref == 'refs/heads/main'", Scalar(job, "if"), StringComparison.Ordinal); // a dispatch on a branch runs nothing
++        Assert.Contains("github.repository == 'danswett/agent-bridge'", Scalar(job, "if"), StringComparison.Ordinal);
++        Assert.DoesNotContain("secrets.", File.ReadAllText(Path.Combine(Root, ".github", "workflows", File_)), StringComparison.Ordinal);
++        var checkout = Steps(job).Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal));
++        Assert.Equal("false", Scalar(checkout["with"], "persist-credentials"));
++        Assert.False(((YamlMappingNode)checkout["with"]).Children.ContainsKey("ref"));
++    }
++
++    [Fact]
++    public void Two_runs_never_race_the_same_key_one_group_and_no_cancelling_of_a_save_in_flight()
++    {
++        var group = (YamlMappingNode)Workflow()["concurrency"];
++
++        Assert.Equal("prime-playwright-cache", Scalar(group, "group"));
++        Assert.Equal("false", Scalar(group, "cancel-in-progress"));
++    }
++
++    [Fact]
++    public void It_downloads_with_the_restore_action_then_saves_the_exact_key_it_restored_and_only_once_every_deb_was_verified()
++    {
++        var steps = Steps(Prime());
++        var restore = steps.Single(s => Uses(s, Restore));
++        var save = steps.Single(s => Uses(s, Save));
++
++        Assert.Equal("system-packages", Scalar(restore, "id"));
++        Assert.Equal(steps.IndexOf(restore) + 1, steps.IndexOf(save)); // nothing between the verified download and the save
++        Assert.Equal("success() && steps.system-packages.outputs.cache-ready == 'true'", Scalar(save, "if"));
++        Assert.Equal("${{ steps.system-packages.outputs.cache-key }}", Scalar(save["with"], "key"));
++        // that output IS the key the restore step used, not a recomputed one
++        var action = Load(".github/actions/playwright-system-packages/action.yml");
++        var actionSteps = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>().ToList();
++        var debs = actionSteps.Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "debs");
++        Assert.StartsWith("actions/cache/restore@", Scalar(debs, "uses"), StringComparison.Ordinal);
++        Assert.Equal("${{ steps.debs.outputs.cache-primary-key }}", Scalar(((YamlMappingNode)action["outputs"])["cache-key"], "value"));
++        Assert.Equal("${{ steps.packages.outputs.cache-ready }}", Scalar(((YamlMappingNode)action["outputs"])["cache-ready"], "value"));
++    }
++
++    [Fact]
++    public void The_download_says_cache_ready_only_after_it_checked_every_deb_against_the_signed_index()
++    {
++        var script = File.ReadAllText(Path.Combine(Root, ".github", "actions", "playwright-system-packages", "download.sh"));
++
++        var ready = script.LastIndexOf("cache-ready=true", StringComparison.Ordinal);
++        Assert.True(ready > 0);
++        Assert.Single(System.Text.RegularExpressions.Regex.Matches(script, "cache-ready=true"));
++        Assert.True(script.LastIndexOf("sha256sum --check", StringComparison.Ordinal) < ready, "cache-ready must come after the last hash check against the signed index");
++        // a deb is copied into the cache only when it passed that check: the fetch is verified before it is kept
++        Assert.Contains("sha256sum --check --status", script, StringComparison.Ordinal);
++    }
++
++    [Fact]
++    public void It_primes_exactly_the_package_sets_the_FULL_lane_restores()
++    {
++        var matrix = ((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)Prime()["strategy"])["matrix"])["include"]).Children
++            .Select(e => (Dir: Scalar(e, "dir"), Browsers: Scalar(e, "browsers"))).ToList();
++        var fullCalls = ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Values
++            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>())
++            .Where(s => Uses(s, Restore)).ToList();
++
++        Assert.NotEmpty(fullCalls);
++        Assert.Equal(matrix.Count, matrix.Distinct().Count());
++        foreach (var call in fullCalls)
++        {
++            var dir = Scalar(call["with"], "working-directory");
++            var browsers = Scalar(call["with"], "browsers");
++            // a pwa-ui leg's browser is its matrix project: chromium or webkit
++            var wanted = browsers == "${{ matrix.project }}" ? new[] { (dir, "chromium"), (dir, "webkit") } : [(dir, browsers)];
++            Assert.All(wanted, w => Assert.Contains(w, matrix));
++        }
++    }
++
++    [Fact]
++    public void The_README_says_to_dispatch_it_on_main_because_a_branch_run_would_write_only_that_refs_scope()
++    {
++        var readme = File.ReadAllText(Path.Combine(Root, "quality", "README.md"));
++
++        Assert.Contains("prime-playwright-cache.yml", readme, StringComparison.Ordinal);
++        Assert.Contains("gh workflow run prime-playwright-cache.yml --ref main", readme, StringComparison.Ordinal);
++        Assert.Contains("only that ref's cache scope", readme, StringComparison.Ordinal);
++    }
++}
+\ No newline at end of file
+-- 
+2.56.1.windows.1
+
