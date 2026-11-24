@@ -212,6 +212,73 @@ public sealed partial class SessionRow : UserControl
         MoveDownItem.IsEnabled = row?.CanMoveDown == true;
         PinItem.Text = Card?.Pinned == true ? "Unpin" : "Pin";
         PinItem.IsEnabled = row is not null;
+        FillGroupMenu(row);
+    }
+
+    // Move to group: each group with its count, the row's own checked, then New group... (G5b).
+    void FillGroupMenu(RowActions? row)
+    {
+        GroupItem.Items.Clear();
+        GroupItem.IsEnabled = row is not null;
+        RemoveFromGroupItem.Visibility = row?.CanRemoveFromGroup == true ? Visibility.Visible : Visibility.Collapsed;
+        if (row is null) { return; }
+        foreach (var g in row.GroupChoices)
+        {
+            var item = new ToggleMenuFlyoutItem { Text = $"{g.Name} ({g.Count})", IsChecked = g.Current, Tag = g.Id };
+            AutomationProperties.SetAutomationId(item, "MoveToGroup." + g.Id);
+            AutomationProperties.SetName(item, $"{g.Name}, {g.Count} {(g.Count == 1 ? "session" : "sessions")}" + (g.Current ? ", current group" : ""));
+            item.Click += OnMoveToGroup;
+            GroupItem.Items.Add(item);
+        }
+        if (GroupItem.Items.Count > 0) { GroupItem.Items.Add(new MenuFlyoutSeparator()); }
+        var add = new MenuFlyoutItem { Text = "New group..." };
+        AutomationProperties.SetAutomationId(add, "NewGroup");
+        AutomationProperties.SetName(add, "New group");
+        add.Click += OnNewGroup;
+        GroupItem.Items.Add(add);
+    }
+
+    // The row keeps focus after a group change, as after a move: it may be redrawn in another group.
+    void OnMoveToGroup(object sender, RoutedEventArgs e)
+    {
+        if (Card is not { Row: { } row } c || sender is not ToggleMenuFlyoutItem { Tag: string id } item) { return; }
+        if (row.GroupChoices.FirstOrDefault(g => g.Id == id) is not { } g || g.Current) { item.IsChecked = true; return; }
+        c.WantsRowFocus = true;
+        row.MoveToGroup(id);
+        Say($"Moved to {g.Name}");
+    }
+
+    void OnRemoveFromGroup(object sender, RoutedEventArgs e)
+    {
+        if (Card is not { Row: { } row } c || !row.CanRemoveFromGroup) { return; }
+        c.WantsRowFocus = true;
+        row.RemoveFromGroup();
+        Say("Removed from group");
+    }
+
+    // Asks for a name; Create stays off while the name is empty, a duplicate or over the limit, and says why.
+    async void OnNewGroup(object sender, RoutedEventArgs e)
+    {
+        if (Card is not { Row: { } row } c) { return; }
+        var box = new TextBox { PlaceholderText = "Group name", AcceptsReturn = false };
+        AutomationProperties.SetName(box, "Group name");
+        var note = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "New group", PrimaryButtonText = "Create", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary, IsPrimaryButtonEnabled = false,
+            Content = new StackPanel { Spacing = 8, Children = { box, note } },
+        };
+        box.TextChanged += (_, _) =>
+        {
+            var problem = row.NewGroupProblem(box.Text);
+            note.Text = box.Text.Length == 0 ? "" : problem ?? "";
+            dialog.IsPrimaryButtonEnabled = problem is null;
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary || row.NewGroupProblem(box.Text) is not null) { return; }
+        c.WantsRowFocus = true;
+        row.NewGroup(box.Text);
+        Say($"Moved to new group {box.Text.Trim()}");
     }
 
     void OnMoveUp(object sender, RoutedEventArgs e) => MoveBy(-1);

@@ -879,6 +879,9 @@ launch lineage may come later, on top of this, once hosts report it.
   on the header on a desktop, the sheet's field on a phone), makes the group at the foot of
   your groups, expanded, and moves the row into it. A name is 1–40 characters after trimming,
   shown as plain text, and unique among your groups ignoring case; at most 32 groups.
+  *Windows (#1618 G5b):* the row menu has Move to group (each group with its count, the row's own checked, then
+  New group…) and Remove from group for a grouped row; Create stays off, with the reason shown, for an empty or duplicate
+  name. The moved row keeps focus; focus going to a collapsed group's header is not built yet.
 - **Where a moved row lands:** Move to group, a drop on a header, or New group… put the row
   at the top of the group. A row moved into a collapsed group leaves its place as §5.3's
   Arriving and leaving says, and keyboard focus goes to that group's header, whose name says
