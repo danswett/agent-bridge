@@ -516,8 +516,8 @@ documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the sw
 Sender gates (G9c2), copied from `AgentLiteSender`, not a new check. The sending host checks `ILiteMode.On` (it reads the `agentMessaging.remote` setting and any
 recorded lite kill, the same switch lite messaging uses) before AND after signing, and rechecks the agent credential after the signer returns, so a kill, the setting
 turned off or a lapsed caller signs and sends nothing. A kill while waiting for the reply, or a cancel, after the send is `unconfirmed` (exit 7), never a refusal and
-never a resend. The source host audits its own refusals before anything is sent, with the same row and hourly limiter as every other refused launch (the caller is the local agent principal; the receiver writes the same row for a verified peer, #4170), and the refusal is
-`audit-unavailable` if it cannot be written). The peer's receipt is rebuilt from fixed fields only: a reason outside the CLI refusal table becomes the one generic code `policy`, and no free-text reason, peer cwd or trust question is shown.
+never a resend. The source host audits its own refusals before anything is sent, with the same row and hourly limiter as every other refused launch (the caller is the local agent principal; the receiver's own refusal row belongs to #4170, not this slice), and the refusal is
+`audit-unavailable` if it cannot be written. The peer's receipt is rebuilt from fixed fields only: a reason outside the CLI refusal table becomes the one generic code `policy`, and no free-text reason, peer cwd or trust question is shown.
 
 Receiver order:
 
@@ -561,6 +561,12 @@ exact grant id and record verified caller principal, action, request id, ingress
 audience/generation, payload binding, cap decision, intent and terminal outcome.
 Every use, including refused attempts, writes the existing audit; unavailable
 audit refuses execution. Issue/revoke and reconciliation are recorded there too.
+The `fleet.launch` receiver writes a refused row for every refusal made after the envelope verified (binding or replay, grant missing,
+revoked or otherwise unusable, scope), for the authenticated peer device (principal `agent:<device>/unmatched`: the subject is not yet
+known to be named by a grant), through the same hourly limiter as other refused launches; if that row cannot be written the receipt
+reason is `audit-unavailable`. Refusals before verification (untrusted peer, rate cap, malformed body, failed verify) have no
+authenticated caller and write nothing, so a peer cannot fill the audit with junk. The nonce is spent when a grant or scope refusal
+follows the replay check (harmless: a retry uses a fresh envelope).
 Grant stop rows (`session.stop`, intent and terminal) carry three additive gate fields, all or none:
 `generation` (the grant generation), `payloadDigest` (SHA-256 hex of `fleet.end/1|request|grant|session|target`,
 a digest, never the content) and `caps` (the grant's hourly/daily/live caps in force). Rows written before

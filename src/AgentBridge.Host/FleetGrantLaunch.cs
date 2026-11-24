@@ -24,7 +24,7 @@ internal sealed record FleetLaunchContext(FleetLaunchInput Input, GrantSubject S
 internal sealed class FleetLaunchDenied(string reason) : InvalidOperationException(reason);
 
 public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string?> account, string device,
-    AgentCredentials credentials, ISessionLauncher launcher)
+    AgentCredentials credentials, ISessionLauncher launcher, ProfileDisk? disk = null)
 {
     readonly GrantStore store = new(folder, key, new(folder), new([], [], [], [], [], [], [], []));
     readonly GrantCounters counters = new(new(folder, key, new(folder), new([], [], [], [], [], [], [], [])));
@@ -94,6 +94,8 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
         if (problem is not null || settings.SectionProblems.Any()) { throw new FleetLaunchDenied("policy"); }
         if (settings.ReadOnly || !settings.Launch.Enabled || !settings.Agents.Enabled || !settings.Agents.LaunchEnabled)
         { throw new FleetLaunchDenied("kill-switch"); }
+        // Under 1 GiB free on the profile's disk (agent-launch-scope.md section 11); free space that cannot be read allows the launch.
+        if ((disk ?? credentials.FleetGrant.Disk).Refusal() is not null) { throw new FleetLaunchDenied("diskLow"); }
         var inbound = settings.Agents.InboundLocal.Launch;
         var agent = context.Offered!.Agents.SingleOrDefault(a => a.Id == input.Agent);
         if (inbound is null || agent is null || !inbound.Agents.Contains(input.Agent)
@@ -177,7 +179,7 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     internal static FleetLaunchReceipt Receipt(FleetLaunchContext? context, LaunchResult result, FleetLaunchInput? input, string? reason) =>
         new((input ?? context?.Input)?.Request ?? Guid.Empty, (input ?? context?.Input)?.Grant ?? Guid.Empty, context?.Grant?.Generation ?? 0,
             result, null, false, null, context?.Caps, reason);
-    static string Reason(LaunchResult result) => result.Reason is "scope" or "policy" or "kill-switch" ? result.Reason
+    static string Reason(LaunchResult result) => result.Reason is "scope" or "policy" or "kill-switch" or "diskLow" ? result.Reason
         : result.Reason is { } reason && reason.StartsWith("grant-", StringComparison.Ordinal) ? reason
         : result.Reason?.Contains("audit", StringComparison.OrdinalIgnoreCase) == true ? "audit-unavailable"
         : result.Reason?.Contains("fleetName", StringComparison.Ordinal) == true ? "name-gate" : "policy";

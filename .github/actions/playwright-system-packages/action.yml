@@ -4,6 +4,8 @@ description: >
   network retries and Canonical mirror fallback (download.sh says why). Non-forced
   debs cache hits verify package hashes against live signed indexes before installing offline.
   Jobs then run browser-only `playwright install`, without another apt update. Linux runners only.
+  It only RESTORES the archives cache and never writes one: full.yml (a workflow_run, in the default branch's context) uses only this action;
+  ci.yml saves with ../playwright-system-packages-save.
 
 inputs:
   browsers:
@@ -20,10 +22,20 @@ inputs:
     required: false
     default: 'false'
 
+outputs:
+  cache-key:
+    description: The archives cache's exact key, for ../playwright-system-packages-save (ci.yml only; this action never writes a cache).
+    value: ${{ steps.debs.outputs.cache-primary-key }}
+  cache-ready:
+    description: 'true when the archives are downloaded and verified and may be saved by the save action.'
+    value: ${{ steps.packages.outputs.cache-ready }}
+
 runs:
   using: composite
   steps:
     # Cache archives only; apt authenticates fresh indexes on every run.
+    # The key carries a hash of the signed indexes' dates (index-hash), so an index that moved is a cache MISS rather than an exact-key hit whose archives fail
+    # verification, and a restore prefix never matches an entry written under another index.
     - id: ubuntu
       shell: bash
       run: echo "version=$(lsb_release -rs)-${ImageVersion:-noimage}" >> "$GITHUB_OUTPUT"
@@ -39,9 +51,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/playwright-apt-debs
-        key: playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.ref-hash }}
+        key: playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-${{ steps.identity.outputs.ref-hash }}
         restore-keys: |
-          playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-
+          playwright-apt-v3-debs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ steps.identity.outputs.packages-hash }}-${{ steps.identity.outputs.index-hash }}-
     - id: packages
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -53,8 +65,3 @@ runs:
       run: |
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
-    - if: always() && steps.packages.outputs.cache-ready == 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ~/.cache/playwright-apt-debs
-        key: ${{ steps.debs.outputs.cache-primary-key }}
