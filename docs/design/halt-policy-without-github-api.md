@@ -326,7 +326,7 @@ No later slice starts until this design is CLEAN and the Chief sends the go.
 4. **PR 3: refusal wording and retry metadata**, folding
    [the wording issue](https://github.com/danswett/agent-bridge/issues/3553).
    Synthetic host-to-app refusal proves code/retry preservation, not a guess about
-   VM4. Legacy rate-limit evidence reads "bad-release check unavailable: GitHub
+   another machine. Legacy rate-limit evidence reads "bad-release check unavailable: GitHub
    rate limit; try again after HH:MM PT"; new-source failures name that source and
    reason. Retry time comes from actual scheduled retry, formatted in Pacific
    including DST/date rollover; missing time is not invented. Test null/unknown

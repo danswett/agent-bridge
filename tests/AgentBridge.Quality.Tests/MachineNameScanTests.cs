@@ -11,12 +11,9 @@ public class MachineNameScanTests
     static readonly Regex MachineName = new(@"(?<![a-z0-9])vm[-_ ]?[1-9]\d*(?![a-z0-9])|\bdswett-[a-z0-9]|(?<![a-z0-9])arm" + @"8(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Areas a later #2643 slice still has to clean. The list only shrinks: an entry with nothing
-    // left in it fails until it is removed. docs/design/ also names a machine the shapes above
-    // can't catch, so it is cleaned with design/.
-    static readonly string[] NotYetCleaned =
-    [
-        "design/", "docs/design/",
-    ];
+    // left in it fails until it is removed. It is empty: every area is clean of the shapes above
+    // (a machine they can't catch, such as the demo's other one, is not seen by this scan).
+    static readonly string[] NotYetCleaned = [];
 
     // What the scan leaves alone: the recorded JSON under a fixtures folder, and nothing else. A source file dropped into Fixtures is read (Q10's P2 on #4390).
     static bool Exempt(string path) =>

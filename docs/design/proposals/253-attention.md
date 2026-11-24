@@ -262,7 +262,7 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
   - Tools' link to a question works for as long as its item is kept.
 - **Answer at the machine:**
   - the card shows the whole question with no controls, and one line in Needs you's text colour:
-    "Answer at the machine · DEV-VM1";
+    "Answer at the machine · Desk-A";
   - leaving the session, or turning the filter off, never counts as an answer. The row keeps its
     glyph until the host clears the question.
 - **A delegate's question** is drawn the same way, under "Delegate *name* asks". A Copilot
@@ -368,7 +368,7 @@ Choosing the row already lands on the question, and the header isn't the place f
 - **Announcements:** a change in N is announced once through a polite live region ("3 need
   you"), at most every 5 seconds, so a burst of questions is one announcement. Nothing is
   announced while the person types in the reply box.
-- **Rows** read as today (§9): "Release notes for 0.1.691, waiting on you, DEV-VM1".
+- **Rows** read as today (§9): "Release notes for 0.1.691, waiting on you, Desk-A".
 - **The question:**
   - its heading (level 3) is where focus lands, and its accessible description is the question's
     first line;

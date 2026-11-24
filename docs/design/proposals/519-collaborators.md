@@ -243,7 +243,7 @@ The card is built to look unlike a tool approval:
 - One consequence sentence. Allow-all: *Approving makes this **your** instruction to an
   allow-all session. It can run commands on DESK without asking.* Unknown mode: *Approving
   makes this **your** instruction. Slipgates can't tell whether this session asks before it
-  runs commands on DEV-VM1.*
+  runs commands on Desk-A.*
 - Actions, in this order: **Deny**, **Approve once**, **Allow @welshofer here for… ▾**
   (5, 15, 30 or 60 minutes, nothing pre-selected). No teal primary, so nothing is the easy
   default.

@@ -437,7 +437,7 @@ class Component extends DCLogic {
       const migrated = screen === 'discover-migrated';
       title = 'Discover'; sub = 'Read only: nothing on this machine changes until you choose';
       footBtns = [B('Back', 'dis'), B('Continue', 'accent')];
-      if (migrated) machineLine = 'DEV-VM1 · Windows 11';
+      if (migrated) machineLine = 'Desk-A · Windows 11';
       blocks = migrated ? [
         info('info', 'Earlier setup found', 'agent-ha-bridge 1.3.22 set up this machine. Its working settings are kept.', [['Review migration', 'std']]),
         section('Managed by agent-ha-bridge'),
@@ -490,7 +490,7 @@ class Component extends DCLogic {
     if (screen === 'accounts' || screen === 'accounts-expired') {
       title = 'Accounts'; sub = 'Agent Bridge first, then each agent through its own sign-in';
       const expired = screen === 'accounts-expired';
-      if (expired) machineLine = 'DEV-VM1 · Windows 11';
+      if (expired) machineLine = 'Desk-A · Windows 11';
       blocks = [
         section('Agent Bridge', '', true),
         expired
@@ -721,7 +721,7 @@ class Component extends DCLogic {
       blocks = workspaceBlocks(true);
     }
     if (screen === 'settings-general') {
-      title = 'General'; sub = 'DEV-VM1 · Dev Box';
+      title = 'General'; sub = 'Desk-A · Dev Box';
       blocks = [
         section('Bridge Host', '', true),
         C(() => [
