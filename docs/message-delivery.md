@@ -150,6 +150,9 @@ the journal refused, a send is refused busy and never falls back to legacy typin
 pump. Phase 1 S6 stops it: BeginStop runs once a planned stop holds the delivery fence, or a restart commits, and never before,
 because a stop the host then refuses (a delivery outlasting 15 s) leaves it running and BeginStop cannot be undone. An admitted
 delivery is never aborted; the pump and its composition are disposed when the host run ends, the pump first.
+A known limit (#4519): if a stop's lease is released WITHOUT the host exiting (the update apply throws, or the restart handover throws),
+the pump stays stopped until the host restarts, because BeginStop cannot be undone; pending items stay in the journal and are drained after
+that restart. Nothing restarts the pump on a release, by design: a host that stopped its fence is not expected to keep running.
 No 2a/2b1 production scheduler entry or live capability probe exists. All table entries remain
 Unknown: queueable working sessions wait; positively idle/empty sessions may use Enter.
 Worker protocol v2 refuses older key-plan headers; an older worker refuses v2 before any keys.
