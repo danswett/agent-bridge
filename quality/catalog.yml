@@ -352,7 +352,7 @@ suites:
     runner: local
     project: tests/AgentBridge.Quality.Tests
     triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
-    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~HaCallSiteGuardTests
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter "FullyQualifiedName~HaCallSiteGuardTests"
     where: ci.yml product
     baseline: { tests: 51, seconds: 3 }
     status: exists
