@@ -240,10 +240,19 @@ public sealed partial class SessionView
     // is on its way: a thumb drag's steps are final view changes, and a ChangeView under it bounced the bar (#1756).
     void KeepAnchoredBlock()
     {
-        if (panning || ReaderScrolling || scrollbarPointers.Count > 0 || keyTarget is not null || anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
+        if (anchoring is not null || anchor is not { } a || ConversationScroll is not { } scroll || !ConversationList.IsLoaded
             || ConversationList.ContainerFromIndex(a.Index) is not FrameworkElement c) { return; }
+        // A layout skipped while held was drawn: the person saw the block move. After the release (which may raise no
+        // view change), start again from where it is, rather than pull the view back by it (#4243, trackpad).
+        // Only a pan or a pressed scrollbar part can end with no view change; a wheel notch or key scroll ends in its own,
+        // and a wheel event without one lapses, after which its realisation is still put back (CI 45325080892).
+        if (panning || scrollbarPointers.Count > 0) { anchorHeld = true; return; }
+        if (ReaderScrolling || keyTarget is not null) { return; }
+        if (anchorHeld) { anchorHeld = false; anchor = new(a.Index, Top(c, scroll)); anchorAt = scroll.VerticalOffset; return; }
         if (a.Correction(anchorAt, scroll.VerticalOffset, Top(c, scroll), scroll.ScrollableHeight) is { } to) { Anchoring(scroll, to); }
     }
+    // Set when the person held the view through a layout; a fresh anchor (TakeAnchor) clears it.
+    bool anchorHeld;
 
     // Every gate FollowPinnedEnd and KeepPlace consult, for a hosted failure to name the one that held.
     internal string PinState() => $"pinEnd={pinEnd} anchoring={anchoring} scrolling={scrolling} panning={panning} held={follow.Held} keyTarget={keyTarget} bars={scrollbarPointers.Count} loaded={ConversationList.IsLoaded} navigating={navigationPending is not null} restoring={restoreReading is not null} releases={pinReleases} seen={seen} released=[{string.Join(" | ", pinReleased)}] requests=[{string.Join(" | ", pinRequests)}]";

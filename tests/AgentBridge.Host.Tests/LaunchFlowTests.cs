@@ -592,6 +592,20 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
     }
 
+    // Session watch S1b (#4262): the owner is the AUTHENTICATED principal of the launch call, told once per session, never a request field.
+    [Fact]
+    public async Task A_started_session_is_told_to_the_owner_record_with_the_principal_that_launched_it()
+    {
+        var launcher = Launcher(Config());
+        var owned = new List<(string Session, string Principal)>();
+        launcher.SessionOwned += (session, principal) => { lock (owned) { owned.Add((session, principal)); } };
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal((result.Session, "phone"), Assert.Single(owned));
+    }
+
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
     // (so the session opens idle), found past the resume list's length, with what the machine no
     // longer offers left to its defaults, and never Allow all for a session started by hand, whatever
