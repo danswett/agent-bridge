@@ -68,7 +68,8 @@ public static class MigrateCommands
         {
             ProfileFolder = profileFolder,
             BridgeHome = Option("--bridge-home") ?? Path.Combine(home, ".agent-ha-bridge"),
-            HookFolder = Path.Combine(local, "AgentBridge", "bin"),
+            // Under the profile root (the product's own folder unless a test moved it, #4520): migrate writes the hook here.
+            HookFolder = Path.Combine(profileRoot, "bin"),
             HookSource = Option("--hook") ?? Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
             LocalAppData = local,
         };
