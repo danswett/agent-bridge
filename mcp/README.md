@@ -35,3 +35,9 @@ node src/server.mjs        # stdio; started by the agent as a child of its sessi
   capability and an accepted agent principal; every rule (the launch record, own session, unpushed work,
   kill switch) is the host's, never this server's. It never sends `session.stop`.
 - Not in this slice: the read-only HTTP mode, `ask_via_home_assistant`, other machines.
+
+## Contract tests
+
+`test/contract/cases.json` is the language-neutral contract for this server and for the .NET port (docs/design/beta-messaging.md section 5):
+each case names the host's capabilities and principal, the fake host's replies by pipe op, the tool calls, and the expected result or local refusal.
+`test/contract.test.mjs` runs the file against any stdio server command (`SLIPGATES_MCP_COMMAND`, a JSON array; default: this Node server) with a fake host on `AGENT_BRIDGE_PIPE`.
