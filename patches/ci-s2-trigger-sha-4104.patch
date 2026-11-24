@@ -1,14 +1,8 @@
-From 8ff5207892f7143e2995df0e2b94c77e5392d95c Mon Sep 17 00:00:00 2001
+From 16ed899eebfb49c337bebf4af7abce8a9fa1ef83 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:21:01 -0800
-Subject: [PATCH] CI S2: FULL checks out the commit the trigger verified, never
- the event's text (CodeQL cache-poisoning alerts on #4254)
+Date: Mon, 23 Nov 2026 22:31:54 -0800
+Subject: [PATCH] s trigger-sha
 
-The trigger job reads the CI run's commit through the API by the run's number (a dispatch's is its input), refuses anything but 40 lowercase hex, and
-outputs it; every other job's checkout is that output, so no checkout or cache step takes a commit straight from the event. Test: only the trigger
-reads the event's commit, through that script, and every checkout uses the output.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/full.yml                    | 29 ++++++++++++++++---
  .../FullWorkflowTests.cs                      | 22 +++++++++++++-
@@ -74,7 +68,7 @@ index 91c2fb68c..b9717b4e6 100644
        - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
          with:
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 21bcdfc0d..c30c5aace 100644
+index 9c1537d2a..2243eb31f 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -8,7 +8,7 @@ namespace AgentBridge.Quality.Tests;
@@ -86,7 +80,7 @@ index 21bcdfc0d..c30c5aace 100644
  
      static string Root => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
  
-@@ -136,4 +136,24 @@ public class FullWorkflowTests
+@@ -140,4 +140,24 @@ public class FullWorkflowTests
              .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
          Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
      }
