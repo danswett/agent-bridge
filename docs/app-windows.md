@@ -51,8 +51,20 @@ same-directory temporary file before atomically replacing the old marker; failed
 preserve the old marker and remove the temporary file. Only an actual exit,
 not hiding to the tray, calls `Complete()`, including tray Quit and a successful update
 handoff immediately before exit. Crash evidence survives closing; a teardown
-crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
-the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+crash restores the marker. Self-tests leave markers alone.
+
+**A hung UI thread leaves a minidump (the hang watchdog, #2869).** In the real app (not a self-test or the demo) `UiHangWatchdog` runs a
+background thread that posts a no-op to the UI dispatcher every 3 seconds. A no-op unanswered for more than 15 seconds means the UI thread is
+blocked (the owner's app once froze with its list still scrolling and left nothing behind), and `WindowsMiniDump` writes ONE minidump for that
+freeze, from the watchdog's own thread, which the blocked one cannot do: `MiniDumpNormal`, thread stacks and the module list only, no heap, so far
+less of what the app was handling than a full dump (a stack can still hold the value of a local). The UI thread answering again ends the freeze,
+says so in `app.log` and re-arms the watchdog: the next freeze is dumped too, and a freeze that goes on is dumped once. Everything the watchdog does, the beats
+and the dump, runs on its own background thread: the UI thread only ever runs the no-op. A pause of more than 9 seconds between beats, and Windows' own resume
+notice (`ResumeNotifier`, a system callback with no window, so it works while the UI thread is blocked), discard the ping in flight and give the UI a full window
+again, and a debugger attached never dumps. A disk with less than 1 GB free gets no dump, and `app.log` says why. Dumps are `%LOCALAPPDATA%\AgentBridge\dumps\AgentBridge-hang-yyyyMMdd-HHmmss-<pid>.dmp`,
+the newest three kept, and `app.log` names the path or says plainly that the dump was not written. A dump stays on the machine: nothing uploads it, and
+the watchdog never touches the host. `RecordHang` (the run marker's own hang evidence: a thread id and a redacted log tail) is not called by this
+slice; recovery UI and the existing feedback submission remain separate work.
 
 ## Decisions
 
