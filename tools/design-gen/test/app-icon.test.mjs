@@ -11,12 +11,24 @@ import { render, encodePng, decodePng, readIco, pngSize } from '../lib/raster.mj
 const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', `app-icon-${process.pid}`);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
-// design/ in a copy the test may change, with the app icon generated into it.
-function copy(name) {
-  const root = path.join(scratch, name);
+// design/ with the app icon generated into it, made ONCE per process: rasterizing every icon size is most of this file's time, and each test below used to
+// do it again in its own copy (eight times over; the light job's design-gen step was half its time, #4104). Generation is deterministic (the test after the
+// copies says so, and the repository's own icons are checked against design/ by the first), so a copy of this tree is the tree generating into the copy made.
+let generated;
+function base() {
+  if (generated) { return generated; }
+  const root = path.join(scratch, 'base');
   rmSync(root, { recursive: true, force: true });
   cpSync(path.join(repoRoot, 'design'), path.join(root, 'design'), { recursive: true });
   writeAppIcons(root);
+  return (generated = root);
+}
+
+// A copy of that tree the test may change.
+function copy(name) {
+  const root = path.join(scratch, name);
+  rmSync(root, { recursive: true, force: true });
+  cpSync(base(), root, { recursive: true });
   return root;
 }
 
@@ -29,6 +41,20 @@ const setTokens = (root, change) => {
 
 test('every app icon in the repository matches design/', () => {
   assert.deepEqual(staleAppIcons(repoRoot), [], 'run node tools/design-gen/generate.mjs and commit the result');
+});
+
+test('generating the app icons again, into a fresh copy of design/, writes the same files with the same bytes as the tree the other tests copy', () => {
+  const first = base();
+  const again = path.join(scratch, 'again');
+  rmSync(again, { recursive: true, force: true });
+  cpSync(path.join(repoRoot, 'design'), path.join(again, 'design'), { recursive: true });
+  writeAppIcons(again);
+  // Every file design-gen writes for the app icon, as it names them: not the fonts and the rest of design/ that were only copied.
+  const files = Object.keys(appIconTargets(appIconSpec(path.join(first, 'design'))));
+  assert.ok(files.length > 0);
+  for (const f of files) {
+    assert.ok(readFileSync(path.join(first, f)).equals(readFileSync(path.join(again, f))), `${f} differs between two generations`);
+  }
 });
 
 test('a changed plate colour makes every app icon stale but the plateless layers and glyphs, and generating again puts it back', () => {

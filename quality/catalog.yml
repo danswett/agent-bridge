@@ -45,6 +45,10 @@
 #   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
 #                 post-merge ("pwa-ui (webkit 1/3)"), each a job its where names. Any post-merge
 #                 suite naming a job makes it post-merge; a renamed job blocks again
+#   lane          fast (the default) | full (S2, #4104, quality/README.md §4.7). A fast suite's where names
+#                 ci.yml jobs, the merge gate; a full suite's where names full.yml jobs, the FULL lane that
+#                 never gates a merge. check reports an unknown lane (it counts as fast), a full suite whose
+#                 where names ci.yml or no full.yml job, and a fast suite whose where names full.yml
 #
 # A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
@@ -352,7 +356,7 @@ suites:
     runner: local
     project: tests/AgentBridge.Quality.Tests
     triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
-    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~HaCallSiteGuardTests
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter "FullyQualifiedName~HaCallSiteGuardTests"
     where: ci.yml product
     baseline: { tests: 51, seconds: 3 }
     status: exists
@@ -537,9 +541,9 @@ suites:
     # Both Windows runners run these steps, so a build/ change reaches windows-11-arm too.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    triggers: [build/**]
+    triggers: [build/**, .github/workflows/publish-pending.yml]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
-    where: ci.yml product
+    where: ci.yml product; publish-pending.yml
     status: exists
 
   - id: lab-scripts
