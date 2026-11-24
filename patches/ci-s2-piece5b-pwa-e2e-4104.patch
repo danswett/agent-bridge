@@ -1,12 +1,12 @@
-From 9250e3a513e910db96e7453952cf175cecb04281 Mon Sep 17 00:00:00 2001
+From 28f53d7d37cdff63c8cc331972c8699d3b6d8369 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:15 -0800
+Date: Mon, 23 Nov 2026 23:23:46 -0800
 Subject: [PATCH] s 5b
 
 ---
- .github/workflows/ci.yml                      | 80 +------------------
- .github/workflows/full.yml                    | 76 +++++++++++++++++-
- .github/workflows/pages.yml                   | 14 +++-
+ .github/workflows/ci.yml                      | 85 +------------------
+ .github/workflows/full.yml                    | 76 ++++++++++++++++-
+ .github/workflows/pages.yml                   | 14 ++-
  ops/runbooks/pwa.md                           |  4 +-
  quality/README.md                             |  4 +-
  quality/catalog.yml                           |  7 +-
@@ -17,10 +17,10 @@ Subject: [PATCH] s 5b
  .../FullWorkflowTests.cs                      |  6 +-
  .../HaValidationCoverageTests.cs              |  2 +-
  .../PlanScriptTests.cs                        |  4 +-
- 13 files changed, 123 insertions(+), 103 deletions(-)
+ 13 files changed, 123 insertions(+), 108 deletions(-)
 
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index ec401b488..46e2262ca 100644
+index f7a847dfc..bda464e8b 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -91,7 +91,6 @@ jobs:
@@ -40,7 +40,7 @@ index ec401b488..46e2262ca 100644
          run: |
            $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
            if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
-@@ -1635,79 +1634,6 @@ jobs:
+@@ -1640,84 +1639,6 @@ jobs:
            if-no-files-found: warn
            retention-days: 7
  
@@ -87,11 +87,16 @@ index ec401b488..46e2262ca 100644
 -          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
 -      # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
 -      - name: Download Playwright's system packages
+-        id: system-packages
 -        uses: ./.github/actions/playwright-system-packages
 -        with:
 -          browsers: chromium webkit
 -          working-directory: pwa
--          save: 'true'
+-      - name: Save Playwright's system-package archives
+-        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+-        uses: ./.github/actions/playwright-system-packages-save
+-        with:
+-          key: ${{ steps.system-packages.outputs.cache-key }}
 -      - run: npx playwright install chromium webkit
 -      - name: Save Playwright's browsers to main's cache
 -        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -120,7 +125,7 @@ index ec401b488..46e2262ca 100644
    quality-gate:
      # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
      # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
-@@ -1723,7 +1649,7 @@ jobs:
+@@ -1733,7 +1654,7 @@ jobs:
      # new gate's check only once every job it needs is done; under the same name, the draft's
      # green gate would stand for the whole head until then, and a merge could go through on it.
      name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
@@ -129,7 +134,7 @@ index ec401b488..46e2262ca 100644
      if: always()
      runs-on: ubuntu-latest
      timeout-minutes: 5
-@@ -1786,7 +1712,7 @@ jobs:
+@@ -1796,7 +1717,7 @@ jobs:
            # The waiver's needs when it waived something, otherwise the real ones.
            NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
            # Whole jobs the catalog makes post-merge: they skip pull requests, which aren't gated on them.
@@ -139,7 +144,7 @@ index ec401b488..46e2262ca 100644
            echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
            bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index ea7f81eb5..4181e4b97 100644
+index aaae9e6b3..3c0bb5ee7 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -151,7 +156,7 @@ index ea7f81eb5..4181e4b97 100644
  on:
    # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
    # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
-@@ -201,11 +201,83 @@ jobs:
+@@ -199,11 +199,83 @@ jobs:
          working-directory: spikes
          run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
  
@@ -306,7 +311,7 @@ index eb5793265..1ce9829c3 100644
  **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
  `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index ab7f51698..5dd95d30e 100644
+index 2e3c32c58..fc8830a0c 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -948,10 +948,9 @@ suites:
@@ -455,7 +460,7 @@ index 5cdc97e00..a3e331bc6 100644
          var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
          Assert.Equal(new[] { "plan", "app" },
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 9d7e0d0d4..bfa9311ed 100644
+index c8052833b..6820ca119 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -26,10 +26,10 @@ public class FullWorkflowTests
