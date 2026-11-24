@@ -53,6 +53,15 @@ fi
 if [ "$key_only" = true ]; then
   hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum); echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
   hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum); echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  # The signed indexes' Release dates: when upstream moves them, the key misses instead of a cached deb failing verification.
+  suite=${PLAYWRIGHT_APT_SUITE:-$(lsb_release -sc 2>/dev/null || echo unknown)}; dates=
+  for pocket in updates security; do
+    date=$(curl -fsS --max-time 10 "https://archive.ubuntu.com/ubuntu/dists/$suite-$pocket/InRelease" 2>/dev/null | sed -n 's/^Date: //p' | head -n 1) || date=
+    if [ -z "$date" ]; then dates=; break; fi
+    dates+="$pocket $date;"
+  done
+  if [ -n "$dates" ]; then hash=$(printf '%s' "$dates" | sha256sum); echo "index-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  else echo "index-hash=unavailable" >> "$GITHUB_OUTPUT"; fi
   exit 0
 fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
@@ -128,6 +137,7 @@ retry() {
     echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::apt network failure (exit $rc, attempt $n of $max); retrying"
     sleep "$wait"; n=$((n + 1))
   done
+  last_errors=$(grep -E '^[EW]:' "$log" || true)
   rm -f "$log"
   # A different Ubuntu mirror or cached debs cannot heal a throttled Microsoft index.
   if [ "$strict" = true ] && [ "$rc" -ne 0 ]; then network_failed=false; fi
@@ -145,7 +155,14 @@ leave_azure() {
   fi
   left_azure=true; network_host=archive.ubuntu.com
 }
-fail() { echo "::error::apt $1 failed (exit $2); see the attempt log above"; exit "$2"; }
+# Name the cause so a red step says whether the network or a verification failed (never installed unverified).
+fail() {
+  local cause=other
+  if grep -qiE 'Hash Sum mismatch|Size mismatch|not signed|BADSIG|NO_PUBKEY|signature|verification' <<< "$last_errors"; then cause=verification
+  elif [ "$2" -eq 124 ] || [ "$network_failed" = true ] || grep -qiE 'Temporary failure resolving|Could not (resolve|connect)|Connection (failed|timed out|refused|reset)|timed out|Network is unreachable' <<< "$last_errors"; then cause=network/timeout; fi
+  echo "::error::apt $1 failed (exit $2): $cause; see the attempt log above"; exit "$2"
+}
+last_errors=
 
 # timeout returns 137 if --kill-after had to KILL it; that still takes the timeout fallback.
 bounded() {
@@ -166,6 +183,10 @@ if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
     leave_azure
   fi
 fi
+# Bound each package fetch itself: apt retries a failed file and drops a stalled connection after 20 s,
+# so one slow package cannot eat the whole step. This adds no source, key or trust setting.
+sudo mkdir -p "$apt_etc/apt.conf.d"
+printf '%s\n' 'Acquire::Retries "3";' 'Acquire::http::Timeout "20";' 'Acquire::https::Timeout "20";' | sudo tee "$apt_etc/apt.conf.d/99playwright-fetch" > /dev/null
 rc=0
 retry update bounded apt-get update || rc=$?
 if [ "$rc" -ne 0 ]; then

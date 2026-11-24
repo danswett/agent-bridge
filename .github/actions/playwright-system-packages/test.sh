@@ -132,13 +132,23 @@ case "$*" in
 esac
 exit 99
 EOF
+cat > "$work/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# Stands in for the signed index's InRelease fetch that only keys the cache.
+echo "$*" >> "$CURL_LOG"
+[ -z "${CURL_FAIL:-}" ] || exit 22
+case "$*" in
+  *-security/InRelease*) printf 'Date: %s\n' "${RELEASE_DATE_SECURITY:-Mon, 23 Nov 2026 00:00:00 UTC}" ;;
+  *) printf 'Date: %s\n' "${RELEASE_DATE_UPDATES:-Mon, 23 Nov 2026 00:00:00 UTC}" ;;
+esac
+EOF
 cat > "$work/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SLEEP_LOG"
 EOF
-chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout"
+chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout" "$work/bin/curl"
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
-export TIMEOUT_LOG="$work/timeout.log"
+export TIMEOUT_LOG="$work/timeout.log" CURL_LOG="$work/curl.log" PLAYWRIGHT_APT_SUITE=noble
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
 export HOME="$work/cache-fixture/home" GITHUB_OUTPUT="$work/cache-fixture/output"
 export PLAYWRIGHT_APT_LISTS="$work/cache-fixture/lists" PLAYWRIGHT_APT_ARCHIVES="$work/cache-fixture/archives"
@@ -269,6 +279,38 @@ if [ "${1:-}" = --cache-auth ]; then
   echo "cache-auth: $failures failure(s)"
   [ "$failures" -eq 0 ]; exit
 fi
+
+robust_cases() {
+  local code key1 key2 conf
+  # (1) every package fetch is bounded and retried by apt itself, so one slow file cannot eat the step.
+  reset "$canonical"
+  check "downloads carry per-file retries and a per-connection timeout" 0 "$(printf 'update\n%s' "$download")" "$canonical"
+  conf="$PLAYWRIGHT_APT_ETC/apt.conf.d/99playwright-fetch"
+  if grep -q 'Acquire::Retries "3"' "$conf" && grep -q 'Acquire::http::Timeout "20"' "$conf" && grep -q 'Acquire::https::Timeout "20"' "$conf"; then
+    echo "ok: the fetch bounds are written as apt configuration"
+  else echo "FAIL: no per-file retry/timeout configuration"; failures=$((failures + 1)); fi
+  # (3) the final error names its cause.
+  reset "$canonical"; export APT_ERROR='E: Hash Sum mismatch'
+  check "a verification failure is named as such" 100 "$(printf 'update\n%s' "$download")" "$canonical"
+  grep -q '^::error::apt download failed (exit 100): verification' "$work/out" \
+    || { echo "FAIL: a hash mismatch was not named as verification"; failures=$((failures + 1)); }
+  reset "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0 APT_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/pool/x.deb  Connection timed out'
+  check "a network failure is named as such" 100 "$(printf 'update\n%s' "$download")" "$canonical"
+  grep -q '^::error::apt download failed (exit 100): network/timeout' "$work/out" \
+    || { echo "FAIL: a network failure was not named as network/timeout"; failures=$((failures + 1)); }
+  # (4) the key follows the signed indexes, so a moved index is a miss, never a failed verify.
+  reset "$canonical"
+  bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || true; key1=$(sed -n 's/^index-hash=//p' "$GITHUB_OUTPUT")
+  : > "$GITHUB_OUTPUT"; RELEASE_DATE_SECURITY='Tue, 24 Nov 2026 06:00:00 UTC' bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || true
+  key2=$(sed -n 's/^index-hash=//p' "$GITHUB_OUTPUT")
+  if [ -n "$key1" ] && [ -n "$key2" ] && [ "$key1" != "$key2" ]; then echo "ok: a moved signed index changes the cache key"
+  else echo "FAIL: cache key ignores the index date ($key1 / $key2)"; failures=$((failures + 1)); fi
+  : > "$GITHUB_OUTPUT"; code=0; CURL_FAIL=1 bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || code=$?
+  if [ "$code" -eq 0 ] && grep -q '^index-hash=unavailable$' "$GITHUB_OUTPUT"; then echo "ok: an unreachable index keys as unavailable, not a failure"
+  else echo "FAIL: key step failed when the index was unreachable"; failures=$((failures + 1)); fi
+  grep -q 'index-hash' "$here/action.yml" && grep -q 'playwright-apt-v4-debs' "$here/action.yml" \
+    || { echo "FAIL: action.yml's key lacks index-hash or the v4 prefix"; failures=$((failures + 1)); }
+}
 
 followup_cases() {
   reset "$azure" "$canonical"; export APT_DOWNLOAD_SECONDS=120
@@ -699,6 +741,7 @@ cache_auth_cases
 cache_ref_case
 cache_copy_cases
 followup_cases
+robust_cases
 fi
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1
