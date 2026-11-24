@@ -1,0 +1,38 @@
+name: Publish pending release
+
+# The owner's release spacing (docs/app-windows.md, "Spacing"): a run of main's that passed and was
+# deferred inside the 15 minutes is published once the window opens, even with main idle.
+# build/publish-pending.ps1 re-runs that run's publish job, which publishes in ci.yml's
+# publish-prerelease group and checks everything again under that lock; this job only reads and
+# re-runs. Main's trusted script only; it runs no pull request's code.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-pending
+  cancel-in-progress: false
+
+jobs:
+  pending:
+    if: github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write # re-running one publish job
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Re-run the deferred publish of main's newest run that passed, once the window opens
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: pwsh -NoProfile -File build/publish-pending.ps1 -Repository $env:REPOSITORY

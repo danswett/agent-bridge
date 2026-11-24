@@ -43,12 +43,24 @@ have from the worker's cache, without asking the network (#609).
 Load the PWA, check its build stamp if it shows one, sign in, and answer a test card on a
 disposable host.
 
+## The stale-PWA alarm
+
+**A red `Stale PWA alarm` run** (`stale-pwa.yml`, every four hours and by hand; #4369) means https://app.slipgates.com is serving a build more than 24 hours older than main's newest commit that
+changed `pwa/`, or that the check could not read what it needs. It compares the served `config.js` (`APP_VERSION` is the deployed commit, `BUILT_AT` its time) with that commit, with two read-only GETs and no secret
+(`quality/stale-pwa.ps1`); an unreadable `config.js` or history is red too, never "fresh". It exists because a held deploy is silent: from Nov 12 to 24 the site served a 12-day-old build while every Pages
+run was green (a rollback fence nobody had set was holding the deploys). Its run summary names the served and the newest commit. **To clear it:** open the newest `Pages` runs and read why the gate did not deploy (a
+rollback fence, a failed named PWA job, or a history it could not read); if no rollback was intended, resume with `gh workflow run pages.yml -R danswett/agent-bridge --ref main` (no `ref`, as under Mitigate 2),
+then dispatch `stale-pwa.yml` (or wait for its next run) and check it is green. A deliberate rollback looks the same and alarms until the fix is deployed. It watches only `pwa/` commits, while Pages also deploys
+on `design/fonts/`, the spikes' web files and `pages.yml`, so it stays quiet on a stale site after only those changed.
 ## Afterwards
 
 Rollback state lives in manual Pages run history: one page of at most 100 runs, ordered by creation
-time, recognizing only main-branch `Pages rollback` and `Pages resume`. Unknown ancestry, lookup
-failure or no boundary in that page blocks automation. Retention (90 days) can age the boundary out;
-perform the explicit manual resume above to re-establish it. First deployment also needs that resume.
+time, recognizing only main-branch `Pages rollback` and `Pages resume`. With no `Pages rollback` run
+in the complete history the fence is open and automatic deploys proceed (no resume is needed for a
+first deployment). After a rollback, deploys stay held until a successful `Pages resume` dispatch.
+Unknown ancestry, a lookup failure or a truncated history (more than 100 runs, none a rollback)
+blocks automation loudly. Matching is by exact run title, so a renamed or retention-expired
+(90 days) `Pages rollback` run leaves the fence open.
 
 If PWA CI would have caught it, it should have: Pages deploys only after its named jobs pass,
 so add the missing test.

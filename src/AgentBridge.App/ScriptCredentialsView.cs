@@ -57,7 +57,8 @@ public sealed class ScriptCredentialsView : UserControl
             var text = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true,
                 Text = $"{row.Name}: {row.Scope}, {row.Live} live, expires {row.ExpiresAt.LocalDateTime:g}, "
                     + (row.LastUse is { } used ? $"last used {used.LocalDateTime:g} (since this host started)" : "not used since this host started")
-                    + (row.FleetLaunch ? ", may launch worker sessions" : "") };
+                    + (row.FleetLaunch ? ", may launch worker sessions" : "")
+                    + (row.ExpiryNote(DateTimeOffset.Now) is { } note ? $". Warning: {note}" : "") };
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             buttons.Children.Add(Button($"Rotate {row.Name}", "Rotate", idle, () => PressAsync(HostOps.ScriptAdd, row.Name, row.Live)));
             buttons.Children.Add(Button($"Revoke {row.Name}", "Revoke", idle, () => PressAsync(HostOps.ScriptRevoke, row.Name, row.Live)));
