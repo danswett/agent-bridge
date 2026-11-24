@@ -9,8 +9,9 @@ public sealed class FakeHostTests
     [Fact]
     public async Task A_host_that_stops_when_asked_notes_the_request_answers_it_intact_and_only_then_goes()
     {
-        // Many times over: an answer cut off by an early stop would show as a lost reply on some of them.
-        for (var round = 0; round < 40; round++)
+        // Many times over: the host answers and hangs up at once, so the client may read the answer and the end of the stream while its own write
+        // is still completing (LocalChannel, #4026). Before that fix this loop failed in 10 of 12 runs (measured in #4057's review).
+        for (var round = 0; round < 200; round++)
         {
             await using var host = new FakeHost();
             var asked = 0;
@@ -26,4 +27,3 @@ public sealed class FakeHostTests
         }
     }
 }
-

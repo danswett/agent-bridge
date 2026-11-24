@@ -9,14 +9,23 @@ on:
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
   # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
-  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
-  # writes no cache and runs every job (the whole ring).
+  # §4.7), or as Quality's critical-fix release of main's head (critical-release with a reason, on
+  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. Only the critical
+  # release is a release (APP_RELEASE); a run by hand writes no cache and runs every job (the whole ring).
   workflow_dispatch:
     inputs:
       force-apt-fallback:
         description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
         type: boolean
         default: false
+      critical-release:
+        description: Publish main's head as a critical fix inside the 15-minute release spacing (publish-prerelease.ps1 -SkipSpacing). Quality only, on an owner or Chief call; main only, with critical-reason
+        type: boolean
+        default: false
+      critical-reason:
+        description: Why this critical fix may not wait; required with critical-release, checked before the build and logged in the run and the release notes
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -46,12 +55,12 @@ env:
   # which also needs the app built here): only then is the host a release build, whose Home
   # Assistant connector may write to a real Home Assistant (design G6). Every pull request and
   # fork builds a dev host.
-  APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
+  APP_RELEASE: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
   # 'true' when this run's package is to be signed with Azure Artifact Signing (#734): the publish
   # path, once the owner has set the repository variable APP_SIGNING to 'true' (docs/app-windows.md,
   # Signing). Then a package that is not signed by the pinned publisher fails the run rather than
   # going out unsigned. Until then, and on every pull request and fork, packages are unsigned.
-  APP_SIGNING: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
+  APP_SIGNING: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
 
 jobs:
   plan:
@@ -99,16 +108,26 @@ jobs:
       # publishes), at a commit that is neither main's head nor any open pull request's. Anything
       # else fails here, before checkout, and every job after the plan is skipped. Push and pull
       # request runs skip this step, so they make no API call.
-      - name: A run by hand is a fallback proof on a commit of its own
+      - name: A run by hand is a fallback proof on a commit of its own, or a critical release of main
         if: github.event_name == 'workflow_dispatch'
         env:
           FORCE: ${{ inputs.force-apt-fallback }}
+          CRITICAL: ${{ inputs.critical-release }}
+          REASON: ${{ inputs.critical-reason }}
           REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+          fail() { echo "::error title=run by hand::$1"; exit 1; }
+          if [ "$CRITICAL" = true ]; then
+            # The critical-fix override (docs/app-windows.md, "Spacing"): main's head, past the release
+            # spacing only, with a reason, checked here before anything is built.
+            [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
+            [ "$FORCE" != true ] || fail "critical-release and force-apt-fallback are separate runs"
+            [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+            exit 0
+          fi
           [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
           if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
             fail "only on a branch other than main, not $REF"
@@ -271,7 +290,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(needs.plan.outputs.product-os) }}
-    runs-on: ${{ matrix.os }}
+    # Windows x64 on the ab-ci pool only for a push or a same-repository pull request with AB_CI_SELF_HOSTED set to 'true';
+    # a fork's pull request, an unset variable and every other leg stay hosted (quality/README.md routing guard, #3824).
+    runs-on: ${{ (matrix.os == 'windows-latest' && vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || matrix.os }}
     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
     # (#129); this caps what a hang can cost.
     timeout-minutes: 30
@@ -289,6 +310,30 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
+      # NuGet's folders and MSBuild's nodes for this job alone: on a reused ab-ci machine nothing outlives the job
+      # (the runner empties RUNNER_TEMP for each one), and a hosted runner behaves the same (quality/README.md, warm caches).
+      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
+        shell: pwsh
+        run: |
+          $t = $env:RUNNER_TEMP
+          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
+          # A clean workspace: checkout cleans already; this also clears what a crashed job left.
+          git clean -ffdx
+      # The ab-ci runners can't reach nuget.org (run 45277647321, NU1301). On a self-hosted runner only, this job's
+      # restores use a config in RUNNER_TEMP (MSBuild reads RestoreConfigFile from the environment; the tool restore
+      # below gets --configfile), written by quality/nuget-mirror.ps1 (New-AbCiNuGetConfig, NuGetMirrorTests): the
+      # runner's mirror (AGENT_BRIDGE_NUGET_SOURCE in its .env) must be https://packagefeedproxy.microsoft.io/... with
+      # no user info, port or query; it is the only package and audit source, with no fallback folder; and every
+      # package must carry a nuget.org repository signature, so the mirror serves nuget.org's own bytes or nothing
+      # (NU3034). A mirror that is down fails the restore (NU1301). nuget.config and every hosted restore are unchanged.
+      - name: NuGet through the runner's mirror, nuget.org-signed packages only (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          . ./quality/nuget-mirror.ps1
+          $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
+          try { New-AbCiNuGetConfig -Source "$env:AGENT_BRIDGE_NUGET_SOURCE" -Path $cfg } catch { Write-Host "::error::$($_.Exception.Message)"; exit 1 }
+          "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
       - name: Choose what to test
         # The whole solution when the whole ring runs (a change to the solution, a workflow or
         # quality/, or main with no passed base), as before. Otherwise a solution filter of the selected test
@@ -317,12 +362,17 @@ jobs:
         id: nuget
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.nuget/packages
-          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
-          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
-      # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
+          path: ${{ runner.temp }}/nuget-packages
+          # A self-hosted leg's packages get their own key (the suffix is empty on a hosted runner, whose key is as before).
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ runner.environment == 'self-hosted' && 'ab-ci-' || '' }}${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-{3}', github.job, runner.os, runner.arch, runner.environment == 'self-hosted' && 'ab-ci-' || '') || '' }}
+      # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json. Hosted: this step, as before.
       - run: dotnet tool restore
-        if: env.DOTNET_TARGET != ''
+        if: env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG == ''
+      # Self-hosted: the same tools through the mirror config above.
+      - run: dotnet tool restore --configfile "$env:NUGET_MIRROR_CONFIG"
+        shell: pwsh
+        if: env.DOTNET_TARGET != '' && env.NUGET_MIRROR_CONFIG != ''
       # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
       # and the compiler too. Always the whole solution, even when only some tests run: projects
       # no test references (the benchmarks, perf-hook's driver) are compiled nowhere else on a
@@ -333,7 +383,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.nuget/packages
+          path: ${{ runner.temp }}/nuget-packages
           key: ${{ steps.nuget.outputs.cache-primary-key }}
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is
       # killed without a process dump, and the run fails naming the test in progress.
@@ -495,6 +545,10 @@ jobs:
           path: ${{ runner.temp }}/relay-image.sarif
           if-no-files-found: ignore
           retention-days: 14
+      - name: Stop this job's build servers
+        # MSBuild's and the compiler's servers would otherwise outlive the job on a reused machine.
+        if: always()
+        run: dotnet build-server shutdown
   relay-image-sarif:
     # The relay image's scan to code scanning (the Security tab), from main only. A pull request's
     # results would be compared with main's last upload, so a vulnerability published since then
@@ -705,13 +759,17 @@ jobs:
       - uses: ./.github/actions/arm64-foreground
         if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'
       - name: The published app draws the demo's cards and answers one (win-arm64 retry, #2026)
+        id: selftest-retry
         if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64'
+        # Recorded, not swallowed: "The win-arm64 self-test failed twice" below fails the job after the package, installer input
+        # and SBOM are uploaded. An Arm64 leg may be red but is never unpackaged (publish-gate, app-installer need those).
+        continue-on-error: true
         shell: pwsh
         run: |
           Write-Output "::warning title=app (win-arm64)::the self-test failed once; retrying it once (#2026)"
           ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest-retry/result.json" -TimeoutSeconds 720
       - name: The win-arm64 self-test passed on retry (flake notice, #2026)
-        if: steps.selftest.outcome == 'failure' && matrix.runtime == 'win-arm64' && success()
+        if: steps.selftest.outcome == 'failure' && steps.selftest-retry.outcome == 'success'
         shell: pwsh
         run: Write-Output "::warning title=app (win-arm64) flake::the self-test failed once and passed on retry; flake record https://github.com/danswett/agent-bridge/issues/2026"
       - name: The release would publish (dry run)
@@ -759,6 +817,12 @@ jobs:
           path: ${{ runner.temp }}/sbom
           if-no-files-found: error
           retention-days: 30
+      - name: The win-arm64 self-test failed twice (recorded after the package and SBOM are uploaded)
+        if: steps.selftest-retry.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Write-Output "::error title=app (win-arm64)::the self-test failed on both attempts (#2026); the package, installer input and SBOM above are uploaded"
+          exit 1
       - name: Stage named self-test text, never WER dumps or archives
         if: always()
         id: selftest-text
@@ -936,12 +1000,11 @@ jobs:
     # version older than any published, the version being this run's number, and refuses a commit
     # that doesn't hold the latest release's commit, since neither a run number nor the order
     # waiting publishes start in says anything of commit order. So a run that publishes after a
-    # newer commit's release publishes nothing, and an older commit's run that gets there first
-    # publishes nothing when main's head has since changed the app (main's selector says so):
-    # main's later run builds the app with both changes and publishes it, whatever the two runs'
-    # numbers, where publishing the older first could leave the newer one refused as an older
-    # version. Had it to be main's head instead, an app change followed by a docs-only commit
-    # would never be released.
+    # newer commit's release publishes nothing; an older commit's run that gets there first still
+    # publishes while main's head follows its commit, and main's later run publishes its own higher
+    # version over it (#4104). Releases are 15 minutes apart: a run inside that is deferred, and
+    # publish-pending.yml re-runs its publish (docs/app-windows.md, "Spacing"). A critical-release
+    # dispatch on main, with a reason, is a publish path too.
     # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
     # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -950,7 +1013,7 @@ jobs:
     # if this need goes. !cancelled() replaces the default success(), so the result is checked here.
     needs: [quality-gate]
     if: >-
-      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      !cancelled() && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
       && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -987,8 +1050,8 @@ jobs:
     # Only a signing run enters the `signing` environment, the one subject the signing identity's
     # federated credential trusts (repo:danswett/agent-bridge:environment:signing), deployable from
     # main only. Without it this job's OIDC token signs in nowhere.
-    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
-    runs-on: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
+    environment: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
+    runs-on: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
     permissions:
       contents: read
       id-token: write # azure/login's OIDC sign-in, used only when APP_SIGNING is 'true'
@@ -1120,10 +1183,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
-      # publish a commit main has since changed the app past (main's later run publishes that),
-      # read with main's own selector and catalog, as that run plans. A second clone, since the
-      # first one's origin/main is this run's commit.
+      # Main's head now, under the publish lock: publish-prerelease.ps1 publishes this commit only
+      # while main's head follows it (#4104). A second clone, since the first one's origin/main is
+      # this run's commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
@@ -1152,9 +1214,14 @@ jobs:
           # Repository variables: this job has no environment, and needs no Azure sign-in; it
           # checks the signatures the sign job made, before uploading and again in the draft.
           SIGNING_EKU: ${{ vars.APP_SIGNING_IDENTITY_EKU }}
+          # Through the environment, never spliced into the script.
+          CRITICAL_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.critical-release }}
+          CRITICAL_REASON: ${{ inputs.critical-reason }}
         run: |
           $sign = @{}
           if ($env:APP_SIGNING -eq 'true') { $sign = @{ RequireSignature = $true; SignerEku = $env:SIGNING_EKU } }
+          # The critical-fix override (docs/app-windows.md, "Spacing"): a dispatch on main, with its reason.
+          if ($env:CRITICAL_RELEASE -eq 'true') { $sign.SkipSpacing = $true; $sign.SkipSpacingReason = $env:CRITICAL_REASON }
           ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head @sign
       - name: Publish the static Beta download manifest
         if: steps.publish.outputs.manifest-tag != ''
@@ -1401,6 +1468,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'main-red')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-main-red.ps1
+      - name: The Merge rule sweep cancels only stuck Merge rule runs, offline
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'merge-rule-sweep')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-merge-rule-sweep.ps1
       - name: Culprit auto-revert uses offline gh and git fixtures
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'revert-culprit')) }}
         shell: pwsh

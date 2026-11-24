@@ -515,11 +515,16 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     var extendsPart = append && messageId is not null && _responseContiguous && S.ResponseTurn == S.TurnId;
                     if (!extendsPart)
                     {
-                        // Legacy text can span several history parts. Never give that
-                        // composite a single part id, or guess through an unread window.
-                        S.ResponseId = !append && _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
-                            && (messageId is null || !_edgeMessages.Contains(messageId))
-                            ? Conversation.TurnIds.Part(record, part) : null;
+                        var identified = _replyIdentityKnown && !toolBeforeText && S.TurnId is not null && record is not null
+                            && (messageId is null || !_edgeMessages.Contains(messageId));
+                        // Legacy text can span several history parts (one message's text split by a thinking
+                        // block, a tool or a delivered notice). That composite is one reply that grows, so it
+                        // keeps the id its FIRST part had: a later part's id would change as it grows, and no id
+                        // made a client rewrite the part of an earlier reply (#3649). A composite that crossed a
+                        // turn, or whose first part had no id, has none; and never guess through an unread window.
+                        S.ResponseId = !identified ? null
+                            : append ? (S.ResponseTurn == S.TurnId ? S.ResponseId : null)
+                            : Conversation.TurnIds.Part(record!, part);
                         part++;
                     }
                     S.Response = append ? S.Response + "\n\n" + text : text;
