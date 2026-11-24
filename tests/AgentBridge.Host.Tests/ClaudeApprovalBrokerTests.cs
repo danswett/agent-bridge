@@ -160,7 +160,8 @@ public sealed class ClaudeApprovalBrokerTests
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
             .Where(f => File.ReadAllText(f).Contains("ClaudeApprovalBroker", StringComparison.Ordinal))
             .Select(Path.GetFileName).ToList();
-        Assert.Equal(["ClaudeApprovalBroker.cs"], users);
+        // The op that waits on it (ClaudeApprovalWait, #1003 PR B) is the one more place, and nothing constructs either: the feature stays off.
+        Assert.Equal(["ClaudeApprovalBroker.cs", "ClaudeApprovalWait.cs"], users.Order(StringComparer.Ordinal).ToList());
     }
 
     // A clock whose timers never fire by themselves: the deadline then rests on what Resolve itself checks.

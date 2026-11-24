@@ -40,10 +40,19 @@ relay or at the machine. That a hook asking over the pipe is the real hook of th
 
 ## Next PRs (not started)
 
-- **B: the pipe op and the hook client.** The op `approval.wait` takes the event; **the host's caller check is the one `agent.hello` uses** (the
-  session's Windows job and the ancestor rule, #4287, extended in #4302 and #4303), reused and not a new pid walk, so orphaned shells and foreign
-  callers are treated the same in both places. The hook verifies the pipe server is the host before sending anything. Squatting the pipe name
-  or posing as the hook are the risks B must close.
+- **B (the pipe op, this change; the hook client is C): `approval.wait`.** Request `{ "event": "<the hook's raw PermissionRequest event, JSON text, at most 16 KiB>" }`;
+  reply `{ "verdict": "allow" | "deny" | "none", "reason"?: one word }`, and **none means the hook shows Claude's own prompt at the machine, never an allow**. The
+  host, not the hook, reads the session, tool and input out of the event, derives the request id (16 hex digits of SHA-256 over `session
+tool
+input`, the hook's
+  `ClaudeApproval.RequestId`), and builds the text shown (`tool: command`, or the raw input when there is no command, after `ShownText.Reveal`, as the app shows it),
+  which the broker digests: the answer is bound to what the host showed, and the hook cannot describe a command that differs from the real input. The caller check is
+  the one `agent.hello` uses (a live session credential and the host's own classification of the caller as an agent, #4287, #4302, #4303), reused, not a new pid walk,
+  and the event's `session_id` must be that credential's session. Reasons with `none`: `bad-event` (not JSON, not an object, no `session_id` or `tool_name`, not
+  `hook_event_name` `PermissionRequest`, no text or over 16 KiB), `caller` (another session's event), `busy` (a prompt for it is already waiting; never replaced),
+  `truncated` (shown cut, so never answerable; at once, nothing registered), `timeout` (no answer by the broker's 100 s, or the hook went away). A refusal of the
+  caller itself, or the op not being offered (off), is an error reply, which the hook reads as none. **Off:** the op is offered only if the host is handed it; nothing hands
+  it today and the setting does not exist, so it replies "isn't available on this host". Still to close in C: the hook verifying the pipe server is the host.
 - **C: the listing and the surfaces.** The tracker lists the prompt as answerable (not `atMachine`) when readable and not truncated; `host-answers.md`,
   the app and push follow; the setting `permissions.claudeApproval` (default off) appears here.
 - **D: the live check** from #4277's body, then turning it on.
