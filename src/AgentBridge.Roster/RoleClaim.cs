@@ -1,4 +1,4 @@
-using System.Text.Encodings.Web;
+using System.Globalization;
 using System.Text.Json;
 
 namespace AgentBridge.Roster;
@@ -20,7 +20,6 @@ public sealed record RoleClaim(string Account, string Generation, RoleId RoleId,
     // role-ids.md §2's order, which the bytes keep; the signed body is all but the signature.
     static readonly string[] Order = ["version", "account", "generation", "roleId", "holderEpoch", "sessionId", "hostAdd",
         "hostKeyId", "bindingProof", "assignmentDigest", "state", "issuedAt", "expiresAt", "authorityKeyId", "signature"];
-    static readonly JsonWriterOptions Writer = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     // Refuses anything but the one canonical encoding, and a claim for another role than the one asked for.
     public static RoleClaim Parse(byte[] utf8, RoleId expected)
@@ -33,7 +32,7 @@ public sealed record RoleClaim(string Account, string Generation, RoleId RoleId,
         string Id(string name) => Codec.IsId(S(name)) ? S(name) : throw new RosterFormatException(Refusal.Id, "claim." + name);
         string Bytes32(string name) { Codec.FromBase64Url(S(name), 32, "claim." + name); return S(name); }
         string Der(string name) { P256.CheckRosterSignature(Codec.FromBase64Url(S(name), "claim." + name), "claim." + name); return S(name); }
-        string At(string name) => Times.IsUtc(S(name)) ? S(name) : throw new RosterFormatException(Refusal.Time, "claim." + name);
+        string At(string name) => Times.IsUtc(S(name)) && S(name).Length == 20 ? S(name) : throw new RosterFormatException(Refusal.Time, "claim." + name);
         var claim = new RoleClaim(EntryBody.ParseAccount(S("account")), Id("generation"), RoleId.Parse(S("roleId"), "claim.roleId"),
             StrictJson.Integer(c.GetProperty("holderEpoch"), "claim.holderEpoch") ?? throw new RosterFormatException(Refusal.Value, "claim.holderEpoch"),
             SessionId.Parse(S("sessionId"), "claim.sessionId"), Bytes32("hostAdd"), Id("hostKeyId"), Der("bindingProof"),
@@ -52,22 +51,13 @@ public sealed record RoleClaim(string Account, string Generation, RoleId RoleId,
     public byte[] SigningInput(string purpose) => purpose == Purpose
         ? Framing.F(Framing.Label(Purpose), BodyBytes()) : throw new RosterFormatException(Refusal.Purpose, "not " + Purpose);
 
+    // Compact JSON in Order. Only account can hold a quote or backslash (controls refuse); all else is raw UTF-8.
     byte[] Encode(bool withSignature)
     {
-        using var stream = new MemoryStream();
-        using (var w = new Utf8JsonWriter(stream, Writer))
-        {
-            w.WriteStartObject();
-            w.WriteNumber("version", 1);
-            string[] values = [Account, Generation, RoleId.Value, "", SessionId.Value, HostAdd, HostKeyId, BindingProof,
-                AssignmentDigest, State, IssuedAt, ExpiresAt, AuthorityKeyId, Signature];
-            for (var i = 1; i < Order.Length - (withSignature ? 0 : 1); i++)
-            {
-                if (Order[i] == "holderEpoch") { w.WriteNumber("holderEpoch", HolderEpoch); } else { w.WriteString(Order[i], values[i - 1]); }
-            }
-            w.WriteEndObject();
-        }
-        return stream.ToArray();
+        static string Q(string text) => "\"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        string[] values = ["1", Q(Account), Q(Generation), Q(RoleId.Value), HolderEpoch.ToString(CultureInfo.InvariantCulture), Q(SessionId.Value),
+            Q(HostAdd), Q(HostKeyId), Q(BindingProof), Q(AssignmentDigest), Q(State), Q(IssuedAt), Q(ExpiresAt), Q(AuthorityKeyId), Q(Signature)];
+        return Framing.Utf8("{" + string.Join(",", Order.Take(Order.Length - (withSignature ? 0 : 1)).Select((name, i) => $"\"{name}\":{values[i]}")) + "}");
     }
 
     // Version 4, RFC 4122 variant, canonical lowercase "D" text; nil, other versions and names refuse.
