@@ -95,6 +95,7 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
   exempt_paths: [tests/AgentBridge.*.Tests/**, pwa/test/**]
+  reliance_record_from: "2026-11-24T18:34:48Z"   # #3944 merged: from here a main run must carry its plan-base record (item A)
   jobs:
     - product
     - ha-integration
