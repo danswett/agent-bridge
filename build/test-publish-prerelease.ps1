@@ -204,6 +204,13 @@ function global:gh {
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/compare/*") {
         if ($global:PpCompare -eq 'fail') { $global:LASTEXITCODE = 1; return }
         $global:PpCompare
+    } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/actions/workflows/ci.yml/runs?*") {
+        # Main's CI runs, and each run's jobs, for publish-pending.ps1.
+        if ($global:PpRuns -is [string]) { $global:LASTEXITCODE = 1; return }
+        foreach ($r in $global:PpRuns) { $r | ConvertTo-Json -Compress }
+    } elseif ($a[0] -eq 'api' -and $a[1] -match '^repos/[^/]+/[^/]+/actions/runs/(\d+)/jobs\?') {
+        foreach ($j in @($global:PpJobs[$Matches[1]])) { if ($j) { $j | ConvertTo-Json -Compress } }
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'POST' -and $a[3] -like "repos/$repo/actions/jobs/*/rerun") {
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/commits/*") {
         'The commit being built (#200)'
     } else { throw "stand-in gh: unexpected $($a -join ' ')" }
@@ -332,7 +339,7 @@ function Reset([int]$prereleases = 0) {
     $global:PpPublishedBody = $null
     $global:PpListFailures = 0; $global:PpListings = 0; $global:PpFailListAfter = -1; $global:PpDeleteFailures = 0; $global:PpDeleteGoesThrough = $false; $global:PpSleeps.Clear()
     $global:PpMain = @($ancestor, $commit, $descendant); $global:PpTagSha = @{}; $global:PpTagType = 'commit'; $global:PpTagRef = $null; $global:PpAncestry = $null
-    $global:PpSelect = $null; $global:PpNow = $null
+    $global:PpSelect = $null; $global:PpNow = $null; $global:PpRuns = @(); $global:PpJobs = @{}
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -399,11 +406,11 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(),
 }
 
 # Both architectures' folders, as the publish job downloads them, unless -Only names one.
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [switch]$Sign, [string]$Head = $commit, [switch]$SkipSpacing) {
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [switch]$Sign, [string]$Head = $commit, [switch]$SkipSpacing, [string]$Reason = 'the relay drops every message') {
     $dirs = @(foreach ($channel in $Only) { New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild -Channel $channel -Machine $Machine[$channel] })
     # -Sign: as CI publishes once APP_SIGNING is on. -SkipSpacing: the critical-fix override.
     $signing = if ($Sign) { @{ RequireSignature = $true; SignerEku = $global:PpEku } } else { @{} }
-    if ($SkipSpacing) { $signing.SkipSpacing = $true }
+    if ($SkipSpacing) { $signing.SkipSpacing = $true; $signing.SkipSpacingReason = $Reason }
     # -Plan: what it says it does, rather than nothing. -Head: main's head as publish reads it.
     if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun @signing 6>&1 | Out-String }
     else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun @signing 6>$null }
@@ -714,7 +721,7 @@ Check 'A green run whose newest release is under 15 minutes old publishes nothin
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
     Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
     Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600')) 'a deferred run left a release or a draft'
-    Assert ($run.Plan -like '*::warning::*v0.1.600 waits*v0.1.504*15 minutes*') "plan: $($run.Plan)"
+    Assert ($run.Plan -like '*::warning::*v0.1.600 waits*v0.1.504*15-minute*publish-pending*') "plan: $($run.Plan)"
     Assert ($run.Output -ceq 'deferred=true') "output: '$($run.Output)'"
 }
 
@@ -761,6 +768,59 @@ Check "A deferred run's changes are never dropped: main's next eligible run, or 
     Assert (@(Uploads).Count -eq 2) "A's re-run, 15 minutes after the newest release, didn't publish: $(Uploads)"
 }
 
+$pendingScript = Join-Path $PSScriptRoot 'publish-pending.ps1'
+function Set-PpPending {
+    # Release v0.1.504 at T on the ancestor; main's run 600 of the commit is green and its publish
+    # job (7600) succeeded, deferred.
+    Reset 3
+    New-PpRelease 'v0.1.504' $true $false $spacingNow.ToString('o')
+    $global:PpRuns = @([pscustomobject]@{ id = 9600; run_number = 600; head_sha = $commit; status = 'completed'; conclusion = 'success' })
+    $global:PpJobs = @{ '9600' = @([pscustomobject]@{ id = 7599; name = 'app'; conclusion = 'success' }, [pscustomobject]@{ id = 7600; name = 'publish'; conclusion = 'success' }) }
+}
+function Invoke-Pending([int]$minutes) { $global:PpNow = $spacingNow.AddMinutes($minutes); & $pendingScript -Repository $repo 6>&1 | Out-String }
+function Reruns { @($global:PpCalls | Where-Object { $_ -like 'gh api -X POST *rerun*' }) }
+
+Check 'Release at T, green at T+5, no push: the pending check re-runs the deferred publish, published at T+15' {
+    Set-PpPending
+    $global:PpNow = $spacingNow.AddMinutes(5)
+    Invoke-Publish '0.1.600'
+    Assert (@(Uploads).Count -eq 0) "published inside the spacing: $(Uploads)"
+    $said = Invoke-Pending 10
+    Assert (@(Reruns).Count -eq 0 -and $said -like '*v0.1.600 waits*') "re-ran at T+10: $(Reruns); said: $said"
+    $said = Invoke-Pending 15
+    Assert ((Reruns) -ceq "gh api -X POST repos/$repo/actions/jobs/7600/rerun") "T+15: $(Reruns); said: $said"
+    # The re-run is that publish job again, under the lock.
+    Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
+    Invoke-Publish '0.1.600'
+    $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
+    Assert ($r -and -not $r.draft -and [DateTimeOffset]::Parse($r.published_at) -eq $spacingNow.AddMinutes(15)) "release: $($r | ConvertTo-Json -Compress)"
+    # Released, nothing is pending: the next tick re-runs nothing.
+    $global:PpTagSha['v0.1.600'] = $commit
+    $global:PpCalls.Clear()
+    $said = Invoke-Pending 20
+    Assert (@(Reruns).Count -eq 0) "re-ran a released version: $said"
+}
+
+Check 'The pending check re-runs only the newest green run that publish deferred, and nothing it cannot read' {
+    $newer = [pscustomobject]@{ id = 9601; run_number = 601; head_sha = $descendant; status = 'in_progress'; conclusion = $null }
+    foreach ($case in @(
+        @{ Name = 'a newer run red'; Set = { $newer.status = 'completed'; $newer.conclusion = 'failure'; $global:PpRuns += $newer }; Reruns = 1 },
+        @{ Name = 'a newer run still going'; Set = { $newer.status = 'in_progress'; $newer.conclusion = $null; $global:PpRuns += $newer }; Reruns = 0 },
+        @{ Name = 'its version released'; Set = { New-PpRelease 'v0.1.600' $true $false $spacingNow.ToString('o'); $global:PpTagSha['v0.1.600'] = $commit }; Reruns = 0 },
+        @{ Name = 'a commit behind the latest release'; Set = { $global:PpTagSha['v0.1.504'] = $descendant }; Reruns = 0 },
+        @{ Name = 'no publish job (the app unchanged)'; Set = { $global:PpJobs['9600'] = @($global:PpJobs['9600'][0]) }; Reruns = 0 },
+        @{ Name = 'runs that cannot be read'; Set = { $global:PpRuns = 'fail' }; Reruns = 0; Says = '*::warning::*the next check tries again*' },
+        @{ Name = 'a release time that cannot be read'; Set = { New-PpRelease 'v0.1.100' $false $false 'not a time' }; Reruns = 0; Says = '*::warning::*publication time*the next check tries again*' }
+    )) {
+        Set-PpPending
+        & $case.Set
+        $said = Invoke-Pending 20
+        Assert (@(Reruns).Count -eq $case.Reruns) "$($case.Name): re-runs $(Reruns); said: $said"
+        if ($case.Contains('Says')) { Assert ($said -like $case.Says) "$($case.Name): said: $said" }
+        Assert ($global:LASTEXITCODE -eq 0) "$($case.Name): exit $global:LASTEXITCODE"
+    }
+}
+
 Check 'The critical-fix override publishes inside the spacing, says so in the run and the notes, and skips no other check' {
     Reset 3
     $global:PpNow = $spacingNow
@@ -768,9 +828,16 @@ Check 'The critical-fix override publishes inside the spacing, says so in the ru
     $env:GITHUB_ACTOR = 'a-quality-session'
     try { $run = Invoke-Spaced { Invoke-Publish '0.1.600' -SkipSpacing -Plan } } finally { Remove-Item Env:GITHUB_ACTOR }
     Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
-    Assert ($run.Plan -like '*::warning::*critical fix*v0.1.504*') "plan: $($run.Plan)"
-    Assert ($global:PpPublishedBody -like '*critical fix*inside the 15-minute release spacing*a-quality-session*') "notes: $global:PpPublishedBody"
+    Assert ($run.Plan -like '*::warning::*critical fix*v0.1.504*a-quality-session*the relay drops every message*') "plan: $($run.Plan)"
+    Assert ($global:PpPublishedBody -like '*critical fix*inside the 15-minute release spacing*a-quality-session*the relay drops every message*') "notes: $global:PpPublishedBody"
     Assert ($run.Output -notlike '*deferred*') "output: '$($run.Output)'"
+    # Who and why, always: no reason (or only control characters) is refused before anything is read.
+    foreach ($reason in '', " `n`t") {
+        Reset 3
+        $said = $null
+        try { Invoke-Publish '0.1.600' -SkipSpacing -Reason $reason } catch { $said = $_.Exception.Message }
+        Assert ($said -like '*-SkipSpacing needs -SkipSpacingReason*' -and $global:PpCalls.Count -eq 0) "reason '$reason': said '$said'; calls: $($global:PpCalls -join '; ')"
+    }
     # An older version, or a commit behind the latest release's, is still refused.
     Reset 3
     $global:PpNow = $spacingNow
@@ -785,14 +852,13 @@ Check 'The critical-fix override publishes inside the spacing, says so in the ru
     Assert (@(Uploads).Count -eq 0) "the override published past another check: $(Uploads)"
 }
 
-Check "A published release whose publication time can't be read stops publishing; a dry run isn't held by the spacing" {
+Check "A release whose publication time can't be read defers the run, to be tried again; a dry run isn't held by the spacing" {
     foreach ($at in $null, 'not a time') {
         Reset 3
         $global:PpNow = $spacingNow
         New-PpRelease 'v0.1.504' $true $false $at
-        $said = $null
-        try { Invoke-Publish '0.1.600' } catch { $said = $_.Exception.Message }
-        Assert ($said -like '*publication time*not publishing v0.1.600*') "'$at' was published past (said: '$said')"
+        $run = Invoke-Spaced { Invoke-Publish '0.1.600' -Plan }
+        Assert ($run.Output -ceq 'deferred=true' -and $run.Plan -like "*::warning::*v0.1.600 waits*v0.1.504's publication time*can't be checked*") "'$at': $($run.Output); $($run.Plan)"
         Assert (@(Uploads).Count -eq 0 -and -not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "'$at': calls: $($global:PpCalls -join '; ')"
     }
     Reset 3

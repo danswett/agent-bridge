@@ -12,9 +12,10 @@
 # higher version over it (#4104). A dry run needs no -MainHead. -MainRepo is no longer read; it is
 # accepted so CI's call stays valid until ci.yml stops passing it.
 #
-# Releases are spaced (owner decision): a run publishes only once the newest published release is
-# 15 minutes old. A run inside that publishes nothing and says deferred=true; its changes ride
-# main's next eligible run, never dropped. -SkipSpacing is the critical-fix override, CI's
+# Releases are spaced (owner decision, release-spacing.ps1): a run publishes only once the newest
+# published release is 15 minutes old. A run inside that, or one that can't read the releases'
+# times, publishes nothing and says deferred=true; never dropped, publish-pending.ps1 re-runs it
+# once the window opens. -SkipSpacing -SkipSpacingReason <why> is the critical-fix override, CI's
 # critical-release dispatch, used only by Quality on an owner or Chief call; every other check holds.
 #
 # Each folder is one Velopack channel, read from the assets.<channel>.json vpk pack wrote there:
@@ -43,14 +44,19 @@ param(
     [switch]$DryRun,
     [switch]$RequireSignature,
     [string]$SignerEku,
-    [switch]$SkipSpacing
+    [switch]$SkipSpacing,
+    [string]$SkipSpacingReason
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $DryRun -and $MainHead -cnotmatch '^[0-9a-f]{40}$') {
     throw "publishing needs -MainHead, main's head commit ('$MainHead')"
 }
+# The override is logged with who ran it and why, in the run and the release notes, on one line.
+$SkipSpacingReason = ($SkipSpacingReason -replace '\p{C}+', ' ').Trim()
+if ($SkipSpacing -and -not $SkipSpacingReason) { throw '-SkipSpacing needs -SkipSpacingReason: why this critical fix may not wait' }
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+. (Join-Path $PSScriptRoot 'release-spacing.ps1')
 if ($RequireSignature) {
     . (Join-Path $PSScriptRoot 'app-signing.ps1')
     Assert-AppSignerEku $SignerEku
@@ -242,28 +248,22 @@ if ($publishing -and -not $DryRun -and $MainHead -cne $Commit) {
 # so this commit's changes go out with the next run that passes, or with this run's re-run.
 $spacingNote = $null
 if ($publishing -and -not $DryRun) {
-    $times = @(foreach ($r in @($releases | Where-Object { -not $_.draft })) {
-            $at = $r.published_at
-            $parsed = [DateTimeOffset]::MinValue
-            if ($at -is [datetime]) { $parsed = [DateTimeOffset]$at }
-            elseif ($at -isnot [string] -or -not [DateTimeOffset]::TryParse($at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)) {
-                throw "couldn't read $($r.tag_name)'s publication time ('$at'); not publishing $tag"
-            }
-            [pscustomobject]@{ Tag = $r.tag_name; At = $parsed }
-        })
-    $last = $times | Sort-Object At -Descending | Select-Object -First 1
-    $age = if ($last) { [DateTimeOffset](Get-Date) - $last.At }
-    if ($last -and $age -lt [TimeSpan]::FromMinutes(15)) {
-        $ago = '{0:N1} minutes ago' -f $age.TotalMinutes
-        if ($SkipSpacing) {
-            Write-Plan -Warn "publishing $tag as a critical fix inside the release spacing: $($last.Tag) was published $ago (-SkipSpacing)"
-            $by = if ($env:GITHUB_ACTOR) { " by $env:GITHUB_ACTOR" } else { '' }
-            $spacingNote = "Published as a critical fix inside the 15-minute release spacing, $($last.Tag) having been published $ago (manual override$by)."
-        } else {
-            Write-Plan -Warn "$tag waits: $($last.Tag) was published $ago, under 15 minutes (the owner's release spacing); main's next run that passes publishes this commit's changes, and so does a re-run of this one"
-            $publishing = $false
-            if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'deferred=true' }
-        }
+    $why = $null
+    try { $newest = Get-NewestRelease $releases ([DateTimeOffset](Get-Date)) }
+    catch { $why = "$($_.Exception.Message), so the release spacing can't be checked" }
+    if (-not $why -and $newest -and $newest.Age -lt $ReleaseSpacing) {
+        $why = "$($newest.Tag) was published $('{0:N1}' -f $newest.Age.TotalMinutes) minutes ago, under the owner's 15-minute release spacing"
+    }
+    if ($why -and $SkipSpacing) {
+        $by = if ($env:GITHUB_ACTOR) { " by $env:GITHUB_ACTOR" } else { '' }
+        Write-Plan -Warn "publishing $tag as a critical fix: $why (-SkipSpacing$by`: $SkipSpacingReason)"
+        $spacingNote = "Published as a critical fix inside the 15-minute release spacing (manual override$by): $SkipSpacingReason"
+    } elseif ($why) {
+        # Never dropped: publish-pending.ps1 re-runs this publish once the newest release is 15
+        # minutes old, unless a later run of main's has published first.
+        Write-Plan -Warn "$tag waits: $why; publish-pending.ps1 re-runs this publish once it may go out"
+        $publishing = $false
+        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'deferred=true' }
     }
 }
 

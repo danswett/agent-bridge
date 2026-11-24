@@ -1069,13 +1069,19 @@ connector's Install button on a machine the dashboard drives.
   once `sign` has succeeded, so it never falls back to the unsigned packages.
 * **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
   S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
-  read under the publish lock. A run inside that publishes nothing, warns, and sets the step output `deferred=true`. Its
-  changes are never dropped: it leaves no release, draft or tag, and main's next run plans from the latest release (CI's
-  release debt), so they go out with the next run that passes, or with this run's re-run once 15 minutes have gone. Until
-  some run passes after it, they wait; nothing publishes them on a timer. Only the spacing is held: every other check
-  above runs first. **Critical fix:** `-SkipSpacing` publishes inside the 15 minutes, with a warning and a line in the
-  release notes naming the override and who ran it. CI passes it from the `critical-release` input of a `workflow_dispatch`
-  on `main` (the ci.yml change is Quality's to apply), which only Quality runs, on an owner or Chief call.
+  its age read from the API's `published_at` under the publish lock (`build/release-spacing.ps1`). A run inside that, or
+  one that can't read a release's time, publishes nothing, warns, and sets the step output `deferred=true`; it leaves no
+  release, draft or tag. Its changes are never dropped, even when main goes idle: every 5 minutes `publish-pending.yml`
+  runs `build/publish-pending.ps1`, which takes main's newest green CI run and, once no newer run is still going, that
+  run's version is above every release, its commit follows the latest release's and the window is open, re-runs its
+  `publish` job. So a release at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
+  A read that fails there re-runs nothing and is tried on the next tick. A run that does pass later publishes them first
+  (CI's release debt). Every publish, a re-run or a dispatch's too, is a `publish` job in the one `publish-prerelease`
+  group, so two never run at once. Only the spacing is held: every other check above runs first. **Critical fix:**
+  `-SkipSpacing -SkipSpacingReason <why>` publishes inside the 15 minutes, with a warning and a line in the release notes
+  naming the override, who ran it and why; no reason, no publish. CI passes them from a `workflow_dispatch` on `main`, its
+  `critical-release` box and `critical-reason` text, which only someone with write access can run (never a label or
+  anything a pull request sets); only Quality runs it, on an owner or Chief call. (Both workflow parts are Quality's to apply.)
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
