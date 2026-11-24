@@ -54,7 +54,7 @@ public class LaneTests
     }
 
     // A full.yml that is as it should be, and one defect at a time.
-    const string Good = """
+    const string GoodRaw = """
         name: Full
         on:
           workflow_run:
@@ -79,6 +79,9 @@ public class LaneTests
                   NEEDS: ${{ toJSON(needs) }}
                 run: echo "$NEEDS"
         """;
+
+    // A raw string takes the file's line endings, and these tests edit it by its LF text: a Windows checkout has CRLF.
+    static readonly string Good = GoodRaw.ReplaceLineEndings("\n");
 
     static IEnumerable<string> FullLane(string yaml) =>
         AgentBridge.Quality.FullLane.Check(Catalog(Suite("a", "full.yml spikes, full.yml app-pack, full.yml full-gate", "full")), yaml).Select(p => $"{p.Kind}: {p.Message}");
