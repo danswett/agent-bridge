@@ -532,11 +532,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    `publish-prerelease.ps1` publishes each version (the run number) once, never one older
    than any published, and never from a commit that doesn't hold the latest release's commit
    (a run number says nothing of commit order; behind it publishes nothing, and diverged or
-   unreadable stops publishing). So a run publishes even after `main` has moved on (an app
-   change followed by a docs-only commit is released by the first's run), unless main's head,
-   read under the lock, has since changed the app by main's own ring-1 selector: then main's
-   later run publishes both, since publishing the older first could leave the newer's lower run
-   number refused (an unreadable or off-main head stops publishing). One reaching
+   unreadable stops publishing). So a run publishes even after `main` has moved on, app changes
+   or not (#4104), as long as main's head, read under the lock, still follows its commit (an
+   unreadable or off-main head stops publishing); main's later run publishes its own higher
+   version over it. When GitHub numbered a descendant's run lower, that version is refused and
+   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
@@ -925,6 +925,19 @@ start within about a minute; a queue that grows is the signal to add runners or 
   (those machines also run fleet sessions: a runner uses its own account with none of theirs, and a job that needs a secret gets
   it from the workflow, as now). Tests that bind a fixed port, a named pipe or a machine-wide mutex name must take a
   per-job name: a clash there is a bug this move exposes, not one to retry.
+* **NuGet on an ab-ci leg goes through the runner's mirror, and only nuget.org's signed bytes.** The ab-ci machines
+  can't reach nuget.org. Each runner's `.env` names `AGENT_BRIDGE_NUGET_SOURCE=https://packagefeedproxy.microsoft.io/nuget/v3/index.json`
+  (set, with the PATH the jobs need, by the owner's `setup/fix-abci-env.ps1`, #4104). On a self-hosted leg only,
+  `ci.yml`'s product writes its restore config with `New-AbCiNuGetConfig` (`quality/nuget-mirror.ps1`,
+  `NuGetMirrorTests`, `CiNuGetMirrorTests`):
+  - that host alone, https, with no user info, port or query, as the only package and audit source;
+  - no fallback folder;
+  - every package required to carry nuget.org's repository signature (its current and two earlier certificates).
+
+  A missing or other mirror, a mirror that is down, or a package nuget.org didn't sign fails the leg; nothing falls
+  back to another source. A hosted leg restores from nuget.org as before. Only product runs on ab-ci: `app` (vpk,
+  publish) has no mirror config and would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
+  an `ab-ci-` part, so it never shares packages with the hosted Windows leg.
 
 **Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
 (`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on
@@ -1221,6 +1234,23 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **CI speed on main** (#4104): `pwsh quality/ci-speed.ps1 [-Runs 100] [-Csv runs.csv] [-DaysCsv days.csv]` measures, for the last N
+  `ci.yml` push runs on main, the merge gate's wall time **from the run's created_at** (what a merger waits, queue included) and
+  **from run_started_at** (labelled apart), the full run, the longest wait of a gate job for a runner, and the red rate per Pacific
+  day (labelled with the year). The gate is the jobs matching `-GatePattern` (default `product` and `quality-gate`, which needs every
+  other job; give the fast lane's job names once it is split out), and the summary line names the gate jobs it matched. Cancelled
+  and skipped runs and runs still going are left out of every median and counted apart, other conclusions are counted as "other",
+  and red is the red-minutes rule. A median is the nearest-rank (lower) one, and an empty window says "no data". **Re-runs:** a
+  re-run keeps its first created_at but restarts run_started_at, so its gate-from-created figure includes the earlier attempt and
+  the first failed attempt is invisible to the red rate (it undercounts, like red-minutes); re-runs are counted on the line and in
+  the CSV (attempt). It prints one summary line (median and p90) and writes the CSVs. Read-only (GET only), and **it fails closed
+  on the rate limit**: it reads the budget from `gh api rate_limit` (free) before its first call and from every response's
+  `x-ratelimit-*` headers before each run page and each batch of at most six job reads, and makes only the calls that keep the
+  remaining budget above 10 % of the limit; a header that is missing, not a number, or zero stops it, and the line then says
+  "STOPPED EARLY" and the figures cover only the runs read. Reads use an ETag cache (a 304 is free). Offline test:
+  `quality/test-ci-speed.ps1` (catalog suite `ci-speed-script`, `planned` until `ci.yml` runs it: the step is
+  `patches/ci-speed-step-4104.patch`, for Quality to apply).
+
 - **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
   [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
   Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are

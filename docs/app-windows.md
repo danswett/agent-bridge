@@ -1055,10 +1055,13 @@ connector's Install button on a machine the dashboard drives.
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
   doesn't rest on the order main's CI runs go in (each push has a group of its
-  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
-  changed the app (main's own selector, under the lock, says so; main's later run publishes
-  both, where publishing this first could leave that one's lower version refused), and
-  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, app changes
+  or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
+  higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
+  merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. There is no
+  minimum spacing between releases and no release window: the owner decided "As often as green" (Nov 23, ~13:30 PT, relayed
+  by Chief S18). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
@@ -1200,12 +1203,11 @@ pre-releases" in Settings stops it finding them until there are full releases.
 Merging is never to wait for it, and it is never to block a merge. Everything below is that design unless it says the selector does it.
 
 **Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
-superseded run that went green still publishes nothing when `main`'s head has since changed the
-app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. **Per-commit groups
-(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
-`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
-starvation lasts until the train exists.
+superseded run that went green published nothing when `main`'s head had since changed the
+app. While merges arrive faster than the app's CI finishes, nothing was released: none was from
+15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. Per-commit groups
+(`ci-main-<sha>`, above) stopped the cancelling, and since #4104 `ci.yml`'s `publish` no longer stands aside
+for a later app change either, so a green run publishes its own commit without waiting for the train.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
@@ -1240,10 +1242,9 @@ starvation lasts until the train exists.
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
   commit. It is to share `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
-  train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
-  `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
-  (`ci.yml`'s `publish` keeps it): the train is to publish the newest verified commit, and a later
-  change is the next verified commit's to publish.
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
+  stands aside for a later app change any more (#4104): the train is to publish the newest verified
+  commit, and a later change is the next verified commit's to publish.
 * **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
   unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).

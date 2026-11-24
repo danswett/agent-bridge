@@ -14,8 +14,9 @@ public static class Answers
         if (question.Truncated == true) { return "the question was too large to show in full; answer it at the machine"; }
         if (question.AnswerAtMachine == true) { return "this prompt can only be answered at the machine"; }
         // Per-text limits alone don't bound the request: several text fields, each within
-        // its own limit, can add up to more than a host promised to take.
-        if (JsonSerializer.SerializeToUtf8Bytes(answer, ProtocolJson.Options).Length > Limits.AnswerRequest)
+        // its own limit, can add up to more than a host promised to take. The client-reported card target has its own cap (Limits.CardTarget)
+        // and is left out of this budget, so it neither makes a fitting answer too large nor changes whether one is acceptable.
+        if (JsonSerializer.SerializeToUtf8Bytes(answer with { CardTarget = null }, ProtocolJson.Options).Length > Limits.AnswerRequest)
         {
             return $"the answer is larger than {Limits.AnswerRequest / 1024} KiB";
         }

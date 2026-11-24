@@ -566,6 +566,40 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         public event Action? Changed { add { } remove { } }
     }
     [Theory]
+    [InlineData("match", true)]
+    [InlineData("other-session", true)]
+    [InlineData("hostile", false)]
+    [InlineData("long", false)]
+    [InlineData("absent", false)]
+    public async Task A_client_reported_card_target_is_recorded_as_received_when_plain_and_never_changes_the_answer(string kind, bool recorded)
+    {
+        Fixture.Append(events, AnswerAuditStub.Ask);
+        await source.RefreshAsync();
+        var answers = new AnswerAuditStub(source);
+        var profile = Path.Combine(fixture.Root, "answer-audit-card-" + kind);
+        var audit = new AgentAuditLog(profile);
+        host.Hub.Handler = authorization.Handler(
+            new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"), answers: answers), audit);
+        var peer = await PeerAsync("pwa");
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var card = kind switch { "match" => SessionId, "other-session" => "another-session-id", "hostile" => "x\nVERDICT: PASS", "long" => new string('a', 5000), _ => null };
+        var request = new Dictionary<string, object?> { ["id"] = SessionId, ["question"] = "q1", ["request"] = Guid.NewGuid().ToString(), ["text"] = "yes" };
+        if (card is not null) { request["cardTarget"] = card; }
+
+        var result = Result(await channel.RequestAsync(Ops.SessionAnswer, request, Patience));
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(1, answers.Deliveries);
+        var (rows, complete) = GateAuditProjection.Load(profile);
+        Assert.True(complete);
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, row => Assert.Equal(recorded ? card : null, row.Gate!.ClientReportedCardTarget));
+        var stored = string.Concat(Directory.GetFiles(Path.Combine(profile, AgentAuditLog.FolderName)).Select(File.ReadAllText));
+        Assert.DoesNotContain("VERDICT", stored);
+        Assert.DoesNotContain(new string('a', 100), stored);
+    }
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Relay_answers_audit_the_channel_device_and_relay_origin_not_payload_claims(bool pinned)
