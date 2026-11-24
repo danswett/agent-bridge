@@ -1229,6 +1229,19 @@ public sealed class AgentLiteDeliveryTests
     }
 
     [Fact]
+    public async Task An_ignored_sent_time_says_so_and_orders_by_the_signed_issued_time_and_nothing_else_changes()
+    {
+        var f = new Fixture(); f.Launch(LaunchProtocol.Ask); var lite = f.Build();
+        await lite.DeliverAsync(Sent("newer", 2, First + 600), "newer", default);
+        await lite.DeliverAsync(Sent("older", 1, First + 60) with { SentAt = null, SentAtIgnored = true }, "older", default);
+        await lite.DeliverAsync(Sent("plain", 3, First + 900) with { SentAt = null }, "plain", default);
+
+        Assert.Contains("send time not given", f.Typed[1].Text);
+        Assert.Contains("STALE", f.Typed[1].Text);   // issuedAt 0 is older than the newer message's time
+        Assert.DoesNotContain("send time not given", f.Typed[2].Text);
+    }
+
+    [Fact]
     public async Task A_message_that_typed_nothing_does_not_raise_the_newest_time()
     {
         var f = new Fixture { Status = SessionStatus.Working }; f.Launch(LaunchProtocol.Ask); var lite = f.Build();

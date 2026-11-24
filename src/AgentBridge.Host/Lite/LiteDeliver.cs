@@ -146,7 +146,7 @@ public sealed class LiteDeliver(
         // An older order that comes after a newer one from the same sender is still typed, and says so (#4435). The time is when the sender
         // first asked to send, which a busy retry keeps, never when this envelope was sealed.
         var sent = envelope.SentAt ?? body.IssuedAt;
-        var framed = Frame(body.Principal, body.Request, safe, IsStale(peer, id, sent) ? sent : null);
+        var framed = Frame(body.Principal, body.Request, safe, IsStale(peer, id, sent) ? sent : null, envelope.SentAtIgnored);
         // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
         // about to go, with the exact words and a label from the verified principal, never from the body,
         // so userMessageFrom=agent is set by the host alone. A delivery that typed nothing (refused,
@@ -358,10 +358,11 @@ public sealed class LiteDeliver(
     static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
 
     // The provenance line: who sent it, from where, and that the user did not type it. A stale one also says when it was sent.
-    static string Frame(AgentPrincipal from, string request, string escaped, long? staleSent = null)
+    static string Frame(AgentPrincipal from, string request, string escaped, long? staleSent = null, bool sendTimeIgnored = false)
     {
         var stale = staleSent is { } at
             ? $" · STALE: sent {TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(at), Pacific):HH:mm} PT, a newer message from this sender was delivered first" : "";
+        if (sendTimeIgnored) { stale += " · send time not given"; }
         return from.Kind == "script"
             ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)}{stale} · not typed by your user] {escaped}"
             : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)}{stale} · not typed by your user] {escaped}";

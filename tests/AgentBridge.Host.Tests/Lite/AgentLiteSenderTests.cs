@@ -129,15 +129,40 @@ public class AgentLiteSenderTests
         Assert.Equal(r.Deliver.Envelope!.Body.IssuedAt, r.Deliver.Envelope.SentAt);
     }
 
-    [Fact]
-    public async Task A_first_request_time_over_a_day_before_the_envelope_is_not_believed()
+    [Theory]
+    [InlineData(-90_000)]   // over a day before the envelope
+    [InlineData(300)]       // the sender clamps a future time to the envelope's own, so this one is believed only as that
+    public async Task A_first_request_time_outside_the_bounds_is_ignored_and_marked_not_given(int offset)
     {
         using var r = new Rig();
         Receiving(r);
+        var sent = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + offset;
 
-        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 90_000), default);
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", sent), default);
 
-        Assert.Null(r.Deliver.Envelope!.SentAt);
+        var seen = r.Deliver.Envelope!;
+        if (offset < 0) { Assert.Equal((null, true), (seen.SentAt, seen.SentAtIgnored)); }
+        else { Assert.Equal((seen.Body.IssuedAt, false), (seen.SentAt, seen.SentAtIgnored)); }
+    }
+
+    [Fact]
+    public async Task A_hand_made_relay_message_with_a_future_or_malformed_time_is_ignored_not_trusted()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var real = r.Link.Reply;
+        foreach (var bad in new object[] { DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600, "soon", 1.5 })
+        {
+            r.Link.Reply = (req, ct) =>
+            {
+                var o = System.Text.Json.JsonSerializer.SerializeToNode(req)!.AsObject();
+                o["sentAt"] = System.Text.Json.JsonSerializer.SerializeToNode(bad);
+                return real(o, ct);
+            };
+            await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
+            Assert.Null(r.Deliver.Envelope!.SentAt);
+            Assert.True(r.Deliver.Envelope.SentAtIgnored);
+        }
     }
 
     // Answers as the real receiver does, so the sealed envelope is checked end to end rather than assumed.

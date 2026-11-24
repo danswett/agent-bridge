@@ -330,9 +330,12 @@ A this doc (#3828) and D1 (docs child: states, timings, depth cap, memory-only s
 A relay message that arrives after a NEWER one from the same sender is typed as before and its provenance header adds
 `STALE: sent HH:mm PT, a newer message from this sender was delivered first`. Nothing is dropped, reordered or held; a message that
 types nothing (busy, refused, unconfirmed) never raises the newest time. The time compared is when the sender first asked to send:
-`agent.send` takes an optional `sentAt` (Unix seconds, not future, at most a day old) that a tool retrying a busy send passes on every retry,
+`agent.send` takes an optional `sentAt` (Unix seconds) that a tool retrying a busy send passes on every retry,
 because each `agent.send` is a new sealed envelope whose signed lifetime is at most two minutes. It rides beside the envelope, unsigned,
-and the receiver believes it only within a day before the envelope's own `issuedAt`; with none it uses `issuedAt`. Strictly older is stale;
+so it is ADDITIVE and OPTIONAL (no version change; a host that does not know it ignores it) and LIMITED: it only orders messages from the
+same authenticated sender to the same session and prints the time, and is never read for authorization, expiry, dedupe or anything else.
+A `sentAt` more than two minutes ahead, over a day old, or not whole seconds is ignored (on `agent.send` as if none was given; on the
+receiver the header says `send time not given`), never trusted. With none, `issuedAt` is used. Strictly older is stale;
 equal times are not. The newest time per sender and target lives in memory for the host run (a restart forgets it and marks fewer, never
 more). A per-sender `seq` would be a signed-body change (protocol version) and is a later slice.
 
