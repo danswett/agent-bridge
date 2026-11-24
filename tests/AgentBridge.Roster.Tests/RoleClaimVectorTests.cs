@@ -45,6 +45,7 @@ public class RoleClaimVectorTests
     public void A_claim_refuses_to_frame_its_body_under_any_other_purpose(string purpose) =>
         Assert.Equal(Refusal.Purpose, Assert.Throws<RosterFormatException>(() => Claim.SigningInput(purpose)).Code);
 
+    // Same key, same parts, only the label differs; the role binding's real tuple is slice 6's.
     [Fact]
     public void A_host_key_binding_signature_and_a_role_binding_signature_never_verify_as_each_other()
     {
