@@ -1,4 +1,4 @@
-From fbedc45fdcfdb8892f8e04090e03f9f7e3092c7f Mon Sep 17 00:00:00 2001
+From 34e10664ccfc60ac0de06e13ee64b6348296c079 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 17:34:25 -0800
 Subject: [PATCH] CI S2, piece 5b: pwa-e2e moves to full.yml; Pages watches
@@ -146,7 +146,7 @@ index bafee7708..7e00b4d2f 100644
            echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
            bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index fe432bc54..be539ee51 100644
+index 02fb4d633..b5023117e 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -462,7 +462,7 @@ index 5cdc97e00..a3e331bc6 100644
          var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
          Assert.Equal(new[] { "plan", "app" },
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 03dc1bc5b..04d110e0f 100644
+index 624d6ced6..20ade2d3c 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -26,10 +26,10 @@ public class FullWorkflowTests
