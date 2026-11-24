@@ -152,7 +152,9 @@ others: `scripts.list`, `scripts.confirm`, `scripts.add` (mint, or rotate when t
 live credential), `scripts.revoke`, and `scripts.grant-fleet` / `scripts.revoke-fleet` (the `launch:fleet`
 tick). They are for the person's app on this machine, or still the host command line until the app path
 ships and the CLI is app-gated (P3). An agent, a script, an unclassified caller and any connection that has
-passed `agent.hello` are refused.
+passed `agent.hello` are refused. Those are the app's operations. The scheduled-task launcher of [script-credentials-run.md](script-credentials-run.md) (not built yet) adds two operations of its own,
+`scripts.admit` and `scripts.finished`, which only a bound task's own descendant may call (the second only from the caller that was admitted, once); they are not the app's
+and the app's list above does not widen.
 
 * **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
   asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
@@ -171,6 +173,12 @@ passed `agent.hello` are refused.
   credentials are live (two during a rotation) and whether the `launch:fleet` tick is on. It never returns
   a token, a hash, a file path or a credential id, and it shows no last four characters (the host keeps
   only the hash, so a later list cannot recover them).
+* **The Settings page (P2).** Settings > Script credentials lists each script (name, scope, expiry, live count, when it last
+  authenticated, and the launch tick) and offers Add, Rotate, Revoke and Allow/Stop launching. Each press shows a confirmation dialog
+  with plain words, then asks `scripts.confirm` and sends the press; a host refusal is shown as the page's notice. The page never holds,
+  shows or copies a secret. It appears only for the app, on Windows, when the host offers the `host.scripts` capability. "Last used" is
+  kept in memory since the host started, so it says so; the last four characters of a credential are not shown, because the host
+  keeps only the hash. Showing them would need a stored field, which is a store-format change left to a decision.
 * **The tick keeps the host's own policy.** `scripts.grant-fleet` is still refused unless the script's
   credential is `read+reply` and the host's agents setting is on; the press cannot widen what the grant
   allows (fleet caps, ticked workspaces and isolation are unchanged and owner-run).
@@ -254,7 +262,7 @@ revocable at the machine in one app press.
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
   rules as agent-token-rotation.md §1. The host keeps only the hash.
-* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design):** how that
+* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design; proposal: [script-credentials-run.md](script-credentials-run.md), the `script-run` launcher):** how that
   path reaches the script now that no terminal step may set it (a per-script path the host reports
   to the app, or a fixed per-profile location the script derives). It is not put in any session's environment, and the
   `set-agent-ha-token.ps1` approach of setting a per-VM environment variable is not repeated:

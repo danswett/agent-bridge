@@ -386,7 +386,7 @@ test('a reply asks for progress only from a host that offers sessions.progress',
   newer.client.close();
 });
 
-test('an answer that fits the 16 KiB only without the progress flag goes without it, rather than be refused for asking', async () => {
+test('an answer that fits the 17 KiB only without the progress flag goes without it, rather than be refused for asking', async () => {
   const { t, client } = await greeted(['sessions.read', 'sessions.answer', 'sessions.progress']);
   const answer = (text) => ({ id: 's1', question: 'q1', request: '00000000-0000-4000-8000-000000000000', text });
   // 8 bytes under the limit as it is: "progress":true would put it 8 over, and the host refuse it.

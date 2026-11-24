@@ -691,7 +691,7 @@ public sealed class HostUpdatesTests : IDisposable
 
         Assert.Equal((2, 1), (web.CdnRequests, web.GitHubRequests));
         Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
-        Assert.Contains("update check: the CDN was not asked, as GitHub has not answered here in the last 6 hours; asking GitHub", said);
+        Assert.Contains("update check: GitHub is asked first, as it has not answered here in the last 6 hours, and the CDN is the fallback if it refuses; asking GitHub", said);
 
         // GitHub answering starts the window again: the relay is read once more.
         web.Cdn = () => Relayed($"[{Listed("0.1.603")}]");

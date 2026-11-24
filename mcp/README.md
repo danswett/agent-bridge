@@ -2,7 +2,7 @@
 
 Gives an agent session the old agent-ha-bridge tool names (`list_agent_sessions`,
 `read_agent_session`, `reply_to_agent_session`, `launch_agent_session`, `read_launch_result`,
-`get_launch_options`) over the Slipgates host's local pipe, on this machine. Protocol and
+`get_launch_options`, `end_agent_session`) over the Slipgates host's local pipe, on this machine. Protocol and
 environment: [local-pipe.md](../docs/protocol/local-pipe.md#the-mcp-server-mcp).
 
 ```
@@ -26,4 +26,12 @@ node src/server.mjs        # stdio; started by the agent as a child of its sessi
   launches are unchanged. This is a cost/context control, not a security boundary; Claude
   and Codex workers are still not narrowed, and Agency still uses its profile. Caller-supplied
   origin fields are ignored and never forwarded; this does not grant launch authority.
+- `end_agent_session {session_id, request?}` is a thin wrapper over the host's `fleet.end` with the
+  all-zero grant id (host-launch.md, #2741). Contract, for any port of this server: `session_id` is the
+  full UUID (shortened ids are refused locally); `request` is an optional UUID, fresh by default; the call
+  sends `{version:1, request, grant:"00000000-0000-0000-0000-000000000000", session}` and returns
+  `{id, request, outcome, reason?}` with outcome `ended`, `refused` or `unknown` (`unconfirmed` from the
+  host also means: send the same `request` again, never a new one). Offered with the `sessions.launch`
+  capability and an accepted agent principal; every rule (the launch record, own session, unpushed work,
+  kill switch) is the host's, never this server's. It never sends `session.stop`.
 - Not in this slice: the read-only HTTP mode, `ask_via_home_assistant`, other machines.

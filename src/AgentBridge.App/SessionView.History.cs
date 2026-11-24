@@ -83,7 +83,6 @@ public sealed partial class SessionView
         }
         var rows = HistoryDraw.Rows(turns.Skip(from).ToArray(), Card?.UserMessage, openPrompts, liveTurn: liveTurn);
         historyVisible = Math.Max(1, turns.Count - from);
-        var line = history is null ? null : HistoryDraw.Line(history.State, rows.Count, !string.IsNullOrEmpty(Card?.UserMessage), history.Start);
         var scroll = ConversationScroll;
         // Measured before the rows change: the pane collapsing under the view must not read as scrolled back.
         var atEnd = HistoryAtEnd();
@@ -91,16 +90,12 @@ public sealed partial class SessionView
         var reading = atEnd ? null : ReadingHistory();
         var (session, releases) = (shownHistory, pinReleases);
         if (atEnd) { SetEndPin(true); }
-        var changed = DuringConversationLayout(() => HistoryRowSync.Apply(historyShown, rows));
+        var changed = DuringConversationLayout(() => HistoryRowSync.Apply(historyShown, rows) | ShowHistoryHeader(rows.Count, from > 0));
         rowsOf = shownHistory;
-        // Nothing moved when no row changed, and a scroller left from another session says nothing of where this one is.
+        // Nothing moved when no row or header line changed, and a scroller left from another session says nothing of where this one is.
+        // A failed page or a start reached moves only the header above the turns, and the reader stays where they were (#1593).
         if ((changed || opening) && session == shownHistory && releases == pinReleases)
         { if (atEnd) { anchor = null; } KeepPlace(atEnd, offset, reading, opening: opening); }
-        HistoryLine.Text = line ?? "";
-        HistoryLine.Visibility = line is null ? Visibility.Collapsed : Visibility.Visible;
-        HistoryRetry.Visibility = history?.State == HistoryLoad.Failed ? Visibility.Visible : Visibility.Collapsed;
-        HistoryEarlier.Visibility = Ui.Show(history?.HasOlder == true && history.State != HistoryLoad.Failed);
-        HistoryEarlier.Content = history?.State == HistoryLoad.Loading ? "Loading earlier messages…" : "Load earlier messages";
         if (from > 0)
         {
             if (historyDraw is null)
@@ -134,10 +129,26 @@ public sealed partial class SessionView
         else { historyDraw?.Stop(); }
     }
 
+    // The lines above the stored turns: the meta line, Try again and Load earlier. Whether any of them moved the turns below.
+    bool ShowHistoryHeader(int drawn, bool earlierUndrawn)
+    {
+        var line = history is null ? null : HistoryDraw.Line(history.State, drawn, !string.IsNullOrEmpty(Card?.UserMessage), history.Start, earlierUndrawn);
+        var retry = Ui.Show(history?.State == HistoryLoad.Failed);
+        var earlier = Ui.Show(history?.HasOlder == true && history.State != HistoryLoad.Failed);
+        var moved = HistoryLine.Text != (line ?? "") || HistoryLine.Visibility != Ui.Show(line is not null)
+            || HistoryRetry.Visibility != retry || HistoryEarlier.Visibility != earlier;
+        HistoryLine.Text = line ?? "";
+        HistoryLine.Visibility = Ui.Show(line is not null);
+        HistoryRetry.Visibility = retry;
+        HistoryEarlier.Visibility = earlier;
+        HistoryEarlier.Content = history?.State == HistoryLoad.Loading ? "Loading earlier messages…" : "Load earlier messages";
+        return moved;
+    }
+
     void DrawEarlier()
     {
         if (follow.Held && HistoryAtEnd()) { historyDraw?.Stop(); return; }
-        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || scrolling && anchoring is null || panning || keyTarget is not null) { return; }
+        if (!IsLoaded || navigationPending is not null || scrollbarPointers.Count > 0 || ReaderScrolling && anchoring is null || panning || keyTarget is not null) { return; }
         var turns = history?.Turns ?? [];
         var first = historyShown.FirstOrDefault();
         var end = first is null ? turns.Count - 1 : 0;
@@ -147,7 +158,8 @@ public sealed partial class SessionView
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
         var atEnd = HistoryAtEnd();
-        var offset = scroll?.VerticalOffset ?? 0;
+        // Where the view is going, not where an earlier prepend's correction has animated to (ConversationKeep.PrependBaseline).
+        var offset = ConversationKeep.PrependBaseline(anchoring, scroll?.VerticalOffset ?? 0);
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var (session, releases) = (shownHistory, pinReleases);
@@ -155,6 +167,8 @@ public sealed partial class SessionView
         DuringConversationLayout(() =>
         {
             for (var i = rows.Count - 1; i >= 0; i--) { historyShown.Insert(0, rows[i]); }
+            // The start row joins once the oldest held turn is drawn, inside the extent the place is kept against.
+            if (from == 0) { ShowHistoryHeader(historyShown.Count, earlierUndrawn: false); }
             return 0;
         });
         historyVisible = turns.Count - from;
@@ -203,10 +217,10 @@ public sealed partial class SessionView
     // Skipped if another session was opened, or the person took the view, meanwhile.
     void KeepPlace(bool atEnd, double offset, (string Id, double Top)? reading = null, double? earlierExtent = null, bool opening = false)
     {
-        if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || scrolling && anchoring is null || keyTarget is not null) { return; }
+        if (navigationPending is not null || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null) { return; }
         var (session, releases, anchors) = (shownHistory, pinReleases, responseAnchors);
         bool Current() => session == shownHistory && releases == pinReleases && restoreReading is null
-            && scrollbarPointers.Count == 0 && !panning && (!scrolling || anchoring is not null)
+            && scrollbarPointers.Count == 0 && !panning && (!ReaderScrolling || anchoring is not null)
             && keyTarget is null && (opening || !follow.Held || !atEnd && !pinEnd);
         void Restore()
         {
@@ -222,7 +236,9 @@ public sealed partial class SessionView
                 {
                     UpdateConversationLayout(HistoryColumn);
                     if (!Current()) { return; }
-                    target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
+                    // For a prepend, from where the view is going when an earlier correction is still on its way: this offset is the animation's, and counting from it loses that correction's height.
+                    var from = earlierExtent is not null ? ConversationKeep.PrependBaseline(anchoring, scroll.VerticalOffset) : scroll.VerticalOffset;
+                    target = Math.Clamp(from + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
             var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;

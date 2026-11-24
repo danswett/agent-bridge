@@ -6,11 +6,11 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
+**Status: the library (R1a to R1c) and the host's observe side are built. Not built: any client screen** (the relay's enforce mode is described below, and the host's channel gate is #1359) (the build status of each slice is under §12 of [device-approval.md](../design/device-approval.md)). R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
-(slices R2 to R5).
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). The relay stores the roster and starts every account in `observe`; an account moves to `enforce` (below) and the relay then tags each socket approved, pending or removed. The host reads and verifies the roster in
+`off` and `observe` and can enroll over its local pipe; the host's own gate is slice R3b.
 
 | Implementation | Where |
 |---|---|
@@ -217,6 +217,23 @@ the hour plus the lock, so a replay never ends a lock early. The relay keeps no 
 
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
+
+## Enrollment refusals
+
+When an enrollment is refused, the refusing side answers with a `refusal` member holding one of these codes (`{ "value": null, "refusal": "wrong-code" }`, the shape the host's enrollment answers already use), and the other side is told the same code, so both ends can say why. `EnrollmentRefusal` (`src/AgentBridge.Roster/EnrollmentRefusal.cs`) and `pwa/js/roster/enrollment-refusal.js` hold the same list, and tests compare each with this table. The host's own step errors (`attempt-store`, `no-attempt`, `locked`, and so on) are not on it and are not shown to a person as a reason; a code a client does not know is shown as a generic refusal.
+
+| Code | When |
+|---|---|
+| `wrong-code` | The code typed does not match (§4.2); three in a row end the attempt (§4.4) |
+| `expired` | The attempt is over its 5 minutes |
+| `already-approved` | The joining key is already active in the roster |
+| `removed` | A signed removal of this key is in the roster: "this device was removed; sign out and in again to make a new key" |
+| `unknown-kind` | The kind is not one of `host`, `app`, `pwa`, `phone` |
+| `roster-limit` | The roster already holds the most active devices it can (64) |
+| `approver-probation` | The approver is on probation (§3.4) or held by one |
+| `no-presence` | The approver is not in the roster, or cannot prove a person is present (`presence: none`, §4.6) |
+
+`EnrollmentRefusal.Check(verifier, approver, joiner, kind)` gives the first of the roster-based reasons, in this order: `unknown-kind`, `already-approved`, `removed`, `roster-limit`, `approver-probation`, `no-presence`. `wrong-code` and `expired` come from the exchange itself. Nothing here changes who may approve: it names the refusals the rules already make.
 
 ### Host descriptor foundation (#2289)
 
@@ -538,7 +555,7 @@ and epoch/sequence ordering before yielding any routable node. No v2 switch chan
 
 ## The relay's copy
 
-The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.
+The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode starts as `observe`: the relay serves every account's log and refuses no connection for want of a roster entry, until a person's device switches the account to `enforce` (see "The relay's enforce mode").
 
 Both messages are text frames from an admitted device of any kind, counted against the frame rate. Entries are the canonical text of §Framing. A device's own `id` (a number) is echoed so a reply can be matched.
 
@@ -562,11 +579,33 @@ Both messages are text frames from an admitted device of any kind, counted again
 
 A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode, next section) is what feeds it.
 
+## The relay's enforce mode (R2, first part)
+
+Each account's relay mode starts as `observe`, which is what the relay has always done, and is reported as `mode` in `roster`. It moves to `enforce` only when a device that is an active **person** device in the account's roster (not a host) sends `{ "t": "roster-enforce", "id": n }` on its own connection; the relay answers `{ "t": "roster-enforce-result", "id": n, "mode": "enforce" }` or `{ ..., "error": "not-approved" }`. (`RelayClient.EnforceRosterAsync`.) It never moves back (a reset is a later slice). The request needs no presence proof: it only tightens, and the relay is never the gate (device-approval.md §4.5). An account with no roster cannot be switched.
+
+In `enforce` the relay tags each connecting key from its own verified copy of the roster:
+
+* **approved**: the key is active in the roster. Served as before.
+* **pending**: any other key. Its presence is `{ "devices": [], "pending": true }`. Its control messages (push, blobs, feedback, roster, forget, registry, `roster-enforce`) are ignored. Its binary frames are routed only to a device that has itself sent to it, and only an approved **person** device may send to a pending one first, so a pending device never opens a channel and two pending devices cannot talk.
+* **removed**: an add of this key was revoked in the roster. The socket is closed at admission with close code `4030` (`removed`), advisory like everything the relay says.
+
+A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). Enforce does not fail open. The relay latches an account in memory once it has seen or set `enforce` (the mode only moves one way). For a latched account, a store that cannot answer (an error, a timeout, a body that does not read, a roster that has gone missing, a mode that has gone back) closes the connecting device with `1012` (`try-later`, a fixed reason that carries no error text) and it reconnects with the usual backoff; a re-tag that cannot read the store keeps every connected device's current tag, so a transient error never un-pends one. The latch is memory only and is lost when the relay restarts: until its first good read after a restart, an account that is in `enforce` is served as `observe` through a store outage. It is not persisted, on purpose: a persisted latch would live in the same store that failed. A stored mode that reads back as anything but `enforce` for a latched account (`observe`, `off`, a value the relay does not know) is refused the same way. An account the relay has never seen in `enforce` is served as before through an outage. The hosts' own gate (`security.roster enforce`) is still the one that counts. Accounts in `observe` are unchanged byte for byte.
+
+An account in `enforce` holds at most 8 pending devices connected at once; the next is closed with `4029` (`too-many-devices`). Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the 20-attempts-an-hour limit and the hour cap on a pending socket, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
+
 ## The host's verifier (OFF mode)
 
 A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the default; `observe` is [below](#observe-mode); anything else is reported in the log and read as `off`).
 
 Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; enforce mode, pinning and the ChannelHub gate are later slices.
+
+## Enforce mode: the channel gate
+
+`security.roster = "enforce"` (#1359, slice R3b) is the host's first refusal. It is off by default, is never set by an upgrade, and is set only by `config set security.roster enforce` run at the machine by a person (an agent session is refused, #67). `off` and `observe` never consult it: `ChannelHub.RosterGate` is not set to refuse anything and the frames on the wire are exactly those of a hub without a gate (`RosterGateTests` compares them).
+
+In `enforce`, `ChannelHub` asks `HostRosterGate.Allows(peer, op)` before it runs any request, on both the XX and the IK path and for the early request in an IK first message. It allows a peer only when the host's pinned, verified roster lists it as active and not held (§3.4, §3.5). Otherwise the reply is `{ ok: false, error: "approve this machine" }` and no handler runs. That covers a device the roster does not list, one that was removed (checked on every request, so a removal ends an open channel's use at its next request), and any device when there is no pin or the roster is unreadable, another account's or not yet verified. An op the host lists as needing a senior device is also refused to a device still on probation (§3.4); the list is empty in this slice and is filled with the commands that use it (R6).
+
+Not in this slice: the handshake's empty introduction and the `transport` member of `hello` (device-approval.md §7.1), the relay's own enforce and admission (R2), and any screen to approve a device (R4, R5). A refused device is refused at its first request, not in its handshake.
 
 ### Retained pin-reader foundation (#1358, part 1)
 

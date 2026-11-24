@@ -29,7 +29,7 @@ internal static partial class AuditGateCommand
         "below-floor:launch", "below-floor:approval", "below-floor:stop", "below-floor:message",
     ];
 
-    internal static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error)
+    internal static int Run(IReadOnlyList<string> args, string profileRoot, TextWriter output, TextWriter error, TimeProvider? time = null)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         var json = false;
@@ -44,6 +44,9 @@ internal static partial class AuditGateCommand
         var host = options.GetValueOrDefault("--host");
         if (!options.TryGetValue("--since", out var sinceText) || !AuditCommands.TryParseTime(sinceText, out var since)
             || !Identity.IsValidProfile(profile) || host is not null && !HostId().IsMatch(host) || json && host is null) { return Fail(error, Usage); }
+        // The window ends when it is read: readAt, so a combiner can tell readings of different spans apart.
+        var readAt = (time ?? TimeProvider.System).GetUtcNow();
+        if (since > readAt) { return Fail(error, Usage); }
 
         GateMessageEvidence? messages = null;
         if (options.TryGetValue("--messages", out var messagesFile))
@@ -65,7 +68,7 @@ internal static partial class AuditGateCommand
         var report = GateAuditProjection.ReadWindow(Path.Combine(profileRoot, profile), since);
         var verdict = GateVerdict.Evaluate(report, messages);
         var dispatches = Math.Max(report.LegacyHaDispatches, report.Totals.Where(t => t.Path == "legacy-ha").Sum(t => t.Successes));
-        if (json) { output.WriteLine(JsonSerializer.Serialize(Describe(host, since, report, verdict, dispatches, messages), Json)); }
+        if (json) { output.WriteLine(JsonSerializer.Serialize(Describe(host, since, readAt, report, verdict, dispatches, messages), Json)); }
         else { Print(output, host, since, report, verdict, dispatches, messages); }
         return verdict.ExitCode;
     }
@@ -74,12 +77,13 @@ internal static partial class AuditGateCommand
         [.. verdict.Reasons.Select(r => r.Contains(" < ") ? "below-floor:" + r.Split(' ')[0] : r.StartsWith("ha-fallback", StringComparison.Ordinal) ? "ha-fallback" : r)
             .Select(code => Known.Contains(code) ? code : "audit-incomplete").Distinct()];
 
-    // Schema 1, closed: the combiner refuses a field it does not know by name.
-    static object Describe(string? host, DateTimeOffset since, GateAuditReport report, GateVerdict verdict, int dispatches, GateMessageEvidence? messages) => new
+    // Schema 1, closed (host, since, readAt, kind, reasons, relay, messages, invalidated, legacyHaDispatches): the combiner refuses a field it does not know.
+    static object Describe(string? host, DateTimeOffset since, DateTimeOffset readAt, GateAuditReport report, GateVerdict verdict, int dispatches, GateMessageEvidence? messages) => new
     {
         schema = 1,
         host = host!,
         since = since.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
+        readAt = readAt.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
         kind = verdict.Kind.ToString().ToLowerInvariant(),
         reasons = Codes(verdict),
         relay = GateVerdict.Units.ToDictionary(u => u.Name, u => verdict.Relay[u.Action]),
