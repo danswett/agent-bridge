@@ -1,6 +1,6 @@
-From f4903abff4a35d379ed343c282dfa2d747525da8 Mon Sep 17 00:00:00 2001
+From 209cac99e80aaf856d4a7cbac52c9ac1e07f32a5 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:45 -0800
+Date: Mon, 23 Nov 2026 23:24:18 -0800
 Subject: [PATCH] s 6a3
 
 ---
@@ -12,10 +12,10 @@ Subject: [PATCH] s 6a3
  5 files changed, 193 insertions(+), 10 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index b055617a8..9f2184ad5 100644
+index 1c44e1e83..f8f2f8bac 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
-@@ -571,18 +571,140 @@ jobs:
+@@ -567,18 +567,140 @@ jobs:
            Write-Output "::error title=app-selftest (win-arm64)::the self-test failed on both attempts (#2026)"
            exit 1
  
@@ -199,7 +199,7 @@ index 9759d180d..d16a0d9a9 100644
                      $lines += "Not waived, $($need.Name) has legs that did not succeed: " + (($unpassed | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join ', ')
                      continue
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index cce9db049..843b88095 100644
+index 85249e6ed..4444e9bc2 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -1258,11 +1258,11 @@ suites:
@@ -257,7 +257,7 @@ index 8aae8addb..ba81c2f66 100644
      $code = Get-Content -Raw $script
      foreach ($name in 'app (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)') {
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 127825537..f1a7dc8d3 100644
+index e7426cb3b..ef8bae40f 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -269,7 +269,7 @@ index 127825537..f1a7dc8d3 100644
          Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
      }
  
-@@ -270,4 +270,49 @@ public class FullWorkflowTests
+@@ -276,4 +276,49 @@ public class FullWorkflowTests
          Assert.Equal("true", Scalar(retry, "continue-on-error"));
          Assert.Contains("exit 1", Scalar(twice, "run"), StringComparison.Ordinal);
      }
