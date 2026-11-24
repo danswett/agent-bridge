@@ -146,11 +146,16 @@ public sealed class LiteDeliver(
         var peer = Principal(body.Principal);
         if (store is not null)
         {
-            switch (store.TryBegin(body.Request, peer, id))
+            var begin = store.TryBegin(body.Request, peer, id);
+            // A prompt Claude took after the report frees its slot (D2b-2b1, #3856): look at the transcript before refusing a held slot.
+            if (begin == BusyQueueStore.Begin.Held && LateTaken(store, id)) { begin = store.TryBegin(body.Request, peer, id); }
+            switch (begin)
             {
                 case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
                 case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
             }
+            var transcript = source.Files(id)?.Transcript;
+            store.Track(body.Request, transcript, transcript is null ? 0 : ClaudeQueue.Mark(transcript), peer);
         }
         // The slot is taken before the rate token is spent, so a held or full refusal never burns the window and so never turns into busy (receipt 7110190967 P1-1).
         if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
@@ -181,7 +186,7 @@ public sealed class LiteDeliver(
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
         // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
-        // send frees the slot; a send that typed nothing frees it and leaves no record; keys that went with no clear result stay held.
+        // send frees the slot; a result the replier marks NoKeysSent (it proves no key went: refused before typing, a stop or departure, a foreign request, an injector\r\n        // fence or an exception before any key) frees it and leaves no record; any other result that may have typed stays held. KeysGoing alone proves nothing, since it\r\n        // runs before the injector's own fence; only a thrown exception with no result falls back to it.
         void Record(ReplyResult? r)
         {
             if (store is null) { return; }
@@ -290,6 +295,15 @@ public sealed class LiteDeliver(
         return before is not null && before.Agents.Contains(found.Agent) ? null : found.Id;
     }
 
+    // A relay prompt Claude took after its send was reported: the record becomes delivered and the slot frees. A held send whose transcript
+    // is unknown, or whose prompt has not been taken, stays held.
+    static bool LateTaken(BusyQueueStore store, string session)
+    {
+        var held = store.Holder(session);
+        if (held?.Transcript is not { } path || !ClaudeQueue.Taken(path, held.Offset, held.Request)) { return false; }
+        store.Settle(held.Request, BusyQueueStore.Delivered, null, held: false, principal: held.Principal);
+        return true;
+    }
     static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
 
     bool BusyQueueOn()

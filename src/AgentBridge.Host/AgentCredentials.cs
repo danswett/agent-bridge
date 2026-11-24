@@ -91,12 +91,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     readonly IScriptTaskReader? tasks;
     readonly Func<int, ProcessAncestry> reread;
+    readonly ISessionJobs? jobs;
 
     public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null, IScriptTaskReader? tasks = null,
-        Func<int, ProcessAncestry>? reread = null)
+        Func<int, ProcessAncestry>? reread = null, ISessionJobs? jobs = null)
     {
         this.tasks = tasks;
         this.reread = reread ?? ProcessChain.Read;
+        this.jobs = jobs;
         LaunchGate = new AgentLaunchGate(folder);
         FleetGrant = new FleetLaunchGrant(folder);
         this.rootAlive = rootAlive ?? ((_, _) => true);
@@ -105,6 +107,20 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         this.time = time ?? TimeProvider.System;
         this.log = log ?? (_ => { });
         Load();
+        ReenrollLive();
+    }
+
+    // After a host restart the sessions that are still running have lost their jobs (a job has no name and no handle left): each live root is
+    // enrolled again, so what it starts from now on is a member. Best effort, and never for a root that has gone.
+    void ReenrollLive()
+    {
+        if (jobs is null) { return; }
+        foreach (var r in records.Where(r => r.Credential.Kind == "session" && r.Credential.RootPid > 0).ToArray())
+        {
+            if (!this.rootAlive(r.Credential.RootPid, r.Credential.RootStartUtc)) { continue; }
+            try { jobs.Enroll(r.Hash, r.Credential.RootPid, r.Credential.RootStartUtc); }
+            catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to a session that was running"); }
+        }
     }
 
     public string? Problem { get { lock (gate) { return problem; } } }
@@ -260,6 +276,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             RevokeEnded(rootAlive);
             if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
             // One credential per session: a resume or a relaunch gets a new one and the old one is dead (§3.4).
+            foreach (var replaced in records.Where(r => r.Credential.Session == session)) { LetGo(replaced.Hash); }
             records.RemoveAll(r => r.Credential.Session == session);
             records.Add(new Record(Hash(token), credential));
             Save();
@@ -337,15 +354,25 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
 
     public void Bind(string launchId, int processId, DateTimeOffset startedAt)
     {
+        string key;
         lock (gate)
         {
             var i = records.FindIndex(r => r.Credential.Kind == "session" && r.Credential.LaunchId == launchId && r.Credential.RootPid == 0);
             if (i < 0) { return; }
             records[i] = records[i] with { Credential = records[i].Credential with { RootPid = processId, RootStartUtc = startedAt } };
+            key = records[i].Hash;
             try { Save(); }
             catch (IOException e) { Fault($"could not save: {e.Message}"); }
             catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
         }
+        // The session job (§3.4): best effort and outside the gate. A launch that gets none is still bound, and the ancestor rule alone applies.
+        if (jobs is null) { return; }
+        try { jobs.Enroll(key, processId, startedAt); }
+        catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to this session"); return; }
+        // Revoked or replaced while the job was being made: its Release found nothing, so this job would be held for a credential that is gone.
+        bool stale;
+        lock (gate) { stale = !records.Any(r => r.Hash == key); }
+        if (stale) { LetGo(key); }
     }
 
     public void Abandon(string launchId)
@@ -359,13 +386,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var presented = token is { Length: AgentProtocol.TokenLength } && token.StartsWith(AgentProtocol.TokenPrefix, StringComparison.Ordinal) ? Hash(token) : null;
         var now = time.GetUtcNow();
         AgentCredential? match = null;
+        string? matchKey = null;
         lock (gate)
         {
             if (problem is not null) { return Refused($"the credential store is unavailable: {problem}"); }
             // Compares every record, so how long the answer takes doesn't say which one matched.
             foreach (var r in records)
             {
-                if (presented is not null && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(r.Hash), Convert.FromHexString(presented))) { match = r.Credential; }
+                if (presented is not null && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(r.Hash), Convert.FromHexString(presented))) { match = r.Credential; matchKey = r.Hash; }
             }
             if (match is not null && match.ExpiresAt <= now)
             {
@@ -404,9 +432,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             return Outside(match, "the caller's ancestry could only be read in part");
         }
         var bound = ancestry.Processes.FirstOrDefault(p => p.Id == match.RootPid);
-        if (bound is null) { return Outside(match, "the session's process isn't among the caller's ancestors"); }
+        if (bound is null)
+        {
+            // A caller whose parent chain no longer reaches the root (a shell whose parent exited) can still be inside the session: it is a member
+            // of the job the host made for this launch. Any other caller is refused exactly as before.
+            if (!InSessionJob(matchKey!, match, ancestry)) { return Outside(match, "the session's process isn't among the caller's ancestors"); }
+        }
         // Both sides must say when it started: an id alone could be a later process given the same one.
-        if (bound.StartedAt is not { } started || (started - match.RootStartUtc).Duration() > StartSlack)
+        else if (bound.StartedAt is not { } started || (started - match.RootStartUtc).Duration() > StartSlack)
         {
             return Outside(match, "the process with the session's id is not the one that started it");
         }
@@ -417,6 +450,19 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             return Outside(match, "the session's process has ended");
         }
         return new AgentHelloDecision(match, null);
+    }
+
+    // Whether the caller (the first process of its ancestry, by pid and start time) is in this credential's own session job, which is
+    // believed only if the recorded root is in it too. Unreadable, absent or failing is "no": the ancestor rule is the only way in then.
+    bool InSessionJob(string key, AgentCredential match, ProcessAncestry ancestry)
+    {
+        if (jobs is null || ancestry.Processes is not [{ Id: > 0, StartedAt: { } at } caller, ..]) { return false; }
+        try { return jobs.Contains(key, match.RootPid, match.RootStartUtc, caller.Id, at); }
+        catch (Exception e)
+        {
+            log($"agent credentials: the session job could not be read ({e.GetType().Name}); the ancestor rule alone applies");
+            return false;
+        }
     }
 
     // Whether the process with this id is still the one that started at that time.
@@ -664,7 +710,15 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
         catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
+        // After the record is gone from disk, and guarded: a job that will not let go can never keep a revoked credential alive.
+        foreach (var r in gone) { LetGo(r.Hash); }
         return true;
+    }
+
+    void LetGo(string key)
+    {
+        try { jobs?.Release(key); }
+        catch (Exception e) { log($"agent credentials: a session job could not be let go ({e.GetType().Name})"); }
     }
 
     void Load()
