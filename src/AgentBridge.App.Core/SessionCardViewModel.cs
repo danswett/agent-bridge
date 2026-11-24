@@ -336,6 +336,15 @@ public sealed partial class SessionCardViewModel : Observable
     bool wantsRowFocus;
     public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
     public bool HasGroupHeader => groupHeader is not null;
+    // The headers of the groups that begin here (G5a): a group's header sits over its first listed row, and a group with no row
+    // to sit on (empty, or folded away) hands its header to the next row.
+    IReadOnlyList<GroupHeader> groupHeaders = [];
+    public IReadOnlyList<GroupHeader> GroupHeaders
+    {
+        get => groupHeaders;
+        internal set { if (!groupHeaders.SequenceEqual(value)) { groupHeaders = value; Raise(nameof(GroupHeaders)); Raise(nameof(HasGroupHeaders)); } }
+    }
+    public bool HasGroupHeaders => groupHeaders.Count > 0;
     public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
     public bool Unread
     {

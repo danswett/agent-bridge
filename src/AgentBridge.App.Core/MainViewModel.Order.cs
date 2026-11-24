@@ -14,6 +14,12 @@ public sealed partial class MainViewModel
     public IReadOnlyList<SessionGroup> Groups => Order.Groups.Items;
     public IReadOnlyDictionary<string, int> GroupCounts => Order.Groups.Counts();
 
+    // Headers with no row after them (the list ends in empty or folded groups): the list's end carries them.
+    public ObservableCollection<GroupHeader> TrailingGroupHeaders { get; } = [];
+    public bool HasTrailingGroupHeaders => TrailingGroupHeaders.Count > 0;
+
+    public void SetGroupCollapsed(string id, bool collapsed) { Order.SetGroupCollapsed(id, collapsed); Rearrange(chosen: true); }
+
     public string CreateGroup(string name)
     {
         var id = Order.Groups.Create(name);
@@ -55,11 +61,12 @@ public sealed partial class MainViewModel
 
     public string KeyOf(SessionCardViewModel card) => CardKey(owner.TryGetValue(card, out var m) ? m.Key : Machine.LocalKey, card.Id);
 
-    public bool CanMove(SessionCardViewModel card, int delta) => Order.CanMove(KeyOf(card), delta);
+    // Not in a folded group: its neighbours there are not listed, and a move would step over rows nobody sees.
+    public bool CanMove(SessionCardViewModel card, int delta) => !Folded(card) && Order.CanMove(KeyOf(card), delta);
 
     public bool Move(SessionCardViewModel card, int delta)
     {
-        if (!Order.Move(KeyOf(card), delta)) { return false; }
+        if (!CanMove(card, delta) || !Order.Move(KeyOf(card), delta)) { return false; }
         Rearrange(chosen: true);
         return true;
     }
@@ -98,7 +105,7 @@ public sealed partial class MainViewModel
     {
         var sort = Order.Sort;
         var a = Arranged();
-        var want = a.Pinned.Concat(a.Sessions).Select(e => byId[e.Key]).ToList();
+        var (want, headers, trailing) = Sectioned(a);
         var hold = !chosen && Sessions.Any(c => c.Editing);
         foreach (var gone in Sessions.Except(want).ToList()) { Sessions.Remove(gone); }
         for (var i = 0; i < want.Count; i++)
@@ -117,14 +124,24 @@ public sealed partial class MainViewModel
             if (c == open) { Order.MarkSeen(key, c.Session.Activity?.ResponseTurn); }
             c.Unread = Order.Unread(key, c.Session.Activity?.ResponseTurn);
         }
-        // Headings by the order on screen, which a held update leaves as it was.
+        // Headings by the order on screen, which a held update leaves as it was. "Sessions" names the rows in no group, once
+        // anything is pinned or any group exists.
         bool pinnedSeen = false, restSeen = false;
+        var sectioned = pins.Count > 0 || Groups.Count > 0;
         foreach (var c in Sessions)
         {
-            c.GroupHeader = pins.Count == 0 ? null
+            var ungrouped = !c.Pinned && Order.Groups.GroupOf(KeyOf(c)) is null;
+            c.GroupHeader = !sectioned ? null
                 : c.Pinned ? (pinnedSeen ? null : "Pinned")
-                : (restSeen ? null : "Sessions");
-            if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
+                : ungrouped && !restSeen ? "Sessions" : null;
+            if (c.Pinned) { pinnedSeen = true; } else if (ungrouped) { restSeen = true; }
+            if (!hold) { c.GroupHeaders = headers.GetValueOrDefault(c) ?? []; }  // a held update leaves them where they were, as it leaves the rows
+        }
+        if (!hold && !TrailingGroupHeaders.SequenceEqual(trailing))
+        {
+            TrailingGroupHeaders.Clear();
+            foreach (var h in trailing) { TrailingGroupHeaders.Add(h); }
+            Raise(nameof(HasTrailingGroupHeaders));
         }
         SyncEnded(a.Ended);
         Raise(nameof(Groups));
@@ -138,6 +155,30 @@ public sealed partial class MainViewModel
         }
         if (Order.Sort != sort) { Rearrange(chosen); }
     }
+    // Pinned, then each group's rows, then the rows in no group (ui.md Groups). A collapsed group lists only the rows that need you and
+    // the session that is open; its header, and an empty group's, sits over the next row listed, or ends up in `trailing`.
+    (List<SessionCardViewModel> Rows, Dictionary<SessionCardViewModel, List<GroupHeader>> Headers, List<GroupHeader> Trailing) Sectioned(Arrangement a)
+    {
+        var rows = a.Pinned.Select(e => byId[e.Key]).ToList();
+        var rest = a.Sessions.Select(e => byId[e.Key]).ToList();
+        var headers = new Dictionary<SessionCardViewModel, List<GroupHeader>>();
+        var waiting = new List<GroupHeader>();
+        void List(SessionCardViewModel c)
+        {
+            rows.Add(c);
+            if (waiting.Count > 0) { headers[c] = [.. waiting]; waiting.Clear(); }
+        }
+        foreach (var g in Order.Groups.Items)
+        {
+            var members = rest.Where(c => Order.Groups.GroupOf(KeyOf(c)) == g.Id).ToList();
+            var folded = Order.IsGroupCollapsed(g.Id);
+            waiting.Add(new GroupHeader(g.Id, g.Name, members.Count, members.Count(c => c.Session.Question is not null), !folded, SetGroupCollapsed));
+            foreach (var c in members.Where(c => !folded || c.Session.Question is not null || c == open)) { List(c); }
+        }
+        foreach (var c in rest.Where(c => Order.Groups.GroupOf(KeyOf(c)) is null)) { List(c); }
+        return (rows, headers, waiting);
+    }
+
     void SyncEnded(IReadOnlyList<EndedSession> ended)
     {
         var now = Time.GetUtcNow();

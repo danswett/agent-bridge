@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.GroupHeaderView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App">
+    <!-- A group's header in the Sessions list (ui.md Groups, §5.3 Disclosure): the group's name, its count and how many of its rows
+         need you, heard as expanded or collapsed; Enter and Space press it. An empty group says what to do. -->
+    <StackPanel>
+        <local:DisclosureButton
+            HorizontalAlignment="Left"
+            MinHeight="32"
+            Margin="-4,4,0,0"
+            Padding="4,4"
+            BorderThickness="0"
+            Background="{ThemeResource SubtleFillColorTransparentBrush}"
+            Foreground="{ThemeResource AbText}"
+            CornerRadius="{StaticResource AbRadiusControl}"
+            AutomationProperties.AutomationId="GroupHeader"
+            AutomationProperties.Name="{x:Bind Header.Text, Mode=OneWay}"
+            IsExpanded="{x:Bind Header.Expanded, Mode=OneWay}"
+            Click="OnToggle">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <ContentControl
+                    Style="{StaticResource AbIconChevron}"
+                    Width="16"
+                    Height="16"
+                    CenterPoint="8,8,0"
+                    Rotation="{x:Bind Header.Angle, Mode=OneWay}"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource AbText2}"
+                    AutomationProperties.AccessibilityView="Raw" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{StaticResource AbTypeSectionHeader}"
+                    Foreground="{ThemeResource AbText2}"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Text="{x:Bind Header.Text, Mode=OneWay}" />
+            </StackPanel>
+        </local:DisclosureButton>
+        <TextBlock
+            Margin="0,0,0,8"
+            Style="{StaticResource AbTypeMeta}"
+            Foreground="{ThemeResource AbText2}"
+            Text="{x:Bind Header.Note, Mode=OneWay}"
+            Visibility="{x:Bind local:Ui.Show(Header.Empty), Mode=OneWay}" />
+    </StackPanel>
+</UserControl>

@@ -3711,10 +3711,13 @@ question, as choosing its row does.
 **Session groups on each platform (#767).** The rules are §6.1's on every client; only the
 controls are each platform's. Where marked *to verify*, the pattern is still to be checked
 against that platform's own guidelines before it is built.
-- **Windows:** the header is an item of the sessions `ListView`, drawn as a disclosure button
-  with the ExpandCollapse automation pattern, so arrows, selection and drag stay the list's own,
-  rather than an `Expander` per group or `ListView`'s grouped `CollectionViewSource`, whose
-  headers don't collapse on their own. *To verify* against Fluent's list and tree guidance.
+- **Windows:** the header is a disclosure button with the ExpandCollapse automation pattern, so
+  arrows, selection and drag stay the list's own, rather than an `Expander` per group or
+  `ListView`'s grouped `CollectionViewSource`, whose headers don't collapse on their own. Built
+  (#1618 G5a): it sits over the group's first listed row (the next row when the group has none
+  listed, the list's end when none follows); a collapsed group lists its rows that need you and the
+  session open. Collapse is this device's, outside the group registers. Not built yet: the unread
+  dot, hiding a group with no match under a machine tab. *To verify* against Fluent's list and tree guidance.
 - **PWA:** the header is a `<button aria-expanded aria-controls>` in the list's arrow order,
   and its rows sit in an element with `role="group"` named for the group. A phone's Move to
   group is a sheet.
