@@ -1,7 +1,7 @@
-From 05249ecb317b5bbc5a50c174e044d8a904dd60a5 Mon Sep 17 00:00:00 2001
+From dc9c068e37b8f3595430c8a07de5200332f0bacf Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:33:13 -0800
-Subject: [PATCH] scratch 6a3
+Date: Mon, 23 Nov 2026 21:37:28 -0800
+Subject: [PATCH] scratch p6a3-new
 
 ---
  .github/workflows/full.yml                    | 126 +++++++++++++++++-
@@ -199,10 +199,10 @@ index 9759d180d..d16a0d9a9 100644
                      $lines += "Not waived, $($need.Name) has legs that did not succeed: " + (($unpassed | ForEach-Object { "$($_.name) ($($_.conclusion))" }) -join ', ')
                      continue
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index aef468381..fbcfbf1db 100644
+index cce9db049..843b88095 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1230,11 +1230,11 @@ suites:
+@@ -1258,11 +1258,11 @@ suites:
      ring: 2
      select: always
      # The release train's packages (S2, #4104, piece 6a): FULL publishes, packs (Velopack) and records the installer input and SBOM of the Windows app on both
