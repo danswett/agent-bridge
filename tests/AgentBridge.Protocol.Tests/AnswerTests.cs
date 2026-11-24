@@ -112,7 +112,7 @@ public class AnswerTests
         Assert.Null(Answers.Check(q, Answer("""{"answer":{"other":"neither, use c"}}""")));
         Assert.Contains("empty", Answers.Check(q, Answer("""{"answer":{"other":"  "}}""")));
         var tooLong = JsonSerializer.Serialize(new { answer = new { other = new string('x', Limits.AnswerText + 1) } });
-        Assert.Contains("longer than 4 KiB", Answers.Check(q, Answer(tooLong)));
+        Assert.Contains("longer than 16 KiB", Answers.Check(q, Answer(tooLong)));
     }
 
     [Fact]
@@ -170,15 +170,79 @@ public class AnswerTests
         Assert.Contains("not a text answer", Answers.Check(Form(Choice("answer")), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = "a" }));
     }
 
+    // The client-reported card target (owner decision on #4044) has its own cap and is outside the 16 KiB answer budget: it neither makes
+    // a fitting answer too large nor lets an oversized one through.
+    static int RequestBytes(AnswerRequest a) => JsonSerializer.SerializeToUtf8Bytes(a, ProtocolJson.Options).Length;
+
+    static AnswerRequest AtTheBudget(int lastFieldLength, string? card)
+    {
+        var fields = new Dictionary<string, JsonElement>();
+        foreach (var i in Enumerable.Range(0, 3)) { fields[$"t{i}"] = JsonDocument.Parse($"\"{new string('x', Limits.AnswerRequest / 4)}\"").RootElement.Clone(); }
+        fields["t3"] = JsonDocument.Parse($"\"{new string('x', lastFieldLength)}\"").RootElement.Clone();
+        return new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Fields = fields, CardTarget = card };
+    }
+
+    [Fact]
+    public void The_card_target_is_outside_the_16_KiB_answer_budget()
+    {
+        var form = Form(Enumerable.Range(0, 4).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray());
+        var largest = Enumerable.Range(1, Limits.AnswerText).Last(n => RequestBytes(AtTheBudget(n, null)) <= Limits.AnswerRequest);
+        var card = new string('c', Limits.CardTarget);
+        Assert.True(RequestBytes(AtTheBudget(largest, card)) > Limits.AnswerRequest, "the fixture must only fit because the card target is left out");
+
+        Assert.Null(Answers.Check(form, AtTheBudget(largest, null)));
+        Assert.Null(Answers.Check(form, AtTheBudget(largest, card)));
+        Assert.Contains($"larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(form, AtTheBudget(largest + 1, null)));
+        Assert.Contains($"larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(form, AtTheBudget(largest + 1, card)));
+    }
+
+    [Fact]
+    public void The_card_target_never_changes_whether_an_answer_is_acceptable()
+    {
+        var form = Form(Choice("answer"));
+        var plain = Answer("""{"answer":"a"}""");
+        foreach (var card in new[] { "", "s1", new string('c', Limits.CardTarget), new string('c', 5000), "line\nbreak" })
+        { Assert.Equal(Answers.Check(form, plain), Answers.Check(form, plain with { CardTarget = card })); }
+        Assert.Equal(64, Limits.CardTarget);
+    }
     [Fact]
     public void A_request_over_16_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
     {
         var fields = Enumerable.Range(0, 5).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text }).ToArray();
-        var text = new string('x', Limits.AnswerText);
+        var text = new string('x', Limits.AnswerRequest / 4);
         var each = JsonSerializer.Serialize(fields.ToDictionary(f => f.Name, _ => text));
 
-        Assert.Contains("larger than 16 KiB", Answers.Check(Form(fields), Answer(each)));
+        Assert.Contains($"larger than {Limits.AnswerRequest / 1024} KiB", Answers.Check(Form(fields), Answer(each)));
         Assert.Null(Answers.Check(Form(fields.Take(3).ToArray()), Answer(JsonSerializer.Serialize(fields.Take(3).ToDictionary(f => f.Name, _ => text)))));
+    }
+
+    // #2752: a free-text answer is as long as a reply, so a person can paste diagnostics; the request budget is that text plus a named envelope for the ids and flags around it.
+    [Fact]
+    public void The_free_text_limit_is_the_reply_limit_and_the_request_budget_is_that_plus_the_envelope()
+    {
+        Assert.Equal((Limits.ReplyText, 16 * 1024), (Limits.AnswerText, Limits.AnswerText));
+        Assert.Equal(Limits.AnswerText + Limits.AnswerEnvelope, Limits.AnswerRequest);
+    }
+
+    static AnswerRequest TextAnswer(int bytes) => new() { Id = "s1", Question = "q1", Request = "r1", Text = new string('x', bytes) };
+
+    [Fact]
+    public void A_free_text_answer_of_exactly_16_KiB_is_accepted_and_one_byte_more_is_refused_naming_the_limit()
+    {
+        Assert.Null(Answers.Check(Form(), TextAnswer(Limits.AnswerText)));
+        Assert.Equal("the answer is longer than 16 KiB", Answers.Check(Form(), TextAnswer(Limits.AnswerText + 1)));
+        var other = Form(Choice("answer", other: true));
+        Assert.Null(Answers.Check(other, Answer(JsonSerializer.Serialize(new { answer = new { other = new string('x', Limits.AnswerText) } }))));
+    }
+
+    [Fact]
+    public void A_maximum_answer_with_a_256_character_session_and_question_id_and_the_flags_fits_the_request_budget_and_would_not_without_the_envelope()
+    {
+        var biggest = new AnswerRequest { Id = new string('i', 256), Question = new string('q', 256), Request = Guid.NewGuid().ToString(), Text = new string('x', Limits.AnswerText), Progress = true };
+
+        Assert.True(RequestBytes(biggest) <= Limits.AnswerRequest);
+        Assert.True(RequestBytes(biggest) > Limits.AnswerText);
+        Assert.Null(Answers.Check(Form(), biggest));
     }
 
     [Fact]

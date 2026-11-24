@@ -15,6 +15,11 @@ public static class OwnPeerCommands
     // This host's own device id and account id (null when not signed in).
     public sealed record Local(string DeviceId, string? Account);
 
+    // What the command line uses: the mode as the kill switch sees it, so after a recorded kill nothing here acts as if messaging were on
+    // unless it truly is (an explicit scope or the default never turns it back on).
+    public static int Run(IReadOnlyList<string> args, string folder, Local local, Func<string?> readLine, TextWriter output, TextWriter error) =>
+        Run(args, folder, () => Lite.LiteKill.IsOn(folder), local, readLine, output, error);
+
     public static int Run(IReadOnlyList<string> args, string folder, Func<bool> modeOn, Local local, Func<string?> readLine, TextWriter output, TextWriter error)
     {
         try { return Dispatch(args, folder, modeOn, local, readLine, output, error); }

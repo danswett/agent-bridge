@@ -57,7 +57,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier() => new(source, f.Processes, probe, new NoGuard(), console, new ReplyOptions
+    ReplyService Replier(DeliveryGate? gate = null) => new(source, f.Processes, probe, new NoGuard(), console, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = true,
@@ -67,7 +67,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
         Time = clock,
-    }, logged.Enqueue, attachments: store);
+    }, logged.Enqueue, gate, store);
 
     ReplyService? replier;
     // Left at the product's 15 s for the tests that press Enter again, which end on what the box
@@ -238,7 +238,60 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)null), (result.Outcome, result.Stage));
     }
 
+    // NoKeysSent (#3856): set only where no key could have gone; a typed reply, or an injector failing after keys, stays MayHaveBeenSent.
     [Fact]
+    public async Task A_Claude_reply_stopped_before_any_key_is_NoKeysSent_whatever_stopped_it()
+    {
+        console.Rows = ClaudeIdle();
+        var busy = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (busy.Outcome, busy.KeyDisposition));
+        var gone = await ReplyAsync("no-such-session", "Ship it");
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (gone.Outcome, gone.KeyDisposition));
+        var current = true; console.BeforeInject = () => current = false;
+        var stale = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current }, Peer);
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (stale.Outcome, stale.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task A_Claude_reply_that_was_typed_or_whose_injector_failed_after_keys_is_MayHaveBeenSent()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Delivered, ReplyKeyDisposition.MayHaveBeenSent), (typed.Outcome, typed.KeyDisposition));
+        console.OnInject = _ => throw new IOException("the worker died after typing");
+        var failed = await ReplyAsync(ClaudeId, "Ship it again");
+        Assert.Equal((AnswerOutcome.Unconfirmed, ReplyKeyDisposition.MayHaveBeenSent), (failed.Outcome, failed.KeyDisposition));
+    }
+    // #3926 review, non-blocking P2s (R10): a result that skips the typing attempt, or fails before any key, says NoKeysSent, so a busy-Claude slot is
+    // freed instead of held with nothing typed.
+    [Fact]
+    public async Task A_foreign_request_and_a_reply_refused_during_a_stop_are_NoKeysSent()
+    {
+        console.Rows = ClaudeIdle();
+        var key = Guid.NewGuid().ToString();
+        var first = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = key, Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal(AnswerOutcome.Refused, first.Outcome);
+        var foreign = await replier.ReplyAsync(new ReplyRequest { Id = "another-session", Request = key, Text = "Ship it" }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (foreign.Outcome, foreign.KeyDisposition));
+        var gate = new DeliveryGate(); replier = Replier(gate);
+        using var stop = await gate.PrepareStopAsync(TimeSpan.FromSeconds(5));
+        var blocked = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Busy, ReplyKeyDisposition.NoKeysSent), (blocked.Outcome, blocked.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task An_exception_before_any_key_is_NoKeysSent_and_the_keys_going_callback_having_run_is_not()
+    {
+        console.Rows = ClaudeIdle();
+        var failed = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => throw new InvalidOperationException("fence down") }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (failed.Outcome, failed.KeyDisposition));
+        Assert.Empty(console.Plans);
+        var going = 0;
+        var late = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => true, KeysGoing = () => { going++; throw new InvalidOperationException("arm failed"); } }, Peer);
+        Assert.Equal(1, going);
+        Assert.Equal(ReplyKeyDisposition.MayHaveBeenSent, late.KeyDisposition);
+    }    [Fact]
     public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
     {
         console.Rows = ClaudeIdle();

@@ -417,6 +417,7 @@ public sealed partial class SessionView
     void TakeAnchor()
     {
         anchor = null;
+        anchorHeld = false;
         if (ConversationScroll is not { } scroll || ConversationList.ItemsPanelRoot is not ItemsStackPanel panel || panel.FirstVisibleIndex < 0) { return; }
         var realised = new List<(int, double, double)>();
         for (var i = panel.FirstVisibleIndex; i <= Math.Min(panel.FirstVisibleIndex + 1, blocks.Count - 1); i++)

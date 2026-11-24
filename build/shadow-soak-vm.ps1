@@ -84,6 +84,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $vmScript = Join-Path $PSScriptRoot 'rehearsal-azure-vmw.ps1'
+# Every mode, -Finish included, needs the sign-in: without it the rehearsal script refuses before it writes, and -Finish would
+# leave both VMs running and billing. Say so now, before anything is started or stopped.
+# The sign-in comes from the AGENT_BRIDGE_REHEARSAL_AZURE_USER user environment variable only: no parameter takes it, so no command line carries it.
+if (-not $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER) {
+    throw 'No expected az sign-in is set. Set the AGENT_BRIDGE_REHEARSAL_AZURE_USER user environment variable once (docs/parity-checklist.md, VM-W in Azure), then open a new terminal. Nothing was started or stopped.'
+}
+$who = @{ ExpectedAzureUser = $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER }
 $scratch = Join-Path $HOME '.agentbridge-rehearsal'
 $soak = 'C:\rehearsal\soak'
 $repoUrl = 'https://github.com/danswett/agent-bridge.git'
@@ -96,7 +103,7 @@ function Invoke-Guest([string] $Role, [string] $Script, [switch] $AsDesktopUser,
     Set-Content -Path $file -Value $Script -Encoding utf8
     try {
         $extra = if ($AsDesktopUser) { @{ AsDesktopUser = $true; TimeoutMinutes = $TimeoutMinutes } } else { @{} }
-        $out = & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $Role -InvokeScript $file @extra 6>$null
+        $out = & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $Role -InvokeScript $file @extra @who 6>$null
         return (($out | Out-String) -replace '(?m)^JOB-DONE\s*$', '').Trim()
     } finally { Remove-Item $file -ErrorAction SilentlyContinue }
 }
@@ -263,7 +270,7 @@ if ($Start) {
     # -notin is case-insensitive but the driver's lookup is not: pass the canonical name.
     foreach ($k in $Caps.Keys) { $agent = @('Copilot', 'Claude', 'Codex') | Where-Object { $_ -eq $k }; $arguments += @('--cap', "$agent=$([int]$Caps[$k])") }
     $line = ($arguments | ForEach-Object { if ("$_" -match '\s') { "'$_'" } else { "$_" } }) -join ' '
-    foreach ($role in 'W', 'M') { & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown Off 6>$null }
+    foreach ($role in 'W', 'M') { & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown Off @who 6>$null }
     Invoke-Guest M -Script @'
 $user = 'rehearsal'
 $dir = Get-ProtectedDirectory 'soak'
@@ -371,8 +378,8 @@ foreach ($name in @(if (Test-Path $record) { Get-Content $record | Sort-Object -
 Remove-Item $record -ErrorAction SilentlyContinue
 '@.Replace('__SOAK__', $soak) | Write-Output
     foreach ($role in 'W', 'M') {
-        & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown On 6>$null
-        & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -Deallocate
+        & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown On @who 6>$null
+        & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -Deallocate @who
     }
     return
 }

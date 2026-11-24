@@ -851,18 +851,19 @@ public class CopilotPlannerTests
     [Fact]
     public void A_required_pattern_is_counted_at_its_minimum_length_and_a_too_large_answer_is_refused_before_any_key()
     {
+        // The three 4,000-character defaults and this one, with the pattern's 600, are over the bound by the same few bytes as before the envelope grew (#2752).
         var properties = new Dictionary<string, object>
         {
             ["a"] = new { type = "string", @default = new string('x', 4_000) },
             ["b"] = new { type = "string", @default = new string('x', 4_000) },
             ["c"] = new { type = "string", @default = new string('x', 4_000) },
-            ["d"] = new { type = "string", @default = new string('x', 3_900) },
+            ["d"] = new { type = "string", @default = new string('x', 3_900 + Limits.AnswerEnvelope) },
             ["p"] = new { type = "string", pattern = "^x{600}$" },
         };
         var (question, _) = Asked(JsonSerializer.Serialize(new { message = "m", requestedSchema = new { properties, required = new[] { "p" } } }));
         var answer = Answer(new Dictionary<string, string>
         {
-            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = new string('x', 3_900), ["p"] = new string('x', 600),
+            ["a"] = new string('x', 4_000), ["b"] = new string('x', 4_000), ["c"] = new string('x', 4_000), ["d"] = new string('x', 3_900 + Limits.AnswerEnvelope), ["p"] = new string('x', 600),
         });
 
         Assert.Null(question.AnswerAtMachine);
