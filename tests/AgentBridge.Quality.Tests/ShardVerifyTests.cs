@@ -115,7 +115,7 @@ public sealed class ShardVerifyTests
         try
         {
             var plan = Path.Combine(dir, "plan.json");
-            File.WriteAllText(plan, """{ "shards": 3, "projects": { "Missing.Tests": { "1": ["ATests"] } } }""");
+            File.WriteAllText(plan, """{ "shards": 3, "projects": { "Missing.Tests": { "1": ["ATests"] } }, "whole": { "1": ["Whole.Tests"] } }""");
             var corrupt = Path.Combine(dir, "Corrupt.Tests.dll");
             File.WriteAllText(corrupt, "not an assembly");
             var empty = Path.Combine(dir, "Empty.Tests.dll");
@@ -130,6 +130,7 @@ public sealed class ShardVerifyTests
 
             Assert.Contains("no test assemblies", Verify(), StringComparison.OrdinalIgnoreCase);
             Assert.Contains("Missing.Tests", Verify(Dll), StringComparison.Ordinal);
+            Assert.Contains("Whole.Tests", Verify(Dll), StringComparison.Ordinal);       // a project the plan lists whole is named too
             Assert.Contains("Corrupt.Tests", Verify(corrupt), StringComparison.Ordinal);
             Assert.Contains("Empty.Tests", Verify(empty), StringComparison.Ordinal);
             File.WriteAllText(plan, "not json");
