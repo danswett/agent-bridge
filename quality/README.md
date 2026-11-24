@@ -419,10 +419,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      inheriting a skipped check; the plan validator pins this condition too. The job
      summary and self-test artifact retain the input identity; job duration excludes the wait
      for `app`. App parallelism and product sharding remain separate #1755 slices.
-   - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
-     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
+   - `light` holds the small Linux checks on one runner: `pwa-unit` with its coverage pass,
+     `pwa-site-csp` and `docs-links`. Each step runs when its
      suite is selected, and every selected one runs even after another fails. It isn't folded
      into `plan`, since a failure there would skip every job that needs the plan.
+   - `design-gen` runs the `design-gen` and `a11y-contrast` suites (`generate.mjs --check`, then design-gen's own
+     tests) on a runner of its own, beside `light`: they were its longest step, 147-232 s (#4104). It is
+     gated on the plan, so a pull request that doesn't touch `design/` or `tools/design-gen` skips it, and
+     is in quality-gate's needs and merge-rule.yml's `main_green.jobs`, like the next.
    - `playwright-apt` runs the Playwright system packages' download and offline install checks
      (`.github/actions/playwright-system-packages/test.sh`) on a runner of its own, beside `light`:
      they took 45-49 s of its serial run (#4104). It is gated on the plan like the others, is in
