@@ -1,6 +1,6 @@
-From 1ad15636866baacccb5c9329a1d32afc66ed5616 Mon Sep 17 00:00:00 2001
+From 4ade189175feaba25afa12b54fe7fcfff7ae6eb9 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:40 -0800
+Date: Mon, 23 Nov 2026 23:24:13 -0800
 Subject: [PATCH] s 7a
 
 ---
@@ -91,7 +91,7 @@ index 000000000..c8e2f1d7d
 +        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
 \ No newline at end of file
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index d1f5c80df..ac7dd68c5 100644
+index a4f7dc812..3d4f46e48 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -627,6 +627,20 @@ suites:
