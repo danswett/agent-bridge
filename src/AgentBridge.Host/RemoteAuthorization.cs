@@ -8,7 +8,9 @@ namespace AgentBridge.Host;
 public sealed class RemoteAuthorization : IDisposable
 {
     static readonly HashSet<string> Reads = [Ops.Hello, Ops.SessionsList, Ops.SessionGet, Ops.SessionsSubscribe];
-    static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op, Lite.LiteReceiver.Op, Lite.LiteKill.Op];
+    static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op, Lite.LiteReceiver.Op, Lite.LiteKill.Op,
+        // G9: a host of this account launching under a grant; the receiver judges the same channel rule and its own grant.
+        FleetRemoteLaunch.Op];
     static readonly HashSet<string> PersonOperations =
     [
         .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,

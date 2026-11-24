@@ -45,7 +45,32 @@ proof survives reopening the store, but conflicting person/process records, unfi
 launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
 This reconciles the predecessor provenance work for
 [agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
-host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
+host-owned fleet grant; it does not itself enable fleet launch admission.
+
+Stopping (#2741): `fleet.end` with the all-zero grant id ends a session with no grant, only when
+`IsFleetWorker` holds, that is, this launch record shows an agent started this exact process through the
+fleet route. A person-started session, no record, an unfinished or unreadable record, a derived (16-hex)
+or unknown id, a held host, a kill switch or an excluded workspace refuses (`scope`, `policy`,
+`kill-switch`) before anything is typed. The same gates apply as for a grant: one press, never
+`person-required` confirmation, audited under the agent's principal. The plain `session.stop` stays
+person-only.
+
+Who may call: the caller must be a live agent session credential with `read+reply+launch` scope at depth 0
+and not adopted (the same subject check as a granted launch). Any such session may end any agent-launched
+session on this host (owner, Nov 16 on #2741): the record keeps no launcher principal, so a stop is not
+limited to the sessions that caller started. It cannot end its own session.
+
+Work is never ended over: the host reads git in the session's folder, once per request, and refuses with
+`policy` on uncommitted or untracked files (whatever `status.showUntrackedFiles` says), a stash, a commit
+on any local branch that has not been pushed, a local branch with no upstream, or git that cannot be read
+or does not finish, pipes included, inside one 5 s deadline for the whole check (the git process tree is killed, and the refusal is the answer). An open pull request is GitHub's to say and the host
+makes no GitHub call, so a caller that must not end such a session checks it first (follow-up for program C).
+
+What the check does not count, by design: files git is told to hide are the repository's own decision about what
+is work, so `.git/info/exclude`, `core.excludesFile` and `.gitignore` matches, and files marked `assume-unchanged` or
+`skip-worktree`, are not pending. Submodule changes are counted whatever `diff.ignoreSubmodules` says. The git child
+runs with no inherited `GIT_*` variable (a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the host's own would aim it
+at another repository), is pointed at the session's folder with `-C`, and its machine-readable output is NUL-separated.
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 
@@ -541,3 +566,10 @@ Set `agents.enabled` true and list workspace labels in `agents.fleet.workspaces`
 an approved isolated workspace; they refuse inherited extra arguments, profiles, resumes,
 transfers and attachments. A fresh worktree is checked before starting; its worker receives
 only `read+reply`, and the durable launch audit records `grant: fleet`.
+
+**`diskLow` (runbook, #2771).** With under 1 GiB free on the profile's disk the host refuses to turn the fleet grant on
+(`grants issue`, `scripts grant-fleet`) and refuses every fleet launch (a script's and a grant's), with code `diskLow`, and `host.status` shows
+`diskLow: ... MiB free`. Free some space on the profile's drive; the next launch goes through, with no restart. If the free space cannot be read at all
+the launch is **not** refused: it is allowed, the log says so once, and `host.status` shows `disk unknown`. Fleet workers are not ended for idling:
+a grant-launched fleet worker takes a live slot like any agent-started session, but the 2 hour `agentLaunchedIdleHours` policy never lists it
+(`AgentLimits.IdleSessions` skips sessions bound with `fleet`). Ordinary agent-started sessions are still listed.

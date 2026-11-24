@@ -8,6 +8,25 @@ import path from 'node:path';
 export const MAX_MESSAGE = 65519;
 export const REQUEST_TIMEOUT_MS = 15000;
 
+// The host's own words, made safe to hand to an agent (#4471; the .NET client's McpHost.Scrub does the same): control characters, line and paragraph
+// separators, bidi controls and zero-width characters become spaces and a terminal escape sequence goes whole; "abat1_" credentials and any run of 32 or more key
+// characters with at least 10 different ones (a UUID stays) are replaced by [redacted]; the whole is at most MAX_HOST_TEXT characters.
+export const MAX_HOST_TEXT = 512;
+export function scrubHostText(text, token) {
+  let flat = String(text ?? '')
+    .replace(/\u001B\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029\uFEFF\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (typeof token === 'string' && token.length >= 6) flat = flat.split(token).join('[redacted]');
+  flat = flat.replace(/abat1_[A-Za-z0-9_\-]+|[A-Za-z0-9_\-+/]{32,}={0,2}/g, (m) => (m.startsWith('abat1_') || (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(m) && new Set(m).size >= 10) ? '[redacted]' : m));
+  if (flat.length <= MAX_HOST_TEXT) return flat;
+  let cut = MAX_HOST_TEXT;
+  const last = flat.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1; // never half of a surrogate pair
+  return flat.slice(0, cut) + '…';
+}
+
 /** What went wrong, in words an agent can act on. */
 export class PipeError extends Error {
   constructor(message, kind = 'error') {
@@ -112,7 +131,7 @@ export class PipeClient {
     if (!entry) return;
     this.pending.delete(message.re);
     if (message.ok) entry.resolve(message.result);
-    else entry.reject(new PipeError(String(message.error ?? 'The host refused the request.'), 'refused'));
+    else entry.reject(new PipeError(scrubHostText(message.error ?? 'The host refused the request.', this.sentToken), 'refused'));
   }
 
   #onClose() {
@@ -158,6 +177,7 @@ export class PipeClient {
  */
 export async function openHost({ endpoint, token, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const client = await new PipeClient(endpoint).connect();
+  client.sentToken = token; // kept only to redact it from the host's words
   try {
     const hello = await client.request('hello', {}, { timeoutMs });
     let principal = null;

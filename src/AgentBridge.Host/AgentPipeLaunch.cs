@@ -63,6 +63,14 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     internal Task<FleetLaunchReceipt> LaunchGrantedRemoteAsync(GrantSubject subject, FleetLaunchInput input) =>
         GrantedAsync(new(AgentProtocol.Principal(subject.SourceHost, subject.Session), [], null),
             JsonSerializer.SerializeToElement(input, ProtocolJson.Options), (grants, parsed) => grants.PrepareRemoteAsync(subject, parsed));
+    // #4170: a refusal the receiver makes after the envelope verified. The caller is the authenticated peer device; its subject is not
+    // known to be named by any grant, so the principal says only the device. Uses the same limiter as every other refused launch.
+    internal string AuditRemoteRefusal(string device, FleetLaunchInput input, string reason)
+    {
+        try { LocalApi.AuditRefusal(AgentProtocol.Principal(device, "unmatched"), [], LaunchProtocol.Launch, JsonSerializer.SerializeToElement(input, ProtocolJson.Options), audit, reason, refusals); }
+        catch (InvalidOperationException) { return "audit-unavailable"; }
+        return reason;
+    }
     async Task<FleetLaunchReceipt> GrantedAsync(LaunchCaller caller, JsonElement data,
         Func<FleetGrantLaunch, FleetLaunchInput, Task<FleetLaunchContext>> prepare)
     {
@@ -207,7 +215,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     void Registered(Guid id, string session, bool confirmed)
     {
         if (Take(id, unverifiedRegistration: !confirmed) is not { } p) { return; }
-        try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session); } catch (InvalidOperationException) { }
+        try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session, fleet: p.Fleet is not null); } catch (InvalidOperationException) { }
         Save(() => store!.Launched(p.Key, session));
         if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Started) { Session = session }); }
     }

@@ -690,8 +690,8 @@ A field's value, by type:
 | `text` | A string |
 | `number` | A number |
 
-Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
-16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text, in `text` or `other`, is at most 16 KiB of UTF-8 (`Limits.AnswerText`, the same as a reply's); the whole request is at most
+17 KiB (`Limits.AnswerRequest`: that text plus `Limits.AnswerEnvelope`, 1 KiB, for the ids and flags around it). A host from before this (4 KiB) refuses a longer answer as "longer than 4 KiB" and never truncates it. A host collapses control characters and line breaks to spaces before typing.
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
@@ -1080,6 +1080,8 @@ Replay requires the original sender, session and still-current host authority ca
 foreign replay receives no escrow or progress. There is no wire confirmation field,
 production clear producer or capability in this cut. Signed person relay confirmation,
 policy and PWA/app presentation follow separately; existing clients are unchanged.
+
+A reply refused because a Copilot box holds words also carries optional `input: { text, marks, truncated, mode, digest, clearable }`: the box escaped as the host shows it (host `[start, length]` marks), at most 500 characters, `digest` the SHA-256 of the whole escaped box, `mode` `"text"`, and `clearable` always `false` in this cut (see [host replies](../host-replies.md)). Sent only to a reply the host classified as a person's; absent for agents, MCP children, Lite and any other refusal, whose `reason` carries only the draft's length. Clients that ignore it behave as before.
 
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
@@ -2482,15 +2484,15 @@ that default is the only answer it can be given from another device, a client le
 out of an answer, and a required field's is refused as blank. A default with something visible
 in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
 whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
-a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (16 KiB), a
 `number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
-number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+number; a form whose smallest answer exceeds 17 KiB in the largest envelope a host takes (a
 256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
 default (a number as the number it holds, written the longer of the ways JavaScript and .NET
 write it), and every other default and every required field
 at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
 `multipleOf` and `integer` allow, past an exclusive bound; a required `text`
-at its `minLength`, which past 4 KiB no answer can meet); and a form with
+at its `minLength`, which past 16 KiB no answer can meet); and a form with
 half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
 must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
 does not solve a pattern for its shortest match, so such a form may be offered and its answer
