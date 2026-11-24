@@ -2,15 +2,14 @@ using System.Text;
 
 namespace AgentBridge.ScriptRun;
 
-// What the host answered to scripts.admit: the admission id, and the name of the script's own protected credential file (never a path).
+// The host's answer to scripts.admit: the admission id, the script's own protected credential file (a name, never a path) and
 // Pinned: the files the host pinned for this task, launcher first (then the child program, then its script, if it has one).
 public sealed record Admission(Guid Id, string File, IReadOnlyList<string> Pinned);
 
 public sealed class HostUnavailableException : Exception;
 public sealed class HostRefusedException : Exception;
 
-// The three things the launcher touches, behind ports so the order and the secrecy rules are tested with fakes; the real ones (the local pipe, the DPAPI file,
-// CreateProcessW) are the next slice.
+// The three things the launcher touches, behind ports so the order and secrecy rules are tested with fakes (the real ones are the next slice).
 public interface IHostPort
 {
     Task<Admission> AdmitAsync(string name, int version, CancellationToken ct);
@@ -31,9 +30,8 @@ public interface IChildStarter
 
 public sealed record ChildCommand(string Name, string Program, IReadOnlyList<string> Arguments, string? Script = null);
 
-// `script-run <name> -- <absolute program> [args]`. The same allow-list the host pins the task's action with (ScriptTaskXml), so the launcher refuses exactly what the
-// pin refuses: a program that is a locked, fully qualified path on its own, or pwsh / powershell with -NoProfile, -NonInteractive and -File <fully qualified script>.
-// Inline code, a relative or environment-variable path and an unknown switch are refused, so no file the child runs can go unpinned.
+// `script-run <name> -- <absolute program> [args]`: the same allow-list the host pins the task's action with (ScriptTaskXml), so the launcher refuses exactly what the pin
+// refuses (a fully qualified program on its own, or pwsh / powershell with -NoProfile, -NonInteractive and -File <fully qualified script>) and no file goes unpinned.
 public static class CommandLine
 {
     static readonly HashSet<string> Interpreters = new(["pwsh.exe", "powershell.exe"], StringComparer.OrdinalIgnoreCase);
@@ -114,8 +112,7 @@ public sealed class Launcher(IHostPort host, ITokenSource tokens, IChildStarter 
         try { admission = await host.AdmitAsync(command.Name, Version, ct); }
         catch (HostUnavailableException) { return Refuse("host-unavailable"); }
         catch (HostRefusedException) { return Refuse("refused"); }
-        // What the OS handed this process must be exactly what the host pinned: the same child program and the same script, or nothing runs (a parse that read it
-        // differently from the pin would otherwise run a script nothing pinned).
+        // What the OS handed this process must be exactly what the host pinned (the same program and script), or nothing runs.
         var expected = command.Script is null ? 2 : 3;
         if (admission.Pinned.Count != expected || !Same(admission.Pinned[1], command.Program) || command.Script is { } script && !Same(admission.Pinned[2], script)) { return Refuse("refused"); }
         // The token is read only after the host has admitted this caller, held as bytes, written straight into the child's environment block and zeroed on every path.
@@ -147,11 +144,9 @@ public sealed class Launcher(IHostPort host, ITokenSource tokens, IChildStarter 
         return Refusal;
     }
 
-    // The task's own environment minus every AGENT_BRIDGE_* variable (a planted one cannot shadow the real one), plus the token, sorted by name, Unicode, double-null
-    // terminated. The token goes from its bytes straight into the block: it is never a string.
+    // The task's environment minus every AGENT_BRIDGE_* variable, plus the token, sorted, Unicode, double-null terminated; the token goes from its bytes into the block.
     static char[] Environment(IReadOnlyDictionary<string, string> environment, byte[] token)
     {
-        // The token takes its place among the sorted names, so the order holds whatever the task's own variables are called.
         var entries = environment.Where(p => !p.Key.StartsWith("AGENT_BRIDGE_", StringComparison.OrdinalIgnoreCase)).Select(p => (p.Key, (string?)p.Value))
             .Append((TokenVariable, null)).OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).ToList();
         var block = new char[entries.Sum(p => p.Key.Length + 1 + (p.Item2?.Length ?? token.Length) + 1) + 1];

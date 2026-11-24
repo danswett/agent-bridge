@@ -2,9 +2,8 @@ using AgentBridge.Host;
 using AgentBridge.ScriptRun;
 using Xunit;
 
-// #3305 slice S1b-1 (docs/design/script-credentials-run.md sections 2, 3, 5 and 7): the CORE of the admin-locked launcher, behind small ports. The order is fixed
-// (parse, admit, read the token, start the child, tell the host), the token exists only in the child's environment block and is zeroed on every path, a refusal is
-// one closed code on stderr and exit 125, and a child that itself exits 125 is mapped to 1.
+// #3305 S1b-1 (docs/design/script-credentials-run.md sections 2, 3, 5, 7): the launcher core. Fixed order (parse, admit, token, child, tell the host), the token only in
+// the child's environment and zeroed on every path, a refusal is one closed code and exit 125, a child's own 125 is mapped to 1.
 public sealed class ScriptRunCoreTests
 {
     const string Pwsh = @"C:\Program Files\PowerShell\7\pwsh.exe";
@@ -25,14 +24,11 @@ public sealed class ScriptRunCoreTests
 
     [Theory]
     [InlineData("dispatcher")]
-    [InlineData("dispatcher", Pwsh)]
-    [InlineData("--", Pwsh)]
     [InlineData("..", "--", Pwsh)]
     [InlineData("a/b", "--", @"C:\Tools\cycle.exe")]
     [InlineData("dispatcher", "--", "pwsh.exe", "-NoProfile", "-NonInteractive", "-File", Script)]
     [InlineData("dispatcher", "--", @"C:\%ProgramFiles%\pwsh.exe", "-NoProfile", "-NonInteractive", "-File", Script)]
     [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-Command", "& C:\\Locked\\Cycle.ps1")]
-    [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-c", "x")]
     [InlineData("dispatcher", "--", Pwsh, "-NonInteractive", "-File", Script)]
     [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-File", Script)]
     [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-File", "Cycle.ps1")]

@@ -1,8 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- script-run: the admin-locked launcher a scheduled task runs (docs/design/script-credentials-run.md). This slice (S1b-1) is its CORE: the command rules,
-       the order of admission, token and child, the child's environment and the exit codes, behind small ports. The executable's entry point and the real ports
-       (the local pipe, the DPAPI file, CreateProcessW) are the next slice, so nothing here reads a credential or starts a process on its own. -->
+  <!-- script-run (docs/design/script-credentials-run.md): this slice (S1b-1) is the launcher's CORE behind ports; the entry point and the real ports are the next slice. -->
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
