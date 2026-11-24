@@ -71,6 +71,18 @@ internal static class ShardWeights
         text.Append("\n  },\n  \"whole\": {\n");
         text.AppendJoin(",\n", whole.Select((l, i) => $"    \"{i + 1}\": [{string.Join(", ", l.Order(StringComparer.Ordinal).Select(p => $"\"{p}\""))}]"));
         text.Append("\n  }\n}\n");
+
+        // Exact, per known class: a filter term is a containment match ("AnswerFlowTests." is inside "AgentAnswerFlowTests."), so every class we know is simulated
+        // against the finished plan and must run in exactly one shard, never none (dropped) and never two. A plan that fails is not written.
+        var plan = ShardPlanFile.Parse(text.ToString());
+        foreach (var (project, classes) in weights)
+        {
+            foreach (var name in classes.Keys)
+            {
+                var running = plan.RunningShards(project, $"{name}.SomeTest").ToArray();
+                if (running.Length != 1) { throw new InvalidOperationException($"{project}: class {name} would run in shards [{string.Join(", ", running)}], not exactly one."); }
+            }
+        }
         return text.ToString();
     }
 }

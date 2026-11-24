@@ -118,6 +118,23 @@ internal sealed class ShardPlanFile
         }
     }
 
+    /// <summary>The shards that would run a test, by VSTest's containment rule: exactly one for every test of a known class, or the plan is wrong.</summary>
+    public IEnumerable<int> RunningShards(string project, string testFullName)
+    {
+        for (var shard = 1; shard <= Shards; shard++)
+        {
+            var choice = For(project, shard);
+            var runs = choice.Run switch
+            {
+                ShardRun.All => true,
+                ShardRun.None => false,
+                _ when choice.Filter!.StartsWith("FullyQualifiedName!~", StringComparison.Ordinal) => choice.Filter.Split('&').All(t => !testFullName.Contains(t["FullyQualifiedName!~".Length..], StringComparison.Ordinal)),
+                _ => choice.Filter.Split('|').Any(t => testFullName.Contains(t["FullyQualifiedName~".Length..], StringComparison.Ordinal)),
+            };
+            if (runs) { yield return shard; }
+        }
+    }
+
     public ShardChoice For(string project, int shard)
     {
         if (shard < 1 || shard > Shards) { throw new ArgumentException($"Shard {shard} is not from 1 to {Shards}."); }

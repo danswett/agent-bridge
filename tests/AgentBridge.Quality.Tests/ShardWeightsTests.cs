@@ -142,6 +142,39 @@ public sealed class ShardWeightsTests : IDisposable
         ShardPlanFile.Parse(a);
     }
 
+    // The real collisions of this repo: most test classes are in the GLOBAL namespace, so their full name is the bare name and "AnswerFlowTests." is inside
+    // "AgentAnswerFlowTests." (a containment filter cannot anchor a term at the start). Each pair must run in exactly one shard, and together.
+    [Theory]
+    [InlineData("AnswerFlowTests", "AgentAnswerFlowTests")]
+    [InlineData("ReplyFlowTests", "AgentReplyFlowTests")]
+    [InlineData("GrowthTests", "TurnBuilderGrowthTests")]
+    public void A_class_whose_name_ends_with_another_runs_once_and_in_the_same_shard(string inner, string outer)
+    {
+        var filler = Enumerable.Range(0, 40).Select(i => ($"Filler{i:D2}Tests", "t", 5.0 + i % 7));
+        Trx("Big.Tests", [(inner, "a", 50.0), (outer, "b", 50.0), .. filler]);
+        var weights = ShardWeights.Read(dir);
+
+        var plan = ShardPlanFile.Parse(ShardWeights.Generate(weights, 4, 60));
+
+        var a = plan.RunningShards("Big.Tests", $"{inner}.a").ToArray();
+        var b = plan.RunningShards("Big.Tests", $"{outer}.b").ToArray();
+        Assert.Equal(a, b);
+        Assert.Single(a);
+        // The new class that nobody listed: it contains the inner term, so it runs where the inner class runs, once, and is not dropped.
+        Assert.Equal(a, plan.RunningShards("Big.Tests", $"X{inner}.NewTest").ToArray());
+    }
+
+    [Theory]
+    [InlineData("AnswerFlowTests", "AgentAnswerFlowTests")]
+    [InlineData("ReplyFlowTests", "AgentReplyFlowTests")]
+    [InlineData("GrowthTests", "TurnBuilderGrowthTests")]
+    public void A_hand_written_plan_that_splits_such_a_pair_is_refused(string inner, string outer)
+    {
+        var json = $$"""{ "shards": 3, "projects": { "P": { "1": ["{{inner}}"], "2": ["{{outer}}"] } } }""";
+
+        Assert.Throws<ArgumentException>(() => ShardPlanFile.Parse(json));
+    }
+
     // The committed plan (quality/test-shards.json) is the one CI will use: it must stay readable, inside the filter budget and with no class in two shards.
     [Fact]
     public void The_committed_plan_is_valid_and_gives_every_shard_something_to_run()
