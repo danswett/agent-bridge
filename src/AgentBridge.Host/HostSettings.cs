@@ -117,6 +117,18 @@ public sealed record HostSettings(bool RemoteApproval)
 
     // The session watch (#4262, docs/design/session-watch.md): OFF unless config.json says sessionWatch.enabled is exactly true. Read on its own,
     // so nothing else in the file can turn it on and a file that cannot be read leaves it off; a newer schema version is not guessed at.
+    static JsonElement? Once(JsonElement obj, string name)
+    {
+        JsonElement? found = null;
+        foreach (var property in obj.EnumerateObject())
+        {
+            if (!property.NameEquals(name)) { continue; }
+            if (found is not null) { throw new JsonException(name + " is repeated"); }
+            found = property.Value;
+        }
+        return found;
+    }
+
     public static bool SessionWatchEnabled(string folder)
     {
         try
@@ -126,9 +138,9 @@ public sealed record HostSettings(bool RemoteApproval)
             using var doc = JsonDocument.Parse(stream);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) { return false; }
-            if (root.TryGetProperty("version", out var version) && !(version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out var v) && v == Version)) { return false; }
-            return root.TryGetProperty("sessionWatch", out var watch) && watch.ValueKind == JsonValueKind.Object
-                && watch.TryGetProperty("enabled", out var on) && on.ValueKind == JsonValueKind.True;
+            // A repeated key is not guessed at (TryGetProperty would take the last one): it leaves the watch off.
+            if (Once(root, "version") is { } version && !(version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out var v) && v == Version)) { return false; }
+            return Once(root, "sessionWatch") is { ValueKind: JsonValueKind.Object } watch && Once(watch, "enabled") is { ValueKind: JsonValueKind.True };
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
     }

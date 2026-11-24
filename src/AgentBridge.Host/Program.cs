@@ -576,14 +576,18 @@ async Task<int> ServeAsync(HostHandover handover)
         push.RevalidateTrust();
     }
     push?.Start();
-    // The session watch (#4262, docs/design/session-watch.md): OFF unless config.json says sessionWatch.enabled is true, read at start. Off, none of this
-    // runs: no timer, no read of any session. The owner record (S1b, LaunchOwnerLog.OwnerOf) is hooked in here once #4312 is on main; until
+    // The session watch (#4262, docs/design/session-watch.md): OFF unless config.json says sessionWatch.enabled is true, read at start. Off, the only
+    // thing that runs is that one read of the setting: no timer, no read of any session, nothing sent. The owner record (S1b, LaunchOwnerLog.OwnerOf) is hooked in here once #4312 is on main; until
     // then no session has an owner, so R2 stays quiet and nothing is addressed to an agent (agent delivery is S3).
     PeriodicTimer? watchTick = null;
     var sessionWatch = AgentBridge.Host.Core.Watch.SessionWatchStarter.Start(() => HostSettings.SessionWatchEnabled(identity.Folder),
         source.Snapshot, () => source.Held is not null, _ => null, (title, body) => push?.NotifyWatch(title, body), () => DateTimeOffset.UtcNow, Log,
         token => (watchTick ??= new PeriodicTimer(AgentBridge.Host.Core.Watch.SessionWatchLoop.Tick)).WaitForNextTickAsync(token).AsTask(), stop.Token);
-    if (sessionWatch is not null) { Log("session watch: on"); }
+    if (sessionWatch is not null)
+    {
+        Log(push is null ? "session watch: on, but push is off here, so its digests are dropped" : "session watch: on");
+        stop.Token.Register(() => watchTick?.Dispose());
+    }
     // What a reboot or a crash took (#780, docs/host-launch.md): the sessions live now, written down
     // as they change, and those an earlier run saw that died with it, restored idle through the
     // launcher's resume path (or offered to resume from Launch). Started once the launcher exists,

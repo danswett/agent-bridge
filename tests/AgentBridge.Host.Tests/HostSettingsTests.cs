@@ -621,6 +621,9 @@ public sealed class HostSettingsTests : IDisposable
     [InlineData("{\"sessionWatch\":{}}", false)]
     [InlineData("{\"version\":2,\"sessionWatch\":{\"enabled\":true}}", false)]
     [InlineData("{not json", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":true,\"enabled\":false}}", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":false,\"enabled\":true}}", false)]
+    [InlineData("{\"sessionWatch\":{\"enabled\":true},\"sessionWatch\":{\"enabled\":false}}", false)]
     public void The_session_watch_is_off_unless_the_file_says_true_and_a_bad_file_leaves_it_off(string? text, bool expected)
     {
         if (text is not null) { File.WriteAllText(Path.Combine(folder, HostSettings.FileName), text); }

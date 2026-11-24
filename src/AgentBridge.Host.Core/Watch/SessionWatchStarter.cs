@@ -15,6 +15,12 @@ public static class SessionWatchStarter
     {
         if (!enabled()) { return null; }
         var loop = new SessionWatchLoop(snapshot, held, new SessionWatch(new WatchSettings(), ownerOf, _ => false), notify, now, log);
-        return new SessionWatchHandle(loop, Task.Run(() => loop.RunAsync(wait, ct), CancellationToken.None));
+        return new SessionWatchHandle(loop, Task.Run(async () =>
+        {
+            // Nothing may fault this task unseen: a loop that fails says so and ends, and a logger that throws is not allowed to hide it.
+            try { await loop.RunAsync(wait, ct); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            { try { log($"session watch: stopped ({e.GetType().Name})"); } catch (Exception) { } }
+        }, CancellationToken.None));
     }
 }
