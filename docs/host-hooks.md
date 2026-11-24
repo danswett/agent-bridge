@@ -66,9 +66,20 @@ migration lock), `intake.json` and the migrated runtime stay as migrate wrote th
 runtime or pointer is made. Copilot and Claude still refuse there (migrate re-pointed them), as do a
 retained `agent-ha-bridge` or `copilot-ha-bridge` marketplace, another profile's marker, an
 unreadable Codex home or marketplace list and a hook path with a space. Remove connection
-reverses only this registration. An unmigrated profile with a legacy root still refuses. G5 still
+reverses only this registration. An unmigrated profile with a legacy root (`~\.agent-ha-bridge`)
+is judged by what the folder is (#3644). A **full installation** (it has `installation.json`) still
+refuses, and the app says to run `agent-bridge-host migrate --dry-run`, then `migrate`, in a terminal
+of the person's own. A folder nothing uses is **retired** by a real Set up press only: no process runs
+from it or names it, no session registration under `runtime\agent-bridge-claude` or `-codex` was written
+in the last 24 hours, and no Codex, Claude or Copilot config refers to it. Set up then renames it to
+`.agent-ha-bridge.legacy-<yyyyMMdd-HHmmss>` (UTC; never deletes it) after every other check passed, and
+records the rename in `<profile>\legacy-retired-<stamp>.json` with the exact rename-back command.
+Anything else (a recent registration, a running process, a config that names it, a link, a file it
+cannot read) still refuses and the app names the folder and the reason. A dry run, the CLI install
+check and Remove never rename it. The host reads registration roots on each scan, so the rename
+needs no host restart of its own; Set up's usual restart is unchanged. G5 still
 checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
-home, changes a legacy task or starts a host automatically.
+home's contents, changes a legacy task or starts a host automatically.
 Every agent's preflight checks Claude bridge commands, excluding this profile's owned
 standalone commands. Every agent's setup and removal also check an existing Codex home
 using the profile's configured Codex CLI, refusing retained `agent-ha-bridge` or

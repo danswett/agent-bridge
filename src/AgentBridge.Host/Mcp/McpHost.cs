@@ -16,7 +16,7 @@ public sealed class McpToolException(string message, McpFailure kind = McpFailur
 // The MCP server's one connection to the host's local pipe, with the authority of the agent session that started it and nothing more:
 // it says hello and, with that session's own AGENT_BRIDGE_TOKEN, agent.hello. It never uses the app's or a person's authority; the host
 // classes it by ancestry as an agent, and refuses the app-only ops. It holds no relay credential and writes nothing to disk.
-public sealed class McpHost : IAsyncDisposable
+public sealed class McpHost : IMcpCalls, IAsyncDisposable
 {
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     // What of the host's own words reaches an agent in an exception message (#4450): at most this many characters, flattened, with anything token-shaped redacted.

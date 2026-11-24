@@ -20,17 +20,47 @@ public sealed class ConversationKeepDrawTests
         return view;
     }
 
+    // A layout whose extent changes only when rows are drawn (a layout pass before the draw sees the extent the view has): the returned setter says what it will be after the next rows.
+    static Action<double> ExtentAfterNextRows(SessionView view, Action? then = null)
+    {
+        var (rows, extent, next) = (view.ShownCount, view.Scroller.ScrollableHeight, 0.0);
+        view.LayoutDuringMeasure = () =>
+        {
+            if (view.ShownCount != rows) { (rows, extent) = (view.ShownCount, next); }
+            view.Scroller.ScrollableHeight = extent;
+            then?.Invoke();
+        };
+        return e => next = e;
+    }
+
     [Fact]
     public void A_second_prepend_while_the_first_correction_is_on_its_way_is_counted_from_where_the_view_is_going()
     {
         var view = ViewedAt17437();
+        var extentAfter = ExtentAfterNextRows(view);
 
-        view.MeasuredExtent = 19040;           // the first draw adds 1040
+        extentAfter(19040);                    // the first draw adds 1040
         view.DrawEarlierForProbe();
-        view.MeasuredExtent = 20038;           // the second adds 998, before the first correction has arrived
+        extentAfter(20038);                    // the second adds 998, before the first correction has arrived
         view.DrawEarlierForProbe();
 
         Assert.Equal([18477.0, 19475.0], view.Scroller.Targets);       // the old wiring went to 18435, below the 18477 already in flight
+    }
+
+    // #4500: main went red on "identical notches up move 48 each from the end" with one notch at 46 (CI 45423922251). DrawEarlier counted the prepend's height from the extent of the LAST layout, which
+    // rows measured since had already moved (18530 then 18523 in the logs; CI 2 px, locally up to 52): that drift was counted as this prepend's height. It counts from a settled layout.
+    [Fact]
+    public void A_prepend_is_counted_from_a_settled_layout_not_from_the_extent_the_last_layout_left()
+    {
+        var view = ViewedAt17437();                      // the last layout read 18000
+        var shownBefore = view.ShownCount;
+        view.LayoutDuringMeasure = () => view.Scroller.ScrollableHeight = 17993 + (view.ShownCount - shownBefore) * 520;      // rows measured since: 7 px less; 520 px per row drawn
+
+        view.DrawEarlierForProbe();
+
+        var added = (view.ShownCount - shownBefore) * 520;
+        Assert.True(added > 0);
+        Assert.Equal([17437.0 + added], view.Scroller.Targets);       // the stale read went to 17430 + added: 7 px short
     }
 
     // The branch with a stored turn in view: the target is the offset that puts that turn back where it was. Counted from the offset the animation has reached, it loses the first correction
@@ -41,11 +71,11 @@ public sealed class ConversationKeepDrawTests
         var view = ViewedAt17437();
         double shifted = 0;
         view.RealizeRowsForProbe(_ => new Microsoft.UI.Xaml.FrameworkElement { Top = 100 + shifted });
-        view.LayoutDuringMeasure = () => shifted = view.MeasuredExtent!.Value - 18000;       // what a prepend does: the turn in view moves down by what was added above it
+        var extentAfter = ExtentAfterNextRows(view, () => shifted = view.Scroller.ScrollableHeight - 18000);       // what a prepend does: the turn in view moves down by what was added above it
 
-        view.MeasuredExtent = 19040;
+        extentAfter(19040);
         view.DrawEarlierForProbe();
-        view.MeasuredExtent = 20038;
+        extentAfter(20038);
         view.DrawEarlierForProbe();
 
         Assert.Equal([18477.0, 19475.0], view.Scroller.Targets);

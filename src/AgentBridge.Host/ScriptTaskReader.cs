@@ -32,6 +32,13 @@ internal static class ScriptTaskXml
         + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{a.Value}\""))
         + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : e.Value.Trim()) + "</" + e.Name.LocalName + ">";
 
+    // Whether the task runs only while its user is logged on: ONE principal with ONE LogonType, InteractiveToken. Anything else (a stored password, S4U, which also runs
+    // logged off, a service account, a group, none) is false, as is anything that is not a task (the owner's Q-run-2 answer, 2026-11-24).
+    internal static bool LoggedOnOnly(string xml) =>
+        Root(xml) is { } task && task.Elements().Where(e => e.Name.LocalName == "Principals").ToList() is [{ } principals]
+        && principals.Elements().ToList() is [{ Name.LocalName: "Principal" } principal]
+        && principal.Elements().Where(e => e.Name.LocalName == "LogonType").ToList() is [{ } logon] && logon.Value.Trim() == "InteractiveToken";
+
     // SHA-256 of the task's actions, principal and triggers (not its registration date or settings), or null when the XML is not a task.
     internal static string? Definition(string xml)
     {
@@ -49,6 +56,7 @@ internal static class ScriptTaskXml
         if (Root(xml) is not { } task || Part(task, "Actions")?.Elements().ToList() is not [{ } exec] || exec.Name.LocalName != "Exec") { return null; }
         var program = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim().Trim('"');
         if (program is null || !Pinnable(program)) { return null; }
+        if (Launcher.Equals(program[(program.LastIndexOfAny(['\\', '/']) + 1)..], StringComparison.OrdinalIgnoreCase)) { return LauncherFiles(task, exec, program); }
         var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
         if (args.Count == 0) { return [program]; }
         if (!Interpreters.Contains(program[(program.LastIndexOfAny(['\\', '/']) + 1)..])) { return null; }
@@ -65,6 +73,38 @@ internal static class ScriptTaskXml
         }
         return null;
     }
+
+    const string Launcher = "script-run.exe";
+
+    // The action of a task bound through the admin-locked launcher (design/script-credentials-run.md sections 2, 3 and 4):
+    // `script-run <name> -- <absolute program> [-NoProfile -NonInteractive -File <absolute script>]`. It pins the launcher, the child program AND the script, never
+    // optionally, and only when the task is logged-on-only (the owner's answer to Q-run-2: no stored password). Anything else, inline code included, is null.
+    static IReadOnlyList<string>? LauncherFiles(XElement task, XElement exec, string launcher)
+    {
+        if (Part(task, "Principals")?.Elements().ToList() is not [{ } principal]
+            || principal.Elements().SingleOrDefault(e => e.Name.LocalName == "LogonType")?.Value.Trim() != "InteractiveToken") { return null; }
+        var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
+        if (args.Count < 3 || args[1] != "--" || !ScriptName.IsMatch(args[0]) || args[0] is "." or ".." || !Pinnable(args[2])) { return null; }
+        var child = args[2];
+        if (!Interpreters.Contains(child[(child.LastIndexOfAny(['\\', '/']) + 1)..])) { return args.Count == 3 ? [launcher, child] : null; }
+        bool noProfile = false, nonInteractive = false;
+        for (var i = 3; i < args.Count; i++)
+        {
+            if (args[i].Length < 2 || args[i][0] is not ('-' or '/')) { return null; }
+            var name = args[i][1..].ToLowerInvariant();
+            if (name.Length <= 4 && "file".StartsWith(name, StringComparison.Ordinal))
+            {
+                return noProfile && nonInteractive && i + 1 < args.Count && Pinnable(args[i + 1]) ? [launcher, child, args[i + 1]] : null;
+            }
+            if (name == "noprofile") { noProfile = true; }
+            else if (name == "noninteractive") { nonInteractive = true; }
+            else if (ValuedSwitches.Contains(name)) { i++; }
+            else if (!PlainSwitches.Contains(name)) { return null; }
+        }
+        return null;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex ScriptName = new(@"^[A-Za-z0-9._-]{1,64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     static readonly HashSet<string> Interpreters = new(["pwsh.exe", "powershell.exe"], StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> PlainSwitches = ["noprofile", "nologo", "noninteractive", "mta", "sta"];
@@ -101,6 +141,8 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
     public string? Definition(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml ? ScriptTaskXml.Definition(xml) : null;
 
     public IReadOnlyList<string>? ActionFiles(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml ? ScriptTaskXml.ActionFiles(xml) : null;
+
+    public bool LoggedOnOnly(string task) => Task(task, t => Get(t, "Xml") as string) is { } xml && ScriptTaskXml.LoggedOnOnly(xml);
 
     // Each running instance's engine and when that process started (UTC); an engine whose start cannot be read is left out.
     public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task)

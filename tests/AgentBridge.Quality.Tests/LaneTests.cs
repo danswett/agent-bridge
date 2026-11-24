@@ -64,14 +64,31 @@ public class LaneTests
             - cron: '17 * * * *'
           workflow_dispatch:
         jobs:
-          spikes:
+          trigger:
             runs-on: ubuntu-latest
+            outputs:
+              ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
             steps: [{ run: echo }]
+          spikes:
+            needs: trigger
+            if: needs.trigger.outputs.ok == 'true'
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+                with:
+                  ref: ${{ needs.trigger.outputs.tested }}
+                  persist-credentials: false
           app-pack:
+            needs: trigger
+            if: needs.trigger.outputs.ok == 'true'
             runs-on: windows-latest
-            steps: [{ run: echo }]
+            steps:
+              - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+                with:
+                  ref: ${{ needs.trigger.outputs.tested }}
+                  persist-credentials: false
           full-gate:
-            needs: [spikes, app-pack]
+            needs: [trigger, spikes, app-pack]
             if: always()
             runs-on: ubuntu-latest
             steps:
@@ -108,15 +125,67 @@ public class LaneTests
     public void The_gate_must_exist_need_every_other_job_run_always_and_read_the_needs()
     {
         Assert.Equal(["full-lane: full.yml has no full-gate job"],
-            FullLane(Good.Replace("full-gate:", "the-gate:")));
+            FullLane(Good.Replace("full-gate:", "the-gate:")).Where(p => p.Contains("no full-gate job", StringComparison.Ordinal)));
         Assert.Equal(["full-lane: full.yml full-gate doesn't need app-pack"],
-            FullLane(Good.Replace("needs: [spikes, app-pack]", "needs: [spikes]")));
+            FullLane(Good.Replace("needs: [trigger, spikes, app-pack]", "needs: [trigger, spikes]")));
         Assert.Equal(["full-lane: full.yml full-gate's if: isn't always(), so a failed or skipped job would skip the gate instead of failing it"],
             FullLane(Good.Replace("if: always()", "if: success()")));
         Assert.Equal(["full-lane: full.yml full-gate reads no toJSON(needs), so it cannot tell a skipped job from a passed one"],
             FullLane(Good.Replace("${{ toJSON(needs) }}", "x")));
     }
 
+    // The commit under test (S2, #4104): the jobs run only for a run by hand or a green push run on main, and check out the commit the trigger verified.
+    [Theory]
+    [InlineData("github.event.workflow_run.conclusion == 'success' && ", "conclusion == 'success'")]
+    [InlineData(" && github.event.workflow_run.event == 'push'", "event == 'push'")]
+    [InlineData(" && github.event.workflow_run.head_branch == 'main'", "head_branch == 'main'")]
+    public void The_trigger_job_must_test_the_conclusion_the_event_and_the_branch_of_the_run_it_follows(string drop, string named)
+    {
+        var problems = FullLane(Good.Replace(drop, ""));
+
+        var problem = Assert.Single(problems);
+        Assert.StartsWith("full-lane: full.yml's trigger ok output doesn't test ", problem);
+        Assert.Contains(named, problem, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_full_workflow_without_a_trigger_job_or_whose_ok_has_no_run_by_hand_branch_is_refused()
+    {
+        Assert.Equal(["full-lane: full.yml has no trigger job, the one that says whether there is a green push run of this repository on main to test"],
+            FullLane(Good.Replace("  trigger:", "  other:")).Where(p => p.Contains("no trigger job", StringComparison.Ordinal)));
+        Assert.Single(FullLane(Good.Replace("github.event_name == 'workflow_dispatch' || ", "")));
+    }
+
+    [Fact]
+    public void Every_job_but_the_trigger_and_the_gate_must_need_the_trigger_and_run_only_when_it_says_ok()
+    {
+        Assert.Equal(["full-lane: full.yml job spikes doesn't need trigger"],
+            FullLane(ReplaceNth(Good, "needs: trigger", "needs: app-pack", 1)));
+        Assert.Equal(["full-lane: full.yml job app-pack's if: isn't needs.trigger.outputs.ok == 'true', so it could run when the trigger said no"],
+            FullLane(ReplaceNth(Good, "if: needs.trigger.outputs.ok == 'true'", "if: always()", 2)));
+    }
+
+    [Theory]
+    [InlineData("ref: ${{ needs.trigger.outputs.tested }}", "# no ref", "has no ref")]
+    [InlineData("ref: ${{ needs.trigger.outputs.tested }}", "ref: ${{ github.sha }}", "checks out ")]
+    [InlineData("ref: ${{ needs.trigger.outputs.tested }}", "ref: main", "checks out ")]
+    [InlineData("persist-credentials: false", "persist-credentials: true", "persist-credentials")]
+    public void A_checkout_must_be_the_commit_the_run_tested_and_keep_no_credentials(string from, string to, string named)
+    {
+        var problems = FullLane(ReplaceNth(Good, from, to, 1));
+
+        var problem = Assert.Single(problems);
+        Assert.Contains(named, problem, StringComparison.Ordinal);
+    }
+
+    // The nth occurrence only, so a sample edit does not depend on its indentation.
+    static string ReplaceNth(string text, string from, string to, int n)
+    {
+        var at = -1;
+        for (var i = 0; i < n; i++)
+            at = text.IndexOf(from, at + 1, StringComparison.Ordinal);
+        return at < 0 ? throw new InvalidOperationException($"occurrence {n} of '{from}' is not in the sample") : text[..at] + to + text[(at + from.Length)..];
+    }
     [Fact]
     public void A_full_workflow_with_no_jobs_is_refused()
     {

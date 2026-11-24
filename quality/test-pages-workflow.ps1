@@ -9,7 +9,7 @@ function Require([bool]$ok, [string]$what) { if (-not $ok) { $failures.Add($what
 $on = [regex]::Match($text, '(?ms)^on:\r?\n(.*?)^\S').Groups[1].Value
 Require ($on -notmatch '(?m)^  push:') 'pages.yml still triggers on push; it must deploy only from workflow_run'
 Require ($on -match '(?m)^  workflow_run:') 'pages.yml has no workflow_run trigger'
-Require ($on -match '(?m)^\s+workflows: \[CI\]') 'workflow_run must watch the CI workflow'
+Require ($on -match '(?m)^\s+workflows: \[CI, Full\]') 'workflow_run must watch the CI and Full workflows (the PWA jobs are in full.yml, and Pages waits for them)'
 Require ($on -match '(?m)^\s+types: \[completed\]') 'workflow_run must fire on completed'
 Require ($on -match '(?m)^\s+branches: \[main\]') 'workflow_run must be limited to main'
 Require ($on -match '(?ms)^  workflow_dispatch:.*?^\s+ref:') 'workflow_dispatch needs a ref input, for rollback'
@@ -23,6 +23,7 @@ $permissions = [regex]::Match($gate, '(?ms)^    permissions:\r?\n(.*?)(?=^    \S
 $scopes = @($permissions -split '\r?\n' | ForEach-Object { ($_ -replace '\s+#.*$', '').Trim() } | Where-Object { $_ -and $_ -notmatch '^#' } | Sort-Object)
 Require ($text -match '(?m)^permissions: \{\}\r?$' -and $scopes.Count -eq 3 -and ($scopes -join ',') -ceq 'actions: read,contents: read,pages: read') 'the gate must have exactly actions:read, contents:read and pages:read with no inherited or added writes'
 $build = [regex]::Match($text, '(?ms)^  build:\r?\n(.*?)^  deploy:').Groups[1].Value
+Require ($text -match '-GetFull' -and $text -match 'Get-FullRunsPath' -and $text -match 'Select-FullRunRow') 'Pages must read the commit''s FULL run, found by head_sha with the release train''s helpers, never deploy on the FAST run alone'
 Require ($build -cmatch "(?m)^    if: needs\.gate\.outputs\.deploy == 'true'\r?$") 'the build must wait for the gate deploy output'
 $deploy = [regex]::Match($text, '(?ms)^  deploy:\r?\n(.*)').Groups[1].Value
 $guard = [regex]::Match($deploy, '(?m)^\s+run: (if \(\$env:GITHUB_EVENT_NAME[^\r\n]+)').Groups[1].Value
@@ -34,6 +35,7 @@ foreach ($case in @(@('workflow_dispatch', '1', $false), @('workflow_dispatch', 
 }
 Require ($text -match 'quality/pages-gate\.ps1' -and $text -notmatch 'commits/main') 'the gate must skip only a commit already live or older, not one that is not main''s tip'
 Require ($text -match 'quality/pages-candidate\.ps1' -and $text -match 'per_page=20' -and $text -notmatch 'workflow_run\.conclusion') 'Pages must select bounded same-SHA named-job evidence, not the whole CI conclusion'
+Require ($text -match '-GetFull' -and $text -match 'Get-FullRunsPath' -and $text -match 'Select-FullRunRow') 'Pages must read the commit''s FULL run, found by head_sha with the release train''s helpers, never deploy on the FAST run alone'
 Require ($build -cmatch '(?m)^          TARGET_SHA: \$\{\{ needs\.gate\.outputs\.sha \|\| inputs\.ref \|\| github\.sha \}\}\r?$') 'the build must prefer the tested SHA, then the manual rollback ref, then the current SHA'
 Require ($build -match 'merge-base --is-ancestor \"\$TARGET_SHA\" origin/main') 'the build job must prove the commit is on main before building it'
 Require ($build -notmatch '(?m)^\s+ref: ') 'the build job must not check out an event-supplied ref (CodeQL cache-poisoning)'

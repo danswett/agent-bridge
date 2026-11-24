@@ -830,6 +830,7 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   `Resuming <label>...`, then goes once the host says the session started, or becomes the
   host's reason when it did not. A prompt that started a session is cleared from each box that
   still holds it once the host says so; a prompt or request written meanwhile is left alone.
+  A workspace this machine does not offer is refused as `Unknown workspace - this machine has <its labels>`, on the card and on an agent's request alike: the rejected value, which may itself be a path, is never echoed (#1901).
 * **An agent's request** (agent-ha-bridge #227): `{at, text, request, settings}` published to the
   prompt payload and then a press. Its settings are the only ones used: one left out is the
   machine's default, never what the card shows; one this machine does not offer is refused in

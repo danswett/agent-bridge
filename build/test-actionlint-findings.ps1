@@ -1,6 +1,6 @@
 # Checks build/actionlint-findings.ps1, which lets only exact queue-key locations through
 # workflow-lint.yml's actionlint step: actionlint 1.7.12's error for concurrency's queue key, at
-# ci.yml/publish and merge-rule.yml/evaluate (#951, #1922). Against made-up repositories and actionlint output under
+# ci.yml/publish, merge-rule.yml/evaluate and full-red.yml/report (#951, #1922). Against made-up repositories and actionlint output under
 # out/test-actionlint-findings: actionlint itself doesn't run. workflow-lint.yml runs this with
 # the exception it sets, which must be exactly that error.
 #
@@ -43,11 +43,12 @@ function Finding([string]$message = $queueError, [string]$file = '.github/workfl
 
 # Runs the filter in a fresh repository holding $ci as its ci.yml (none if $null), on $output as
 # actionlint's (JSON of it unless already a string), and returns its exit code and annotations.
-function Invoke-Filter($output, [int]$exitCode = 1, [AllowNull()][string[]]$ci = $ciLines, [string]$exception = $allowed, [string[]]$mergeRule) {
+function Invoke-Filter($output, [int]$exitCode = 1, [AllowNull()][string[]]$ci = $ciLines, [string]$exception = $allowed, [string[]]$mergeRule, [string[]]$fullRed) {
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
     New-Item -ItemType Directory -Force (Join-Path $scratch '.github' 'workflows') | Out-Null
     if ($null -ne $ci) { Set-Content -LiteralPath (Join-Path $scratch '.github' 'workflows' 'ci.yml') -Value $ci }
     if ($mergeRule) { Set-Content -LiteralPath (Join-Path $scratch '.github' 'workflows' 'merge-rule.yml') -Value $mergeRule }
+    if ($fullRed) { Set-Content -LiteralPath (Join-Path $scratch '.github' 'workflows' 'full-red.yml') -Value $fullRed }
     $file = Join-Path $scratch 'findings.json'
     if ($null -ne $output) {
         $text = if ($output -is [string]) { $output } else { ConvertTo-Json -InputObject @($output) -Depth 3 }
@@ -99,6 +100,23 @@ Check 'Only evaluate''s queue in merge-rule is a second exact-location exception
     Assert-Fails (Invoke-Filter @(Finding) -mergeRule $merge) 'remove the exception (#951)'
 }
 
+Check 'Only report''s queue in full-red.yml is a third exact-location exception' {
+    $red = $ciLines -replace '^  publish:$', '  report:'
+    $finding = Finding -file '.github/workflows/full-red.yml'
+    $result = Invoke-Filter @((Finding), $finding) -fullRed $red
+    Assert-Passes $result
+    Assert ([bool]($result.Annotations -like '::notice file=.github/workflows/full-red.yml,line=12,col=7,title=actionlint exception (#951)::unexpected key "queue"*')) "annotations: $($result.Annotations -join ' | ')"
+    foreach ($bad in @((Finding -file '.github/workflows/full-red.yml' -line 9), (Finding -file '.github/workflows/full-red.yml' -kind 'expression'))) {
+        Assert-Fails (Invoke-Filter @((Finding), $finding, $bad) -fullRed $red) 'title=actionlint*'
+    }
+    Assert-Fails (Invoke-Filter @((Finding), $finding) -fullRed $ciLines) 'title=actionlint syntax-check::'
+    Assert-Fails (Invoke-Filter @((Finding), $finding) -fullRed ($red -replace '^      queue: max$', '      other: max')) 'title=actionlint syntax-check::'
+    Assert-Fails (Invoke-Filter @((Finding), $finding, $finding) -fullRed $red) 'title=actionlint syntax-check::'
+    Assert-Fails (Invoke-Filter @(Finding) -fullRed $red) 'remove the exception (#951)'
+    # Before the workflow exists there is nothing to let through, and a queue elsewhere in it is no exception.
+    Assert-Passes (Invoke-Filter @(Finding))
+    Assert-Fails (Invoke-Filter @((Finding), (Finding -file '.github/workflows/full-red.yml' -line 4 -column 3))) 'file=.github/workflows/full-red.yml,line=4,col=3'
+}
 Check 'No findings with no queue in ci.yml passes' {
     Assert-Passes (Invoke-Filter '[]' -exitCode 0 -ci ($ciLines | Where-Object { $_ -notmatch 'queue' }))
 }
