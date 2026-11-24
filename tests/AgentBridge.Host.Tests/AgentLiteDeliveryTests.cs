@@ -35,12 +35,14 @@ public sealed class AgentLiteDeliveryTests
         public Action? OnSnapshot, OnReadScreen, OnReply;
         // KeysGo: the keys would go (a refusal before them leaves it false); OnWait: what the owner does while the typing slot is awaited.
         public bool KeysGo = true;
+        public bool InjectorStops;   // the replier ran KeysGoing, then the injector's own fence or screen check stopped before any key (ReplyService AgentAsync)
         public Action<string>? OnWait;
         public Action? AfterKeys;
         public Exception? ThrowAfterKeys;
         public DiscoveryHeld? Held { get; set; }
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
+        public ReplyStage? Stage;
         public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Action<KeyPlan>? OnInject;
         public readonly List<KeyPlan> Plans = [];
@@ -49,6 +51,8 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        BusyQueueStore? busyStore;
+        public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
         public LiteDeliver Build(DeliveryLaneScheduler? lane = null) => new([
             new ForcedAskGate(Launches),
@@ -63,7 +67,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue };
+            account: lane is null ? null : () => Account) { Lane = lane, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -92,9 +96,10 @@ public sealed class AgentLiteDeliveryTests
             // As ReplyService: the fence is run once the typing slot is held, and a stale one types nothing.
             OnReply?.Invoke();
             OnWait?.Invoke(request.Text!);
-            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
-            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal });
+            if (InjectorStops) { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
+            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
@@ -668,8 +673,8 @@ public sealed class AgentLiteDeliveryTests
     {
         var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
         var lite = f.Build();
-        for (var i = 0; i < LiteDeliver.MaxPerMinute; i++) { Assert.True((await lite.DeliverAsync(Envelope("hi"), "hi", default)).Typed); }
-        Assert.Equal(new LiteDelivery(false, "busy"), await lite.DeliverAsync(Envelope("hi"), "hi", default));
+        for (var i = 0; i < LiteDeliver.MaxPerMinute; i++) { Assert.True((await SendNew(lite)).Typed); }
+        Assert.Equal(new LiteDelivery(false, "busy"), await SendNew(lite));
         var command = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; command.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
         Assert.Empty(command.Typed);
@@ -717,6 +722,26 @@ public sealed class AgentLiteDeliveryTests
         Assert.Single(unconfirmed.Typed);
         var delivered = new Fixture { Agent = agent, Rows = rows }; delivered.Launch(LaunchProtocol.Ask);
         Assert.Equal(new LiteDelivery(true, null), await Send(delivered));
+    }
+    // D2b: with the flag on, a reply that only reached Claude's queue is reported queued, not delivered; flag off is unchanged.
+    [Theory]
+    [InlineData(true, ReplyStage.Queued, true)]
+    [InlineData(true, null, false)]
+    [InlineData(false, ReplyStage.Queued, false)]
+    public async Task With_the_flag_on_a_reply_confirmed_only_by_claudes_queue_is_reported_queued(bool flag, ReplyStage? stage, bool queued)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = flag ? SessionStatus.Working : SessionStatus.Idle, BusyQueue = flag, Stage = stage }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
+        Assert.Single(f.Typed);
+    }
+
+    // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
+    // second is refused queueHeld (never busy, which would trigger the HA fallback), and a full store is refused statusFull. Flag off: unused.
+    static Task<LiteDelivery> SendNew(LiteDeliver lite, string text = "hi") => lite.DeliverAsync(Envelope(text, Guid.NewGuid().ToString()), text, default);
+    Fixture BusyClaude(ReplyStage? stage = null, AnswerOutcome outcome = AnswerOutcome.Delivered)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Stage = stage, Outcome = outcome }; f.Launch(LaunchProtocol.Ask);
+        return f;
     }
     // Option 2 (owner decision on #3866, #3828 design "Busy sends to Claude"): with laneDelivery on, a Claude target keeps the legacy
     // busy-queue typing path while claudeBusyQueue is on; Copilot stays on the lane; nothing changes with the flag off.
@@ -766,6 +791,81 @@ public sealed class AgentLiteDeliveryTests
         using var r = new LaneRig(lane);
         Assert.True((await r.Send(words)).Typed);
         Assert.Equal(Assert.Single(plain.Typed).Text, Assert.Single(lane.Typed).Text);
+    }
+    [Fact]
+    public async Task An_accepted_busy_claude_send_holds_the_slot_and_a_second_is_refused_queueHeld_with_no_keys_not_busy()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Queued, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task An_unconfirmed_busy_claude_send_keeps_the_slot_held()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Unconfirmed); var lite = f.Build();
+        Assert.Equal(LiteKind.Unconfirmed, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, "noRow", true), (held.State, held.Reason, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task A_delivered_send_and_a_refusal_before_any_key_free_the_slot()
+    {
+        var delivered = BusyClaude(); var lite = delivered.Build();
+        Assert.True((await SendNew(lite)).Typed);
+        Assert.Equal((BusyQueueStore.Delivered, false), (delivered.Store.Records().Single().State, delivered.Store.Records().Single().Held));
+        Assert.True((await SendNew(lite)).Typed);
+        var refused = BusyClaude(outcome: AnswerOutcome.Refused); refused.KeysGo = false; var l2 = refused.Build();
+        Assert.False((await SendNew(l2)).Typed);
+        Assert.Empty(refused.Store.Records());
+        refused.Outcome = AnswerOutcome.Delivered; refused.KeysGo = true;
+        Assert.True((await SendNew(l2)).Typed);
+    }
+    // #3926 review (receipt 7110190967). P1-1: the slot is taken before the per-minute rate token is spent, so refusing a held slot never burns it
+    // and never turns into busy (which would allow the one HA fallback and bypass the cap).
+    [Fact]
+    public async Task Repeated_queueHeld_refusals_stay_queueHeld_and_never_turn_into_busy_by_spending_the_rate_window()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        for (var i = 0; i < 12; i++) { Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite)); }
+        Assert.Single(f.Typed);
+    }
+    // P1-2: the replier ran KeysGoing, then its injector stopped before any key (a screen change or a failed fence). It reports NoKeysSent, so the
+    // slot is freed and no record is left, whatever KeysGoing did first.
+    [Fact]
+    public async Task A_send_the_injector_stopped_after_keys_going_types_nothing_and_leaves_no_held_slot()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); f.InjectorStops = true; var lite = f.Build();
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await SendNew(lite));
+        Assert.Empty(f.Store.Records());
+        Assert.False(f.Store.SlotHeld(Target));
+        f.InjectorStops = false; f.Outcome = AnswerOutcome.Delivered;
+        Assert.True((await SendNew(lite)).Typed);
+    }
+    [Fact]
+    public async Task A_refusal_after_keys_went_is_held_unconfirmed_not_freed()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); var lite = f.Build();
+        Assert.False((await SendNew(lite)).Typed);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+    }
+    [Fact]
+    public async Task A_full_store_refuses_statusFull_before_any_key_and_the_flag_off_never_touches_the_store()
+    {
+        var f = BusyClaude(); var lite = f.Build();
+        for (var i = 0; i < BusyQueueStore.MaxRecords; i++) { f.Store.TryBegin(Guid.NewGuid().ToString(), "p", "other" + i); }
+        Assert.Equal(new LiteDelivery(false, "statusFull"), await SendNew(lite));
+        Assert.Empty(f.Typed);
+        var off = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; off.Launch(LaunchProtocol.Ask); var l2 = off.Build();
+        Assert.True((await SendNew(l2)).Typed); Assert.True((await SendNew(l2)).Typed);
+        Assert.Empty(off.Store.Records());
     }
     [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()

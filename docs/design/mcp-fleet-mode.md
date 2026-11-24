@@ -26,10 +26,27 @@ are closed-set values, never text.
 - **Read only.** Fleet mode lists; it does not reply to, stop or launch anything on another machine. Those stay local-only and
   keep their existing authorization.
 
+## Owner decision on messaging scope (Nov 23, exact time not supplied)
+
+The owner answered an ask_user question from Chief S18, relayed by Chief S18 to Quality R9, choosing the option labelled "Same person's
+agents only (Recommended)". `docs/owner-decisions.md` (slipgates-fleet, Nov 23) records it in the record's own words, not the owner's:
+"an agent may message only agent sessions of the SAME signed-in person, on any of that person's machines; nothing crosses people. This
+records the default only, not the code." Design: [beta-messaging.md](beta-messaging.md).
+
+What it decides is **whom agents may message by default**. It does not decide any MCP tool. The text above it, which this proposal
+would change **for reply only**, is:
+
+> **Read only.** Fleet mode lists; it does not reply to, stop or launch anything on another machine. Those stay local-only and keep their existing authorization.
+
+and the "Not proposed" bullet "Acting on a remote session (reply, stop, launch) from the MCP server." Under the decision's substance,
+a **reply to a same-person session on another machine** is the one item proposed to move out of "Not proposed" (the departure table below,
+row 5, for the Chief to confirm); stop and launch, keys and every other bullet stay owner CHANGES. `scope: "fleet"` (a read) and
+`machineName` stay Engineering proposals with their own open rows 1 to 4.
+
 ## Not proposed, each an owner CHANGE if wanted
 
 - Returning `cwd`, titles, repository, branch or any question text for another machine's sessions.
-- Acting on a remote session (reply, stop, launch) from the MCP server.
+- Acting on a remote session (reply, stop, launch) from the MCP server. **Amended for reply only (departure row 5, for the Chief to confirm):** a reply to a same-person session on another machine; stop and launch stay here.
 - A new relay field or op for this; the existing `fleet.list` is enough.
 - A default of fleet scope.
 
@@ -79,7 +96,7 @@ remote session) is an owner CHANGE routed through the Chief, not a builder choic
 ## Departures from the existing docs: UNAPPROVED owner CHANGE proposals
 
 This note is a **proposal**. Each point below departs from a canonical document as it stands today. Every one is an **unapproved owner CHANGE
-proposal**; none is decided, and **the canonical documents are edited only when the owner approves** (nothing in this PR edits them).
+proposal**; none is decided, and **the canonical documents are edited only when the owner approves** (this note's own text is edited here, and the two table rows below name the canonical documents the `machine` argument would change; no canonical document other than this one gets a rule change).
 
 | # | Existing source (as it stands) | What this proposal would change |
 |---|---|---|
@@ -87,6 +104,8 @@ proposal**; none is decided, and **the canonical documents are edited only when 
 | 2 | `mcp/README.md` (not in this slice: ..., **other machines**) | The MCP server would list other machines' sessions |
 | 3 | `docs/protocol/local-pipe.md` (MCP: **this machine only**; `machine` arguments are refused) | A fleet-scoped list through the local pipe, which is no longer this machine only |
 | 4 | `docs/protocol/agent-operations.md` (`machineName` is the relay's display name, **independent of `include`**) | `machineName` returned only with `include: "content"` in MCP output (untrusted display text), where the relay contract returns it regardless |
+| 5 | `docs/protocol/local-pipe.md`, "The MCP server" (it maps `reply_to_agent_session` to `session.reply`, this machine only; a `machine` argument is refused) | `reply_to_agent_session` takes an optional `machine` and, with it, the local host sends through `agent.send` (a reply to a same-person session on another machine). **For the Chief to confirm** that the Nov 23 messaging-scope decision covers it |
+| 6 | `mcp/README.md` ("Not in this slice: ... other machines"; a `machine` argument is ignored) | The same `machine` argument, in the .NET server (beta-messaging.md section 4). slipgates-fleet `fleet-tools-to-host.md` ("MCP local only") needs a matching edit once row 5 is settled |
 
 If the owner prefers the existing C6 shape (a separate credentialed read tool, not a mode of the local list), points 1 to 3 change to follow it and
 this note is rewritten; point 4 stands or falls on its own.

@@ -1080,11 +1080,15 @@ public class MergeRuleTests
     //   Ops probe, Flake hunt (daily schedule, dispatch), Update gap, Beta acceptance, ARM64 self-test loop (dispatch only),
     //   Lab nightly and Lab release verification (dispatch / workflow_call; held),
     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
-    //   verdict and a finished one needn't re-judge anything, #2454).
+    //   verdict and a finished one needn't re-judge anything, #2454),
+    //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+    //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
+    //   request; docs/app-windows.md, "Spacing").
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
-        "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Merge rule sweep", "Ops probe", "Pages", "Revert culprit", "Update gap",
+        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
