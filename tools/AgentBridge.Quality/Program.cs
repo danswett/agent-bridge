@@ -26,6 +26,11 @@ static class Program
               issue list --json number,title,body,labels,author); only the hunt's own and
               --owner's count. Exits 1 when a test failed every run on some OS, or a run broke
               outside any test.
+          shard-filter --plan FILE (--check | --project NAME --shard N)
+              What test shard N of a plan (quality/test-shards.json) runs of a project: prints none,
+              all, or the dotnet test --filter to use. Shard N of N is the remainder: it runs what
+              no other shard lists. --check only reads the plan, and fails if it is malformed,
+              ambiguous (a class in two shards) or over the filter size budget.
         """ + "\n" + MergeRuleCommand.Usage + "\n" + ReportCommand.Usage + "\n" + AbCiCapacity.Usage;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -62,6 +67,9 @@ static class Program
         // The ab-ci pool's capacity check reads fetched runner and job JSON, so it runs anywhere too.
         if (args[0] == "ab-ci-capacity")
             return AbCiCapacity.Run(options, output);
+        // So does the shard plan, a file (S4, #4104).
+        if (args[0] == "shard-filter")
+            return ShardFilter(options, output);
         var root = options.GetValueOrDefault("repo") ?? ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var catalog = Catalog.Load(Path.Combine(root, "quality", "catalog.yml"));
         var graph = ProjectGraph.Load(root);
@@ -116,9 +124,9 @@ static class Program
         }
     }
 
-    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run" };
+    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run", "check" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner",
-        "runners", "jobs", "max-queued", "max-wait", "min-online", "now" };
+        "runners", "jobs", "max-queued", "max-wait", "min-online", "now", "project", "shard" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX
@@ -126,6 +134,24 @@ static class Program
     /// failed every run on some OS or a run broke outside any test. It never touches GitHub;
     /// quality/publish-flakes.ps1 carries out the plan.
     /// </summary>
+    /// <summary>
+    /// What one test shard runs of one project (quality/test-shards.json): prints <c>none</c>, <c>all</c> or the <c>dotnet test --filter</c> to use. <c>--check</c>
+    /// only reads the plan and fails if it is malformed, ambiguous or over the filter budget.
+    /// </summary>
+    static int ShardFilter(Dictionary<string, string> options, TextWriter output)
+    {
+        string Need(string name) => options.GetValueOrDefault(name) ?? throw new ArgumentException($"shard-filter needs --{name}.");
+        var plan = ShardPlanFile.Parse(File.ReadAllText(Need("plan")));
+        if (options.ContainsKey("check"))
+        {
+            output.WriteLine($"ok: {plan.Shards} shards");
+            return 0;
+        }
+        var choice = plan.For(Need("project"), int.Parse(Need("shard"), System.Globalization.CultureInfo.InvariantCulture));
+        output.WriteLine(choice.Run switch { ShardRun.None => "none", ShardRun.All => "all", _ => choice.Filter });
+        return 0;
+    }
+
     static int Flakes(Dictionary<string, string> options, TextWriter output)
     {
         var results = options.GetValueOrDefault("results") ?? throw new ArgumentException("flakes needs --results DIR.");

@@ -26,6 +26,13 @@ internal static class ShardPlanner
     // What the filter language reads as syntax. A class name holding one is refused: a quietly misread term would drop its tests.
     static readonly char[] FilterSyntax = ['(', ')', '&', '|', '=', '!', '~', '\\'];
 
+    /// <summary>Refuses a class name the filter language would misread (it would drop that class's tests quietly).</summary>
+    public static void RefuseUnfilterable(string name)
+    {
+        if (name.Length == 0 || name.IndexOfAny(FilterSyntax) >= 0 || name.Any(char.IsWhiteSpace))
+            throw new ArgumentException($"Test class name '{name}' cannot be a filter term.", nameof(name));
+    }
+
     /// <summary>
     /// A pure function of the discovered classes and their recorded seconds, so every shard job computes the same plan. A class with no recorded
     /// time weighs the median of those that have one, so a new class is spread rather than piled onto a shard. Longest unit first, onto the lightest shard.
@@ -34,11 +41,7 @@ internal static class ShardPlanner
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(shards, 1);
         var names = classes.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        foreach (var name in names)
-        {
-            if (name.Length == 0 || name.IndexOfAny(FilterSyntax) >= 0 || name.Any(char.IsWhiteSpace))
-                throw new ArgumentException($"Test class name '{name}' cannot be a filter term.", nameof(classes));
-        }
+        foreach (var name in names) { RefuseUnfilterable(name); }
 
         var known = names.Where(n => seconds.TryGetValue(n, out var s) && double.IsFinite(s) && s > 0).Select(n => seconds[n]).Order().ToList();
         var fallback = known.Count == 0 ? 1.0 : known[known.Count / 2];
