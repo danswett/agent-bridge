@@ -107,10 +107,10 @@ static partial class SelfTest
             // notches above and every frame here (ScrollSettle, tested in App.Tests). The wall clock is only a backstop so a view that never arrives fails instead of hanging the run.
             phase = "settle";
             var settle = new ScrollSettle(high, back);
-            var giveUp = clock.Elapsed + TimeSpan.FromSeconds(90);
+            var (settleFrom, giveUp) = (clock.Elapsed, clock.Elapsed + TimeSpan.FromSeconds(90));
             while (!settle.Done && clock.Elapsed < giveUp) { await Frame(); settle.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
             check(settle.Passed,
-                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}, {(clock.Elapsed - settleFrom).TotalSeconds:0.#} s; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
         }
         finally
         {

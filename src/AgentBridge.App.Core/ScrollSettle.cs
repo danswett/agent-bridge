@@ -17,14 +17,21 @@ public sealed class ScrollSettle
     /// <param name="high">The highest offset seen so far (the notches before this).</param>
     /// <param name="worstBack">The worst fall below it seen so far.</param>
     /// <param name="stillFrames">Consecutive rendered frames at the end, unmoving and unchanged, that settle the view.</param>
-    /// <param name="maxFrames">The frame budget: a view that has not settled by then fails, so a view that never arrives cannot hang the run.</param>
+    /// <param name="maxFrames">The frame budget (about 90 s at 60 fps; CI 45357085188 was still following history that drew for over 10 s, so 600 frames was too few): a view that has not settled by then fails, so a view that never arrives cannot hang the run.</param>
     /// <param name="tolerance">Pixels of rounding: a fall of no more than this is not moving back up, and this close to the end is at the end.</param>
-    public ScrollSettle(double high, double worstBack = 0, int stillFrames = 30, int maxFrames = 600, double tolerance = 1.5)
+    public ScrollSettle(double high, double worstBack = 0, int stillFrames = 30, int maxFrames = 5400, double tolerance = 1.5)
     {
         (this.high, WorstBack, this.stillFrames, this.maxFrames, this.tolerance) = (high, worstBack, stillFrames, maxFrames, tolerance);
     }
 
     public int Frames { get; private set; }
+
+    /// <summary>The extent on the first frame, on the last, and on how many frames it changed: why a view that did not settle did not.</summary>
+    public double FirstExtent { get; private set; }
+
+    public double Extent { get; private set; }
+
+    public int ExtentChanges { get; private set; }
 
     public double WorstBack { get; private set; }
 
@@ -45,6 +52,9 @@ public sealed class ScrollSettle
         WorstBack = Math.Max(WorstBack, high - offset);
         high = Math.Max(high, offset);
         Gap = extent - offset;
+        if (Frames == 1) { FirstExtent = extent; }
+        else if (extent != lastExtent) { ExtentChanges++; }
+        Extent = extent;
         var unchanged = offset == lastOffset && extent == lastExtent;
         still = Gap <= tolerance && !moving && unchanged ? still + 1 : 0;
         (lastOffset, lastExtent) = (offset, extent);
@@ -52,5 +62,5 @@ public sealed class ScrollSettle
 
     public string Describe() => Settled
         ? $"settled at the end after {Frames} frames, worst back {WorstBack:0.#}"
-        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}";
+        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames)";
 }

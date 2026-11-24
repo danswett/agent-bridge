@@ -40,6 +40,36 @@ public sealed class ScrollSettleTests
         Assert.True(settle.Passed, settle.Describe());
     }
 
+    // CI 45357085188: the history was still drawing 10 s (600 frames at 60 fps) after the last notch, the pin was following the growing end to within 417, and the 600-frame budget ran out.
+    // The default budget has to outlast a slow draw; a settled run still stops at once.
+    [Fact]
+    public void A_view_still_following_a_growing_end_after_600_frames_settles_within_the_default_budget()
+    {
+        var settle = new ScrollSettle(high: End - 5000);
+
+        for (var i = 0; i < 1500; i++) { settle.Observe(End + i * 30 - 417, End + i * 30, moving: true); }   // the end keeps growing and the pin stays 417 behind it
+        Assert.False(settle.Done);
+        for (var i = 0; i < 40; i++) { settle.Observe(End + 45000, End + 45000, moving: false); }
+
+        Assert.True(settle.Passed, settle.Describe());
+        Assert.Equal(0, settle.WorstBack);
+    }
+
+    // A run that does not settle has to say why: where the extent started, where it ended, and how often it changed.
+    [Fact]
+    public void A_view_that_does_not_settle_says_how_its_extent_changed()
+    {
+        var settle = new ScrollSettle(high: 10000, maxFrames: 50);
+
+        for (var i = 0; i < 50; i++) { settle.Observe(10000 + i * 100, 20000 + i * 1000, moving: true); }
+
+        Assert.True(settle.Done);
+        Assert.Equal(20000, settle.FirstExtent);
+        Assert.Equal(20000 + 49 * 1000, settle.Extent);
+        Assert.Equal(49, settle.ExtentChanges);
+        Assert.Contains("extent 20000 to 69000 (changed on 49 frames)", settle.Describe(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_view_that_parks_short_of_the_end_never_settles_and_fails_when_the_frame_budget_runs_out()
     {
