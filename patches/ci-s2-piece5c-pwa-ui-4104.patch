@@ -1,13 +1,13 @@
-From 2aa8fd89adbb3827c26f9c2cb03a693ec5fdbaac Mon Sep 17 00:00:00 2001
+From 5ce3dc6378b7eac30205376cf04947bf99821b2b Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:32:39 -0800
+Date: Mon, 23 Nov 2026 23:24:04 -0800
 Subject: [PATCH] s 5c
 
 ---
  .../playwright-system-packages/download.sh    |   2 +-
  .../playwright-system-packages/test.sh        |   2 +-
- .github/workflows/ci.yml                      | 187 ++----------------
- .github/workflows/full.yml                    | 162 ++++++++++++++-
+ .github/workflows/ci.yml                      | 192 ++----------------
+ .github/workflows/full.yml                    | 160 ++++++++++++++-
  quality/README.md                             |  12 +-
  quality/catalog.yml                           |  10 +-
  quality/merge-rule.yml                        |  15 --
@@ -17,7 +17,7 @@ Subject: [PATCH] s 5c
  .../HaValidationCoverageTests.cs              |   2 +-
  .../MergeRuleTests.cs                         |   8 +-
  .../PlanScriptTests.cs                        |   4 +-
- 13 files changed, 229 insertions(+), 220 deletions(-)
+ 13 files changed, 227 insertions(+), 225 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/download.sh b/.github/actions/playwright-system-packages/download.sh
 index 86c98cc7c..2474d91ff 100644
@@ -33,10 +33,10 @@ index 86c98cc7c..2474d91ff 100644
  # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
  # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
 diff --git a/.github/actions/playwright-system-packages/test.sh b/.github/actions/playwright-system-packages/test.sh
-index 43b32c046..1b857889e 100644
+index be4783b6b..41c96442f 100644
 --- a/.github/actions/playwright-system-packages/test.sh
 +++ b/.github/actions/playwright-system-packages/test.sh
-@@ -636,7 +636,7 @@ check "a corrupt package alongside a DNS failure still refuses retry and fallbac
+@@ -638,7 +638,7 @@ check "a corrupt package alongside a DNS failure still refuses retry and fallbac
    100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
  export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
  
@@ -46,7 +46,7 @@ index 43b32c046..1b857889e 100644
  from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
  from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index 46e2262ca..85cbe77a3 100644
+index bda464e8b..85cbe77a3 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -8,16 +8,12 @@ on:
@@ -150,7 +150,7 @@ index 46e2262ca..85cbe77a3 100644
        # Without install scripts, as pages.yml builds the published site (#650), so a build that
        # needed one fails here first.
        - name: The PWA's packages
-@@ -1506,134 +1477,6 @@ jobs:
+@@ -1506,139 +1477,6 @@ jobs:
              echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
            fi
  
@@ -218,12 +218,17 @@ index 46e2262ca..85cbe77a3 100644
 -      # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
 -      # false on every push and pull request run, which run the action exactly as before.
 -      - name: Download Playwright's system packages
+-        id: system-packages
 -        uses: ./.github/actions/playwright-system-packages
 -        with:
 -          browsers: ${{ matrix.project }}
 -          working-directory: pwa
 -          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
--          save: 'true'
+-      - name: Save Playwright's system-package archives
+-        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+-        uses: ./.github/actions/playwright-system-packages-save
+-        with:
+-          key: ${{ steps.system-packages.outputs.cache-key }}
 -      - run: npx playwright install "$PROJECT"
 -      - name: Save Playwright's browsers to main's cache
 -        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -285,7 +290,7 @@ index 46e2262ca..85cbe77a3 100644
    quality-gate:
      # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
      # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
-@@ -1649,7 +1492,7 @@ jobs:
+@@ -1654,7 +1492,7 @@ jobs:
      # new gate's check only once every job it needs is done; under the same name, the draft's
      # green gate would stand for the whole head until then, and a merge could go through on it.
      name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
@@ -295,7 +300,7 @@ index 46e2262ca..85cbe77a3 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index 4181e4b97..77a87beff 100644
+index 3c0bb5ee7..b0f47195d 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -361,11 +366,9 @@ index 4181e4b97..77a87beff 100644
        # The commit every other job checks out. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
        # the event's text, and either is refused unless it is 40 lowercase hex: no job reads the event's commit, they all read this output.
        - name: The commit under test
-@@ -248,13 +284,8 @@ jobs:
-         with:
+@@ -247,12 +283,6 @@ jobs:
            browsers: chromium webkit
            working-directory: pwa
-+          save: 'false'
        - run: npx playwright install chromium webkit
 -      - name: Save Playwright's browsers to main's cache
 -        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -376,7 +379,7 @@ index 4181e4b97..77a87beff 100644
        - run: npx playwright test test/e2e
        - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
          if: failure()
-@@ -273,11 +304,124 @@ jobs:
+@@ -271,11 +301,123 @@ jobs:
            if-no-files-found: warn
            retention-days: 7
  
@@ -452,7 +455,6 @@ index 4181e4b97..77a87beff 100644
 +          browsers: ${{ matrix.project }}
 +          working-directory: pwa
 +          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
-+          save: 'false'
 +      - run: npx playwright install "$PROJECT"
 +      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
 +      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
@@ -537,7 +539,7 @@ index 1ce9829c3..db7e6b8ba 100644
  **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
  `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 5dd95d30e..d1f5c80df 100644
+index fc8830a0c..a4f7dc812 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
 @@ -929,10 +929,9 @@ suites:
@@ -625,7 +627,7 @@ index bf10713d0..f10753641 100644
      {
          var (code, output) = RunGuard(critical, reason, reference, force);
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index bfa9311ed..9b9fc029a 100644
+index 6820ca119..c56839610 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -639,9 +641,9 @@ index bfa9311ed..9b9fc029a 100644
      }
  
      [Fact]
-@@ -164,4 +164,38 @@ public class FullWorkflowTests
-             Assert.Contains(part, script, StringComparison.Ordinal);
-         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
+@@ -170,4 +170,38 @@ public class FullWorkflowTests
+         Assert.Equal(ci.Count(s => Uses(s, Restore)), saves.Count);
+         Assert.All(saves, s => Assert.Equal("always() && steps.system-packages.outputs.cache-ready == 'true'", Scalar(s, "if")));
      }
 -}
 \ No newline at end of file
