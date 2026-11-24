@@ -1,0 +1,692 @@
+From 62d8d8b1f99df5747d9ff18389d52a4a66ad026b Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 07:30:21 -0800
+Subject: [PATCH] CI S2 combined: the workflow parts of 4b, 5a, 5b, 5c and 7a
+ on the new main (Part of #4104)
+
+One patch for Quality to apply on the S2 COMBINED branch ci/s2-combined3 at its head (see the pull request for the exact heads); the branch holds everything else.
+Patch branch: sg-patch/ci-s2-combined-4104. Built on main 522bf1267849bce8ac11d2ba10c8af0ef9989604 (#4254 merged); apply only on an unmoved base.
+
+What it does: ci.yml loses pwa-ui, pwa-e2e and the force-apt-fallback dispatch input (they run in FULL now); full.yml gains pwa-ui (six legs) and pwa-e2e, each checking out needs.trigger.outputs.tested and
+using only the restore-only action; full-red.yml (new, 7a) opens one issue per red FULL job; pages.yml waits for FULL (5a).
+
+Q10's notes: (a) the validator requires needs.trigger.outputs.tested and does not read head_repository; (b) the dispatched-sha on-main check is GONE (FULL has no dispatch sha; a run by hand tests the tip of
+the ref it runs on); (c) the README cache bullet is fixed in the branch.
+
+DECISION FOR QUALITY / R8c: the by-hand apt-fallback proof (quality/README.md section 4.7) had its input on ci.yml's workflow_dispatch; this patch removes it there (pwa-ui moves) and does NOT add it to
+full.yml, because main's FullWorkflowTests (#4254) requires a run of FULL by hand to take no input at all. So that proof has no trigger now. Either keep it that way, or allow one boolean force-apt-fallback
+input (no commit, never reaches a checkout) in that test; I did not decide it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml       | 279 +++------------------------------
+ .github/workflows/full-red.yml |  46 ++++++
+ .github/workflows/full.yml     | 182 ++++++++++++++++++++-
+ .github/workflows/pages.yml    |  14 +-
+ 4 files changed, 259 insertions(+), 262 deletions(-)
+ create mode 100644 .github/workflows/full-red.yml
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f7a847dfc..42a24cc1b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -8,16 +8,12 @@ on:
+     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
+     # marking it ready must run the PR gate on the same head without waiting for another push.
+     types: [opened, synchronize, reopened, ready_for_review]
+-  # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
+-  # §4.7), or as Quality's critical-fix release of main's head (critical-release with a reason, on
+-  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. Only the critical
+-  # release is a release (APP_RELEASE); a run by hand writes no cache and runs every job (the whole ring).
++  # By hand, only as Quality's critical-fix release of main's head (critical-release with a reason, on
++  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. The apt fallback proof
++  # is full.yml's. Only the critical release is a release (APP_RELEASE); a run by hand writes no
++  # cache and runs every job (the whole ring).
+   workflow_dispatch:
+     inputs:
+-      force-apt-fallback:
+-        description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
+-        type: boolean
+-        default: false
+       critical-release:
+         description: Publish main's head as a critical fix inside the 15-minute release spacing (publish-prerelease.ps1 -SkipSpacing). Quality only, on an owner or Chief call; main only, with critical-reason
+         type: boolean
+@@ -90,8 +86,6 @@ jobs:
+       app: ${{ steps.select.outputs.app }}
+       app-installer: ${{ steps.select.outputs.app-installer }}
+       light: ${{ steps.select.outputs.light }}
+-      pwa-ui: ${{ steps.select.outputs.pwa-ui }}
+-      pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
+       suites: ${{ steps.select.outputs.suites }}
+       test-projects: ${{ steps.select.outputs.test-projects }}
+       # The whole ring is the whole solution on all three runners, without asking the selector.
+@@ -99,45 +93,21 @@ jobs:
+       product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
+       test-filter: ${{ steps.select.outputs.test-filter }}
+     steps:
+-      # A run by hand exists only to prove pwa-ui's apt fallback (force-apt-fallback), and its
+-      # checks, quality-gate among them, land on the commit it runs: on an open pull request's
+-      # head they would stand in for that pull request's own run (the merge rule reads the latest
+-      # run per head). So it must ask for the fallback, on a branch other than main (which
+-      # publishes), at a commit that is neither main's head nor any open pull request's. Anything
+-      # else fails here, before checkout, and every job after the plan is skipped. Push and pull
+-      # request runs skip this step, so they make no API call.
+-      - name: A run by hand is a fallback proof on a commit of its own, or a critical release of main
++      # A run by hand is Quality's critical release of main's head and nothing else (the apt fallback
++      # proof is full.yml's): a reason is required and is checked here, before checkout, so a run that
++      # asks for anything else, or for another branch, fails and every job after the plan is skipped.
++      # Push and pull request runs skip this step.
++      - name: A run by hand is a critical release of main
+         if: github.event_name == 'workflow_dispatch'
+         env:
+-          FORCE: ${{ inputs.force-apt-fallback }}
+           CRITICAL: ${{ inputs.critical-release }}
+           REASON: ${{ inputs.critical-reason }}
+           REF: ${{ github.ref }}
+-          SHA: ${{ github.sha }}
+-          REPO: ${{ github.repository }}
+-          GH_TOKEN: ${{ github.token }}
+         run: |
+           fail() { echo "::error title=run by hand::$1"; exit 1; }
+-          if [ "$CRITICAL" = true ]; then
+-            # The critical-fix override (docs/app-windows.md, "Spacing"): main's head, past the release
+-            # spacing only, with a reason, checked here before anything is built.
+-            [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
+-            [ "$FORCE" != true ] || fail "critical-release and force-apt-fallback are separate runs"
+-            [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+-            exit 0
+-          fi
+-          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
+-          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
+-            fail "only on a branch other than main, not $REF"
+-          fi
+-          main=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha) || fail "couldn't read main's head"
+-          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read main's head"
+-          [ "$SHA" != "$main" ] || fail "$SHA is main's head; prove on a new commit of its own"
+-          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].head.sha' > "$RUNNER_TEMP/pr-heads" || fail "couldn't list the open pull requests"
+-          while read -r head; do
+-            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
+-            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
+-          done < "$RUNNER_TEMP/pr-heads"
++          [ "$CRITICAL" = true ] || fail "a run by hand is only for critical-release=true (the apt fallback proof is full.yml's)"
++          [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
++          [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+         with:
+           persist-credentials: false
+@@ -255,7 +225,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product ha-integration app app-installer light pwa-ui pwa-e2e
++          JOBS: product ha-integration app app-installer light
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -1252,6 +1222,7 @@ jobs:
+     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
++    #  - full-red-script: the FULL lane's red alert (one issue per commit), on a stub gh (quality/full-red.ps1);
+     #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
+     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
+     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+@@ -1299,6 +1270,11 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'wake-watch-script')) }}
+         shell: pwsh
+         run: pwsh -NoProfile -File tools/agents/test-wake-watch.ps1
++      - name: The FULL lane's red alert opens one issue per commit and keeps the waived Arm64 results apart
++        # A stub gh: nothing reaches GitHub.
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'full-red-script')) }}
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/test-full-red.ps1
+       - name: The red-minutes figure counts spells the way the guardian does
+         # A fixed run list: nothing reaches GitHub.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+@@ -1374,7 +1350,7 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'epic-dashboard-unit')) }}
+         run: python3 -m unittest discover -s tools/epic-dashboard -v
+       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
+-      # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
++      # PWA's packages, as locked, without Playwright's browsers (only full.yml's pwa-ui and pwa-e2e jobs fetch those).
+       # Without install scripts, as pages.yml builds the published site (#650), so a build that
+       # needed one fails here first.
+       - name: The PWA's packages
+@@ -1507,217 +1483,6 @@ jobs:
+             echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
+           fi
+ 
+-  pwa-ui:
+-    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
+-    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
+-    # the wall time of every PWA change. Both browsers now have three
+-    # shards. Playwright's --shard splits what --project selects, so together the six run every
+-    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
+-    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
+-    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
+-    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
+-    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
+-    name: pwa-ui (${{ matrix.name }})
+-    needs: plan
+-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-ui == 'true'
+-    strategy:
+-      fail-fast: false
+-      matrix:
+-        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
+-        include: >-
+-          ${{ fromJSON(format('[{0}{1}]',
+-          '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+-          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
+-    runs-on: ubuntu-24.04
+-    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+-    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+-    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
+-    # come from the same mirror. 35 leaves room for bounded update and download retries,
+-    # Canonical fallback and the shard's tests. It bounds a
+-    # stuck job, not a test: a leg that passes takes as long as before.
+-    timeout-minutes: 35
+-    defaults:
+-      run:
+-        working-directory: pwa
+-    env:
+-      PWA_SKIP_E2E: '1'
+-      PROJECT: ${{ matrix.project }}
+-      SHARD: ${{ matrix.shard }}
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+-        with:
+-          node-version: '22'
+-      - run: npm ci
+-      - name: Which Playwright
+-        id: playwright
+-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browser from main's cache, as in full.yml's spikes-linux, keyed by browser so each leg
+-      # restores only the one it runs.
+-      - name: Playwright's browsers from main's cache
+-        id: browsers
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+-      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
+-      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
+-      # how). The install below then finds them all downloaded; it, and the packages, are as before.
+-      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the first
+-      # mirror's download and takes that fallback before any package is downloaded, to prove it once; the
+-      # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
+-      # false on every push and pull request run, which run the action exactly as before.
+-      - name: Download Playwright's system packages
+-        id: system-packages
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: ${{ matrix.project }}
+-          working-directory: pwa
+-          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
+-      - name: Save Playwright's system-package archives
+-        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+-        uses: ./.github/actions/playwright-system-packages-save
+-        with:
+-          key: ${{ steps.system-packages.outputs.cache-key }}
+-      - run: npx playwright install "$PROJECT"
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+-      - name: Select changed PWA specs
+-        if: github.event_name == 'pull_request'
+-        id: repeat-specs
+-        env:
+-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+-        run: node tools/repeat-changed-specs.mjs --select
+-      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+-      - name: Repeat changed PWA specs five times without retries
+-        if: github.event_name == 'pull_request' && steps.repeat-specs.outputs.specs != '[]'
+-        env:
+-          CHANGED_SPECS: ${{ steps.repeat-specs.outputs.specs }}
+-        run: node tools/repeat-changed-specs.mjs
+-      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
+-      # summary and as a warning, so a retry never hides a flake. Never fails the job.
+-      - name: Flaky report
+-        if: ${{ !cancelled() }}
+-        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
+-      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+-      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+-      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+-      # Chromium alone: the engine that emulates forced colours.
+-      - name: Renders of the demo
+-        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+-        continue-on-error: true
+-        run: npx playwright test --config playwright.renders.config.mjs
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: ${{ !cancelled() && matrix.renders }}
+-        with:
+-          name: pwa-renders
+-          path: pwa/renders/
+-          if-no-files-found: ignore
+-          retention-days: 14
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: failure()
+-        with:
+-          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
+-          path: pwa/test-results
+-          retention-days: 7
+-      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+-      # look at on every run, not only a failed one.
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+-        with:
+-          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
+-          path: |
+-            pwa/test-results/**/signin-*.png
+-            !pwa/test-results/**/attachments/**
+-          if-no-files-found: warn
+-          retention-days: 7
+-
+-  pwa-e2e:
+-    # The PWA end to end through the spike dev stack's relay, in Chromium and WebKit
+-    # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
+-    # it (#457): built once, here, rather than in every shard or passed round as an artifact.
+-    needs: plan
+-    # Post-merge (quality/catalog.yml pwa-e2e suite, #3209): pull requests skip it.
+-    if: github.event_name != 'pull_request' && (needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true')
+-    runs-on: ubuntu-24.04
+-    # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
+-    # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
+-    # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
+-    # step's bounded retries on that mirror and a full download from Canonical's archive.
+-    timeout-minutes: 35
+-    defaults:
+-      run:
+-        working-directory: pwa
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+-        with:
+-          dotnet-version: '10.0.x'
+-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+-        with:
+-          node-version: '22'
+-      - name: Build the dev stack
+-        # The specs skip themselves without it, and pass, so its absence must fail here instead.
+-        run: |
+-          dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
+-          test -f ../spikes/s4-relay/src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll || { echo "::error::the dev stack built no s4-devstack.dll, so the e2e specs would skip"; exit 1; }
+-      - run: npm ci
+-      - name: Which Playwright
+-        id: playwright
+-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      - name: Playwright's browsers from main's cache
+-        id: browsers
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+-      # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
+-      - name: Download Playwright's system packages
+-        id: system-packages
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: chromium webkit
+-          working-directory: pwa
+-      - name: Save Playwright's system-package archives
+-        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+-        uses: ./.github/actions/playwright-system-packages-save
+-        with:
+-          key: ${{ steps.system-packages.outputs.cache-key }}
+-      - run: npx playwright install chromium webkit
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+-      - run: npx playwright test test/e2e
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: failure()
+-        with:
+-          name: pwa-test-results-e2e
+-          path: pwa/test-results
+-          retention-days: 7
+-      # The sign-in link's capture (test/e2e/e2e.spec.mjs, #969), for Creative on every run.
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: ${{ !cancelled() }}
+-        with:
+-          name: pwa-captures-e2e
+-          path: |
+-            pwa/test-results/**/signin-*.png
+-            !pwa/test-results/**/attachments/**
+-          if-no-files-found: warn
+-          retention-days: 7
+-
+   quality-gate:
+     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
+     # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
+@@ -1733,7 +1498,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, ha-integration, app, app-installer, light]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+@@ -1796,7 +1561,7 @@ jobs:
+           # The waiver's needs when it waived something, otherwise the real ones.
+           NEEDS: ${{ steps.waiver.outputs.needs || toJSON(needs) }}
+           # Whole jobs the catalog makes post-merge: they skip pull requests, which aren't gated on them.
+-          PR_OFF: ${{ github.event_name == 'pull_request' && 'app-installer pwa-e2e' || '' }}
++          PR_OFF: ${{ github.event_name == 'pull_request' && 'app-installer' || '' }}
+         run: |
+           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+diff --git a/.github/workflows/full-red.yml b/.github/workflows/full-red.yml
+new file mode 100644
+index 000000000..c8e2f1d7d
+--- /dev/null
++++ b/.github/workflows/full-red.yml
+@@ -0,0 +1,46 @@
++name: Full red
++
++# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one open issue per red job, labelled full-red, a comment on it for each later
++# red commit, the blocking jobs apart from the Arm64 results the owner waived. It never holds a merge.
++on:
++  # Reads a finished Full run on main only; runs main's copy of the script and never checks out the run's code.
++  workflow_run: # zizmor: ignore[dangerous-triggers]
++    workflows: [Full]
++    types: [completed]
++    branches: [main]
++
++permissions:
++  contents: read
++
++jobs:
++  report:
++    # Only this repository's own Full run on main, made by workflow_run or by hand: the branches filter alone also matches a fork's pull request whose
++    # branch is named main. (Full's own event is workflow_run, not push, which main-red's CI-watching guard tests.) The script checks the same.
++    if: >-
++      github.event.workflow_run.head_repository.full_name == github.repository &&
++      github.event.workflow_run.head_branch == 'main' &&
++      (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')
++    # Queued, not dropped: with a plain group GitHub keeps one pending run and drops the rest, and a dropped run is a dropped alert. One at a time, so two runs
++    # never race to open the same job's issue. At job level, where build/actionlint-findings.ps1 lets actionlint's queue-key error through.
++    concurrency:
++      group: full-red
++      queue: max
++      cancel-in-progress: false
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions:
++      contents: read
++      actions: read
++      issues: write
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++          sparse-checkout: quality
++      - name: Open or update each red job's issue
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          RUN_ID: ${{ github.event.workflow_run.id }}
++          REPOSITORY: ${{ github.repository }}
++        run: pwsh -NoProfile -File quality/full-red.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
+\ No newline at end of file
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index a5843d241..4612522b6 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -5,7 +5,7 @@ name: Full
+ # merge_group or push trigger (quality/catalog.yml `lane: full`, and the catalog check enforces it). It runs after a push to main
+ # whose FAST run finished green (a workflow_run of CI), or by hand for a commit (the release train dispatches it for one it wants
+ # to publish). Every job tests the commit the FAST run passed on, never the branch tip. A newer push cancels an older run: the
+-# latest wins. Piece 4 has the spikes here; the app's self-test, pack and installers, pwa-ui and pwa-e2e follow (pieces 5 and 6).
++# latest wins. The spikes, pwa-e2e and pwa-ui are here (pieces 4, 5b and 5c); the app's self-test, pack and installers follow (piece 6).
+ on:
+   # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
+   # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
+@@ -13,10 +13,11 @@ on:
+     workflows: [CI]
+     types: [completed]
+     branches: [main]
+-  # By hand, with NO input: it re-runs FULL on the tip of the ref it is dispatched on (a person dispatches it on main), so nothing a person types can reach a checkout. CodeQL
++  # By hand, with no commit input: it re-runs FULL on the tip of the ref it is dispatched on (a person dispatches it on main), so nothing a person types can reach a checkout. CodeQL
+   # followed the old sha input through the trigger job into every checkout and raised cache-poisoning alerts on this workflow, and a static analyser cannot see an on-main check.
+   workflow_dispatch:
+ 
++
+ permissions:
+   contents: read
+ 
+@@ -199,11 +200,186 @@ jobs:
+         working-directory: spikes
+         run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
+ 
++  pwa-e2e:
++    # The PWA end to end through the spike dev stack's relay, in Chromium and WebKit
++    # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
++    # it (#457): built once, here, rather than in every shard or passed round as an artifact.
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    runs-on: ubuntu-24.04
++    # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
++    # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
++    # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
++    # step's bounded retries on that mirror and a full download from Canonical's archive.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.trigger.outputs.tested }}
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - name: Build the dev stack
++        # The specs skip themselves without it, and pass, so its absence must fail here instead.
++        run: |
++          dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
++          test -f ../spikes/s4-relay/src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll || { echo "::error::the dev stack built no s4-devstack.dll, so the e2e specs would skip"; exit 1; }
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
++      # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: chromium webkit
++          working-directory: pwa
++      - run: npx playwright install chromium webkit
++      - run: npx playwright test test/e2e
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-e2e
++          path: pwa/test-results
++          retention-days: 7
++      # The sign-in link's capture (test/e2e/e2e.spec.mjs, #969), for Creative on every run.
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: ${{ !cancelled() }}
++        with:
++          name: pwa-captures-e2e
++          path: |
++            pwa/test-results/**/signin-*.png
++            !pwa/test-results/**/attachments/**
++          if-no-files-found: warn
++          retention-days: 7
++
++  pwa-ui:
++    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
++    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
++    # the wall time of every PWA change. Both browsers now have three
++    # shards. Playwright's --shard splits what --project selects, so together the six run every
++    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
++    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
++    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
++    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
++    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
++    name: pwa-ui (${{ matrix.name }})
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    strategy:
++      fail-fast: false
++      matrix:
++        # Every leg, as Pages waits for them (quality/pages-jobs.json): FULL runs both browsers, none of it for a pull request.
++        include:
++          - { name: "chromium 1/3", project: chromium, shard: "1/3", renders: true }
++          - { name: "chromium 2/3", project: chromium, shard: "2/3" }
++          - { name: "chromium 3/3", project: chromium, shard: "3/3" }
++          - { name: "webkit 1/3", project: webkit, shard: "1/3" }
++          - { name: "webkit 2/3", project: webkit, shard: "2/3" }
++          - { name: "webkit 3/3", project: webkit, shard: "3/3" }
++    runs-on: ubuntu-24.04
++    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
++    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
++    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
++    # come from the same mirror. 35 leaves room for bounded update and download retries,
++    # Canonical fallback and the shard's tests. It bounds a
++    # stuck job, not a test: a leg that passes takes as long as before.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    env:
++      PWA_SKIP_E2E: '1'
++      PROJECT: ${{ matrix.project }}
++      SHARD: ${{ matrix.shard }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.trigger.outputs.tested }}
++          persist-credentials: false
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
++      # restores only the one it runs.
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
++      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
++      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
++      # how). The install below then finds them all downloaded; it, and the packages, are as before.
++      # The action's force-apt-fallback (the by-hand proof of quality/README.md §4.7) is not passed here: a run of this workflow by hand takes no input (#4254's CodeQL fix), so the
++      # proof has no trigger in FULL until one is chosen (see the pull request). Every run uses the action exactly as before.
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: ${{ matrix.project }}
++          working-directory: pwa
++      - run: npx playwright install "$PROJECT"
++      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
++      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
++      # summary and as a warning, so a retry never hides a flake. Never fails the job.
++      - name: Flaky report
++        if: ${{ !cancelled() }}
++        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
++      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
++      # never fail the job, and they are kept whatever the tests did. Design signs a state off
++      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
++      # Chromium alone: the engine that emulates forced colours.
++      - name: Renders of the demo
++        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
++        continue-on-error: true
++        run: npx playwright test --config playwright.renders.config.mjs
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: ${{ !cancelled() && matrix.renders }}
++        with:
++          name: pwa-renders
++          path: pwa/renders/
++          if-no-files-found: ignore
++          retention-days: 14
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
++          path: pwa/test-results
++          retention-days: 7
++      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
++      # look at on every run, not only a failed one.
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: ${{ !cancelled() && matrix.project == 'chromium' }}
++        with:
++          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
++          path: |
++            pwa/test-results/**/signin-*.png
++            !pwa/test-results/**/attachments/**
++          if-no-files-found: warn
++          retention-days: 7
++
+   full-gate:
+     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+     # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
+     # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
+-    needs: [trigger, spikes, spikes-linux]
++    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/.github/workflows/pages.yml b/.github/workflows/pages.yml
+index 221b38327..3de880475 100644
+--- a/.github/workflows/pages.yml
++++ b/.github/workflows/pages.yml
+@@ -13,7 +13,7 @@ on:
+   # Accepted: the build runs only a commit proven to be an ancestor of origin/main after successful
+   # named PWA checks on main, never checks out an event-supplied ref, and holds no publish token.
+   workflow_run: # zizmor: ignore[dangerous-triggers]
+-    workflows: [CI]
++    workflows: [CI, Full]
+     types: [completed]
+     branches: [main]
+   workflow_dispatch:
+@@ -80,7 +80,17 @@ jobs:
+           if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') {
+             $runs = @((Read-Api "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20").workflow_runs)
+             foreach ($r in $runs) { $r | Add-Member -NotePropertyName jobs -NotePropertyValue @((Read-Api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($r.id)/jobs?filter=latest&per_page=100").jobs) }
+-            $candidate = & quality/pages-candidate.ps1 -Runs $runs
++            # The PWA jobs are in full.yml (S2, #4104) and a Pages deploy is a release, so it waits for FULL: a commit's FULL run is
++            # found by its head_sha with the release train's own helpers, and read only when the push run lacks some of the jobs.
++            . ./build/select-release-commit.ps1
++            $getFull = {
++              param($sha)
++              $found = @(@((Read-Api (Get-FullRunsPath $env:GITHUB_REPOSITORY $sha)).workflow_runs) | Where-Object { $_ } | ForEach-Object { "$($_.id)`t$($_.conclusion)`t$($_.head_sha)`t$($_.event)`t$($_.head_branch)" })
++              $row = Select-FullRunRow $found $sha
++              if (-not $row) { return $null }
++              [pscustomobject]@{ Id = $row.Id; Conclusion = $row.Conclusion; jobs = @((Read-Api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($row.Id)/jobs?filter=latest&per_page=100").jobs) }
++            }
++            $candidate = & quality/pages-candidate.ps1 -Runs $runs -GetFull $getFull
+             if (-not $candidate.sha) {
+               Write-Host $candidate.reason; 'deploy=false' >> $env:GITHUB_OUTPUT; exit 0
+             }
+-- 
+2.56.1.windows.1
+
