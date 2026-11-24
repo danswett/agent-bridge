@@ -74,7 +74,7 @@
     AZURE_CONFIG_DIR for the az CLI, so a separate sign-in can be used.
 
 .PARAMETER ExpectedAzureUser
-    The az sign-in the rehearsal belongs to. Any other is refused unless -AllowOtherAzureUser.
+    The az sign-in the rehearsal belongs to (default: the AGENT_BRIDGE_REHEARSAL_AZURE_USER environment variable, so no address is kept in the repo). Any other, or none set, is refused unless -AllowOtherAzureUser.
 
 .PARAMETER JumpVia
     user@host of an SSH jump host (VM-M) for an operator whose own SSH egress the NSG does not
@@ -186,7 +186,7 @@ param(
 
     [string] $AzureConfigDir = (Join-Path $HOME '.azure-agentbridge'),
 
-    [string] $ExpectedAzureUser = 'danswett@outlook.com',
+    [string] $ExpectedAzureUser = $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER,
 
     [switch] $AllowOtherAzureUser,
 
@@ -1351,7 +1351,7 @@ function Expand-Guest([string] $Script) {
 $signedIn = (Invoke-Az account show --query user.name -o tsv).Trim()
 if ($signedIn -ne $ExpectedAzureUser) {
     if (-not $AllowOtherAzureUser) {
-        throw "az is signed in as '$signedIn', not '$ExpectedAzureUser' (AZURE_CONFIG_DIR=$AzureConfigDir). Sign in with that profile, or pass -AllowOtherAzureUser."
+        throw "az is signed in as '$signedIn', not '$ExpectedAzureUser' (AZURE_CONFIG_DIR=$AzureConfigDir). Sign in with that profile, set AGENT_BRIDGE_REHEARSAL_AZURE_USER (or pass -ExpectedAzureUser), or pass -AllowOtherAzureUser."
     }
     Write-Warning "continuing as '$signedIn' because -AllowOtherAzureUser was given"
 }
