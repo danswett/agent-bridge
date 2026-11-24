@@ -18,6 +18,10 @@ public static class LiteCodes
     // A node id could not be resolved because session discovery is held (docs/design/reply-deduplication.md): the
     // session may be live but not listed yet. Nothing was typed; a retry may deliver.
     public const string SessionResolutionIncomplete = "sessionResolutionIncomplete";
+    // Busy-Claude queue (docs/message-delivery.md): a relay message to this session is still held, or the status store is full. Nothing was typed.
+    // Neither is busy: busy triggers the one HA fallback, which would bypass the depth cap.
+    public const string QueueHeld = "queueHeld";
+    public const string StatusFull = "statusFull";
 }
 
 public sealed record GateDecision(bool Allowed, string? Code, string? Reason)
@@ -50,7 +54,7 @@ public static class LiteComposition
         launcher.SessionStarted += launches.Launched;
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue };
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = new BusyQueueStore(TimeProvider.System) };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)
