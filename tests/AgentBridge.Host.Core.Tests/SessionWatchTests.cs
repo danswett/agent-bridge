@@ -95,7 +95,8 @@ public class SessionWatchTests
         var w = Watch(null, "s1");
         w.Evaluate([S(SessionStatus.Working, T.AddHours(-3))], T.AddHours(-2));
         w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T.AddHours(-2));
-        Assert.DoesNotContain(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T), n => n.Rule == WatchRule.Idle);
+        // Delivered, so it is never R2; after two idle hours it is R4: an offer to end, not idle-with-work.
+        Assert.Equal(WatchRule.Finished, Assert.Single(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done, PR is open.")], T)).Rule);
     }
 
     [Fact]
@@ -154,7 +155,7 @@ public class SessionWatchTests
         var w = Watch(null, "s1");
         w.Evaluate([S(before, T.AddHours(-3))], T.AddHours(-3));
         w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T.AddHours(-2));
-        Assert.DoesNotContain(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T), n => n.Rule == WatchRule.Idle);
+        Assert.Equal(WatchRule.Finished, Assert.Single(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T)).Rule);
 
         var blank = Watch(null, "s1");
         blank.Evaluate([S(before, T.AddHours(-3))], T.AddHours(-3));
@@ -251,6 +252,26 @@ public class SessionWatchTests
         Assert.Single(w.Evaluate([], T));
         w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(1));
         Assert.Single(w.Evaluate([], T.AddHours(2)));
+    }
+
+    [Fact]
+    public void A_missing_session_repeats_every_thirty_minutes_three_times_then_one_final_notice_then_silence()
+    {
+        var w = WatchEnded(_ => false, "s1");
+        w.Evaluate([S(SessionStatus.Working, T.AddHours(-1))], T.AddMinutes(-1));
+        var all = new List<WatchNotice>();
+        for (var i = 0; i < 8; i++) all.AddRange(w.Evaluate([], T.AddMinutes(31 * i)));
+        Assert.Equal([false, false, false, true], all.Select(n => n.Final));
+    }
+
+    [Fact]
+    public void A_finished_offer_stops_after_the_cap_with_one_final_notice()
+    {
+        var w = Watch();
+        Delivered(w);
+        var all = new List<WatchNotice>();
+        for (var i = 0; i < 8; i++) all.AddRange(w.Evaluate([S(SessionStatus.Idle, T.AddHours(-2), response: "Done.")], T.AddMinutes(31 * i)));
+        Assert.Equal([false, false, false, true], all.Select(n => n.Final));
     }
 
     [Fact]

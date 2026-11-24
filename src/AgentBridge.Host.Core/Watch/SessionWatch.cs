@@ -40,7 +40,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
     public IReadOnlyList<WatchNotice> Evaluate(IReadOnlyList<Session> sessions, DateTimeOffset now, bool held = false)
     {
         if (held) return [];
-        if (!settings.Enabled) { foreach (var s in sessions) Track(s); return []; }
+        if (!settings.Enabled) { foreach (var s in sessions) Track(s); Forget(sessions); return []; }
         var notices = new List<WatchNotice>();
         var live = new HashSet<(WatchRule, string)>();
         foreach (var s in sessions)
@@ -48,7 +48,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
             var delivery = Track(s);
             var inState = now - s.StatusSince;
             var owner = ownerOf(s.Id);
-            if (owner is not null) { owned.Add(s.Id); missingSince.Remove(s.Id); }
+            if (owner is not null && ended is not null) { owned.Add(s.Id); missingSince.Remove(s.Id); }
             WatchRule? rule = s.Status switch
             {
                 SessionStatus.Waiting when inState >= settings.PromptAfter => WatchRule.Prompt,
@@ -76,8 +76,15 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
         }
         // A session that left the state, or went away, starts a fresh episode next time.
         foreach (var k in ledger.Keys.Where(k => !live.Contains(k)).ToList()) ledger.Remove(k);
-        foreach (var id in seen.Keys.Where(id => !ids.Contains(id)).ToList()) seen.Remove(id);
+        Forget(sessions);
         return notices;
+    }
+
+    // What a session that is gone leaves behind in the delivery tracker is dropped with it.
+    void Forget(IReadOnlyList<Session> sessions)
+    {
+        var ids = sessions.Select(s => s.Id).ToHashSet();
+        foreach (var id in seen.Keys.Where(id => !ids.Contains(id)).ToList()) seen.Remove(id);
     }
 
     // One notice per episode (the same state since the same moment), then every Repeat, MaxPerEpisode in all, then one final one, then silence.
