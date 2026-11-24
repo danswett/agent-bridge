@@ -3458,7 +3458,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(AppUpdateViewModel.DidNotInstall("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", again: true), banner.Message);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
     }
-    // Updater robustness (owner, Nov 23: VM6 failed 8040 -> 8050 when 8051 landed minutes later). A download or an
+    // Updater robustness (owner, Nov 23: a machine failed 8040 -> 8050 when 8051 landed minutes later). A download or an
     // apply under way completes: a newer release found meanwhile (Settings' check, a tick's) is not looked for until
     // it has finished, so it can neither replace the package being applied nor leave the install to abort or restart.
     // The newer one is checked for afterwards.
