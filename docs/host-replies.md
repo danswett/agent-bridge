@@ -198,6 +198,12 @@ additionally requires the same host verification callbacks and still-current per
 intent. A changed authority generation is refused without escrow or progress.
 No live key validation or production enablement is claimed by this foundation.
 
+**The refusal shows the box (slice 2).** A person's own reply (`ReplyIntent.Steer`) refused for a draft, or for shell
+mode, in a plain or shell box read whole on the screen also carries `ReplyResult.Input`: the box's text escaped (with host marks),
+cut to 500 characters, its mode, and the digest of the whole escaped text, with `clearable: false`. Nothing is cleared or typed and
+no key goes. Other callers and boxes get no `input`. Unchanged and not addressed here: the refusal `reason` already quotes the box
+(escaped, capped) to every caller.
+
 ## Attachments (Copilot)
 
 Ported from agent-ha-bridge (`hooks/daemon-replies.ps1`: `New-BridgeAttachmentPrompt`,

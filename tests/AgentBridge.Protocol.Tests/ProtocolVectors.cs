@@ -648,6 +648,12 @@ public static class ProtocolVectors
         f.Record<ClearedComposer>(Host)
             .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
             .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
+        // What a refused person reply shows of Copilot's box (#804 slice 2): escaped, cut, the mode and the digest of the whole escaped text.
+        var boxed = ShownText.RevealMarked("rerun the build‮ gol", rightToLeft: true);
+        var shownBox = new ReplyInput(boxed.Shown, [.. boxed.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])], false, "text", EscapedApproval.Shown(boxed.Shown), false);
+        f.Record<ReplyInput>(Host)
+            .Valid("a-draft", new ReplyInput("rerun the tests", [], false, "text", EscapedApproval.Shown("rerun the tests"), false))
+            .Valid("an-escaped-cut-shell-box", shownBox with { Mode = "shell", Truncated = true });
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
