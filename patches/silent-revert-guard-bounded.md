@@ -1,0 +1,9 @@
+# The silent-revert guard's step, bounded (patch for Quality, Q10): #4490 P2-3
+
+Part of #4465 and #4490. For the PR on branch `sg-silent-revert-guard` (head `b2c3e6fe12082023ae59648034653d85b67d7779`). Apply it **after** that head: `git apply --check patches/silent-revert-guard-bounded.patch` is clean there, `agent-bridge-quality check` says "The catalog is complete." on the patched tree, and `bash -n` accepts the `run:` block. I do not push workflow files. It replaces the step Quality applied in `23ee4336`.
+
+- **Before:** `git fetch --no-tags --unshallow origin` (falling back to `--depth=20000`): the default refspec deepens every branch's history, not only the base's.
+- **After:** `timeout 60 git fetch --no-tags --depth=1000 origin "ef183b1e7f8a1e5ade65955d2dd985d8c069875c" || echo "::notice ..."`: only the base tip's last 1000 commits, 60 s at most, and a failed or slow fetch is skipped (the tool then reports every line as not checked) instead of failing. The tool is run with `--max-seconds 90 --max-lines 20000`, its own hard caps, so the step's `timeout-minutes: 5` stays only the backstop: worst case is 60 s fetch + about 90 s tool (+ one blame call), well under 300 s.
+- No expression is inlined into the script (the pull request number still comes through `env: PR`).
+
+**Measured (see the PR body for the table):** CI, current step, a normal PR: **7 s of a 35 s plan job**. This machine, bounded step on a fresh depth-2 checkout: **5.9 s** normal (real #4483 merge ref), **9.2 s** for a 5,597-line deletion, **25.8 s** for a 37,101-line whole-project deletion (stopped at the 20,000-line budget); the unbounded fetch alone was 19.1 s and 125 MiB against 4.7 to 5.0 s and 69 MiB. The exact step text has not run on a real runner until you apply it: after that, the plan job's "Silent-revert guard" step duration in the run is the real number.

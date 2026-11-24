@@ -1,0 +1,17 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index c935c24a..6cc64e9a 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -254,8 +254,10 @@ jobs:
+         env:
+           PR: ${{ github.event.pull_request.number }}
+         run: |
+-          git fetch --no-tags --unshallow origin || git fetch --no-tags --depth=20000 origin
+-          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll silent-revert --base HEAD^1 --head HEAD --pr "$PR" --summary "$GITHUB_STEP_SUMMARY"
++          # Blame needs history only for the deleted lines: the base's last 1000 commits, not every branch (git fetch --unshallow origin deepens them all). A fetch that fails or runs over
++          # 60 s is skipped, and the tool then says what it could not check; the tool has its own hard caps (--max-seconds, --max-lines), so this step's 5-minute timeout is only the backstop.
++          timeout 60 git fetch --no-tags --depth=1000 origin "$(git rev-parse HEAD^1)" || echo "::notice title=silent-revert::history fetch skipped: older lines are not checked"
++          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll silent-revert --base HEAD^1 --head HEAD --pr "$PR" --summary "$GITHUB_STEP_SUMMARY" --max-seconds 90 --max-lines 20000
+       - name: What runs and why
+         id: select
+         shell: pwsh
