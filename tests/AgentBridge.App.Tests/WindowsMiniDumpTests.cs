@@ -5,6 +5,10 @@ using Xunit;
 namespace AgentBridge.App.Tests;
 
 // The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, from the test process itself.
+// MiniDumpWriteDump on its own process suspends its other threads, which Microsoft warns can deadlock, and this assembly's test host
+// hung on CI three times with this class in flight in one: so it runs ALONE, in a collection with no parallelism (xunit runs it after
+// the parallel ones have finished), and keeps its coverage. QuarantineTests lists it. That removes one suspected cause of the hang.
+[Collection(nameof(WindowsMiniDumpTests))]
 public sealed class WindowsMiniDumpTests : IDisposable
 {
     readonly string folder = Path.Combine(Path.GetTempPath(), "abdump-" + Guid.NewGuid().ToString("N"));
@@ -15,7 +19,7 @@ public sealed class WindowsMiniDumpTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
-    [Fact(Skip = Quarantined)]
+    [Fact]
     public void A_dump_is_a_real_minidump_named_for_its_time_and_process_and_far_smaller_than_a_full_one()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -31,7 +35,7 @@ public sealed class WindowsMiniDumpTests : IDisposable
         Assert.InRange(bytes.Length, 1024, 64 * 1024 * 1024);
     }
 
-    [Fact(Skip = Quarantined)]
+    [Fact]
     public void Only_the_newest_few_dumps_are_kept()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -48,17 +52,12 @@ public sealed class WindowsMiniDumpTests : IDisposable
         Assert.True(File.Exists(Path.Combine(folder, "someone-elses.dmp")));
     }
 
-    // The tests that write a dump write a real one of this test host: MiniDumpWriteDump on its own process, which Microsoft warns can
-    // deadlock while other threads run, and hung the test host on CI three times, holding main red (QuarantineTests). The rows that
-    // refuse to write, and the one whose file already exists, still run: they throw before MiniDumpWriteDump.
-    const string Quarantined = "quarantined (fixes-main, Part of #4104; tracking issue filed by Quality): a real MiniDumpWriteDump of the test host crashes or hangs it in CI, until 2026-11-30";
-
     // A dump is a few megabytes, but a disk with no room left is the machine's emergency, not a thing to add to: below 1 GB free, no dump.
     [Theory]
     [InlineData(0L, false)]
     [InlineData((1L << 30) - 1, false)]
-    [InlineData(1L << 30, true, Skip = Quarantined)]
-    [InlineData(50L << 30, true, Skip = Quarantined)]
+    [InlineData(1L << 30, true)]
+    [InlineData(50L << 30, true)]
     public void With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said(long freeBytes, bool writes)
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -103,3 +102,6 @@ public sealed class ResumeNotifierTests
         Assert.False(notifier.Registered);
     }
 }
+
+[CollectionDefinition(nameof(WindowsMiniDumpTests), DisableParallelization = true)]
+public sealed class WindowsMiniDumpCollection;

@@ -11,19 +11,24 @@ namespace AgentBridge.App.Tests;
 // This list is the only place that says which, and it stays small: adding a class is a change to this file, reviewed as one.
 public sealed class QuarantineTests
 {
-    static readonly string[] Expected = ["RunCompletionTests", "WindowsMiniDumpTests"];
-    const int Largest = 3;
+    // GrowthTests and SpeedQuadraticControlTests already ran alone (timing needs a quiet machine); RunCompletionTests and
+    // WindowsMiniDumpTests are the suspected hang causes.
+    static readonly string[] Expected = ["GrowthTests", "RunCompletionTests", "SpeedQuadraticControlTests", "WindowsMiniDumpTests"];
+    const int Largest = 5;
 
     static List<string> RunningAlone()
     {
         var types = typeof(QuarantineTests).Assembly.GetTypes();
-        var alone = types.Select(t => t.GetCustomAttribute<CollectionDefinitionAttribute>())
-            .Where(d => d is { DisableParallelization: true })
-            .Select(d => d!.Name)
+        var alone = types.Where(t => t.GetCustomAttribute<CollectionDefinitionAttribute>() is { DisableParallelization: true })
+            .Select(t => NameOf<CollectionDefinitionAttribute>(t))
             .ToHashSet();
-        return types.Where(t => t.GetCustomAttribute<CollectionAttribute>() is { } c && alone.Contains(c.Name))
+        return types.Where(t => NameOf<CollectionAttribute>(t) is { } name && alone.Contains(name))
             .Select(t => t.Name).Order(StringComparer.Ordinal).ToList();
     }
+
+    // The collection a type is in, or one it defines, by name (the constructor's argument: xunit exposes no property).
+    static string? NameOf<T>(Type t) where T : Attribute =>
+        t.CustomAttributes.FirstOrDefault(a => a.AttributeType == typeof(T))?.ConstructorArguments.FirstOrDefault().Value as string;
 
     [Fact]
     public void The_suspected_hang_causes_run_alone_and_nothing_else_does()
