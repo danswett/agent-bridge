@@ -29,7 +29,7 @@ async function session(page) {
   }, { ID, turns: Array.from({ length: N }, (_, i) => turn(i + 1)) });
   const v = await open(page, ID);
   await expect(v.locator('.history-turn').nth(2)).toBeVisible();
-  // Older history loads as the reader nears the top (by a wheel), and moves the view: load it first, so no step is that.
+  // Older history loads (by a wheel) as the reader nears the top and moves the view: load it first.
   for (let i = 0; i < 3; i += 1) { await wheel(page, v, -100000); await page.waitForTimeout(600); }
   await wheel(page, v, 100000);
   await expect.poll(() => gap(v)).toBeLessThan(4);
@@ -62,7 +62,6 @@ const settle = (v) => pane(v).evaluate((sc) => new Promise((resolve) => {
   requestAnimationFrame(tick);
 }));
 
-// The scrolls the app asks the conversation for.
 const recordScrolls = (v) => pane(v).evaluate((el) => {
   const scrollTo = el.scrollTo.bind(el);
   window.__scrolls = [];
@@ -87,7 +86,7 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await page.addInitScript(() => Object.defineProperties(navigator, { standalone: { value: true }, userAgentData: { value: null }, userAgent: { value: 'iPhone' } }));
     });
 
-    test('it shows only more than a screen above the end, saying "Jump to latest", above the reply box, in no layout', async ({ page }) => {
+    test('it shows only more than a screen above the end, above the reply box, a 44 px target, in no layout', async ({ page }) => {
       const v = await session(page);
       await expect(pill(v)).toBeHidden();
       const screen = await client(v);
@@ -95,18 +94,30 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await expect(pill(v)).toBeHidden();
       await wheel(page, v, -Math.round(screen * 1.5));
       await expect(v.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
-      await expect(pill(v)).toHaveText('Jump to latest');
       expect(await client(v), 'the pill takes no room from the conversation').toBe(screen);
       const p = await pill(v).boundingBox();
-      const reply = await v.locator('.reply-slot').boundingBox();
       const at = await pane(v).boundingBox();
-      expect(p.y + p.height).toBeLessThanOrEqual(reply.y + 1);
-      // And it is what is under its own centre: not hidden behind the reply area, which would leave it unseen and untappable.
-      expect(await pill(v).evaluate((el) => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })).toBe(true);
+      expect(p.height, 'a 44 px touch target').toBeGreaterThanOrEqual(44);
       expect(Math.abs(p.x + p.width / 2 - (at.x + at.width / 2))).toBeLessThan(2);
+      // Above the reply area, and what is under its own centre (not hidden behind it: unseen and untappable).
+      const above = () => pill(v).evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return [r.bottom <= el.closest('.conversation').querySelector('.reply-slot').getBoundingClientRect().top + 1, el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))];
+      });
+      expect(await above()).toEqual([true, true]);
+      // A reply area of another height (a six-line draft): the pill follows it, with no offset fixed in the stylesheet.
+      await v.locator('form.reply').getByRole('textbox', { name: 'Reply' }).fill(Array(6).fill('draft').join(String.fromCharCode(10)));
+      await expect.poll(above).toEqual([true, true]);
+      // A wheel over the pill is a wheel over the conversation behind it.
+      const q = await pill(v).boundingBox();
+      await page.mouse.move(q.x + q.width / 2, q.y + q.height / 2);
+      const before = await top(v);
+      await page.mouse.wheel(0, -120);
+      await settle(v);
+      expect(before - (await top(v))).toBe(120);
     });
 
-    test('a message arriving meanwhile is counted without moving the view; choosing the pill scrolls smoothly to the end, takes it in, and goes', async ({ page }) => {
+    test('a message or a question arriving meanwhile is counted or said, without moving the view; choosing the pill scrolls smoothly to the end and goes', async ({ page }) => {
       const v = await session(page);
       await wheel(page, v, -Math.round((await client(v)) * 3));
       const at = await top(v);
@@ -114,11 +125,18 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await expect(pill(v)).toHaveText('1 new · Jump to latest');
       await arrive(page, N + 2);
       await expect(pill(v)).toHaveText('2 new · Jump to latest');
+      await page.evaluate(({ ID, q, until }) => {
+        const d = window.agentBridgeDemo;
+        d.upsert({ ...d.host.get(ID), status: 'waiting', statusSince: until, updatedAt: until, question: q });
+      }, { ID, q: choices, until: later() });
+      await expect(pill(v)).toHaveText('Question · Jump to latest');
+      await expect(v.locator('.question-waiting'), 'one pill, not two').toBeHidden();
       expect(await top(v), 'nothing moved under the reader').toBe(at);
       await recordScrolls(v); // the call is what is seen: headless Chromium does not animate a smooth scroll
       await pill(v).click();
       await expect.poll(() => gap(v)).toBeLessThan(4);
       await expect(pane(v).getByText(`Reply ${N + 2}.`)).toBeVisible();
+      await expect(v.locator('.question-slot .answer')).toBeVisible();
       await expect(pill(v)).toBeHidden();
       expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'smooth' }]);
     });
@@ -144,22 +162,6 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await expect.poll(() => gap(v)).toBeLessThan(4);
       await expect(pill(v)).toBeHidden();
       await expect(pane(v)).toBeFocused();
-    });
-
-    test('a question arriving while reading back makes it say so, and nothing scrolls on its own', async ({ page }) => {
-      const v = await session(page);
-      await wheel(page, v, -Math.round((await client(v)) * 3));
-      const at = await top(v);
-      await page.evaluate(({ ID, q, until }) => {
-        const d = window.agentBridgeDemo;
-        d.upsert({ ...d.host.get(ID), status: 'waiting', statusSince: until, updatedAt: until, question: q });
-      }, { ID, q: choices, until: later() });
-      await expect(pill(v)).toHaveText('Question · Jump to latest');
-      await expect(v.locator('.question-waiting'), 'one pill, not two').toBeHidden();
-      expect(await top(v)).toBe(at);
-      await pill(v).click();
-      await expect.poll(() => gap(v)).toBeLessThan(4);
-      await expect(v.locator('.question-slot .answer')).toBeVisible();
     });
 
     test('a wheel moves the conversation exactly as far as it says, the pill appearing or not (#4243)', async ({ page }) => {

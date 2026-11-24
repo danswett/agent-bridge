@@ -1455,16 +1455,15 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 @media (max-width: 759px) {
   .question-waiting { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--foot-h) + var(--ab-space-2)); margin: 0; z-index: 3; }
 }
-/* "Jump to latest" (ui.md §6.4 H3, #1720): a pill above the reply box, in no layout (a row with no height; the pill is
-   drawn up from its foot), so it never changes what is read. Centred with margins: a transform is its entering's. */
+/* "Jump to latest" (ui.md §6.4 H3, #1720): a pill above the reply box, in no layout (a row with no height, the pill drawn
+   up from its foot): it never changes what is read. Centred with margins; a transform is its entering's. */
 .jump-row { position: relative; flex: none; height: 0; z-index: 3; }
 .jump-latest {
   position: absolute; left: 0; right: 0; bottom: var(--ab-space-2); margin-inline: auto; width: fit-content;
-  min-height: 36px; max-width: calc(100% - 2 * var(--ab-space-4)); padding: 0 var(--ab-space-4);
+  min-height: var(--tap); max-width: calc(100% - 2 * var(--ab-space-4)); padding: 0 var(--ab-space-4);
   border: 1px solid var(--ab-stroke2); border-radius: 999px; background: var(--ab-card); color: var(--ab-text);
   font: inherit; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
 }
-/* A question waiting at the end (H3a): in Needs you's text colour. */
 .jump-latest[data-question] { color: var(--ab-needs-text); border-color: currentColor; }
 /* On a phone, and installed on an iPhone or iPad at any width, the reply area is drawn over the conversation's foot: the pill rides above it. */
 @media (max-width: 759px) { .jump-latest { bottom: calc(var(--foot-h, 0px) + var(--ab-space-2)); } }
