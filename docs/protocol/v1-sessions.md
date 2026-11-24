@@ -1081,6 +1081,8 @@ foreign replay receives no escrow or progress. There is no wire confirmation fie
 production clear producer or capability in this cut. Signed person relay confirmation,
 policy and PWA/app presentation follow separately; existing clients are unchanged.
 
+A reply refused because a Copilot box holds words also carries optional `input: { text, marks, truncated, mode, digest, clearable }`: the box escaped as the host shows it (host `[start, length]` marks), at most 500 characters, `digest` the SHA-256 of the whole escaped box, `mode` `"text"`, and `clearable` always `false` in this cut (see [host replies](../host-replies.md)). Sent only to a reply the host classified as a person's; absent for agents, MCP children, Lite and any other refusal, whose `reason` carries only the draft's length. Clients that ignore it behave as before.
+
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
 request's attachment order. It is returned only for **delivered Copilot and Claude**

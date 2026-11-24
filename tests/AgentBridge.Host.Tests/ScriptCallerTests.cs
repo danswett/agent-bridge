@@ -207,6 +207,7 @@ public sealed class ScriptCallerTests : IDisposable
     [InlineData("session.rename")]
     [InlineData("session.history")]
     [InlineData("sessions.list")]
+    [InlineData("load.get")]
     [InlineData("host.restart")]
     [InlineData("hello")]
     [InlineData("agent.hello")]

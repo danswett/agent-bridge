@@ -117,8 +117,10 @@ public static class HistoryDraw
 
     // The one meta line above the stored turns: what the history holds, or why it holds nothing.
     // Turns held are always drawn, so a machine that has gone offline still shows what the store has.
-    public static string? Line(HistoryLoad state, int drawn, bool hasLivePrompt, HistoryStart? start) => state switch
+    // The start line is the top of what is drawn, so it waits while held turns above the drawn ones are not yet (#1593).
+    public static string? Line(HistoryLoad state, int drawn, bool hasLivePrompt, HistoryStart? start, bool earlierUndrawn = false) => state switch
     {
+        HistoryLoad.StartReached when earlierUndrawn => null,
         HistoryLoad.Loading when drawn == 0 => Loading,
         HistoryLoad.Failed => Failed,
         HistoryLoad.NoHistory => NoHistory,
