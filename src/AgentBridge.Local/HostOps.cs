@@ -34,6 +34,8 @@ public static class HostOps
     // The person approves a folder for launching from the app, no terminal (host.workspace.add). In hello only for the app.
     public const string WorkspacesCapability = "host.workspaces";
     public const string WorkspaceAdd = "host.workspace.add";
+    public const string WorkspaceList = "host.workspace.list";
+    public const string WorkspaceRemove = "host.workspace.remove";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -149,8 +151,13 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // while absent, when the folder-trust devices may, and only while folder trust is on.
 // PhoneSignIn: permissions.phoneSignIn, signing an agent in from a person's device (#972).
 // FleetLaunchRule: fleetNames.launchRule, on or off, read fresh for each launch; null from older hosts.
+// AgentMessagingScope: the effective agentMessaging scope (docs/design/beta-messaging.md section 3), same-person or off,
+// read fresh for each message, with the kill epoch and agentMessaging.remote counted in; null from older hosts.
+// AgentMessagingOffBy: why messaging is off although the config does not ask for it: "kill" when a recorded kill with no
+// agentMessaging.remote own-account keeps it off (only a person at the machine sets that key); null otherwise.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true, string? FleetLaunchRule = null)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true, string? FleetLaunchRule = null,
+    string? AgentMessagingScope = null, string? AgentMessagingOffBy = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
@@ -160,7 +167,8 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
         && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
-        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on");
+        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && (AgentMessagingScope ?? "same-person") == (other.AgentMessagingScope ?? "same-person")
+        && AgentMessagingOffBy == other.AgentMessagingOffBy;
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
@@ -207,6 +215,9 @@ public sealed record HostStatus
     // Why the host acts on nothing from other devices now (delivery.readOnly, or agent-ha-bridge
     // running), absent when it does: an install a device asked for before is not carried out.
     public string? ReadOnly { get; init; }
+    // The profile's disk for fleet launches (#2771): "diskLow: ..." under 1 GiB free (the fleet grant and fleet launches are refused), "disk unknown" when
+    // free space cannot be read (launches are still allowed), absent when fine.
+    public string? Disk { get; init; }
     // The Dev Box keep-awake, absent when this machine is not a Dev Box.
     public DevBoxStatus? DevBox { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
@@ -229,8 +240,11 @@ public sealed record SignInRequest(string? Relay = null);
 // elsewhere is never approved again by a list made before. DevBoxKeepAwake: devBox.keepAwake,
 // applied at once. PhoneSignIn: permissions.phoneSignIn, at the next start.
 // FleetLaunchRule: fleetNames.launchRule, on or off, applied at the next launch without restart.
+// AgentMessagingScope: agentMessaging.scope, same-person or off, applied from the next message without restart; only a
+// person's app may send it, and a kill (agentMessaging.remote off) keeps it off, which refuses the change.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null, bool? PhoneSignIn = null, string? FleetLaunchRule = null);
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null, bool? PhoneSignIn = null, string? FleetLaunchRule = null,
+    string? AgentMessagingScope = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
 

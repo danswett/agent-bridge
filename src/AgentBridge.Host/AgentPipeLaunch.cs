@@ -215,7 +215,7 @@ public sealed class AgentPipeLaunch(string folder, AgentCredentials credentials,
     void Registered(Guid id, string session, bool confirmed)
     {
         if (Take(id, unverifiedRegistration: !confirmed) is not { } p) { return; }
-        try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session); } catch (InvalidOperationException) { }
+        try { credentials.LaunchGate.LaunchStarted(p.Principal, p.Request, session, fleet: p.Fleet is not null); } catch (InvalidOperationException) { }
         Save(() => store!.Launched(p.Key, session));
         if (p.Fleet is { } fleet) { fleetGrants!.Finish(fleet, new(LaunchOutcome.Started) { Session = session }); }
     }

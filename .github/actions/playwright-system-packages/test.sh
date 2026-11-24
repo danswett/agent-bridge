@@ -763,8 +763,8 @@ fi
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
-if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF "if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml"; then
-  echo "ok: successfully downloaded archives can be saved after a fatal install failure"
+if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF 'value: ${{ steps.packages.outputs.cache-ready }}' "$here/action.yml"; then
+  echo "ok: successfully downloaded archives are reported ready after a fatal install failure, for the save action"
 else echo "FAIL: a later install failure prevented saving downloaded archives"; failures=$((failures + 1)); fi
 if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
@@ -776,18 +776,20 @@ check "a forced proof cannot use a cache hit to ignore update DNS failures" \
   100 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
 ! grep -q 'npx playwright install --with-deps' "$here/../../workflows/ci.yml" \
   || { echo "FAIL: a downstream browser install would run apt update again"; failures=$((failures + 1)); }
-[ "$(grep -c 'path: ~/.cache/playwright-apt-debs$' "$here/action.yml")" = 2 ] &&
+[ "$(cat "$here/action.yml" "$here/../playwright-system-packages-save/action.yml" | grep -c 'path: ~/.cache/playwright-apt-debs$')" = 2 ] &&
+  ! grep -q 'actions/cache/save' "$here/action.yml" &&
+  grep -q 'actions/cache/save' "$here/../playwright-system-packages-save/action.yml" &&
   ! grep -q 'playwright-apt-lists' "$here/action.yml" &&
   grep -q 'key:.*packages-hash.*ref-hash' "$here/action.yml" &&
   grep -q 'restore-keys:' "$here/action.yml" &&
-  grep -qF "    - if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
+  { ! grep -q 'playwright-system-packages-save' "$here/../../workflows/ci.yml" || grep -qF "if: always() && steps.system-packages.outputs.cache-ready == 'true'" "$here/../../workflows/ci.yml"; } \
   || { echo "FAIL: versioned archives-only caches must restore and save after successful cold runs"; failures=$((failures + 1)); }
 awk '
   /^  [[:alnum:]_-]+:/ { actions=0 }
-  /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
+  /uses: \.\/\.github\/actions\/playwright-system-packages$/ { actions++ }
   /npx playwright install / { if (actions-- <= 0) bad=1; installs++ }
   END { exit bad || installs != 4 }
-' "$here/../../workflows/ci.yml" \
+' "$here/../../workflows/ci.yml" "$here/../../workflows/full.yml" \
   || { echo "FAIL: each of the four browser installs must follow its system-package action"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
@@ -803,7 +805,7 @@ export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
 # The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
 export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_ARGS="$work/curl-args.log" CURL_FIXTURES="$work/curl-fixtures"
 
-# force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
+# force-apt-fallback (the action's input; no workflow passes it until the by-hand proof gets its trigger, quality/README.md §4.7): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.
 from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
 from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'

@@ -157,8 +157,11 @@ public sealed partial class SessionView
         var from = Math.Max(0, end - 2);
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
+        // Count from a settled layout: rows measured since the last prepend have moved the extent, and a stale read counts that drift as this prepend's height (#4500).
+        if (scroll is not null) { UpdateConversationLayout(HistoryColumn); }
         var atEnd = HistoryAtEnd();
-        var offset = scroll?.VerticalOffset ?? 0;
+        // Where the view is going, not where an earlier prepend's correction has animated to (ConversationKeep.PrependBaseline).
+        var offset = ConversationKeep.PrependBaseline(anchoring, scroll?.VerticalOffset ?? 0);
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var (session, releases) = (shownHistory, pinReleases);
@@ -235,7 +238,9 @@ public sealed partial class SessionView
                 {
                     UpdateConversationLayout(HistoryColumn);
                     if (!Current()) { return; }
-                    target = Math.Clamp(scroll.VerticalOffset + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
+                    // For a prepend, from where the view is going when an earlier correction is still on its way: this offset is the animation's, and counting from it loses that correction's height.
+                    var from = earlierExtent is not null ? ConversationKeep.PrependBaseline(anchoring, scroll.VerticalOffset) : scroll.VerticalOffset;
+                    target = Math.Clamp(from + Top(row, scroll) - kept.Top, 0, scroll.ScrollableHeight);
                 }
             }
             var off = reading is not null || atEnd || pinEnd ? Math.Abs(scroll.VerticalOffset - target) > 0.5 : scroll.VerticalOffset < target - 0.5;

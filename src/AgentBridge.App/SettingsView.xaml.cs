@@ -26,7 +26,7 @@ public sealed partial class SettingsView : UserControl
         {
             if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; viewModel.PropertyChanged -= OnViewModelChanged; }
             viewModel = value;
-            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; viewModel.PropertyChanged += OnViewModelChanged; }
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; viewModel.PropertyChanged += OnViewModelChanged; viewModel.ConfirmAgentMessagingOff = ConfirmMessagingOff; }
             ScriptsSection.Attach(viewModel);
             Bindings.Update();
         }
@@ -118,6 +118,18 @@ public sealed partial class SettingsView : UserControl
     {
         if (viewModel is { } v && sender is Button { Tag: string request }) { await v.CancelVerificationAsync(request); }
     }
+    // Turning messaging off stops every agent's messages across the person's machines at once, so it is asked first.
+    async Task<bool> ConfirmMessagingOff()
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Turn off messaging between your agents?",
+            Content = "No agent will send or receive messages from your other agent sessions until you turn this back on.",
+            PrimaryButtonText = "Turn off", CloseButtonText = "Keep on", DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
     async void OnRunVerification(object sender, RoutedEventArgs e)
     {
         if (viewModel is not { CanRunVerification: true } v) { return; }

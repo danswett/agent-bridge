@@ -159,7 +159,10 @@ not closure proof. Refusals at every step are audited (§6).
 **Fail closed.** An unreadable or malformed `agents` policy, an unreadable credential store
 (already enforced by `AgentCredentials`), caps not yet rebuilt from the audit (§5) or an audit log
 that cannot be written each refuse the launch. Unreadable is never read as allowed, the same
-posture as the credential store and [docs/host-config.md](../host-config.md). In operation:
+posture as the credential store and [docs/host-config.md](../host-config.md). **One named exception: free space** (`diskLow`, section 11).
+Free space that cannot be read (a share, a dropped drive, access denied) is not a full disk and never refuses a launch: it is allowed, said once in
+the log, and `host.status` shows `disk unknown`; a dropped profile drive already fails closed through the credential store and the audit log, and a
+full disk is stopped by the audit write. In operation:
 * **Transient is not unreadable.** A file briefly locked (a virus scan, a backup, a sync client)
   is retried for about a second before the host decides.
 * **Distinct codes:** transient `policyUnreadable`, `auditUnwritable`, `capRebuilding`
@@ -605,6 +608,10 @@ accepted: the alternative is launches nobody can account for. To make it rare an
 host refuses to turn the fleet grant on, and refuses fleet launches, with under 1 GiB free on the
 profile's disk (`code: diskLow`), and `host.status` shows it. The runbook gets one line each for
 `diskLow`, `auditUnwritable`, `capRebuilding` and the recovery override (§5).
+
+**Built (#2771):** exactly as above: the threshold is 1 GiB free on the profile's disk, for the fleet grant and fleet launches only (not every agent
+launch), code `diskLow`, shown in `host.status`; free space that cannot be read allows the launch, says so once in the log and shows `disk unknown`.
+The runbook line is in host-launch.md.
 
 ## 12. Open questions for the owner
 

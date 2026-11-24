@@ -830,6 +830,7 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   `Resuming <label>...`, then goes once the host says the session started, or becomes the
   host's reason when it did not. A prompt that started a session is cleared from each box that
   still holds it once the host says so; a prompt or request written meanwhile is left alone.
+  A workspace this machine does not offer is refused as `Unknown workspace - this machine has <its labels>`, on the card and on an agent's request alike: the rejected value, which may itself be a path, is never echoed (#1901).
 * **An agent's request** (agent-ha-bridge #227): `{at, text, request, settings}` published to the
   prompt payload and then a press. Its settings are the only ones used: one left out is the
   machine's default, never what the card shows; one this machine does not offer is refused in
@@ -1614,14 +1615,16 @@ Assistant and broker).
 ```
 agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123
 agent-bridge-host config set homeAssistant.disposable true
-agent-bridge-host config set homeAssistant.enabled true
 agent-bridge-host ha token set            # paste the token, then explicitly confirm
+agent-bridge-host ha on                   # audited; restart the host once to apply
 agent-bridge-host ha status               # on, or why not, and any refusal; never the token
 agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
+Use `ha off` or `ha on` for connection changes; generic `config set` and `config unset`
+refuse `homeAssistant.enabled` rather than bypass its audit and startup checks.
 
 `ha token set` requires the base URL first. It reports length, whitespace and only eight SHA256
 hex characters, checks the local JWT shape (not validity), then warns about the recorded

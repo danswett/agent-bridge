@@ -127,6 +127,16 @@ It is a person's act: a freshly classified local app without an agent credential
 process (the host CLI included), a script credential or a remote channel is refused with
 `person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
 
+`host.workspace.list` and `host.workspace.remove` (#2694, the host half of the Settings launch-folder editor) let the person see the approved
+folders and remove one. `host.workspace.list` takes no data and answers `{ "result": "listed", "workspaces": [{ "path", "label", "isolate" }], "baseline" }`:
+the folders as `config.json` holds them (one that has gone away is still listed) and a `baseline`, a hash of that whole list, so any added, removed
+or changed entry changes it. `host.workspace.remove` takes exactly `{ "path": "<absolute path>", "baseline": "<the baseline the person saw>" }`: the
+exact folder only, never one below it. The result is `{ "result": "removed", "label", "path", "baseline": "<the new one>", "restartRequired": true }` or
+`{ "result": "refused", "code" }`, the code one of `stale` (the list changed since the person looked: nothing is written, and the person's draft is kept
+for them to review), `not-approved` (the folder is not on the list), `not-a-path`, `unwritable`, `busy`, `invalid-request` or `config-unreadable`. A
+removal keeps every other setting and folder as written. Nothing is approved, trusted, restarted or launched; a removal applies after a restart. Both are
+a person's act, refused with `person-only` as `host.workspace.add` is, and every `remove` outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
+
 `host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
 "genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
 `{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
@@ -428,7 +438,7 @@ of its own session, so its ancestry includes the credential's root process. It k
 agent-ha-bridge's tool names (`list_agent_sessions`, `read_agent_session`,
 `reply_to_agent_session`, `launch_agent_session`, `read_launch_result`, `get_launch_options`) and
 maps them to `sessions.list`, `session.get`, `session.reply`, `session.launch` and
-`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (a pipe name or path) or, on
+`launch.options`; `end_agent_session` maps to `fleet.end` with no grant (mcp/README.md). It finds the host from `AGENT_BRIDGE_PIPE` (the rule that follows is the .NET MCP server's (`McpEndpoint`); the Node server `mcp/src/server.mjs`, until it is retired, still accepts any name or path; on Windows one local pipe name, or `\\.\pipe\` plus one, with no separator, colon, `..` or trailing dot; elsewhere an absolute socket path with no `..` or control character) or, on
 Windows, as above from the user's SID and the profile folder (`AGENT_BRIDGE_ROOT`, then
 `AGENT_BRIDGE_PROFILE`, default `default`). `AGENT_BRIDGE_TOKEN` is the credential, sent in
 `agent.hello`. It lists only the tools whose capability `hello` names, and none when no host
@@ -485,6 +495,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `settings` | `{ remoteApproval, name?, remoteFolderTrust, remoteFolderTrustDevices?, devBoxKeepAwake, escapedApproval?, escapedApprovalDevices?, phoneSignIn }` as `config.json` says now (`launch.remoteFolderTrust`, the approved device ids, absent when none, `devBox.keepAwake`, `permissions.phoneSignIn` (#972, applied at the next start), and `permissions.escapedApproval` and `permissions.escapedApprovalDevices`, the latter absent while it inherits the folder-trust devices, which confirm only while folder trust is on; #803). The app's Settings shows which devices may confirm an escaped approval |
 | `restartRequired` | `config.json` differs from what the running host read, or agent setup has been attempted in this host run and may have changed registrations. A partial failure also conservatively requests restart; this is not evidence that setup completed |
 | `log` | Path of the host's log file |
+| `disk` | The profile's disk for fleet launches: `diskLow: ...` under 1 GiB free (the fleet grant and fleet launches are refused), `disk unknown` when free space cannot be read (launches still allowed), absent when fine (#2771). |
 | `readOnly` | Why the host acts on nothing from other devices now (`delivery.readOnly`, or agent-ha-bridge running, G5); absent when it does. The app carries out no install a device asked for while it is set, and checks it again just before stopping the host |
 | `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at, now? }]`, `by` naming the device (`"pwa 1a2b3c4d"`). `now`, on an Install that is an Update now (#1159): `{ release, accept?, until }`, the release the person was shown, what they confirmed it may go over (`UpdateBusy`), and when the press's 15 minutes end. Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes (an Update now's at `until`, if sooner). The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 | `devBox` | The Dev Box keep-awake ([host-config.md](../host-config.md#dev-box-keep-awake)), present only when this machine is a Microsoft Dev Box (the Dev Box agent is installed, its settings usable or not): `{ keepAwake, intervalMinutes, last?: { at, outcome, detail, alarming }, nextAt?, problem? }`. `keepAwake` is whether passes run now; `outcome` is `skipped`, `delayed`, `safe`, `no-action`, `blocked`, `failed`, `stood-back`, `busy` or `not-a-devbox`; `alarming` (`failed`, `blocked`, or `stood-back` with the scheduler unreadable) says the Dev Box may hibernate. `nextAt` while on. `problem`: why the agent's settings could not be used, so it cannot be kept awake |
@@ -506,6 +517,18 @@ so no restart is needed or requested for this change alone. Existing names and t
 This is the same local-App-only `host.settings` path: agents, the host CLI and relay callers
 cannot change it. Older hosts omit the view field; the app disables the toggle rather than
 sending an unsupported write.
+
+`host.settings` also accepts `agentMessagingScope: "same-person" | "off"`, writing the
+`agentMessaging.scope` key (docs/design/beta-messaging.md section 3). `HostSettingsView.agentMessagingScope`
+reports the effective scope in settings replies, `host.status` and subscription events: `off` also while a
+recorded kill (`lite-kill-epoch.json`) is in force without `agentMessaging.remote` set to `own-account`, with
+`agentMessagingOffBy: "kill"` saying so; `same-person` is refused then too. Unknown write values and an `agentMessaging` section that is not an object are
+refused before any part of the request is saved. The host checks that the proposed file reads back as
+requested, so `same-person` is refused while `agentMessaging.remote` is `"off"` (a kill keeps it off until
+a person turns that back on with `config set`). The scope is read afresh for each message, so no restart is
+needed or requested. Same local-App-only path: agents, the host CLI and relay callers cannot change it. Older
+hosts omit the view field; the app disables the control rather than sending an unsupported write. No value
+wider than `same-person` can be written.
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.

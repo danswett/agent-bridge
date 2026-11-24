@@ -6,10 +6,12 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
-// host.workspace.add: the person in the app approves a folder with no terminal, through the command line's one check; anyone else is refused.
+// host.workspace.add, and host.workspace.list and remove (#2694): the person in the app approves a folder with no terminal, through the command line's one check; anyone else is refused.
 public sealed class WorkspaceAddOpTests : IAsyncLifetime
 {
     const string Op = HostOps.WorkspaceAdd;
+    const string RemoveOp = HostOps.WorkspaceRemove;
+    const string ListOp = HostOps.WorkspaceList;
     readonly string folder = Path.Combine(Path.GetTempPath(), "abwo-" + Guid.NewGuid().ToString("N")[..8]);
     // Under the test's own folder rather than temp, which the system-folder check refuses.
     readonly string dirs = Path.Combine(AppContext.BaseDirectory, "abwo-" + Guid.NewGuid().ToString("N")[..8]);
@@ -173,6 +175,137 @@ public sealed class WorkspaceAddOpTests : IAsyncLifetime
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             handler(new Remote(), Op, JsonSerializer.SerializeToElement(new { path = Dir("a") })));
+
+        Assert.Contains("person-only", error.Message);
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+    }
+
+    void Seed(params string[] paths) => File.WriteAllText(ConfigPath, JsonSerializer.Serialize(new
+    {
+        version = 1, retained = 7,
+        launch = new { workspaces = paths.Select(p => new { path = p, label = Path.GetFileName(p), isolate = true }).ToArray() },
+    }));
+
+    static string Text(JsonElement e, string name) => e.GetProperty(name).GetString()!;
+
+    [Fact]
+    public async Task The_list_gives_the_approved_folders_and_a_baseline_and_changes_nothing()
+    {
+        string a = Dir("a"), b = Dir("b");
+        Seed(a, b);
+        var before = File.ReadAllText(ConfigPath);
+        await using var ch = await Connect();
+
+        var result = await ch.CallAsync(ListOp, new { });
+
+        Assert.Equal(new[] { a, b }, result.GetProperty("workspaces").EnumerateArray().Select(w => Text(w, "path")).ToArray());
+        Assert.False(string.IsNullOrEmpty(Text(result, "baseline")));
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+    }
+
+    [Fact]
+    public async Task The_app_removes_a_folder_against_the_baseline_it_saw_and_is_told_the_new_baseline_and_a_restart()
+    {
+        string a = Dir("a"), b = Dir("b");
+        Seed(a, b);
+        await using var ch = await Connect();
+        var seen = Text(await ch.CallAsync(ListOp, new { }), "baseline");
+
+        var result = await ch.CallAsync(RemoveOp, new { path = a, baseline = seen });
+
+        Assert.Equal(("removed", "a", true), (Text(result, "result"), Text(result, "label"), result.GetProperty("restartRequired").GetBoolean()));
+        Assert.Equal(Text(await ch.CallAsync(ListOp, new { }), "baseline"), Text(result, "baseline"));
+        var saved = JsonNode.Parse(File.ReadAllText(ConfigPath))!;
+        Assert.Equal(7, saved["retained"]!.GetValue<int>());
+        Assert.Equal(b, Assert.Single(saved["launch"]!["workspaces"]!.AsArray())!["path"]!.GetValue<string>());
+        Assert.Single(logged, line => line.Contains(RemoveOp, StringComparison.Ordinal) && line.Contains("removed", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("not-approved")]
+    [InlineData("not-a-path")]
+    public async Task A_refused_remove_gets_its_closed_code_writes_nothing_and_is_audited(string code)
+    {
+        string a = Dir("a");
+        Seed(a);
+        await using var ch = await Connect();
+        var seen = Text(await ch.CallAsync(ListOp, new { }), "baseline");
+        var before = File.ReadAllText(ConfigPath);
+        logged.Clear();
+        var request = code switch
+        {
+            "stale" => new { path = a, baseline = "0000" },
+            "not-approved" => new { path = Dir("other"), baseline = seen },
+            _ => new { path = "relative", baseline = seen },
+        };
+
+        var result = await ch.CallAsync(RemoveOp, request);
+
+        Assert.Equal(("refused", code), (Text(result, "result"), Text(result, "code")));
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+        Assert.Single(logged, line => line.Contains(RemoveOp, StringComparison.Ordinal) && line.Contains(code, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""{"path":"$p"}""")]
+    [InlineData("""{"baseline":"x"}""")]
+    [InlineData("""{"path":"$p","baseline":""}""")]
+    public async Task Remove_A_request_of_any_other_shape_is_invalid_and_writes_nothing(string json)
+    {
+        Seed(Dir("a"));
+        var before = File.ReadAllText(ConfigPath);
+        await using var ch = await Connect();
+
+        var result = await ch.CallAsync(RemoveOp, JsonSerializer.Deserialize<JsonElement>(json.Replace("$p", JsonEncodedText.Encode(Dir("a")).ToString(), StringComparison.Ordinal)));
+
+        Assert.Equal(("refused", "invalid-request"), (Text(result, "result"), Text(result, "code")));
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+    }
+
+    [Fact]
+    public async Task Remove_A_config_file_that_is_not_json_is_left_alone_and_reported_with_a_closed_code()
+    {
+        File.WriteAllText(ConfigPath, "{broken");
+        await using var ch = await Connect();
+
+        Assert.Equal("config-unreadable", Text(await ch.CallAsync(RemoveOp, new { path = Dir("a"), baseline = "x" }), "code"));
+        Assert.Equal("config-unreadable", Text(await ch.CallAsync(ListOp, new { }), "code"));
+        Assert.Equal("{broken", File.ReadAllText(ConfigPath));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent, false)]
+    [InlineData(CallerKind.Other, false)]
+    [InlineData(CallerKind.HostCli, false)]
+    [InlineData(CallerKind.Agent, true)]
+    [InlineData(CallerKind.Other, true)]
+    [InlineData(CallerKind.HostCli, true)]
+    public async Task Only_a_person_in_the_app_may_see_or_remove_a_folder(CallerKind kind, bool list)
+    {
+        string a = Dir("a");
+        Seed(a);
+        var before = File.ReadAllText(ConfigPath);
+        await using var ch = await Connect();
+        logged.Clear();
+        callers.Kind = kind;
+
+        var error = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(list ? ListOp : RemoveOp, new { path = a, baseline = "x" }));
+
+        Assert.Contains("person-only", error.Message);
+        Assert.Equal(before, File.ReadAllText(ConfigPath));
+        Assert.Contains(logged, line => line.Contains("refused", StringComparison.Ordinal) && line.Contains(list ? ListOp : RemoveOp, StringComparison.Ordinal));
+        Assert.True(callers.Fresh);
+    }
+
+    [Fact]
+    public async Task Remove_A_remote_channel_is_refused_even_when_classified_as_the_app()
+    {
+        Seed(Dir("a"));
+        var before = File.ReadAllText(ConfigPath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler(new Remote(), RemoveOp, JsonSerializer.SerializeToElement(new { path = Dir("a"), baseline = "x" })));
 
         Assert.Contains("person-only", error.Message);
         Assert.Equal(before, File.ReadAllText(ConfigPath));

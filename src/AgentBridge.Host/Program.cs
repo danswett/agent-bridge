@@ -370,7 +370,7 @@ switch (command)
             var rest = new List<string>(arguments);
             var p = rest.IndexOf("--profile");
             if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
-            if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant token")) { return 4; }
+            if (HaCommands.Writes(rest) && Refused("change the host's Home Assistant connection or token")) { return 4; }
             Func<string?>? active = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().Active : null;
             return HaCommands.Run(rest, LoadIdentity().Folder, () => HaCommands.ReadSecret(Console.Error), Console.Out, Console.Error, IsDevBuild(), active, () => SecretInput.Read(Console.Error));
         }
@@ -397,7 +397,7 @@ switch (command)
             if (OwnPeerCommands.Writes(rest) && Refused("change the pinned own-peers")) { return 4; }
             var identity = LoadIdentity();
             var local = new OwnPeerCommands.Local(Wire.DeviceId(identity.Key.Public), identity.Account?.AccountId);
-            return OwnPeerCommands.Run(rest, identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, local, Console.In.ReadLine, Console.Out, Console.Error);
+            return OwnPeerCommands.Run(rest, identity.Folder, local, Console.In.ReadLine, Console.Out, Console.Error);
         }
     case "hooks" when arguments.ElementAtOrDefault(1) == "status":
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
@@ -654,6 +654,11 @@ async Task<int> ServeAsync(HostHandover handover)
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
     var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => HostSettings.CurrentAgentMessaging(identity.Folder), () => liteKill.On, () => identity.Account?.AccountId, launcher, identity.Folder, identity.Key, Log, drivers, deliveryGate);
+    // S6: the lane pump stops draining once a stop holds the delivery fence (or a restart commits), never before: a refused stop
+    // leaves the host running and the pump must go on. It and its composition end with the host run, the pump first.
+    plannedStops.StopHeld = () => liteDeliver.Pump?.BeginStop();
+    using var laneComposition = liteDeliver.Composition;
+    await using var lanePump = liteDeliver.Pump;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -926,7 +931,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Dev = IsDevBuild(),
         Elevated = PeerPolicy.SelfElevated(),
         Machine = machine,
-        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder)),
+        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder), identity.Folder),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         ApplyRemoteFolderTrust = on =>
@@ -946,6 +951,7 @@ async Task<int> ServeAsync(HostHandover handover)
         FleetPublication = () => fleetPublication.Status,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
+        Disk = new ProfileDisk(serveFolder!, log: Log).StatusLine,
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
@@ -1032,7 +1038,8 @@ async Task<int> ServeAsync(HostHandover handover)
         fleetResume = new FleetResumeCommands(identity.Folder, grantCredentials, launcher.LaunchRole, launcher.WasFleetLaunched,
             id => source.Get(id) is not null, restore.RecordedLaunch, (ask, ct) => launcher.ResumeFleetAsync(ask, ct), fleetNames.Get);
     }
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume, remoteLaunch: remoteLaunch), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, AgentBridge.Host.Lite.AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink, agentCredentials, identity.Key.Public), new AgentBridge.Host.Fleet.FleetList(agentCredentials, fleetRoster, messagingRoster: liteFleetRoster), audit: agentAudit, samePcPin: samePcPin, grantLaunch: grantPipe, fleetStop: fleetStop, fleetResume: fleetResume, remoteLaunch: remoteLaunch,
+        scriptAdmission: agentCredentials is null ? null : new ScriptAdmission(agentCredentials, agentAudit)), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

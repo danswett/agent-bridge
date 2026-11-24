@@ -39,6 +39,12 @@ The host serving the profile must be running for `migrate`. The migration proves
 by restarting it, and a rollback restarts it too. The Windows app's Settings page does not offer
 this yet; that is WinUI slice 2 (`docs/app-windows.md`).
 
+A leftover `~\.agent-ha-bridge` blocks fresh hook Set up (Settings > Agents). With
+`installation.json` in it, it is a full installation: run `migrate --dry-run`, then `migrate`, as
+above. Without one, and with nothing using it, Set up renames it aside to
+`.agent-ha-bridge.legacy-<timestamp>` and records how to undo that
+([host-hooks.md](host-hooks.md), #3644); a folder with no `installation.json` cannot be migrated.
+
 ## What migrate does
 
 In order. A failure at any step after the snapshot rolls back on its own, and the report ends

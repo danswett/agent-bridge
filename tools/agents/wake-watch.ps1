@@ -1,6 +1,7 @@
 # wake-watch.ps1: exits as soon as there is something for this team to act on, which wakes the session.
 # See docs/agents/onboarding.md §5. Run it with the powershell tool in mode "async" (attached), and
-# restart it after handling each wake.
+# restart it after handling each wake. Pass -Async to say so: without it the run is capped at one minute (#1109), because
+# a watcher started as a blocking shell call holds its session, unable to read messages, for the whole run.
 #
 # Budget: most sessions share one GitHub account (5,000 REST calls an hour between them). A dozen
 # watchers polling plainly used it all up on 11-05, twice. So every read is a conditional request
@@ -13,10 +14,18 @@ param(
   [int]$CommentSeconds = 60,
   [int]$CiSeconds = 180,
   [int]$MaxMinutes = 120,
+  [switch]$Async,                                # this run is attached as an async shell call; without it the run is capped at one minute
   [long[]]$IgnoreIds = @(),                      # comment ids to skip, e.g. a rolling status comment edited in place
   [string]$StatePath                            # defaults to a per-team file under ~/.copilot/wake-watch
 )
 $ErrorActionPreference = 'Stop'
+$blockingCapMinutes = 1
+$capped = $false
+if (-not $Async -and $MaxMinutes -gt $blockingCapMinutes) {
+  Write-Host "wake-watch: no -Async, so this run is capped at $blockingCapMinutes minute (a blocking call holds the session); run me async with -Async to wait up to $MaxMinutes min"
+  $MaxMinutes = $blockingCapMinutes
+  $capped = $true
+}
 $repo = 'danswett/agent-bridge'
 $tags = @("[to:$($Team.ToLower())]", '[to:all]')
 $cache = @{}
@@ -180,4 +189,4 @@ while ((Get-Date) -lt $deadline) {
   } catch { Write-Host "watch error (continuing): $($_.Exception.Message)"; Start-Sleep -Seconds 60 }
   Start-Sleep -Seconds $CommentSeconds
 }
-"WAKE timeout after $MaxMinutes min (restart the watcher)"
+"WAKE timeout after $MaxMinutes min (restart the watcher)$(if ($capped) { '; not async, so capped: run it with -Async' })"

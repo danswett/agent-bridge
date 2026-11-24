@@ -306,6 +306,20 @@
                     Style="{StaticResource AbSecondaryText}"
                     TextWrapping="Wrap"
                     Text="New sessions can receive an allowed, unique fleet name. Applies immediately; existing names and trust stay unchanged." />
+                <ToggleSwitch
+                    Header="Let my agents message each other across my machines"
+                    AutomationProperties.AutomationId="AgentMessagingScope"
+                    IsEnabled="{x:Bind ViewModel.CanChangeAgentMessaging, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.AgentMessagingSamePerson, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    TextWrapping="Wrap"
+                    AutomationProperties.AutomationId="AgentMessagingStatus"
+                    Text="{x:Bind ViewModel.AgentMessagingStatus, Mode=OneWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    TextWrapping="Wrap"
+                    Text="On: an agent can message your other agent sessions on any machine signed in to your account, and they can message it. Never anyone else's. Off: no agent sends or receives this way. Applies from the next message. Only you can change it here; an agent cannot. If it was turned off with the kill command, turn it back on at the machine." />
                 <local:ScriptCredentialsView x:Name="ScriptsSection" />
                 <ToggleSwitch
                     Header="Let this app and my devices approve Copilot permission prompts"

@@ -73,6 +73,30 @@ public sealed class CiCachePolicyTests
     public void A_matrix_the_fixed_resolver_reads_as_the_pool_is_held_to_the_reused_machine_rules(string strategy)
         => Assert.Contains(Check(Ci("product", Checkout, "${{ matrix.os }}", strategy)), v => v.Contains("reused ab-ci machine", StringComparison.Ordinal));
 
+    // R4zzB842 P3: a job that takes keys through a YAML merge key may take its runner that way: held to the reused-machine rules.
+    [Fact]
+    public void A_job_with_a_merge_key_is_held_to_the_reused_machine_rules()
+        => Assert.Contains(Check("x-base: &base { runs-on: windows-latest }\n" + System.Text.RegularExpressions.Regex.Replace(Ci("product", Checkout), @"runs-on: windows-latest(?=\r?\n)", "<<: *base")),
+            v => v.Contains("reused ab-ci machine", StringComparison.Ordinal));
+    // R8b P2 (#4104): GitHub reads an action's owner and repository in any case, so every spelling is the same action.
+    [Theory]
+    [InlineData("product", "Actions/Cache@v4", "saves on every event")]
+    [InlineData("product", "BUILDJET/CACHE@v4", "saves on every event")]
+    [InlineData("product", "Actions/Cache/Save@v4", "saves a cache on more than a push to main")]
+    [InlineData("app", "Actions/Cache/Restore@v4", "ships, so it restores from the package feeds")]
+    public void A_cache_action_in_any_case_is_the_same_action(string job, string uses, string problem)
+        => Assert.Contains(Check(Ci(job, Cache(uses))), v => v.Contains(problem, StringComparison.Ordinal));
+
+    [Fact]
+    public void Setup_docker_checkout_and_the_reused_machine_cache_rule_read_any_case()
+    {
+        Assert.Contains(Check(Ci("product", "      - uses: Actions/Setup-Node@v4\n        with:\n          cache: npm\n")), v => v.Contains("saves on every event", StringComparison.Ordinal));
+        Assert.Contains(Check(Ci("product", "      - uses: Docker/Build-Push-Action@v6\n        with:\n          cache-to: type=gha\n")), v => v.Contains("more than a push to main", StringComparison.Ordinal));
+        var dirty = "      - uses: Actions/Checkout@v4\n        with:\n          clean: false\n" + PerJob + "\n" + Shutdown;
+        Assert.Contains(Check(Ci("product", dirty, "[windows, x64]")), v => v.Contains("starts from a clean workspace", StringComparison.Ordinal));
+        var outside = string.Join("\n", Checkout, PerJob, Cache("Actions/Cache/Restore@v4"), Shutdown);
+        Assert.Contains(Check(Ci("product", outside, "[windows, x64]")), v => v.Contains("caches only from", StringComparison.Ordinal));
+    }
     // B221 P1-1: local composite actions are read and held to the same rules, with the two documented exceptions.
     [Fact]
     public void A_local_composite_action_is_followed_and_held_to_the_same_rules()
@@ -90,9 +114,12 @@ public sealed class CiCachePolicyTests
     {
         // install-trivy: its restore is hash-checked before use, so a shipping job may take it.
         Assert.Empty(Check(Ci("app", "      - uses: ./.github/actions/install-trivy\n"), new() { ["./.github/actions/install-trivy"] = Composite(Cache(Restore)) }));
-        // playwright-system-packages: its debs are verified against live signed indexes, so it saves on always().
-        var apt = Composite(Cache(Save, condition: "always() && steps.packages.outputs.cache-ready == 'true'"));
-        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = apt }));
+        // playwright-system-packages-save: its debs are verified against live signed indexes, so the archives it saves are safe to take on always() (ci.yml gates the call).
+        // The restore action beside it only restores: that passes, and a save put back into it is refused like any other action's.
+        var apt = Composite(Cache(Save));
+        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages-save\n"), new() { ["./.github/actions/playwright-system-packages-save"] = apt }));
+        Assert.Empty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = Composite(Cache(Restore)) }));
+        Assert.NotEmpty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/playwright-system-packages\n"), new() { ["./.github/actions/playwright-system-packages"] = apt }));
         Assert.NotEmpty(Check(Ci("pwa-ui", "      - uses: ./.github/actions/other\n"), new() { ["./.github/actions/other"] = apt }));
     }
 
