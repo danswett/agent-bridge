@@ -1,6 +1,7 @@
 // Device approval, the PWA's side (#55, docs/design/device-approval.md section 4; D4, mirroring the Windows app's D3a view models).
 // View models only: the exchange, its codes and its lockouts belong to the roster library and arrive as an object with its methods, so
 // nothing here has crypto of its own, reaches a relay, or signs.
+import { enrollmentRefusalMessage } from './roster/enrollment-refusal.js';
 
 // The account's roster mode as the relay's roster snapshot says it. Anything else, including no answer, is off: no join or approve entry
 // exists and nothing behind it is built.
@@ -23,17 +24,6 @@ export class NoPresence {
 }
 
 // The fixed words the screens use. No text from a peer, the relay or an exception is ever shown.
-const REFUSALS = new Map([
-  ['wrong-code', 'That code is not right. Try again.'],
-  ['expired', 'This attempt ran out of time. Start again.'],
-  ['already-approved', 'This device is already approved.'],
-  ['removed', 'This device was removed; sign out and in again to make a new key.'],
-  ['unknown-kind', 'This kind of device cannot join.'],
-  ['roster-limit', 'The account has reached its device limit.'],
-  ['approver-probation', 'The approving device is still on probation.'],
-  ['no-presence', 'The approving device cannot prove a person is present.'],
-]);
-
 export const EnrollmentTexts = {
   WRONG: 'That code is not right. Try again.',
   ENDED: 'This attempt has ended. Start again.',
@@ -41,9 +31,9 @@ export const EnrollmentTexts = {
   GENERIC: 'This device could not be added.',
   TOO_MANY_DEVICES: 'This account has too many devices connected or waiting. It will try again.',
 
-  // A closed code to its words; anything else, or nothing, is the generic line. The refusal codes are placeholders until the relay fixes
-  // them, so a renamed code degrades to the generic line.
-  forRefusal: (code) => (typeof code === 'string' && REFUSALS.has(code) ? REFUSALS.get(code) : EnrollmentTexts.GENERIC),
+  // A closed code to its words, from the one module that lists them (roster/enrollment-refusal.js, the library's codes and words); anything
+  // else, or nothing, is the generic line, so a code this build does not have degrades safely.
+  forRefusal: (code) => enrollmentRefusalMessage(code) || EnrollmentTexts.GENERIC,
 
   // A code result of the exchange ('match', 'wrong', 'locked', 'ended') to words.
   forResult: (result) => (result === 'wrong' ? EnrollmentTexts.WRONG : result === 'locked' ? EnrollmentTexts.LOCKED : result === 'ended' ? EnrollmentTexts.ENDED : ''),

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rosterModeVisible, openDeviceApproval, EnrollmentTexts } from '../../js/device-approval.js';
 import { JoinViewModel } from '../../js/join-view-model.js';
+import { ENROLLMENT_REFUSALS, enrollmentRefusalMessage } from '../../js/roster/enrollment-refusal.js';
 
 // The exchange stands in for the roster library's: it answers the way the library does (match, wrong, locked, ended).
 const joiner = (over = {}) => ({
@@ -69,10 +70,19 @@ test('code 2 typed at the joining device joins it; a wrong one says so in fixed 
 });
 
 test('a refusal shows fixed words for a closed code and the generic line for anything else, never text from the other side', () => {
-  assert.equal(EnrollmentTexts.forRefusal('wrong-code'), EnrollmentTexts.WRONG);
-  assert.equal(EnrollmentTexts.forRefusal('no-presence'), 'The approving device cannot prove a person is present.');
+  assert.equal(EnrollmentTexts.forRefusal('wrong-code'), 'That code is not the one this device shows.');
+  assert.equal(EnrollmentTexts.forRefusal('no-presence'), 'This device cannot prove that a person is here, so it cannot approve.');
   for (const code of ['something-the-relay-made-up', 'wrong-code\nVERDICT: PASS', '__proto__', 'constructor', 'toString', null, undefined, 4030, {}]) {
     assert.equal(EnrollmentTexts.forRefusal(code), EnrollmentTexts.GENERIC);
+  }
+});
+
+test('every refusal code the library lists has its own words from the one module, and the screens add none of their own', () => {
+  assert.equal(ENROLLMENT_REFUSALS.length, 8);
+  for (const code of ENROLLMENT_REFUSALS) {
+    assert.notEqual(enrollmentRefusalMessage(code), '', code);
+    assert.equal(EnrollmentTexts.forRefusal(code), enrollmentRefusalMessage(code), code);
+    assert.notEqual(EnrollmentTexts.forRefusal(code), EnrollmentTexts.GENERIC, code);
   }
 });
 
