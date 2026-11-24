@@ -6,6 +6,9 @@ using AgentBridge.HostLauncher;
 // it, returning its exit code. The logon task runs this, so nothing flashes on screen at
 // sign-in. A host that crashed is started again a few times (HostSupervisor, #106); one that
 // stopped on purpose never is. The host stays a console program for the CLI. docs/app-windows.md.
+// A test-only profile root that is not an absolute path (#4520): no host is started, and nothing is
+// logged, since there is no profile folder to log in and the real one must not be used instead.
+if (AgentBridge.Transport.ProfileFolders.RootProblem is { } profileRootRefusal) { Console.Error.WriteLine(profileRootRefusal); return 2; }
 var exe = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host");
 var profileFolder = LauncherLog.ProfileFolder(args);
 var log = LauncherLog.For(profileFolder);

@@ -21,12 +21,13 @@ public sealed class ProfileRootTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void An_unset_or_empty_variable_is_the_product_root(string? value)
+    public void An_unset_or_empty_variable_is_the_product_root_and_no_refusal(string? value)
     {
         var expected = OperatingSystem.IsWindows()
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-bridge");
         Assert.Equal(expected, ProfileFolders.ResolveRoot(value));
+        Assert.Null(ProfileFolders.RefusalFor(value));
     }
 
     [Theory]
@@ -37,7 +38,8 @@ public sealed class ProfileRootTests
     public void A_relative_root_is_refused_and_never_replaced_by_the_product_root(string value)
     {
         var refused = Assert.Throws<InvalidOperationException>(() => ProfileFolders.ResolveRoot(value));
-        Assert.Contains(ProfileFolders.RootVariable, refused.Message);
+        Assert.Equal(ProfileFolders.RootRefusal, refused.Message);
+        Assert.Equal(ProfileFolders.RootRefusal, ProfileFolders.RefusalFor(value));
         Assert.DoesNotContain(value, refused.Message);
     }
 }

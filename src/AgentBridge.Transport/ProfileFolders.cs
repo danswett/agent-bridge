@@ -17,18 +17,23 @@ static class ProfileFolders
     // the default, since falling back to the real folder is the harm this exists to prevent.
     public const string RootVariable = "AGENT_BRIDGE_PROFILE_ROOT";
 
+    // The one line the host's command line and the launcher say when it is relative (exit 2).
+    public const string RootRefusal = "AGENT_BRIDGE_PROFILE_ROOT must be an absolute path; nothing was read or written";
+
     public static string DefaultRoot => ResolveRoot(Environment.GetEnvironmentVariable(RootVariable));
+
+    // RootRefusal when this process's variable is set and is not an absolute path, else null. Read
+    // first by every entry point, before it opens anything, so it can refuse cleanly.
+    public static string? RootProblem => RefusalFor(Environment.GetEnvironmentVariable(RootVariable));
+
+    public static string? RefusalFor(string? configured) =>
+        string.IsNullOrWhiteSpace(configured) || Path.IsPathFullyQualified(configured.Trim()) ? null : RootRefusal;
 
     // The root for a value of RootVariable: the product's own when it is unset or empty.
     public static string ResolveRoot(string? configured)
     {
-        if (string.IsNullOrWhiteSpace(configured)) { return ProductRoot; }
-        var root = configured.Trim();
-        if (!Path.IsPathFullyQualified(root))
-        {
-            throw new InvalidOperationException($"{RootVariable} must be an absolute folder path (it is for tests and diagnostics); it was not used, and the product's own folder was not used instead.");
-        }
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        if (RefusalFor(configured) is { } refusal) { throw new InvalidOperationException(refusal); }
+        return string.IsNullOrWhiteSpace(configured) ? ProductRoot : Path.TrimEndingDirectorySeparator(Path.GetFullPath(configured.Trim()));
     }
 
     static string ProductRoot => OperatingSystem.IsWindows()

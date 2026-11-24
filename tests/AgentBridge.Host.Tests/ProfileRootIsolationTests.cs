@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Migration;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -45,15 +46,54 @@ public sealed class ProfileRootIsolationTests
         await AssertRootIsHonouredAsync(HostProcessIsolation.NewRoot("root-honoured-"));
     }
 
-    [Fact]
-    public async Task A_relative_root_is_refused_and_the_real_folder_is_not_used_instead()
+    static readonly string RelativeRoot = Path.Combine("relative", "root");
+
+    // The read-only check for a relative root: the product's code throws instead of using any folder.
+    static async Task AssertRelativeRootIsRefusedByTheProductAsync()
     {
         var start = Child("profile-root-child");
-        HostProcessIsolation.Isolate(start, Path.Combine("relative", "root"));
+        HostProcessIsolation.Isolate(start, RelativeRoot);
         var (exit, output, error) = await RunAsync(start);
         Assert.NotEqual(0, exit);
         Assert.Empty(output);
-        Assert.Contains(HostProcessIsolation.RootVariable, error);
+        Assert.Contains(AgentBridge.Transport.ProfileFolders.RootRefusal, error);
+    }
+
+    [Fact]
+    public async Task A_relative_root_is_refused_and_the_real_folder_is_not_used_instead()
+    {
+        await AssertRelativeRootIsRefusedByTheProductAsync();
+    }
+
+    // Said once, in one fixed line, before the command reads or writes anything (R8c, #4520). The
+    // read-only check above goes first, so a regression is caught before the real host is started.
+    [Fact]
+    public async Task The_host_command_line_refuses_a_relative_root_with_one_line_and_exit_2()
+    {
+        await AssertRelativeRootIsRefusedByTheProductAsync();
+        var start = new ProcessStartInfo("dotnet");
+        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "agent-bridge-host.dll"));
+        start.ArgumentList.Add("config");
+        start.ArgumentList.Add("show");
+        HostProcessIsolation.Isolate(start, RelativeRoot);
+        var (exit, output, error) = await RunAsync(start);
+        Assert.Equal(2, exit);
+        Assert.Empty(output);
+        Assert.Equal(AgentBridge.Transport.ProfileFolders.RootRefusal, error);
+    }
+
+    // No production path moves: with the variable unset, migrate's hook folder is the very folder it
+    // used before the override existed (the real local folder's AgentBridge\bin), byte for byte.
+    [Fact]
+    public async Task With_the_variable_unset_migrate_puts_its_hook_folder_where_it_always_did()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        MigrationOptions? seen = null;
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => MigrateCommands.RunAsync(
+            ["migration", "status"], AgentBridge.Transport.ProfileFolders.ResolveRoot(null), TextWriter.Null, TextWriter.Null,
+            o => { seen = o; throw new InvalidOperationException("captured"); }));
+        Assert.Equal("captured", thrown.Message);
+        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge", "bin"), seen!.HookFolder);
     }
 
     // The guard that refuses config set inside an agent session is what stopped these writes, and a

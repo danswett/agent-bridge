@@ -84,6 +84,9 @@ using AgentBridge.Transport;
 // Device names carry characters outside the console's legacy code page ("iPhone · Agent Bridge"),
 // which a redirected log otherwise records as replacement characters.
 Console.OutputEncoding = System.Text.Encoding.UTF8;
+// A test-only profile root that is not an absolute path (ProfileFolders.RootVariable, #4520): said once,
+// before anything is read or written, and never replaced by the real folder.
+if (ProfileFolders.RootProblem is { } profileRootRefusal) { Console.Error.WriteLine(profileRootRefusal); return 2; }
 var arguments = args.ToList();
 var command = arguments.Count > 0 ? arguments[0] : "help";
 string? Option(string name)
