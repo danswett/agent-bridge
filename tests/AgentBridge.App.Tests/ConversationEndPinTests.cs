@@ -541,7 +541,8 @@ public sealed class ConversationEndPinTests
         if (state != "unheld") { view.FollowState.PointerOver(7); }
         view.SwitchForProbe();
         if (state == "ended") { view.FollowState.PointerLeft(7); }
-        if (state == "navigation") { view.Scroller.Wheel(); }
+        // Opened at the top: a wheel turned up there moves nothing (#4313), so the person's move is turning it down.
+        if (state == "navigation") { view.Scroller.Wheel(-120); }
         view.DrainForProbe();
         view.Follow();
         if (state == "navigation") { Assert.Empty(view.Scroller.Targets); }
@@ -837,7 +838,7 @@ public sealed class ConversationEndPinTests
         {
             view.Scroller.Targets.Clear();
             var from = view.Scroller.VerticalOffset;
-            view.Scroller.Wheel();
+            view.Scroller.Wheel(-120);
             view.Moved(Math.Min(from + 72, extent), final: false);
             view.Moved(Math.Min(from + 144, extent));
             if (view.Scroller.VerticalOffset >= extent - 0.5 && extent < 48112)
@@ -855,8 +856,8 @@ public sealed class ConversationEndPinTests
             $"offset after each notch: {string.Join(", ", offsets)} (end {extent}, worst move back {back})");
     }
 
-    // A wheel that cannot move the view (already at an edge) raises no view change: its hold lapses by itself,
-    // and only the latest notch's lapse lets go.
+    // A wheel event that raises no view change (another scroller took it, or a zero delta): its hold lapses by
+    // itself, and only the latest notch's lapse lets go.
     [Fact]
     public void A_wheel_with_no_view_change_lets_go_after_its_start_window()
     {
@@ -875,6 +876,31 @@ public sealed class ConversationEndPinTests
         // Still at the end once it lapses: the next reply re-engages the pin there.
         view.LapseWheelForProbe();
         Assert.True(view.HistoryEnd, view.PinState());
+    }
+
+    // #4313 (P2 on #4252): the wheel turned down at the very end cannot move the view, yet it released the pin and held
+    // the view for 250 ms. A reply streaming in meanwhile was not followed, and once it grew past the 8 DIP slack later
+    // updates never re-engaged: the view was left above a growing reply. Turning the wheel at the edge it points to
+    // now leaves the pin and the view alone; turning it away from the end still releases at once.
+    [Fact]
+    public void A_wheel_turned_down_at_the_very_end_keeps_following_a_streaming_reply()
+    {
+        var view = new SessionView { MeasuredExtent = 48000 };
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.Scroller.Wheel(-120);
+        foreach (var extent in new[] { 48300.0, 48600 })
+        {
+            view.MeasuredExtent = view.Scroller.ScrollableHeight = extent;
+            view.ReplyForProbe();
+            view.DrainForProbe();
+            view.LapseWheelForProbe();
+            Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == extent, $"follows the reply to {extent}: {view.PinState()}");
+            view.Moved(extent);
+        }
+        Assert.Equal(0, view.Releases);
+        view.Scroller.Wheel(120);
+        Assert.False(view.Pinned);
     }
 
     [Fact]

@@ -67,7 +67,7 @@ static partial class SelfTest
             {
                 var from = scroll.VerticalOffset;
                 var to = Math.Clamp(from + direction * notch, 0, scroll.ScrollableHeight);
-                view.WheelForSelfTest();
+                view.WheelForSelfTest(direction < 0 ? 120 : -120);
                 scroll.ChangeView(null, to, null, disableAnimation: false);
                 trace.Add(new { ms = clock.ElapsedMilliseconds, phase, kind = "notch", from, to });
                 var low = from;
