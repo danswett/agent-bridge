@@ -13,6 +13,7 @@ public sealed class ScrollSettle
     double lastOffset = double.NaN;
     double lastExtent = double.NaN;
     int still;
+    int lastChangeFrame;
     readonly Queue<string> tail = new();
 
     /// <param name="high">The highest offset seen so far (the notches before this).</param>
@@ -34,6 +35,9 @@ public sealed class ScrollSettle
 
     public int ExtentChanges { get; private set; }
 
+    /// <summary>Frames since the extent last changed: 0 while content is still growing, large when the view parked short of a final extent.</summary>
+    public int FramesSinceExtentChange => Frames - lastChangeFrame;
+
     public double WorstBack { get; private set; }
 
     /// <summary>Distance from the end on the last frame.</summary>
@@ -54,7 +58,7 @@ public sealed class ScrollSettle
         high = Math.Max(high, offset);
         Gap = extent - offset;
         if (Frames == 1) { FirstExtent = extent; }
-        else if (extent != lastExtent) { ExtentChanges++; }
+        else if (extent != lastExtent) { ExtentChanges++; lastChangeFrame = Frames; }
         Extent = extent;
         tail.Enqueue($"{offset:0.#}/{extent:0.#}{(moving ? "+" : "")}");
         if (tail.Count > 6) { tail.Dequeue(); }
@@ -65,5 +69,5 @@ public sealed class ScrollSettle
 
     public string Describe() => Settled
         ? $"settled at the end after {Frames} frames, worst back {WorstBack:0.#}"
-        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames), last frames {string.Join(' ', tail)} (offset/extent, + while moving)";
+        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames, last changed {FramesSinceExtentChange} frames ago), last frames {string.Join(' ', tail)} (offset/extent, + while moving)";
 }

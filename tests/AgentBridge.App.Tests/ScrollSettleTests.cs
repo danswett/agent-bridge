@@ -67,7 +67,7 @@ public sealed class ScrollSettleTests
         Assert.Equal(20000, settle.FirstExtent);
         Assert.Equal(20000 + 49 * 1000, settle.Extent);
         Assert.Equal(49, settle.ExtentChanges);
-        Assert.Contains("extent 20000 to 69000 (changed on 49 frames)", settle.Describe(), StringComparison.Ordinal);
+        Assert.Contains("extent 20000 to 69000 (changed on 49 frames,", settle.Describe(), StringComparison.Ordinal);
     }
 
     // CI 45364490020: the extent was final, the view never went back, and it sat 66 short of the end for the rest of 90 s. The artifact has no frame trace, so the verdict itself carries the last
@@ -82,6 +82,21 @@ public sealed class ScrollSettleTests
         var text = settle.Describe();
         Assert.Contains("last frames 62059/63125 62059/63125 62059/63125 62059/63125 62059/63125 62059/63125+", text, StringComparison.Ordinal);
         Assert.DoesNotContain("62000/", text, StringComparison.Ordinal);       // only the last six
+    }
+
+    // Growth still under way at the end of the budget (the content keeps drawing) is a different finding from a view parked short of a final extent; one number tells them apart.
+    [Fact]
+    public void A_view_that_does_not_settle_says_how_long_ago_its_extent_last_changed()
+    {
+        var growing = new ScrollSettle(high: 10000, maxFrames: 100);
+        for (var i = 0; i < 100; i++) { growing.Observe(10000 + i, 20000 + i * 50, moving: false); }
+        var parked = new ScrollSettle(high: 10000, maxFrames: 100);
+        for (var i = 0; i < 100; i++) { parked.Observe(10066, i < 10 ? 20000 + i * 50 : 20450, moving: false); }
+
+        Assert.Equal(0, growing.FramesSinceExtentChange);
+        Assert.Equal(90, parked.FramesSinceExtentChange);
+        Assert.Contains("last changed 0 frames ago", growing.Describe(), StringComparison.Ordinal);
+        Assert.Contains("last changed 90 frames ago", parked.Describe(), StringComparison.Ordinal);
     }
 
     [Fact]
