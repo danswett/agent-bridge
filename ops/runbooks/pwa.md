@@ -10,7 +10,7 @@ failing to install (a release the worker could not keep whole; #650).
 `pages.yml` checks the newest 20 main-push CI runs every five minutes and at CI or Full completion.
 Plan, all six pwa-ui shards, pwa-e2e and product (ubuntu-latest) must succeed, each in the CI run or in the same commit's Full run (full.yml; a Pages deploy waits for FULL, never deploys on CI alone); other jobs do not gate.
 Only Pages-path changes proven on main and newer than a known live APP_VERSION deploy.
-A FULL run that never starts or was cancelled (its concurrency group cancels by arrival, not by commit) leaves the newest commit undeployed and silent: only the stale-PWA alarm (`stale-pwa.yml`, #4369) notices. To unblock it, while that commit is still main's tip, dispatch FULL by hand on main: `gh workflow run full.yml -R danswett/agent-bridge --ref main`. A by-hand FULL run on `main` at that exact commit counts for Pages; a dispatch on any branch never does (write access is needed to dispatch).
+A FULL run that never starts or was cancelled (its concurrency group cancels by arrival, not by commit) leaves the newest commit undeployed and silent: **nothing notices it today**; the stale-PWA alarm (`stale-pwa.yml`, #4369/#4466) is not on main yet and, once it is, is what notices. To unblock it, while that commit is still main's tip, dispatch FULL by hand on main: `gh workflow run full.yml -R danswett/agent-bridge --ref main`. A by-hand FULL run on `main` at that exact commit counts for Pages; a dispatch on any branch never does (write access is needed to dispatch).
 Manual rollback below remains exempt. The build job holds no publishing token; the deploy
 job publishes the artifact, then fetches the live `config.js` and `sw.js` and compares their
 sha256 with the built files, retrying for about five minutes while Pages propagates. A mismatch
@@ -45,6 +45,8 @@ Load the PWA, check its build stamp if it shows one, sign in, and answer a test 
 disposable host.
 
 ## The stale-PWA alarm
+
+**Not on main yet:** #4466 (`stale-pwa.yml` and `quality/stale-pwa.ps1`) is open. Until it merges there is no such alarm and nothing notices a stale site; this section describes what it does once it has landed.
 
 **A red `Stale PWA alarm` run** (`stale-pwa.yml`, every four hours and by hand; #4369) means https://app.slipgates.com is serving a build more than 24 hours older than main's newest commit that
 changed `pwa/`, or that the check could not read what it needs. It compares the served `config.js` (`APP_VERSION` is the deployed commit, `BUILT_AT` its time) with that commit, with two read-only GETs and no secret
