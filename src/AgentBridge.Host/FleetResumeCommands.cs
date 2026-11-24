@@ -9,7 +9,6 @@ namespace AgentBridge.Host;
 
 public sealed record FleetResumeInput(int Version, Guid Request, string Session);
 public sealed record FleetResumeReceipt(Guid Request, string Outcome, string? Reason, string? SessionId = null);
-
 // fleet.resume (#4318, docs/design/agent-resume.md): a coordinator resumes a fleet worker in place. The caller is a live agent
 // session at depth 0 with launch scope whose own recorded launch role the person listed in agents.resume.roles; the session is
 // one the launch record shows a fleet launch, ended, never the caller's own, resumed with the settings it was launched with.
@@ -28,7 +27,6 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
     // is simply running, which refuses.
     readonly Dictionary<(string, Guid), FleetResumeReceipt> answered = [];
     readonly Queue<(string, Guid)> order = new();
-
     public async Task<FleetResumeReceipt> HandleAsync(AgentCredential caller, JsonElement data)
     {
         await serial.WaitAsync();
@@ -50,7 +48,6 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 return written || outcome == "refused" ? receipt : receipt with { Outcome = "unconfirmed", Reason = "audit-unavailable" };
             }
             FleetResumeReceipt Refused(string reason, string? session = null) => Done("refused", reason, session);
-
             try
             {
                 if (data.ValueKind != JsonValueKind.Object || ProtocolJson.ByteCount(data) > 4096
