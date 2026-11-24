@@ -8,7 +8,7 @@ using System.Text.Json;
 namespace AgentBridge.Hooks;
 
 // #1003 PR C: the hook's end of approval.wait (docs/design/claude-approval-channel.md). Over the host's local pipe (4-byte little-endian length, then UTF-8 JSON,
-// docs/protocol/local-pipe.md) it says hello, sends the Claude PermissionRequest event with approval.wait, and takes the verdict from the one reply: anything but
+// docs/protocol/local-pipe.md) it says hello and agent.hello (the session token, which the host checks), sends the Claude PermissionRequest event with approval.wait, and takes the verdict from the one reply: anything but
 // exactly allow or deny in a successful reply to that request is none. It sends NOTHING until it has verified that the server is the host's own program, and
 // any failure, refusal, timeout or hang-up is none, so Claude shows its own prompt. AOT-safe: no reflection.
 public static class ApprovalClient
@@ -48,29 +48,32 @@ public static class ApprovalClient
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern int CloseHandle(IntPtr handle);
 
     // Connects (no host is none after connectWait), verifies the server, and asks. Null for anything but a verdict of allow or deny.
-    public static async Task<string?> AskHostAsync(string pipeName, Func<NamedPipeClientStream, bool> verifyServer, string eventText, TimeSpan wait, TimeSpan connectWait)
+    public static async Task<string?> AskHostAsync(string pipeName, Func<NamedPipeClientStream, bool> verifyServer, string eventText, string? token, TimeSpan wait, TimeSpan connectWait)
     {
-        if (Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
+        if (string.IsNullOrEmpty(token) || Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
         try
         {
             using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
             using (var connect = new CancellationTokenSource(connectWait)) { await pipe.ConnectAsync(connect.Token); }
-            return verifyServer(pipe) ? await AskAsync(pipe, eventText, wait) : null;
+            return verifyServer(pipe) ? await AskAsync(pipe, eventText, token, wait) : null;
         }
         catch (Exception e) when (e is IOException or OperationCanceledException or UnauthorizedAccessException or ObjectDisposedException or InvalidOperationException) { return null; }
     }
 
-    public static async Task<string?> AskAsync(Stream pipe, string eventText, TimeSpan wait)
+    public static async Task<string?> AskAsync(Stream pipe, string eventText, string? token, TimeSpan wait)
     {
-        if (Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
+        if (string.IsNullOrEmpty(token) || Encoding.UTF8.GetByteCount(eventText) > MaxEventBytes) { return null; }
         using var limit = new CancellationTokenSource(wait);
         try
         {
             await WriteAsync(pipe, "{\"id\":1,\"op\":\"hello\",\"data\":{}}", limit.Token);
             using var hello = await ReplyAsync(pipe, 1, limit.Token);
             if (hello is null || !Succeeded(hello, out _)) { return null; }
-            await WriteAsync(pipe, $"{{\"id\":2,\"op\":\"approval.wait\",\"data\":{{\"event\":\"{JavaScriptEncoder.Default.Encode(eventText)}\"}}}}", limit.Token);
-            using var answer = await ReplyAsync(pipe, 2, limit.Token);
+            await WriteAsync(pipe, $"{{\"id\":2,\"op\":\"agent.hello\",\"data\":{{\"token\":\"{JavaScriptEncoder.Default.Encode(token)}\"}}}}", limit.Token);
+            using var agent = await ReplyAsync(pipe, 2, limit.Token);
+            if (agent is null || !Succeeded(agent, out _)) { return null; }
+            await WriteAsync(pipe, $"{{\"id\":3,\"op\":\"approval.wait\",\"data\":{{\"event\":\"{JavaScriptEncoder.Default.Encode(eventText)}\"}}}}", limit.Token);
+            using var answer = await ReplyAsync(pipe, 3, limit.Token);
             if (answer is null || !Succeeded(answer, out var result)) { return null; }
             var verdict = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("verdict", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
             return verdict is "allow" or "deny" ? verdict : null;

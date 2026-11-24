@@ -13,7 +13,7 @@ namespace AgentBridge.Hooks.Tests;
 public sealed class ApprovalClientTests
 {
     const string Event = """{"session_id":"s-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo <hello> & \"x\" é"}}""";
-    const string Allow = """{"re":2,"ok":true,"result":{"verdict":"allow"}}""";
+    const string Allow = """{"re":3,"ok":true,"result":{"verdict":"allow"}}""";
     static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
 
     static async Task<bool> Fill(Stream s, byte[] buffer)
@@ -67,18 +67,20 @@ public sealed class ApprovalClientTests
         }
     }
 
-    // Hello, then the one reply given for approval.wait (after an unrelated event frame).
+    // Hello, agent.hello, then the one reply given for approval.wait (after an unrelated event frame).
     static FakeHost Host(string waitReply) => new(async (s, got) =>
     {
         await Take(s, got);
         await Send(s, """{"re":1,"ok":true,"result":{}}""");
         await Take(s, got);
+        await Send(s, """{"re":2,"ok":true,"result":{"principal":"agent:m/s-1","scope":"read"}}""");
+        await Take(s, got);
         await Send(s, """{"ev":"session.upsert","seq":1,"data":{}}""");
         await Send(s, waitReply);
     });
 
-    static Task<string?> Ask(FakeHost host, string eventText = Event, Func<NamedPipeClientStream, bool>? verify = null, TimeSpan? wait = null) =>
-        ApprovalClient.AskHostAsync(host.Name, verify ?? (_ => true), eventText, wait ?? Wait, TimeSpan.FromSeconds(5));
+    static Task<string?> Ask(FakeHost host, string eventText = Event, Func<NamedPipeClientStream, bool>? verify = null, TimeSpan? wait = null, string? token = "abat1_secret") =>
+        ApprovalClient.AskHostAsync(host.Name, verify ?? (_ => true), eventText, token, wait ?? Wait, TimeSpan.FromSeconds(5));
 
     [Theory]
     [InlineData("allow")]
@@ -88,17 +90,18 @@ public sealed class ApprovalClientTests
         await using var host = Host(Allow.Replace("allow", verdict));
         Assert.Equal(verdict, await Ask(host));
         Assert.Equal("""{"id":1,"op":"hello","data":{}}""", host.Received[0]);
-        using var wait = JsonDocument.Parse(host.Received[1]);
-        Assert.Equal((2, "approval.wait", Event), (wait.RootElement.GetProperty("id").GetInt32(), wait.RootElement.GetProperty("op").GetString(), wait.RootElement.GetProperty("data").GetProperty("event").GetString()));
+        Assert.Equal("""{"id":2,"op":"agent.hello","data":{"token":"abat1_secret"}}""", host.Received[1]);
+        using var wait = JsonDocument.Parse(host.Received[2]);
+        Assert.Equal((3, "approval.wait", Event), (wait.RootElement.GetProperty("id").GetInt32(), wait.RootElement.GetProperty("op").GetString(), wait.RootElement.GetProperty("data").GetProperty("event").GetString()));
     }
 
     [Theory]
-    [InlineData("""{"re":2,"ok":true,"result":{"verdict":"none","reason":"off"}}""")]
-    [InlineData("""{"re":2,"ok":true,"result":{"verdict":"ALLOW"}}""")]
-    [InlineData("""{"re":2,"ok":true,"result":{"verdict":true}}""")]
-    [InlineData("""{"re":2,"ok":true,"result":"allow"}""")]
-    [InlineData("""{"re":2,"ok":true}""")]
-    [InlineData("""{"re":2,"ok":false,"result":{"verdict":"allow"}}""")]
+    [InlineData("""{"re":3,"ok":true,"result":{"verdict":"none","reason":"off"}}""")]
+    [InlineData("""{"re":3,"ok":true,"result":{"verdict":"ALLOW"}}""")]
+    [InlineData("""{"re":3,"ok":true,"result":{"verdict":true}}""")]
+    [InlineData("""{"re":3,"ok":true,"result":"allow"}""")]
+    [InlineData("""{"re":3,"ok":true}""")]
+    [InlineData("""{"re":3,"ok":false,"result":{"verdict":"allow"}}""")]
     [InlineData("""{"re":99,"ok":true,"result":{"verdict":"allow"}}""")]
     [InlineData("not json")]
     public async Task Anything_but_exactly_allow_or_deny_in_a_successful_reply_to_this_request_is_none(string reply)
@@ -108,11 +111,27 @@ public sealed class ApprovalClientTests
     }
 
     [Fact]
-    public async Task A_host_that_refuses_hello_is_not_sent_the_event()
+    public async Task A_host_that_refuses_hello_is_not_sent_the_token_or_the_event()
     {
         await using var host = new FakeHost(async (s, got) => { await Take(s, got); await Send(s, """{"re":1,"ok":false,"error":"refused"}"""); await Take(s, got); });
         Assert.Null(await Ask(host));
         Assert.Single(host.Received);
+    }
+
+    [Fact]
+    public async Task A_host_that_refuses_agent_hello_is_not_sent_the_event_and_no_token_means_nothing_is_sent()
+    {
+        await using var host = new FakeHost(async (s, got) =>
+        {
+            await Take(s, got); await Send(s, """{"re":1,"ok":true,"result":{}}""");
+            await Take(s, got); await Send(s, """{"re":2,"ok":false,"error":"refused: not an agent"}"""); await Take(s, got);
+        });
+        Assert.Null(await Ask(host));
+        Assert.Equal(2, host.Received.Count);
+        await using var none = Host(Allow);
+        Assert.Null(await Ask(none, token: null));
+        Assert.Null(await Ask(none, token: ""));
+        Assert.Empty(none.Received);
     }
 
     [Fact]
@@ -129,7 +148,7 @@ public sealed class ApprovalClientTests
             await s.FlushAsync();
         });
         Assert.Null(await Ask(big));
-        await using var silent = new FakeHost(async (s, got) => { await Take(s, got); await Send(s, """{"re":1,"ok":true,"result":{}}"""); await Take(s, got); await Task.Delay(TimeSpan.FromSeconds(5)); });
+        await using var silent = new FakeHost(async (s, got) => { await Take(s, got); await Send(s, """{"re":1,"ok":true,"result":{}}"""); await Take(s, got); await Send(s, """{"re":2,"ok":true,"result":{}}"""); await Take(s, got); await Task.Delay(TimeSpan.FromSeconds(5)); });
         var started = DateTime.UtcNow;
         Assert.Null(await Ask(silent, wait: TimeSpan.FromMilliseconds(400)));
         Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3));
@@ -150,7 +169,7 @@ public sealed class ApprovalClientTests
     public async Task With_no_host_listening_the_answer_is_none_without_a_long_wait()
     {
         var started = DateTime.UtcNow;
-        Assert.Null(await ApprovalClient.AskHostAsync("ab-appr-none-" + Guid.NewGuid().ToString("N")[..8], _ => true, Event, Wait, TimeSpan.FromMilliseconds(300)));
+        Assert.Null(await ApprovalClient.AskHostAsync("ab-appr-none-" + Guid.NewGuid().ToString("N")[..8], _ => true, Event, "abat1_secret", Wait, TimeSpan.FromMilliseconds(300)));
         Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3));
     }
 
