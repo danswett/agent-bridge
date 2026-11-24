@@ -85,8 +85,9 @@ free text. A code a client does not know is shown as a generic refusal.
 Today `reply_to_agent_session` and `list_agent_sessions` act on this machine only ([mcp-fleet-mode.md](mcp-fleet-mode.md),
 [local-pipe.md](../protocol/local-pipe.md), `mcp/README.md`). **Engineering proposal, not the owner's words:** slice PR5 gives them the
 person's other machines, through the host and nothing else. The record covers only the default scope (section 1); these tool changes
-stay departures that [mcp-fleet-mode.md](mcp-fleet-mode.md) lists, and the Chief decides whether the owner decision covers the `machine`
-argument before PR5 starts.
+stay departures that [mcp-fleet-mode.md](mcp-fleet-mode.md) lists. The Chief has confirmed row 5: a `machine` argument that targets the
+same person's sessions on any of that person's machines is inside the owner's Nov 23 scope (PR5a, built). The fleet list (`scope:
+"fleet"`, PR5b) is not settled and waits for the owner.
 
 - `reply_to_agent_session` takes an optional `machine` (the exact 32-hex device id from a fleet row). With it, the MCP server asks the
   **local host** for `agent.send`; without it, the call is exactly today's local reply. This is the one change the owner decision's

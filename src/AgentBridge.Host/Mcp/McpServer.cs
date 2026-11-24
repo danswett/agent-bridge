@@ -19,6 +19,10 @@ public interface IMcpConnection : IMcpCalls
 public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
 {
     const int MaxText = 16 * 1024;
+    // agent.send's own limit (UTF-16 code units), for a message to another machine.
+    const int MaxRemoteText = 4096;
+    static readonly System.Text.RegularExpressions.Regex DeviceId = new("^[0-9a-f]{32}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    static readonly System.Text.RegularExpressions.Regex NodeId = new("^agent_bridge_[0-9a-f]{16}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     static readonly string Instructions = $"{Product.Name} messaging is connected on this machine. When you need to message, read or start another agent session, " +
         "use these tools instead of any other messaging route; they carry your identity and the permissions the owner gave you. " +
@@ -31,8 +35,8 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             """{"type":"object","properties":{"include":{"type":"string","enum":["content"],"description":"Add each session's latest response and question. Default: status only."}}}"""),
         ("read_agent_session", "sessions.read", true, "Read a session's latest answer. Pass the since from reply_to_agent_session to never get a stale answer.",
             """{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string","description":"Session id from list_agent_sessions."},"since":{"type":"string","description":"The \"since\" reply_to_agent_session returned; the answer then waits for a newer turn."},"wait_seconds":{"type":"number","description":"Wait up to this long (max 600) for the turn to finish."}}}"""),
-        ("reply_to_agent_session", "sessions.reply", false, "Send a message to another agent session on this machine.",
-            """{"type":"object","required":["session_id","text"],"properties":{"session_id":{"type":"string","description":"Session id."},"text":{"type":"string","description":"The whole message, up to 16 KiB. It arrives as one line."}}}"""),
+        ("reply_to_agent_session", "sessions.reply", false, "Send a message to another agent session on this machine, or with machine to a session on another of your own machines. A message to another machine is sent once and never retried: if the outcome is unconfirmed or unknown, do not send it again unasked.",
+            """{"type":"object","required":["session_id","text"],"properties":{"session_id":{"type":"string","description":"Session id; with machine, that session's node id (agent_bridge_ and 16 hex digits)."},"machine":{"type":"string","description":"Exact device id (32 lowercase hex digits) of another machine signed in as you. Only your own agents' sessions can be reached; another person's are refused."},"text":{"type":"string","description":"The whole message, up to 16 KiB (4096 characters with machine). It arrives as one line."}}}"""),
         ("launch_agent_session", "sessions.launch", false, "Start (or resume) an agent session on this machine.",
             """{"type":"object","properties":{"machine":{"type":"string","description":"Ignored: this server reaches this machine only."},"prompt":{"type":"string","description":"The opening prompt, whole, up to 16 KiB."},"request":{"type":"string","description":"Your own key for this launch (letters, digits, - _ . :), to read its result later."},"agent":{"type":"string","description":"Launcher id from get_launch_options."},"workspace":{"type":"string","description":"Workspace label."},"profile":{"type":"string","description":"Agency profile."},"resume":{"type":"string","description":"Id of a resumable session."},"model":{"type":"string","description":"Model."},"effort":{"type":"string","description":"Effort."},"context":{"type":"string","description":"Context."},"permissions":{"type":"string","enum":["Ask permission","Allow all"]},"role":{"type":"string","description":"Worker role (letters, digits, hyphens). Omitted: default. Cost/context control, not a security boundary. Null or blank roles are rejected."}}}"""),
         ("read_launch_result", "sessions.launch", false, "What a launch made through this server came to.",
@@ -137,6 +141,7 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             {
                 "list_agent_sessions" => await McpTools.ListSessionsAsync(conn, (string?)a["include"] == "content", ct),
                 "read_agent_session" => await McpTools.ReadSessionAsync(conn, (string)a["session_id"]!, (string?)a["since"], Math.Min(600, a["wait_seconds"] is JsonValue w && w.TryGetValue<double>(out var d) ? d : 0), ct: ct),
+                "reply_to_agent_session" when a["machine"] is JsonValue => await McpTools.SendAsync(conn, (string)a["machine"]!, (string)a["session_id"]!, (string)a["text"]!, ct),
                 "reply_to_agent_session" => await McpTools.ReplyAsync(conn, (string)a["session_id"]!, (string)a["text"]!, ct),
                 "launch_agent_session" => await McpTools.LaunchAsync(conn, ledger, a, ct),
                 "read_launch_result" => ledger.Read((string)a["request"]!),
@@ -173,6 +178,13 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             case "read_agent_session":
                 Str("session_id"); Str("since", optional: true);
                 if (a.ContainsKey("wait_seconds") && !(a["wait_seconds"] is JsonValue w && w.TryGetValue<double>(out var d) && double.IsFinite(d))) { throw new McpToolException("wait_seconds must be a number."); }
+                break;
+            case "reply_to_agent_session" when a.ContainsKey("machine"):
+                // Another of this person's machines: an exact device id, that machine's roster node id, and agent.send's own text rules.
+                if (!(a["machine"] is JsonValue mv && mv.TryGetValue<string>(out var machine) && DeviceId.IsMatch(machine))) { throw new McpToolException("machine must be an exact device id: 32 lowercase hex digits."); }
+                if (!(a["session_id"] is JsonValue sv && sv.TryGetValue<string>(out var node) && NodeId.IsMatch(node))) { throw new McpToolException("With machine, session_id is that session's node id: agent_bridge_ and 16 lowercase hex digits."); }
+                if (!(a["text"] is JsonValue tv && tv.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text) && !text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))) { throw new McpToolException("text must be a non-blank string without control characters other than tab, CR and LF."); }
+                if (text.Length > MaxRemoteText) { throw new McpToolException($"text is too long for another machine (max {MaxRemoteText} characters)."); }
                 break;
             case "reply_to_agent_session": Str("session_id"); Str("text", MaxText); break;
             case "launch_agent_session":
