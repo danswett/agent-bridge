@@ -169,7 +169,13 @@ public static class ProtocolVectors
             .Valid("no-figure", new SessionLoad { Session = SessionId })
             .Valid("descriptors", session with { Agent = LoadAgentKind.Direct, HandleKind = LoadHandleKind.Fds })
             .Reads("unknown-enums", """{"session":"s-1","agent":"future","state":"future","handleKind":"future"}""");
-        f.Record<MachineLoad>(Host)
+        // The local pipe's reply (#2982): only the four figures launch admission reads, never a session list or machine totals.
+        f.Record<MachineLoadFigures>(Host)
+            .Valid("fresh", new MachineLoadFigures { State = MachineLoadState.Fresh, AgeMs = 100, RunQueueAvg = 2.5, StaleAfterMs = 15000 })
+            .Valid("stale-no-figure", new MachineLoadFigures { State = MachineLoadState.Stale, AgeMs = 16000, StaleAfterMs = 15000 })
+            .Valid("unavailable", new MachineLoadFigures())
+            .Reads("unknown-state", """{"state":"future"}""")
+            .Reads("mixed-case-names", """{"STATE":"stale","AGEMs":16000,"runQUEUEavg":2.5,"sTaleAfterMS":15000}""");        f.Record<MachineLoad>(Host)
             .Valid("full", full)
             .Valid("partial", full with { State = MachineLoadState.Partial, Memory = null })
             .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000, RunQueueAvg = null })
