@@ -879,6 +879,9 @@ public sealed record ReplyRequest
     // Host-only, with claudeBusyQueue (#3828, slice C): Claude's box must be positively empty or show exactly the known queued hint; never from a protocol caller.
     [JsonIgnore]
     public bool RequireEmptyBox { get; init; }
+    // Clear and send (#804): the command a person's device signed to clear the box it was shown (ReplyClear). Only a host's relay channel acts on one;
+    // anything else ignores it and the reply is refused as before.
+    public SignedCommand? Clear { get; init; }
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }

@@ -149,6 +149,8 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool RestoreOnStart { get; init; } = true;
     // permissions.phoneSignIn: off unless set true.
     public bool PhoneSignIn { get; init; }
+    // replies.clearAndSend (#804): ReplyClear.Confirm or .Off. Off unless it is exactly confirm.
+    public string ClearAndSend { get; init; } = AgentBridge.Protocol.ReplyClear.Off;
     // permissions.escapedApproval: EscapedApproval.Confirm or .Machine.
     public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
 
@@ -309,6 +311,11 @@ public sealed record HostSettings(bool RemoteApproval)
                         _ => throw new JsonException("fleet.share is not true or false"),
                     } };
                 }
+            }
+            if (root.TryGetProperty("replies", out var replies) && replies.ValueKind == JsonValueKind.Object && replies.TryGetProperty("clearAndSend", out var clear))
+            {
+                // Read in the direction that does least: anything but the exact word confirm is off.
+                settings = settings with { ClearAndSend = clear.ValueKind == JsonValueKind.String && clear.GetString() == AgentBridge.Protocol.ReplyClear.Confirm ? AgentBridge.Protocol.ReplyClear.Confirm : AgentBridge.Protocol.ReplyClear.Off };
             }
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }
             if (permissions.ValueKind != JsonValueKind.Object) { throw new JsonException("permissions is not an object"); }

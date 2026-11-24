@@ -40,6 +40,18 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal((new HostSettings(false), (string?)null), With("{ // mine\n \"permissions\": { \"remoteApproval\": false, } }"));
     }
 
+    // Clear and send (#804): nothing clears a box from another device unless replies.clearAndSend is exactly "confirm".
+    [Theory]
+    [InlineData("{}", "off")]
+    [InlineData("{ \"replies\": {} }", "off")]
+    [InlineData("{ \"replies\": { \"clearAndSend\": \"confirm\" } }", "confirm")]
+    [InlineData("{ \"replies\": { \"clearAndSend\": \"off\" } }", "off")]
+    [InlineData("{ \"replies\": { \"clearAndSend\": \"always\" } }", "off")]
+    [InlineData("{ \"replies\": { \"clearAndSend\": true } }", "off")]
+    [InlineData("{ \"replies\": \"confirm\" }", "off")]
+    public void Clear_and_send_is_off_unless_the_policy_is_exactly_confirm(string json, string expected) =>
+        Assert.Equal(expected, With(json).Settings.ClearAndSend);
+
     [Fact]
     public void Escaped_approvals_are_confirmed_from_the_folder_trust_devices_until_a_list_of_their_own_replaces_them()
     {
