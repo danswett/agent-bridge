@@ -74,7 +74,9 @@
     AZURE_CONFIG_DIR for the az CLI, so a separate sign-in can be used.
 
 .PARAMETER ExpectedAzureUser
-    The az sign-in the rehearsal belongs to (default: the AGENT_BRIDGE_REHEARSAL_AZURE_USER environment variable, so no address is kept in the repo). Any other, or none set, is refused unless -AllowOtherAzureUser.
+    The az sign-in the rehearsal belongs to. Default: the AGENT_BRIDGE_REHEARSAL_AZURE_USER
+    environment variable, set once as a user environment variable, so no address is kept in
+    the repo. Any other sign-in, or none set, is refused unless -AllowOtherAzureUser.
 
 .PARAMETER JumpVia
     user@host of an SSH jump host (VM-M) for an operator whose own SSH egress the NSG does not
@@ -1349,9 +1351,12 @@ function Expand-Guest([string] $Script) {
 # ---------------------------------------------------------------------------------------------
 # Before anything that writes: the az profile in -AzureConfigDir must be the expected sign-in.
 $signedIn = (Invoke-Az account show --query user.name -o tsv).Trim()
-if ($signedIn -ne $ExpectedAzureUser) {
+if (-not $ExpectedAzureUser -or $signedIn -ne $ExpectedAzureUser) {
     if (-not $AllowOtherAzureUser) {
-        throw "az is signed in as '$signedIn', not '$ExpectedAzureUser' (AZURE_CONFIG_DIR=$AzureConfigDir). Sign in with that profile, set AGENT_BRIDGE_REHEARSAL_AZURE_USER (or pass -ExpectedAzureUser), or pass -AllowOtherAzureUser."
+        if (-not $ExpectedAzureUser) {
+            throw "No expected az sign-in is set. Set the AGENT_BRIDGE_REHEARSAL_AZURE_USER user environment variable once (docs/parity-checklist.md, VM-W in Azure), then open a new terminal. az is signed in as '$signedIn'."
+        }
+        throw "az is signed in as '$signedIn', not '$ExpectedAzureUser' (AZURE_CONFIG_DIR=$AzureConfigDir). Sign in with that profile, fix AGENT_BRIDGE_REHEARSAL_AZURE_USER, or pass -AllowOtherAzureUser."
     }
     Write-Warning "continuing as '$signedIn' because -AllowOtherAzureUser was given"
 }

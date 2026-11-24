@@ -105,8 +105,19 @@ It creates only the resource group `rg-agent-bridge-rehearsal` (westus2, tagged
 `purpose=rehearsal-39`). That group holds a Windows 11 Pro VM `REHEARSAL-W` (Standard_D4s_v5,
 which runs nested virtualization for WSL2, with Standard_D4as_v5 as the fallback), a static
 public IP and an NSG. It refuses to run if `az` is signed in as anyone other than
-`-ExpectedAzureUser`, or if an existing group of that name lacks the tag. It needs Windows
-(the password file is DPAPI) and PowerShell 7.3 or later.
+the account named by the `AGENT_BRIDGE_REHEARSAL_AZURE_USER` environment variable (below), or if an
+existing group of that name lacks the tag. It needs Windows (the password file is DPAPI) and PowerShell 7.3 or later.
+
+**The sign-in it belongs to (one-time, in Windows settings).** The script, and `build/shadow-soak-vm.ps1`, which calls it, refuse
+unless `az` is signed in as the account the rehearsal belongs to. No address is kept in the repo and none is typed into a command:
+the account is read from a user environment variable, which you set once:
+
+1. Open Start and type **environment variables**, then choose **Edit environment variables for your account**.
+2. Under **User variables**, choose **New**. Name: `AGENT_BRIDGE_REHEARSAL_AZURE_USER`. Value: the account `az` is signed in as.
+3. Choose OK, then open a new terminal.
+
+Every command below then works as written. With the variable unset the script says so and stops before it writes anything,
+and the soak says so before it starts or stops anything (its `-Finish` would otherwise leave both VMs running and billing).
 
 Everything inside the VM is done through `az vm run-command`, not SSH. A proxied network can
 send SSH out from addresses other than its web traffic. Entra Global Secure Access does this,
