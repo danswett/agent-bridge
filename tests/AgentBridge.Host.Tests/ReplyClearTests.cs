@@ -65,6 +65,19 @@ public sealed class ReplyClearTests
     }
 
     [Fact]
+    public async Task A_person_class_refusal_is_never_replayed_to_a_non_person_resend_of_the_same_request()
+    {
+        await using var h = await Harness.Create(); h.Draft = "a draft someone left here";
+        var asked = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true };
+        var first = await h.Replier.ReplyAsync(asked with { IntentSource = () => ReplyIntent.Steer });
+        Assert.NotNull(first.Input);
+        // The same device, session and request UUID, now from an unclassified sender: it must not read the cached person result.
+        var again = await h.Replier.ReplyAsync(asked with { IntentSource = () => ReplyIntent.Unknown });
+        Assert.Null(again.Input);
+        Assert.DoesNotContain("someone left", JsonSerializer.Serialize(again, ProtocolJson.Options));
+    }
+
+    [Fact]
     public async Task An_empty_box_has_no_input_to_show()
     {
         await using var h = await Harness.Create(); h.Draft = "";
