@@ -18,6 +18,13 @@ public sealed class UiHangWatchdogTests
         readonly object gate = new();
         readonly List<Action> pending = [];
         public bool Throws { get; set; }
+        public bool Refuses { get; set; }
+        public bool TryPost(Action action)
+        {
+            if (Refuses) { return false; }
+            Post(action);
+            return true;
+        }
         public void Post(Action action)
         {
             if (Throws) { throw new InvalidOperationException("the queue is closed"); }
@@ -189,6 +196,68 @@ public sealed class UiHangWatchdogTests
         var (id, name) = Assert.Single(threads);
         Assert.NotEqual(uiThread, id);
         Assert.Equal("UI hang watchdog", name);
+    }
+
+    // A logger that throws (a full disk, a closed file) must never escape a beat: on the background thread that is an unhandled exception, which ends the app.
+    [Fact]
+    public void A_logger_that_throws_never_escapes_a_beat_and_the_dump_is_still_taken()
+    {
+        var watchdog = new UiHangWatchdog(ui, dump, time, _ => throw new InvalidOperationException("the log is gone"), debuggerAttached: () => false);
+
+        Hang(watchdog, TimeSpan.FromMinutes(1));
+        ui.Run();                                   // it answers again: the recovery line throws too
+        watchdog.Tick();
+        ui.Run();
+        watchdog.Tick();
+
+        Assert.Equal(1, dump.Writes);
+        Assert.False(watchdog.Stopped);
+    }
+
+    [Fact]
+    public void A_logger_that_throws_does_not_end_the_watchdog_thread_or_crash_the_process()
+    {
+        var wrote = new ManualResetEventSlim();
+        var writer = new CallbackDump(() => wrote.Set());
+        using var watchdog = new UiHangWatchdog(ui, writer, TimeProvider.System, _ => throw new IOException("the log is gone"),
+            pingEvery: TimeSpan.FromMilliseconds(20), hangAfter: TimeSpan.FromMilliseconds(250), debuggerAttached: () => false);
+
+        watchdog.Start();
+        Assert.True(wrote.Wait(TimeSpan.FromSeconds(10)));
+        Thread.Sleep(200);                           // beats after the throwing line: still running, nothing unhandled
+
+        Assert.False(watchdog.Stopped);
+        watchdog.Dispose();
+        Assert.True(watchdog.Stopped);
+    }
+
+    // QueueDispatcher.Post ignored TryEnqueue's result: a queue that refuses the ping (the app is closing) looked like a hung UI thread.
+    [Fact]
+    public void A_dispatcher_that_refuses_the_ping_stops_the_watchdog_and_is_never_a_hang()
+    {
+        ui.Refuses = true;
+        var watchdog = Watchdog();
+
+        Hang(watchdog, TimeSpan.FromMinutes(5));
+
+        Assert.Equal(0, dump.Writes);
+        Assert.True(watchdog.Stopped);
+        Assert.Contains(said, line => line.Contains("refused", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_dispatcher_that_starts_refusing_later_stops_it_the_same_way()
+    {
+        var watchdog = Watchdog();
+        watchdog.Tick();
+        ui.Run();                                    // the first ping is answered
+        ui.Refuses = true;
+        watchdog.Tick();
+
+        Hang(watchdog, TimeSpan.FromMinutes(2));
+
+        Assert.Equal(0, dump.Writes);
+        Assert.True(watchdog.Stopped);
     }
 
     [Fact]

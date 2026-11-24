@@ -18,6 +18,10 @@ public static class LiteCodes
     // A node id could not be resolved because session discovery is held (docs/design/reply-deduplication.md): the
     // session may be live but not listed yet. Nothing was typed; a retry may deliver.
     public const string SessionResolutionIncomplete = "sessionResolutionIncomplete";
+    // Busy-Claude queue (docs/message-delivery.md): a relay message to this session is still held, or the status store is full. Nothing was typed.
+    // Neither is busy: busy triggers the one HA fallback, which would bypass the depth cap.
+    public const string QueueHeld = "queueHeld";
+    public const string StatusFull = "statusFull";
 }
 
 public sealed record GateDecision(bool Allowed, string? Code, string? Reason)
@@ -44,13 +48,21 @@ public interface ILiteLaunches
 // the routine never names a gate itself.
 public static class LiteComposition
 {
-    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, Func<string?> account, LaunchService launcher, string folder, P256KeyPair key, Action<string> log, SessionDrivers? drivers = null)
+    public static LiteDeliver Create(ISessionSource source, ISessionReplier replier, IConsoleInjector injector, Func<AgentMessagingSettings> currentSettings, Func<bool> modeOn, Func<string?> account, LaunchService launcher, string folder, P256KeyPair key, Action<string> log, SessionDrivers? drivers = null, DeliveryGate? gate = null)
     {
         var launches = new LiteLaunchLog(id => LiveProcess(source, id), folder, key, log);
         launcher.SessionStarted += launches.Launched;
         source.Changed += (_, _) => launches.Prune();
         IReplyTargetGate[] gates = [new ForcedAskGate(launches), new AllowlistedAllTargetsGate(launches, currentSettings)];
-        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue };
+        // The lane (S4) exists only when the host supplies its delivery gate. It stays off until laneDelivery is on; the one pump
+        // wakes on the composition's Offered event, and S6 owns stopping it.
+        LaneComposition? lane = null; DeliveryDispatchPump? pump = null;
+        if (gate is not null)
+        {
+            lane = new LaneComposition(currentSettings, modeOn, gate, replier, LaneScreens.Create(source, injector, TimeProvider.System), folder, log);
+            pump = new DeliveryDispatchPump(lane, source, log);
+        }
+        return new LiteDeliver(gates, source, replier, injector, log, targetFence: TargetFence(launches, currentSettings, modeOn), account: account) { Drivers = drivers, ClaudeBusyQueue = () => modeOn() && currentSettings().ClaudeBusyQueue, BusyStore = new BusyQueueStore(TimeProvider.System), Composition = lane, Pump = pump };
     }
 
     internal static Func<string, Func<bool>> TargetFence(LiteLaunchLog launches, Func<AgentMessagingSettings> settings, Func<bool> modeOn)
