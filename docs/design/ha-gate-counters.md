@@ -248,8 +248,12 @@ Reads change no bytes; permitted appends may extend files, not rewrite pre-exist
 fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
 of missing evidence, clean suffix, automatic reset/start, new store/journal or
 repair command. Repair/reset execution remains outside 9A; reset alone does not
-restore evidence health. Archive enumeration and active-run preservation remain
-9B; neither cut completes #2524 alone or admits a qualifying run.
+restore evidence health. Active-run preservation is 9B (#2971): a run is ACTIVE when any row carries its
+run id and no `gate.seal` row for it exists (every unsealed run counts, so two overlapping runs are both kept; a row or file whose
+run or seal cannot be read counts as active). Retention and `audit archive` never delete or move a day holding rows of an active
+run, so active-run evidence stays in the live files, and the head model is unchanged: archived days are not replayed, because
+archiving already advances `Root` and `RetiringRoot`. Runs unsealed for over 7 days are counted as abandoned and the count is logged
+with the active count; nothing is expired here. Consequences stated plainly: an unparseable line (a torn write) holds its day, and retention stops at the first held day, so one old held day also pauses later days until it is repaired or its run is sealed; the first-grant rotation (`retired/`) is a separate path that copies whole days and is not changed here. Neither cut completes #2524 alone or admits a qualifying run.
 
 This explicitly clarifies previously unspecified append policy, based on section 4
 lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head

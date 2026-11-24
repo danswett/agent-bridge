@@ -192,5 +192,17 @@ if ((Fence @($rollbackRun) 101).reason -ne 'rollback-active') { Write-Host 'FAIL
 $missingTotal = & $rollbackScript -Runs @()
 if (-not ($missingTotal.held -eq $true -and $missingTotal.loud -eq $true -and $missingTotal.reason -ceq 'rollback-history-unavailable')) { Write-Host "FAIL: a missing TotalCount must hold loudly -> held $($missingTotal.held), $($missingTotal.reason), loud $($missingTotal.loud)"; $failures++ }
 
+# An explicit TotalCount that is no count of runs holds loudly too (#4425): it used to coerce to 0 and open the fence.
+foreach ($bad in @($null, '', -1, 'abc', 1.5)) {
+    $state = try { & $rollbackScript -Runs @() -TotalCount $bad 3>$null } catch { @{ held = 'threw'; reason = $_.Exception.Message; loud = $null } }
+    ExpectFence "TotalCount $(if ($null -eq $bad) { 'null' } else { "'$bad'" })" $state $true 'rollback-history-unavailable' $true
+}
+ExpectFence 'a TotalCount read from JSON (a long)' (& $rollbackScript -Runs @() -TotalCount ([long]0) 3>$null) $false 'no-rollback' $false
+# No rollback is no warning on every 5-minute gate run, nor a line in the gate's summary (#4425): the gate prints the reason once.
+$summaryFile = New-TemporaryFile; $savedSummary = $env:GITHUB_STEP_SUMMARY; $env:GITHUB_STEP_SUMMARY = $summaryFile.FullName
+try { $streams = @(& $rollbackScript -Runs @() -TotalCount 0 3>&1) } finally { $env:GITHUB_STEP_SUMMARY = $savedSummary }
+$warned = @($streams | Where-Object { $_ -is [System.Management.Automation.WarningRecord] }); $noted = @(Get-Content $summaryFile.FullName); Remove-Item $summaryFile.FullName
+if ($warned.Count -or $noted.Count) { Write-Host "FAIL: no rollback must print nothing itself -> warnings $($warned.Count), summary '$($noted -join ' | ')'"; $failures++ }
+Write-Host $(if ($failures) { "pages gate: $failures failed" } else { 'pages gate: ok' })
+# Last, always (PagesGateScriptTests pins it): #4370's first head lost this tail, and the file then passed whatever it found.
 if ($failures) { exit 1 }
-Write-Host 'pages gate: ok'

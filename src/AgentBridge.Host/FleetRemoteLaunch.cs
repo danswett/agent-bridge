@@ -12,9 +12,19 @@ namespace AgentBridge.Host;
 // request binding, replay, then the receiving host's own grant is the authority through the shared launch pipeline.
 // signPoint is believed only because it arrived on this channel, which the sender's device key authenticates (as in lite);
 // the hostSign suspension is temporary, and a signed roster replaces this later.
-public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
+public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants, ILiteMode mode, TimeProvider? clock = null, DateTimeOffset? startedAt = null)
 {
     public const string Op = "fleet.launch";
+    // The kill gate is required, so a wiring that forgets it cannot fail open.
+    readonly ILiteMode gate = mode ?? throw new ArgumentNullException(nameof(mode));
+
+    // The one place the receiver is built: Program calls this once per host, after the launch pipeline exists, so the service serves fleet.launch
+    // and every request shares ONE replay cache and ONE 2.5-minute warm-up. A second call returns the instance already wired.
+    internal static FleetRemoteLaunch Wire(SessionService service, AgentPipeLaunch pipeline, GrantStore grants, ILiteMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(mode);
+        return service.FleetRemoteLaunch ??= new FleetRemoteLaunch(pipeline, grants, mode);
+    }
     readonly TimeProvider time = clock ?? TimeProvider.System;
     readonly RateCap rates = new(clock ?? TimeProvider.System);
     // Warm-up: for about 2.5 minutes after a start nothing is accepted, so an envelope sealed before a restart cannot replay.
@@ -22,6 +32,8 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
 
     public async Task<FleetLaunchReceipt> ReceiveAsync(LiteChannel channel, JsonElement data)
     {
+        // The lite kill (ILiteMode.On, the same switch as lite messaging) turns remote launch off, before any parse or side effect.
+        if (!gate.On) { return Refuse("kill-switch"); }
         if (channel.Untrusted is not null || !rates.Allow(channel.PeerId, Op)) { return Refuse("policy"); }
         FleetActionSigned signed; FleetLaunchInput input; byte[] point = [];
         try

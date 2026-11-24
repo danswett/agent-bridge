@@ -324,6 +324,7 @@ accepts a caller that is a member of that job when the chain does not reach the 
   its processes do and nothing is ended.
 * **Foreign callers.** A process in neither the chain nor the job is refused exactly as before, with the same log line. Another
   session's job does not admit a caller to this one. Adopted sessions and macOS/Linux are unchanged (no job, ancestor rule).
+  A refusal logs the caller's chain as pids and image file names only (sanitised, at most 12), never a command line, path or token.
 **macOS and Linux.** See step 2: no agent credentials there until peer identification and
 ancestry exist. That is a prerequisite for launched and adopted sessions alike.
 
