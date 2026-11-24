@@ -845,6 +845,17 @@ test only; per-commit main concurrency; the `ab-ci` labels behind `AB_CI_SELF_HO
 the app UI self-test jobs hosted. *Proposed* (not yet recorded as decisions, marked below): the cache policy, the shards, the
 path-filter extension, the reused-machine rules, the cost figures and the order of work.
 
+**Test shards (S4, #4104; approved as option A, built in pieces; the planner is the first).** The `product` job's tests are 472 s of its 641 s, and
+one project, `Host.Tests`, is 417 s of that, so shards split by **test class** inside the big projects (`Host.Tests`, `App.Tests`), each shard job building
+for itself (build once and hand the output over as an artifact is decided after the artifact transfer is measured). A shard runs `dotnet test --no-build --filter`
+with one `FullyQualifiedName~Class.` term per class it owns. Two things must hold or a test is dropped or run twice, and `ShardPlanner` (`tools/AgentBridge.Quality`)
+is built around them: **every class is in exactly one shard**, and **a term matches only its own shard's tests**. A term `X.` also matches `FakeX.`, so classes like
+that are one unit and travel together (3 of Host.Tests' 139). The plan is a pure function of the classes discovered and their recorded seconds, so every shard job computes
+the same plan; a class with no recorded time weighs the median of those that have one, so a new class is spread rather than piled on. Discovery must be the **built
+assembly's, by reflection**, never a scan of the source: the spike's source scan missed a class with a custom Fact attribute and 73 of Host.Tests' 4860 tests ran in no
+shard. `dotnet test --list-tests` is not an option either (222 s on Host.Tests alone). A class name the filter language would misread is refused, never dropped. The
+shard legs, the discovery command, the weights file and `quality-gate` failing on a missing or skipped shard are later pieces.
+
 **What gates main: two lanes (decided, owner, Nov 23, S2, #4104; the design, not yet built: what exists today is one `ci.yml`, whose `app`
 job self-tests and packs, and the pieces below build it, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
 one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on
