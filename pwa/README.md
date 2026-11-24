@@ -238,7 +238,7 @@ name and state).
   each given for one machine and go only through `HostSession.route(hostId)`, that machine's
   open channel; one waiting for a machine that is away is resent to that machine when it is
   back (once its new snapshot is whole), and never to a session of the same id on another. What a card offers comes from its
-  own machine's hello, so a read-only shadow such as "DSWETT-DEV-VM1 (shadow)" shows its
+  own machine's hello, so a read-only shadow such as "guest-c (shadow)" shows its
   sessions read-only, saying why, beside machines that take answers.
 * **Connections.** A machine is connected to only while it is shown: one channel per
   machine, at most three handshakes under way at once (one for a machine no longer shown is

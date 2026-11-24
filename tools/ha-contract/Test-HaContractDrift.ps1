@@ -56,7 +56,11 @@ $upstream = (& git -C $Source rev-parse HEAD).Trim()
 Set-Content -LiteralPath (Join-Path $OutDir 'upstream.txt') -Value $upstream -NoNewline
 
 $exporter = Join-Path $PSScriptRoot 'Export-HaContract.ps1'
-$arguments = @('-NoProfile', '-File', $exporter, '-Source', $Source)
+# The machines the pinned contract was recorded for, read back from it: nothing here names one, and recording the same ones is what makes a
+# difference mean the contract moved.
+$slugs = (Get-Content -LiteralPath (Join-Path $Fixtures 'ha-contract.json') -Raw | ConvertFrom-Json).slugs
+$arguments = @('-NoProfile', '-File', $exporter, '-Source', $Source,
+    '-Machine', $slugs[0].machineName, '-OtherMachine', $slugs[1].machineName, '-QualifiedMachine', $slugs[2].machineName)
 foreach ($key in $names.Keys) { $arguments += @("-$key", (Join-Path $OutDir "recorded\$($names[$key])")) }
 $log = & pwsh @arguments 2>&1 | ForEach-Object { "$_" }
 $exported = $LASTEXITCODE

@@ -3,7 +3,7 @@
     agent-ha-bridge's own functions rather than restating them.
 
     The HA connector (docs/ha-connector.md) must publish exactly what the PowerShell daemon
-    publishes, so the dashboard DSWETT-HOME generates keeps drawing a migrated machine. The
+    publishes, so the dashboard agent-ha-bridge generates keeps drawing a migrated machine. The
     surest description of "exactly" is the daemon's own code: this script loads the functions
     that build topics, entity ids and payloads from an agent-ha-bridge checkout, replaces the
     one function that would send anything (Invoke-HomeAssistantService) with a recorder, calls
@@ -18,7 +18,7 @@
     Run from the agent-bridge repository root:
 
         pwsh -NoProfile -File tools/ha-contract/Export-HaContract.ps1 `
-            -Source C:\Users\me\repos\agent-ha-bridge
+            -Source C:\Users\me\repos\agent-ha-bridge -Machine <name> -OtherMachine <name> -QualifiedMachine <host.domain>
 
     and commit tests/AgentBridge.HomeAssistant.Tests/Fixtures/ha-contract.json. The source's
     commit is recorded in the fixture, so a later regeneration shows what changed upstream.
@@ -27,6 +27,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Source,
+    # The two machine names the recording is made for. None is written here: the tests read them back from the fixture, so any two names do.
+    [Parameter(Mandatory)][string]$Machine,
+    [Parameter(Mandatory)][string]$OtherMachine,
+    # A fully qualified host name, recorded to show how a name with a domain is made into a slug.
+    [Parameter(Mandatory)][string]$QualifiedMachine,
     [string]$Output = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-contract.json'),
     # Questions: how the daemon arms, clears and reads a session's answer controls.
     [string]$DecisionsOutput = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures\ha-decisions.json'),
@@ -172,7 +177,7 @@ function Get-Published {
     , @($script:Recorded | ForEach-Object { ConvertTo-Fixture $_ })
 }
 
-$machine = 'DSWETT-DEV-VM1'
+# $machine is the -Machine parameter (PowerShell names are not case-sensitive).
 $slug = Get-BridgeMachineSlug -MachineName $machine
 # A publisher that takes no machine name (Publish-CopilotMqttUpdate) names its device after the
 # computer it runs on, which made a recording depend on where it was made: on any computer but
@@ -338,7 +343,7 @@ $fixture = [ordered]@{
         stateMaxChars = $script:CopilotMqttConfig.StateMaxChars
         maxFields = $script:CopilotMqttMaxFields
     }
-    slugs = @(@('DSWETT-DEV-VM1', 'DSWETT-HOME', 'dswett-arm8.redmond.corp.microsoft.com', 'A--B__C', '!!!', 'ÄÖÜ-Laptop', ('x' * 30), ('ab_' * 9)) | ForEach-Object {
+    slugs = @(@($Machine, $OtherMachine, $QualifiedMachine, 'A--B__C', '!!!', 'ÄÖÜ-Laptop', ('x' * 30), ('ab_' * 9)) | ForEach-Object {
         [ordered]@{ machineName = $_; slug = Get-BridgeMachineSlug -MachineName $_ }
     })
     nodes = @(@($copilotId, $claudeId, $codexId, 'abc', '---', 'ABCDEF0123456789ABCDEF', 'session one') | ForEach-Object {
