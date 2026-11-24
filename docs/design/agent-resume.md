@@ -52,7 +52,7 @@ closed) until they are relaunched; the owner resumes those by hand meanwhile.
    matched by session id alone (a new `WasFleetLaunched`); an unfinished or unreadable record refuses (fail closed).
 2. **Refused:** an unknown id; a session only a person launched; any session another person's host record names (nothing
    crosses people: this host's record is one person's); a derived (16-hex) id; a session already running (`running`; no
-   force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host or excluded session.
+   force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host, excluded caller, session, fleet name or workspace (the lists fleet.end honours), or a workspace not approved.
 3. **Never wider than the original.** The resume uses the settings the host recorded when the session was launched
    (agent, profile, model, effort, context, and permissions as launched), never anything the caller supplies, and never
    wider: a setting the machine no longer offers falls back to its default, and settings that cannot be read refuse the

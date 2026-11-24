@@ -31,12 +31,15 @@ public sealed class FleetResumeTests : IDisposable
     public void Dispose() => Directory.Delete(folder, true);
     AgentCredential Caller(string scope, int depth = 0) => credentials.Check(credentials.Mint(Guid.NewGuid().ToString(), "person-launch", 100, started, scope, depth),
         new([new PeerProcess(100, started, "agent.exe")], true)).Accepted!;
-    void Settings(string[]? roles = null, bool enabled = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
-    {
-        agents = new { enabled, resume = new { roles = roles ?? ["quality-lead"] } }, launch = new { enabled = true, workspaces = Array.Empty<string>() },
-    }));
-    FleetResumeCommands Open() => new(folder, credentials, session => session == caller.Session ? callerRole : null, _ => fleetLaunched, _ => running, _ => recorded,
-        (ask, _) => { resumed.Add(ask); return Task.FromResult(outcome with { Session = ask.Id }); });
+    void Settings(string[]? roles = null, bool enabled = true, string[]? sessions = null, string[]? excludedWorkspaces = null, bool approved = true) =>
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
+        {
+            agents = new { enabled, resume = new { roles = roles ?? ["quality-lead"] }, inbound = new { exclude = new { sessions = sessions ?? [], workspaces = excludedWorkspaces ?? [] } } },
+            launch = new { enabled = true, workspaces = approved ? new[] { new { label = "App", path = folder } } : [] },
+        }));
+    string? name;
+    FleetResumeCommands Open() => new(folder, credentials, session => session == target ? null : callerRole, _ => fleetLaunched, _ => running, _ => recorded,
+        (ask, _) => { resumed.Add(ask); return Task.FromResult(outcome with { Session = ask.Id }); }, s => s == target ? name : null);
     Task<FleetResumeReceipt> Resume(string? session = null, Guid? request = null, AgentCredential? who = null) => Open().HandleAsync(who ?? caller,
         JsonSerializer.SerializeToElement(new { version = 1, request = request ?? Guid.NewGuid(), session = session ?? target }));
     [Fact]
@@ -61,11 +64,33 @@ public sealed class FleetResumeTests : IDisposable
         Assert.Equal(("refused", "policy"), (receipt.Outcome, receipt.Reason));
         Assert.Empty(resumed);
     }
+    // The person's "no agent may reach" lists bind resume as they bind fleet.end: the caller, the target's fleet name, the recorded workspace.
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("name")]
+    [InlineData("workspace")]
+    [InlineData("unapproved")]
+    public async Task Excluded_callers_names_and_workspaces_and_unapproved_workspaces_are_refused_like_fleet_end(string why)
+    {
+        name = "worker-7";
+        if (why == "caller") { Settings(sessions: [caller.Session]); }
+        else if (why == "name") { Settings(sessions: [name]); }
+        else if (why == "workspace") { Settings(excludedWorkspaces: ["App"]); }
+        else { Settings(approved: false); }
+        var receipt = await Resume();
+        Assert.Equal(("refused", "scope"), (receipt.Outcome, receipt.Reason));
+        Assert.Empty(resumed);
+    }
     [Fact]
     public async Task A_caller_without_launch_scope_or_not_at_depth_zero_is_refused()
     {
         Assert.Equal("policy", (await Resume(who: Caller(AgentProtocol.ScopeReadReply))).Reason);
-        Assert.Equal("policy", (await Resume(who: Caller(AgentProtocol.ScopeReadReplyLaunch, depth: 1))).Reason);
+        var deep = Caller(AgentProtocol.ScopeReadReplyLaunch, depth: 1);
+        Assert.Equal(1, deep.Depth);   // the credential really is below depth 0
+        Assert.Equal("policy", (await Resume(who: deep)).Reason);
+        var adopted = credentials.Check(credentials.Mint(Guid.NewGuid().ToString(), AgentCredentials.AdoptedLaunch, 100, started, AgentProtocol.ScopeReadReplyLaunch),
+            new([new PeerProcess(100, started, "agent.exe")], true)).Accepted!;   // an adopted session is never a coordinator
+        Assert.Equal("policy", (await Resume(who: adopted)).Reason);
         Assert.Empty(resumed);
     }
     [Theory]
