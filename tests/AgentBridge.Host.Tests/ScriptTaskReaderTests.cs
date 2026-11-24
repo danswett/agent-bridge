@@ -16,8 +16,8 @@ public class ScriptTaskReaderTests
     const string U = "S-1-5-21-1-2-3-1000";
     const string Admins = "O:BAG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)";
 
-    static bool? Locked(string sddl, bool folder = false, SecurityIdentifier[]? groups = null, SecurityIdentifier[]? denyOnly = null) =>
-        TaskAccess.Unchangeable(sddl, folder, User, groups ?? [], denyOnly);
+    static bool? Locked(string sddl, bool folder = false, SecurityIdentifier[]? groups = null, SecurityIdentifier[]? denyOnly = null, bool beside = false) =>
+        TaskAccess.Unchangeable(sddl, folder, User, groups ?? [], denyOnly, beside);
 
     [Theory]
     [InlineData("O:BAG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;" + U + ")", true)]
@@ -209,6 +209,82 @@ public class ScriptTaskReaderTests
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Deletes(me)), (true, Readonly(me))]));
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, "not a descriptor")]));
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, "O:SYG:SY")]));
+    }
+
+    [Fact]
+    public void The_folder_a_pinned_file_sits_in_is_not_locked_when_the_user_may_add_a_file_or_a_subfolder_to_it()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // A library planted beside a pinned program runs in its place, so adding to that folder counts like changing a file in it.
+        Assert.False(Locked("O:BAG:SYD:(A;;FA;;;SY)(A;;0x2;;;" + U + ")", folder: true, beside: true));
+        Assert.False(Locked("O:BAG:SYD:(A;;0x4;;;" + U + ")", folder: true, beside: true));
+        Assert.False(Locked("O:BAG:SYD:(A;;0x1301bf;;;BU)", folder: true, groups: [Users], beside: true));
+        Assert.True(Locked("O:BAG:SYD:(A;;FA;;;BA)(A;;0x2;;;BA)", folder: true, beside: true));
+        Assert.True(Locked("O:BAG:SYD:(D;;0x6;;;" + U + ")(A;;0x6;;;" + U + ")", folder: true, beside: true));
+        // Folders above it only matter for what they let the user remove or re-permission: adding there plants nothing beside the program.
+        Assert.True(Locked("O:BAG:SYD:(A;;0x6;;;" + U + ")", folder: true));
+    }
+
+    [Fact]
+    public void A_descriptor_with_no_owner_or_an_object_entry_is_undecided_not_locked()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Null(Locked("D:(A;;FA;;;SY)(A;;FR;;;" + U + ")"));
+        Assert.Null(Locked("G:SYD:(A;;FA;;;SY)", folder: true));
+        Assert.Null(Locked("O:BAG:SYD:(OA;;FA;bf967aba-0de6-11d0-a285-00aa003049e2;;" + U + ")"));
+    }
+
+    [Fact]
+    public void A_pinned_file_is_not_locked_when_the_folder_beside_it_takes_additions_but_a_folder_further_up_may()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var me = WindowsIdentity.GetCurrent().User!.Value;
+        string Readonly(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;{who})";
+        string Adds(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;0x6;;;{who})";
+
+        Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Adds(me)), (true, Readonly(me))]));
+        Assert.True(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, Adds(me))]));
+    }
+
+    [Fact]
+    public void The_walk_up_from_a_file_asks_every_level_and_refuses_links_unreadable_folders_and_a_missing_file()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var me = WindowsIdentity.GetCurrent().User!.Value;
+        string Readonly() => $"O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;{me})";
+        var root = Directory.CreateTempSubdirectory("script-task-walk-");
+        try
+        {
+            var real = Directory.CreateDirectory(Path.Combine(root.FullName, "real"));
+            var file = Path.Combine(real.FullName, "run.ps1");
+            File.WriteAllText(file, "# run");
+            var asked = new List<string>();
+            string Fake(FileSystemInfo e) { asked.Add(e.FullName); return Readonly(); }
+
+            Assert.True(WindowsScriptTaskReader.LockedChain(file, Fake));
+            Assert.Equal(file, asked[0]);
+            Assert.Contains(real.FullName, asked);
+            Assert.Contains(root.FullName, asked);
+            Assert.Equal(new DirectoryInfo(file).Root.FullName, asked[^1]);
+
+            Assert.False(WindowsScriptTaskReader.LockedChain(Path.Combine(real.FullName, "missing.ps1"), Fake));
+            Assert.False(WindowsScriptTaskReader.LockedChain(file, e => e.FullName == root.FullName ? throw new UnauthorizedAccessException() : Readonly()));
+            Assert.False(WindowsScriptTaskReader.LockedChain(file, e => e.FullName == file ? throw new IOException() : Readonly()));
+            Assert.False(WindowsScriptTaskReader.LockedChain(file, e => e.FullName == real.FullName ? "not a descriptor" : Readonly()));
+
+            var junction = Path.Combine(root.FullName, "junction");
+            var made = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{junction}\" \"{real.FullName}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true });
+            made!.WaitForExit();
+            Assert.Equal(0, made.ExitCode);
+            Assert.False(WindowsScriptTaskReader.LockedChain(Path.Combine(junction, "run.ps1"), _ => Readonly()));
+        }
+        finally
+        {
+            // A junction is removed on its own (never recursively, which would follow it), then the rest.
+            var link = Path.Combine(root.FullName, "junction");
+            if (Directory.Exists(link)) { Directory.Delete(link, recursive: false); }
+            root.Delete(recursive: true);
+        }
     }
 
     [Fact]
