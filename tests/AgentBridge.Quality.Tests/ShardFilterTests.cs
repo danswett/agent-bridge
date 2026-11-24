@@ -193,4 +193,22 @@ public sealed class ShardFilterTests
         }
         finally { File.Delete(file); }
     }
+
+    // Quality's P2 (#4320's read): shard-filter knew no total, so a 3-job CI matrix on a 4-shard plan would never run shard 4, the remainder. --of M makes the mismatch fail.
+    [Theory]
+    [InlineData("3")]
+    [InlineData("5")]
+    public void A_shard_count_that_is_not_the_plans_fails_so_a_matrix_never_skips_the_remainder(string of)
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"shards-{Guid.NewGuid():N}.json");
+        File.WriteAllText(file, Plan);
+        try
+        {
+            var e = Assert.Throws<ArgumentException>(() => Program.Run(["shard-filter", "--plan", file, "--project", "Host.Tests", "--shard", "1", "--of", of], new StringWriter()));
+            Assert.Contains("4 shards", e.Message, StringComparison.Ordinal);
+            Assert.Throws<ArgumentException>(() => Program.Run(["shard-filter", "--plan", file, "--check", "--of", of], new StringWriter()));
+            Assert.Equal(0, Program.Run(["shard-filter", "--plan", file, "--project", "Host.Tests", "--shard", "4", "--of", "4"], new StringWriter()));
+        }
+        finally { File.Delete(file); }
+    }
 }
