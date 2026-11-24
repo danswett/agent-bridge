@@ -352,6 +352,50 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
 
     Task IManageNotices.Notify(string exceptDevice, string machineName, string body) => NotifyMachine(exceptDevice, machineName, body);
 
+    // Session watch S2 (docs/design/session-watch.md, "Delivery"): the host's own digest of stuck sessions, ONE per machine per pass, to every
+    // device that wants questions. It goes in the needs-you class and question kind like the folder-trust notice, in the words the watch
+    // built (the caller never passes a session title or what an agent said), visible, with one slot per device so a newer digest
+    // replaces an older one that has not gone yet.
+    public const string WatchKey = "~watch";
+
+    public void NotifyWatch(string title, string body)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            foreach (var sub in store.All)
+            {
+                if (!MayNotify(sub) || !sub.Wants(NoticeKind.Question, WatchKey)) { continue; }
+                var message = PushNotice.Fit(new PushMessage
+                {
+                    Notification = new PushNotification
+                    {
+                        Title = title,
+                        Body = body,
+                        Navigate = PushNotice.NavigateNeedsYou(sub.App, machine.Id),
+                        Tag = PushNotice.Tag(machine.Id, WatchKey),
+                        Data = new PushNoticeData { Kind = NoticeKind.Question, Machine = machine.Id, Session = "", Class = NotificationClass.NeedsYou, At = now },
+                    },
+                });
+                outbox.RemoveAll(o => o.Device == sub.Device && o.Session == WatchKey);
+                outbox.Add(new Outgoing
+                {
+                    Device = sub.Device,
+                    Session = WatchKey,
+                    Kind = NoticeKind.Question,
+                    Plain = PushNotice.Serialize(message),
+                    Ttl = (int)options.QuestionTtl.TotalSeconds,
+                    Urgency = "high",
+                    Topic = PushNotice.Topic(machine.Id, WatchKey),
+                    Created = now,
+                    NotBefore = now,
+                    Grant = sub.Grant,
+                });
+            }
+        }
+        Signal();
+    }
+
     public Task NotifyMachine(string exceptDevice, string title, string body)
     {
         var sent = new List<Task>();
