@@ -89,7 +89,8 @@ stay departures that [mcp-fleet-mode.md](mcp-fleet-mode.md) lists. The Chief has
 same person's sessions on any of that person's machines is inside the owner's Nov 23 scope (PR5a, built). The fleet list (`scope:
 "fleet"`, PR5b) is not settled and waits for the owner.
 
-- `reply_to_agent_session` takes an optional `machine` (the exact 32-hex device id from a fleet row). With it, the MCP server asks the
+- `reply_to_agent_session` takes an optional `machine` (the exact 32-hex device id from a fleet row). With it, `session_id` is the target's
+  roster node id (`agent_bridge_` and 16 hex digits) and the text is at most 4096 characters (`agent.send`'s limit). The MCP server asks the
   **local host** for `agent.send`; without it, the call is exactly today's local reply. This is the one change the owner decision's
   substance (messaging same-person sessions on other machines) points at.
 - `list_agent_sessions` takes the opt-in `scope: "fleet"` already proposed in mcp-fleet-mode.md. That is a read surface with its own
