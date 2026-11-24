@@ -38,7 +38,7 @@ public static class WatchDigest
         var clean = new StringBuilder();
         foreach (var c in label ?? "")
         {
-            if (char.IsControl(c) || c is '‎' or '‏' or '؜' or (>= '‪' and <= '‮') or (>= '⁦' and <= '⁩')) { clean.Append(' '); }
+            if (char.IsControl(c) || c is '\u200E' or '\u200F' or '\u061C' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069')) { clean.Append(' '); }
             else { clean.Append(c); }
         }
         var text = string.Join(' ', clean.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));

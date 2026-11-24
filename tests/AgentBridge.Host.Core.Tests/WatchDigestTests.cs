@@ -73,6 +73,13 @@ public class WatchDigestTests
     }
 
     [Fact]
+    public void One_character_longer_than_the_cut_alone_reads_a_session_not_an_empty_name()
+    {
+        var label = "e" + new string((char)0x0301, 30);
+        Assert.Equal("a session", Names(WatchDigest.Compose([N(WatchRule.Prompt, "a")], _ => label)!.Value.Body));
+    }
+
+    [Fact]
     public void Control_characters_and_direction_overrides_are_dropped_and_an_empty_or_missing_name_reads_a_session()
     {
         string Name(string? l) => Names(WatchDigest.Compose([N(WatchRule.Prompt, "a")], _ => l!)!.Value.Body);
