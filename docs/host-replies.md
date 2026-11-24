@@ -553,6 +553,19 @@ This is hygiene, not a security boundary: a model may ignore the marker, and a s
 A reply refused because a complete, non-shell Copilot box holds words (refusal `Occupied`)
 also returns `input`: the box as the host shows it (hidden characters escaped, host `marks`),
 capped at 500 characters, `truncated`, `mode: "text"`, the SHA-256 `digest` of the whole
-escaped box, and `clearable`. Only a reply classified as a person's (the same `Steer` provenance the clear requires) gets `input` and the draft in `reason`; an agent, an MCP child or an unclassified sender gets the reason with the draft's length only (`ReplyReasons.Shared`). **Lite never shows the box:** the Lite refusal stays the content-free `composerNotEmpty`, because the box may hold a person's draft that an agent must not read; it may later say only that a person can clear it. This cut only shows: `clearable` is always `false`, no key is
+escaped box, and `clearable`. Only a reply classified as a person's (the same `Steer` provenance the clear requires) gets `input` and the draft in `reason`; an agent, an MCP child or an unclassified sender gets the reason with the draft's length only (`ReplyReasons.Shared`). **Lite never shows the box:** the Lite refusal stays the content-free `composerNotEmpty`, because the box may hold a person's draft that an agent must not read; it may later say only that a person can clear it. Slice 2 only showed. `clearable` is true only for a person-class reply, for a one-row box that fits whole, to a relay device the policy `replies.clearAndSend` and the approved devices accept (slice 3b below); otherwise false. In slice 2 no key is
 sent, and nothing is cleared. A cut never splits an escape or a surrogate pair. Shell mode,
 Claude and Codex boxes carry no `input` yet. The signed clear and policy follow in later slices.
+
+### Clear and send is wired (#804 slice 3b)
+
+A reply through the relay from an approved person's device may carry `clear`, the command it signed for the box it was shown
+(`session.reply:clear`, `target.shown` the `input.digest`). The host checks it with `ReplyClearConfirmations` (relay only, device that signed,
+pwa or app kind, approved device, pinned person key, this session, this reply's own request, 5 minutes, and the digest of the box **as read now
+in the typing slot**), then runs the guarded clear of the foundation. `replies.clearAndSend` is `off` by default, so nothing clears until it is `confirm`.
+
+**The draft source is the screen (the owner's option A).** The draft is the box as the typing slot's screen read shows it. The one loss is
+**outer whitespace**: trailing spaces cannot be told from the row's padding, so leading and trailing spaces are not kept. The digest, the text
+a client shows to confirm, and the returned `cleared` text are all that same text, so a person confirms exactly what is deleted as shown. Interior
+spaces are kept. Everything else the foundation requires stays: Copilot, person intent, one row, at most 500 escaped characters, rows pinned to
+the keys, two empty reads. The local pipe, MCP, Lite and Home Assistant lose any `clear` and cannot supply a confirmation or a draft.

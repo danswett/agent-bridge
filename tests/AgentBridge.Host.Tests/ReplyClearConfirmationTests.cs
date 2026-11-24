@@ -121,4 +121,42 @@ public sealed class ReplyClearConfirmationTests : IDisposable
         approved = list;
         return Confirmations();
     }
+
+    // The wiring (#804 3b): only a reply through the relay from a device carries a clear to act on; everything else loses it.
+    [Fact]
+    public void A_clear_that_did_not_come_through_the_relay_is_dropped_and_nothing_can_clear()
+    {
+        var request = Reply(Guid.NewGuid().ToString(), Sign(Guid.NewGuid().ToString())) with { ClearConfirmation = _ => null, ClearDraftFromScreen = true };
+        var wired = ReplyClearWiring.Apply(request, relayPeer: null, Confirmations());
+        Assert.Null(wired.Clear);
+        Assert.Null(wired.ClearConfirmation);
+        Assert.False(wired.ClearDraftFromScreen);
+        Assert.Null(ReplyClearWiring.Apply(request, Phone, verifier: null).ClearConfirmation);
+    }
+
+    [Fact]
+    public void A_clear_through_the_relay_gets_the_verifier_and_the_screen_draft_but_no_other_source()
+    {
+        var id = Guid.NewGuid().ToString();
+        var wired = ReplyClearWiring.Apply(Reply(id, Sign(id)) with { ClearDraftSource = () => "x" }, Phone, Confirmations());
+        Assert.Null(wired.ClearDraftSource);
+        Assert.True(wired.ClearDraftFromScreen);
+        Assert.Null(wired.ClearConfirmation!(Digest));
+        Assert.NotNull(wired.ClearConfirmation!(EscapedApproval.Shown("something else")));
+        var plain = Reply(id, null);
+        Assert.Null(ReplyClearWiring.Apply(plain, Phone, Confirmations()).ClearConfirmation);
+    }
+
+    [Theory]
+    [InlineData(true, ReplyClear.Confirm, true)]
+    [InlineData(true, ReplyClear.Off, false)]
+    [InlineData(false, ReplyClear.Confirm, false)]
+    public void Clearable_is_offered_only_to_a_relay_device_the_policy_and_devices_would_accept(bool relay, string policy, bool expected)
+    {
+        var shown = new ReplyResult(AnswerOutcome.Refused, "typed") { Input = ComposerInput.From("rerun the tests") with { Clearable = true } };
+        var offered = ReplyClearWiring.Offer(shown, relay ? Phone : null, Confirmations(policy));
+        Assert.Equal(expected, offered.Input!.Clearable);
+        Assert.Equal("rerun the tests", offered.Input.Text);
+        Assert.Null(ReplyClearWiring.Offer(new ReplyResult(AnswerOutcome.Refused), Phone, Confirmations()).Input);
+    }
 }

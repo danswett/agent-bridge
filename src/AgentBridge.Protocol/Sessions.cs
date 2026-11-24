@@ -908,6 +908,11 @@ public sealed record ReplyRequest
     // No production producer until a trustworthy source of the original draft lands.
     [JsonIgnore]
     public Func<string?>? ClearDraftSource { get; init; }
+    // Host-only, with no ClearDraftSource (#804, owner's option A): the draft is the box as the screen read shows it in the typing slot.
+    // The one loss is outer whitespace (trailing spaces cannot be told from the row's padding); the digest, the confirm sheet and
+    // the returned cleared text are all that same text. Never from a protocol caller.
+    [JsonIgnore]
+    public bool ClearDraftFromScreen { get; init; }
 }
 
 public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);

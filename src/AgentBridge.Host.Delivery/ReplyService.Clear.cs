@@ -13,7 +13,10 @@ public sealed partial class ReplyService
         const string Unsafe = "the composer cannot be cleared safely; nothing was sent";
         const string Changed = "the session or person confirmation changed; nothing more was typed";
         const string NotEmpty = "the composer did not read empty after clearing; nothing was sent";
-        var draft = request.ClearDraftSource?.Invoke();
+        // The owner's option A (#804): with no lossless source, the draft is the box as this read shows it, outer whitespace trimmed (the one
+        // named loss: trailing spaces cannot be told from the row's padding). Everything after uses that same text.
+        var fromScreen = request.ClearDraftSource is null && request.ClearDraftFromScreen && state is { Content.Length: > 0 };
+        var draft = fromScreen ? state!.Content : request.ClearDraftSource?.Invoke();
         if (draft is null || state is not { Complete: true, Main: true, Shell: false, Lines: 1, Vim: CopilotVimMode.None or CopilotVimMode.Insert }
             || draft.Length == 0 || draft.Length > CopilotInputBoxReader.ShownLength
             || draft.Contains('\n') || draft.Contains('\r') || state.Content != draft.Trim(' '))
@@ -28,7 +31,7 @@ public sealed partial class ReplyService
         string? Fence()
         {
             if (request.Intent != ReplyIntent.Steer || request.ClearConfirmation is null
-                || (clearing && request.ClearDraftSource?.Invoke() != draft)
+                || (clearing && !fromScreen && request.ClearDraftSource?.Invoke() != draft)
                 || probe.Active() is not null || guard.Refuse(pid) is not null || LaunchHeld?.Invoke(session.Id) is not null)
                 return Changed;
             if (source.Get(session.Id) is not { Agent: AgentKind.Copilot, Status: SessionStatus.Idle, Question: null } live

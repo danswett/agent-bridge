@@ -758,7 +758,10 @@ public sealed class SessionService
         var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await replies.ReplyAsync(request, channel.PeerId, watch: watch);
+        // Clear and send (#804): only a relay device's clear is acted on, with the screen as its draft source; everyone else loses it.
+        var relayPeer = channel is SecureChannel relayed ? relayed.PeerId : null;
+        request = ReplyClearWiring.Apply(request, relayPeer, ReplyClear);
+        var result = ReplyClearWiring.Offer(await replies.ReplyAsync(request, channel.PeerId, watch: watch), relayPeer, ReplyClear);
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Replied(channel.PeerId, request.Id);
