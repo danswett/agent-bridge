@@ -641,10 +641,8 @@ suites:
     runner: local
     triggers: [quality/stale-pwa.ps1, quality/test-stale-pwa.ps1]
     command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
-    where: ci.yml light
-    # planned until stale-pwa.yml and its ci.yml step land (patches/ci-s2-stale-pwa-alarm-4369.patch, applied by Quality). Flip to exists,
-    # and add stale-pwa.yml check to the where, with that patch.
-    status: planned
+    where: ci.yml light, stale-pwa.yml check
+    status: exists
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
