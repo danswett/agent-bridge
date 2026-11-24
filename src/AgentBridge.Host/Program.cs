@@ -580,11 +580,12 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     push?.Start();
     // The session watch (#4262, docs/design/session-watch.md): OFF unless config.json says sessionWatch.enabled is true, read at start. Off, the only
-    // thing that runs is that one read of the setting: no timer, no read of any session, nothing sent. The owner record (S1b, LaunchOwnerLog.OwnerOf) is hooked in here once #4312 is on main; until
-    // then no session has an owner, so R2 stays quiet and nothing is addressed to an agent (agent delivery is S3).
+    // thing that runs is that one read of the setting: no timer, no read of any session, nothing sent. The owner record (S1b, LaunchOwnerLog.OwnerOf) is hooked in below once the launcher exists; until then no
+    // session has an owner, so R2 stays quiet. Nothing is addressed to an agent (agent delivery is S3).
+    Func<string, string?> watchOwnerOf = _ => null;
     PeriodicTimer? watchTick = null;
     var sessionWatch = AgentBridge.Host.Core.Watch.SessionWatchStarter.Start(() => HostSettings.SessionWatchEnabled(identity.Folder),
-        source.Snapshot, () => source.Held is not null, _ => null, source.EndedByHook,
+        source.Snapshot, () => source.Held is not null, id => watchOwnerOf(id), source.EndedByHook,
         IntakeState.Load(identity.Folder).State?.ClaudeSessionEndHookAt is { } claudeHookAt ? new Dictionary<AgentKind, DateTimeOffset> { [AgentKind.Claude] = claudeHookAt } : new Dictionary<AgentKind, DateTimeOffset>(),
         (title, body) => push?.NotifyWatch(title, body), () => DateTimeOffset.UtcNow, Log,
         token => (watchTick ??= new PeriodicTimer(AgentBridge.Host.Core.Watch.SessionWatchLoop.Tick)).WaitForNextTickAsync(token).AsTask(), stop.Token);
@@ -664,6 +665,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var launchOwners = new LaunchOwnerLog(identity.Folder, identity.Key, Log);
     launchOwners.Prune(id => source.Get(id) is not null, DateTimeOffset.UtcNow);
     launcher.SessionOwned += (session, principal) => launchOwners.Record(session, principal, DateTimeOffset.UtcNow);
+    watchOwnerOf = launchOwners.OwnerOf;
     launcher.StartScanning();
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
