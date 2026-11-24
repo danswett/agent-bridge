@@ -164,11 +164,16 @@ session; S3 cap raised, fallback removed, 2 min gap dropped; S4 end called by th
 | S4 | R3 missing and R4 offer, loop failure notice and heartbeat |
 | S5 | R5 host health |
 
-## Defaults taken (no owner question raised)
+## Defaults taken, and the owner decision still needed
 
-Thresholds above; offer-only R4; person notices on and agent delivery off by default; no new principal kind (a person-issued script
-credential instead); owner record written by the host at launch; digest and caps; reuse `NeedsYou`; coordinators keep an offline check until a
-relay probe exists.
+Defaults taken: thresholds above; offer-only R4; person notices on and agent delivery off; no new principal kind (a person-issued script
+credential instead); owner record written by the host at `SessionStarted`; digests and caps; the `NeedsYou` notification class; coordinators
+keep an offline check until a relay probe exists.
+
+**Owner decision to record before S3 (plainly):** the `watch` credential needs a PERSON press of Add in Settings > Script credentials on EACH
+machine, and it expires in 30 days by default. Until the owner (or the person at that machine) presses it, agent delivery stays off and only the
+person is notified; after 30 days it lapses unless renewed. Whether to renew monthly or allow a longer life is the owner's call and goes in the
+fleet register. Nothing in this note makes that decision, and no agent may press it.
 
 ## Not in this note
 
