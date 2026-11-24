@@ -35,8 +35,7 @@ public sealed class ShardFilterTests
         Assert.Contains("Ns.AlphaTests", e.Message, StringComparison.Ordinal);
     }
 
-    // Quality's ask (#4320): `dotnet test --filter ""` is no filter at all and runs every test, so an empty filter is never run: a filtered choice with
-    // nothing to filter by is skipped (none), whoever builds it, and the command never prints an empty line for a shard to run.
+    // Quality's ask (#4320): `dotnet test --filter ""` runs every test, so a filtered choice with no filter is skipped (none), whoever builds it.
     [Theory]
     [InlineData(null)]
     [InlineData("")]

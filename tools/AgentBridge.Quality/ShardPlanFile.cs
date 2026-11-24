@@ -12,15 +12,11 @@ internal enum ShardRun
     Filtered,
 }
 
-// What a shard job runs. An empty filter is no filter to `dotnet test`, which would run every test (Quality, #4320): a filtered
-// choice with nothing to filter by is skipped (None), whoever builds it, never run.
-internal sealed record ShardChoice
+// An empty filter is no filter to `dotnet test`, which runs every test (Quality, #4320): a filtered choice without one is skipped.
+internal sealed record ShardChoice(ShardRun Run, string? Filter = null)
 {
-    public ShardChoice(ShardRun run, string? filter = null) =>
-        (Run, Filter) = run == ShardRun.Filtered && string.IsNullOrWhiteSpace(filter) ? (ShardRun.None, null) : (run, filter);
-
-    public ShardRun Run { get; }
-    public string? Filter { get; }
+    public ShardRun Run { get; } = Run == ShardRun.Filtered && string.IsNullOrWhiteSpace(Filter) ? ShardRun.None : Run;
+    public string? Filter { get; } = string.IsNullOrWhiteSpace(Filter) ? null : Filter;
 }
 
 /// <summary>
