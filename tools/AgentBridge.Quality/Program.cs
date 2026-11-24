@@ -26,7 +26,7 @@ static class Program
               issue list --json number,title,body,labels,author); only the hunt's own and
               --owner's count. Exits 1 when a test failed every run on some OS, or a run broke
               outside any test.
-        """ + "\n" + MergeRuleCommand.Usage + "\n" + ReportCommand.Usage;
+        """ + "\n" + MergeRuleCommand.Usage + "\n" + ReportCommand.Usage + "\n" + AbCiCapacity.Usage;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -59,6 +59,9 @@ static class Program
         // The flake hunt's reporter reads test results, not the catalog, so it runs anywhere.
         if (args[0] == "flakes")
             return Flakes(options, output);
+        // The ab-ci pool's capacity check reads fetched runner and job JSON, so it runs anywhere too.
+        if (args[0] == "ab-ci-capacity")
+            return AbCiCapacity.Run(options, output);
         var root = options.GetValueOrDefault("repo") ?? ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var catalog = Catalog.Load(Path.Combine(root, "quality", "catalog.yml"));
         var graph = ProjectGraph.Load(root);
@@ -114,7 +117,8 @@ static class Program
     }
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run" };
-    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner" };
+    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner",
+        "runners", "jobs", "max-queued", "max-wait", "min-online", "now" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX

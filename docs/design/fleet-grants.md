@@ -491,6 +491,23 @@ and the signed fleet-action envelope; the receiver-side grant is authority.
 No separate roster gate applies to launch/stop; the account-wide kill switch stays.
 Own-account only; no cross-account federation or HA launch/stop fallback.
 
+Remote subject attestation (G9b; owner approval requested before G9b2 code). The source host runs the AP1
+session-credential and process-tree check locally, then signs; the envelope `subject` is the SHA-256 digest of
+the canonical tuple (account, source host, session, credential, process instance). The receiver cannot inspect
+a remote process, so it matches that digest to a grant `subjects` entry, requires the tuple's account to be its
+own and its source host to equal the envelope's source device and differ from its own device, and never calls
+the local `IsLive` credential check for a remote subject. A local source host never takes this path. Trust is
+the existing own-peer trust (owner, Nov 21, 12:50 PT). The `hostSign` suspension is TEMPORARY (owner): own-account
+messaging trust applies now; a signed roster is built and turned on later, and this section is revisited then.
+
+Restart replay (owner-approved warm-up). The envelope replay cache is in memory. Every envelope expires within 120 s, so
+after a host start the receiver refuses all `fleet.launch` envelopes until 120 s plus the 30 s clock skew has passed
+(about 2.5 minutes); any envelope sealed before the restart has expired by then, so it cannot replay. Expect remote
+launches to be refused with `policy` for about 2.5 minutes after a host restart; senders get a refusal, not a queue, and
+retry with a fresh request. No store or new file is added. Noted alternative, not chosen: a durable (sourceDevice, nonce)
+file that survives restart and removes the pause, at the cost of a private atomic store and its recovery rules.
+The sender's envelope `generation` is diagnostic only: the receiver fences on its own grant generation (as local launches do).
+
 Receiver order:
 
 1. Validate transport/account/audience and agent identity; reject replay,
@@ -533,6 +550,19 @@ exact grant id and record verified caller principal, action, request id, ingress
 audience/generation, payload binding, cap decision, intent and terminal outcome.
 Every use, including refused attempts, writes the existing audit; unavailable
 audit refuses execution. Issue/revoke and reconciliation are recorded there too.
+Grant stop rows (`session.stop`, intent and terminal) carry three additive gate fields, all or none:
+`generation` (the grant generation), `payloadDigest` (SHA-256 hex of `fleet.end/1|request|grant|session|target`,
+a digest, never the content) and `caps` (the grant's hourly/daily/live caps in force). Rows written before
+they existed carry none and stay valid; the fields are omitted, not null, so those rows are byte-identical.
+A previous version reads a new row and ignores the fields (the line hash covers the raw line, not the parsed
+row). A repeated request id is matched by the intent row's `Gate.Operation`, grant, caller and session: another
+binding or payload refuses `duplicate-id`, one recorded `ended` outcome replays, and none or more than one
+distinct terminal is `unconfirmed` and never dispatched again. A replay is still a use of the grant: grant
+validity (revoked, expired, generation), the caller's place in the subjects, `IsLive`, policy and the kill-switch
+are rechecked first and refuse with the reason the first call would have given; only the session-scope part
+cannot apply, as the session is gone. Residual, accepted (owner ruling via Engineering Lead R9): an intent row
+written before the digest existed has none, so the digest check is skipped for it; the key still includes the
+same session id, and a replay only reports the recorded outcome and does nothing.
 Grant counters derive from durable admissions, not a mutable UI number.
 
 | Threat | Control and remaining boundary |

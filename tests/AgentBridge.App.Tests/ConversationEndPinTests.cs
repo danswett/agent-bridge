@@ -749,6 +749,36 @@ public sealed class ConversationEndPinTests
         Assert.Empty(view.Scroller.Targets);
     }
 
+    // #1756: dragging the thumb (or holding an arrow) toward the end of a long mixed transcript realises
+    // tool rows taller than their estimate. Each realisation moved the block at the top, and the layout
+    // correction put it back with ChangeView under the held thumb: the bar bounced up, the end never came.
+    [Theory]
+    [InlineData("thumb")]
+    [InlineData("arrow")]
+    [InlineData("track")]
+    public void A_held_scrollbar_part_is_never_moved_by_the_top_block_correction_until_released(string part)
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        var bar = new Microsoft.UI.Xaml.Controls.Primitives.ScrollBar { Parent = view.Scroller };
+        var source = new Microsoft.UI.Xaml.UIElement { Parent = bar };
+        view.Scroller.Press(part == "thumb" ? new Microsoft.UI.Xaml.UIElement { Parent = source } : source);
+        // Alternate tool rows (estimated 48, real 160) and text rows (estimated 48, real 90) realised above the
+        // top block as the drag goes on: the block, at 40 now, was taken that much higher at each step.
+        var growth = new[] { 112.0, 42, 112, 42, 112, 42 };
+        for (var step = 0; step < growth.Length; step++)
+        {
+            view.Moved(42000 + step * 1000);
+            view.TakeAnchorForProbe(40 - growth[step]);
+            view.LaidOutForProbe();
+            Assert.Empty(view.Scroller.Targets);
+        }
+        view.Scroller.EndGesture("release");
+        view.LaidOutForProbe();
+        // Once let go, the view is still again, and the last realisation's move is put back as before.
+        Assert.Equal([47042.0], view.Scroller.Targets);
+    }
+
     [Fact]
     public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
     {
