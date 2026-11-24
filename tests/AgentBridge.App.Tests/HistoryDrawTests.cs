@@ -235,6 +235,16 @@ public sealed class HistoryDrawTests
     }
 
     [Fact]
+    public void The_start_row_waits_until_every_held_turn_is_drawn()
+    {
+        var at = new HistoryStart { At = T0 };
+        Assert.Null(HistoryDraw.Line(HistoryLoad.StartReached, 1, true, at, earlierUndrawn: true));
+        Assert.Null(HistoryDraw.Line(HistoryLoad.StartReached, 1, true, new HistoryStart { Limited = true }, earlierUndrawn: true));
+        Assert.StartsWith("Start of session · ", HistoryDraw.Line(HistoryLoad.StartReached, 5, true, at, earlierUndrawn: false));
+        Assert.Equal("Couldn't load earlier messages", HistoryDraw.Line(HistoryLoad.Failed, 1, true, at, earlierUndrawn: true));
+    }
+
+    [Fact]
     public void A_turns_prompt_and_reply_carry_their_own_sent_times()
     {
         var clock = new MessageClock(T0.AddMinutes(30), TimeZoneInfo.Utc, System.Globalization.CultureInfo.GetCultureInfo("en-US"));

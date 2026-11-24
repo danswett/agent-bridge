@@ -177,6 +177,7 @@ Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
 | `duplicate-store-full` | The 4096-id store is full of unexpired bindings |
 | `target-offline` | The target node is unreachable; nothing was sent that could have acted |
 | `kill-switch` | Account-wide kill switch, `launch.enabled` off or equivalent off state |
+| `diskLow` | Under 1 GiB free on the profile's disk; nothing was started (free space that cannot be read does not refuse). Written camelCase as agent-launch-scope.md names it; a CLI older than this change rejects an unknown reason as an invalid receipt |
 | `peer-not-trusted` | The target is not a trusted own peer (same-account relay presence bound to the device key) |
 | `person-required` | The existing stopper needs person confirmation; the agent never obtains `--confirm` |
 | `audit-unavailable` | Audit intent could not be written; no action taken |

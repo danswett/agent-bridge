@@ -31,6 +31,10 @@ public static class HostOps
     public const string ScriptGrantFleet = "scripts.grant-fleet";
     public const string ScriptRevokeFleet = "scripts.revoke-fleet";
 
+    // The person approves a folder for launching from the app, no terminal (host.workspace.add). In hello only for the app.
+    public const string WorkspacesCapability = "host.workspaces";
+    public const string WorkspaceAdd = "host.workspace.add";
+
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
     public const string Subscribe = "host.subscribe";
@@ -203,6 +207,9 @@ public sealed record HostStatus
     // Why the host acts on nothing from other devices now (delivery.readOnly, or agent-ha-bridge
     // running), absent when it does: an install a device asked for before is not carried out.
     public string? ReadOnly { get; init; }
+    // The profile's disk for fleet launches (#2771): "diskLow: ..." under 1 GiB free (the fleet grant and fleet launches are refused), "disk unknown" when
+    // free space cannot be read (launches are still allowed), absent when fine.
+    public string? Disk { get; init; }
     // The Dev Box keep-awake, absent when this machine is not a Dev Box.
     public DevBoxStatus? DevBox { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.

@@ -15,7 +15,8 @@ static class Completeness
         IReadOnlyList<string> SolutionProjects,
         IReadOnlyDictionary<string, IReadOnlyList<string>> WorkflowJobs,
         IReadOnlyList<string> TrackedFiles,
-        string? CiWorkflow = null);
+        string? CiWorkflow = null,
+        string? FullWorkflow = null);
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, ProjectGraph graph, Inputs inputs)
     {
@@ -51,6 +52,8 @@ static class Completeness
 
         if (inputs.CiWorkflow is not null)
             problems.AddRange(CiPlan.Check(catalog, inputs.CiWorkflow));
+        if (inputs.FullWorkflow is not null)
+            problems.AddRange(FullLane.Check(catalog, inputs.FullWorkflow));
 
         var commands = catalog.Suites.Where(s => s.Command is not null).Select(s => s.Command!).ToList();
         foreach (var folder in PwaSpecFolders(inputs.TrackedFiles))
@@ -74,11 +77,13 @@ static class Completeness
             foreach (var file in Directory.EnumerateFiles(workflowDir).Where(f => f.EndsWith(".yml", StringComparison.Ordinal) || f.EndsWith(".yaml", StringComparison.Ordinal)))
                 workflows[Path.GetFileName(file)] = WorkflowJobs(File.ReadAllText(file));
         var ci = Path.Combine(workflowDir, "ci.yml");
+        var full = Path.Combine(workflowDir, FullLane.File);
         return Check(catalog, graph, new Inputs(
             File.Exists(slnx) ? SolutionProjects(File.ReadAllText(slnx)) : [],
             workflows,
             ChangedFiles.Tracked(root),
-            File.Exists(ci) ? File.ReadAllText(ci) : null));
+            File.Exists(ci) ? File.ReadAllText(ci) : null,
+            File.Exists(full) ? File.ReadAllText(full) : null));
     }
 
     public static IReadOnlyList<string> SolutionProjects(string slnxXml) =>

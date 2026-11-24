@@ -98,3 +98,12 @@ test('sample times reject calendar rollover and out-of-range dates and offsets a
   const sampledAt = '2024-02-29T12:00:00.000Z';
   assert.equal(readers.readMachineLoad({ sampledAt }).sampledAt, sampledAt);
 });
+
+test('runQueueAvg is read only as a finite number, and an absent or malformed figure stays absent, never 0', () => {
+  assert.equal(readers.readMachineLoad({ state: 'partial', runQueueAvg: 8.5 }).runQueueAvg, 8.5);
+  assert.equal(readers.readMachineLoad({ state: 'partial', runQueueAvg: 0 }).runQueueAvg, 0);
+  for (const bad of ['8.5', null, NaN, Infinity, -Infinity, {}, []]) {
+    assert.equal('runQueueAvg' in readers.readMachineLoad({ state: 'partial', runQueueAvg: bad }), false, String(bad));
+  }
+  assert.equal('runQueueAvg' in readers.readMachineLoad({ state: 'stale' }), false);
+});
