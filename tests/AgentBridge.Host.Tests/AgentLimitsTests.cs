@@ -63,6 +63,24 @@ public sealed class AgentLimitsTests
         });
     }
 
+    // #2771: a fleet worker (a grant launch) takes a live slot like any agent-started session, but the idle policy (agentLaunchedIdleHours, 2)
+    // never lists it, however long it idles; an ordinary agent-started session is still listed.
+    [Fact]
+    public void A_fleet_worker_is_not_ended_at_two_hours_idle()
+    {
+        WithGate((gate, _) =>
+        {
+            Assert.True(gate.CheckLaunch("agent:m/builder", "r1", "hash").Allowed);
+            gate.LaunchStarted("agent:m/builder", "r1", "agent-started");
+            Assert.True(gate.CheckLaunch("agent:m/builder", "r2", "hash").Allowed);
+            gate.LaunchStarted("agent:m/builder", "r2", "fleet-worker", fleet: true);
+            gate.ObserveSession("agent-started", now, personTyped: false);
+            gate.ObserveSession("fleet-worker", now, personTyped: false);
+            now = now.AddHours(3);
+            Assert.Equal(["agent-started"], gate.IdleSessions());
+        });
+    }
+
     [Fact]
     public void Pending_launches_reserve_live_slots_and_only_their_own_completion_releases_them()
     {

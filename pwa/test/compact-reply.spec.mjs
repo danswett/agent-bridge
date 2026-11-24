@@ -1,5 +1,6 @@
-// A phone's reply area (#935, ui.md §6.5, §6.2, §9). Below 760 px the box is one line at rest, 52
-// tall, with Attach before the text and Send after it, and grows a line at a time to six lines; a
+// A phone's reply area (#935, ui.md §6.5, §6.2, §9). Below 760 px the box is three lines at rest (the
+// owner, Nov 23 about 23:30 PT: the collapse makes room, so the expanded box fills it), 100 tall,
+// with Attach before the text and Send after it, and grows a line at a time to six lines; a
 // question waiting puts one line above it, whose link goes to the question; and while the person
 // reads, the area floats over the conversation's foot and mirrors the collapsing header (#631):
 // near the end it rides the scroll, away from it 32 up sends it away and 64 down brings it back, a
@@ -39,6 +40,8 @@ const choices = (id) => ({
 const box = (v) => v.locator('form.reply');
 const input = (v) => box(v).getByRole('textbox', { name: 'Reply' });
 const height = (l) => l.evaluate((el) => el.getBoundingClientRect().height);
+// Five lines of words for the box.
+const FIVE = ['one', 'two', 'three', 'four', 'five'].join(String.fromCharCode(10));
 
 // The conversation not moving: an app-made scroll (to a question) has run its course, too.
 const settle = (v) => v.locator('.stream-scroll').evaluate((sc) => new Promise((resolve) => {
@@ -87,12 +90,12 @@ async function session(page, { long = true, query = '' } = {}) {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  test('the box is one line at rest, 52 tall, Attach before the text and Send after it, in one row', async ({ page }) => {
+  test('the box is three lines at rest, 100 tall, Attach before the text and Send after it, in one row', async ({ page }) => {
     const v = await session(page, { long: false });
     const b = box(v);
-    expect(await height(b.locator('.reply-box'))).toBe(52);
+    expect(await height(b.locator('.reply-box'))).toBe(100);
     // The reply area at rest: the box, and the slot's padding and edge.
-    expect(await height(v.locator('.reply-slot'))).toBe(73);
+    expect(await height(v.locator('.reply-slot'))).toBe(121);
     const at = (name) => b.getByRole(name === 'text' ? 'textbox' : 'button', { name: name === 'text' ? 'Reply' : name }).boundingBox();
     const [attach, text, send] = [await at('Attach a file or image'), await at('text'), await at('Send')];
     expect(attach.x + attach.width).toBeLessThanOrEqual(text.x);
@@ -107,7 +110,7 @@ test.describe('on a phone', () => {
     await expect(b.getByRole('button', { name: 'Send' })).toBeFocused();
   });
 
-  test('it grows a line at a time to six lines, then scrolls inside', async ({ page }) => {
+  test('it is three lines at rest, grows a line at a time to six lines, then scrolls inside', async ({ page }) => {
     const v = await session(page, { long: false });
     const t = input(v);
     const heights = [];
@@ -115,13 +118,93 @@ test.describe('on a phone', () => {
       await t.fill(Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n'));
       heights.push(await height(t));
     }
-    expect(heights).toEqual([44, 68, 92, 116, 140, 164, 164, 164]);
+    expect(heights).toEqual([92, 92, 92, 116, 140, 164, 164, 164]);
     expect(await t.evaluate((el) => getComputedStyle(el).overflowY)).toBe('auto');
     expect(await t.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    // Emptied, it is one line again.
+    // Emptied, it is three lines again.
     await t.fill('');
-    expect(await height(t)).toBe(44);
-    expect(await height(box(v).locator('.reply-box'))).toBe(52);
+    expect(await height(t)).toBe(92);
+    expect(await height(box(v).locator('.reply-box'))).toBe(100);
+  });
+
+  test('three lines from the first paint: the box never has another height, and the transcript does not move for it', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__boxHeights = [];
+      const seen = new WeakSet();
+      const watch = () => {
+        for (const t of document.querySelectorAll('form.reply textarea.reply-input')) {
+          if (seen.has(t)) { continue; }
+          seen.add(t);
+          new ResizeObserver((entries) => { for (const e of entries) { window.__boxHeights.push(Math.round(e.borderBoxSize[0].blockSize)); } }).observe(t);
+        }
+      };
+      new MutationObserver(watch).observe(document, { childList: true, subtree: true });
+    });
+    const v = await session(page);
+    await settle(v);
+    const sc = v.locator('.stream-scroll');
+    const first = await sc.evaluate((el) => el.scrollTop);
+    await page.waitForTimeout(600);
+
+    // A box that grew to its three lines after first paint would have been seen at one line first, and moved the end under the reader.
+    // (The first report is 0 while the view is not yet laid out.)
+    expect([...new Set((await page.evaluate(() => window.__boxHeights)).filter((h) => h > 0))]).toEqual([92]);
+    expect(await sc.evaluate((el) => el.scrollTop)).toBe(first);
+    expect(await end(v) - first).toBeLessThanOrEqual(1);
+  });
+
+  test('changing the height of the box does not move the transcript: not away from the end, and not at it', async ({ page }) => {
+    const v = await session(page);
+    const sc = v.locator('.stream-scroll');
+    const top = () => sc.evaluate((el) => el.scrollTop);
+    await settle(v);
+
+    // Away from the end, read back up: more lines in the box, then none, leave the view where the person put it.
+    await scrollTo(v, Math.floor((await end(v)) / 2));
+    await settle(v);
+    const mid = await top();
+    await input(v).fill(FIVE);
+    await settle(v);
+    expect(await top()).toBe(mid);
+    await input(v).fill('');
+    await settle(v);
+    expect(await top()).toBe(mid);
+
+    // At the end too: the box's height is never a scroll. (The view is where the person left it, wherever that was.)
+    await scrollTo(v, await end(v));
+    await settle(v);
+    const last = await top();
+    await input(v).fill(FIVE);
+    await settle(v);
+    expect(await top()).toBe(last);
+    await input(v).fill('');
+    await settle(v);
+    expect(await top()).toBe(last);
+  });
+
+  test('a wheel moves the transcript exactly as far as it says, whether the area is whole, riding or compact (#4243)', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'Mobile WebKit cannot send wheel input.');
+    const v = await session(page);
+    const sc = v.locator('.stream-scroll');
+    const top = () => sc.evaluate((el) => el.scrollTop);
+    await settle(v);
+    const box = await sc.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+    const steps = [];
+    const states = new Set();
+    for (const dy of [-120, -120, -120, -120, -120, -120, -120, -120, 120, 120, 120, 120, 120, 120, 120, 120]) {
+      const before = await top();
+      await page.mouse.wheel(0, dy);
+      await settle(v);
+      steps.push((await top()) - before);
+      states.add((await foot(v)).state);
+    }
+
+    expect(steps).toEqual([-120, -120, -120, -120, -120, -120, -120, -120, 120, 120, 120, 120, 120, 120, 120, 120]);
+    // It went through the whole, the riding and the compact area, and back to the whole at the end.
+    expect(states.has('compact')).toBe(true);
+    expect((await foot(v)).fy).toBe(0);
   });
 
   test('a question waiting puts one line above the box, whose link focuses its first choice and leaves the header as it was', async ({ page }) => {
@@ -138,8 +221,8 @@ test.describe('on a phone', () => {
       return c;
     }));
     expect(await height(notice)).toBe(18);
-    // One line of notice, and the box: 99 at rest.
-    expect(await height(v.locator('.reply-slot'))).toBe(99);
+    // One line of notice, and the box: 147 at rest.
+    expect(await height(v.locator('.reply-slot'))).toBe(147);
     await expect(input(v)).toBeDisabled();
     // Read back up, the question out of sight, with the header folded to its bar.
     await settle(v);
@@ -248,7 +331,7 @@ test.describe('on a phone', () => {
     const max = await end(v);
     expect(max).toBeGreaterThan(600);
     // A session opens at its latest message, so the reply area is in full, at rest.
-    expect(await foot(v)).toMatchObject({ fy: 0, room: 25, state: 'rest', solid: false });
+    expect(await foot(v)).toMatchObject({ fy: 0, room: 73, state: 'rest', solid: false });
     await scrollTo(v, max);
     expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest' });
     // The conversation keeps room for the whole area at its end: its last words clear of it.
@@ -257,7 +340,7 @@ test.describe('on a phone', () => {
     await scrollTo(v, max - 10);
     expect(await foot(v)).toMatchObject({ fy: 10, state: 'riding', solid: false });
     await scrollTo(v, max - 400);
-    expect(await foot(v)).toMatchObject({ fy: 25, state: 'compact', solid: true });
+    expect(await foot(v)).toMatchObject({ fy: 73, state: 'compact', solid: true });
     // The bar: 48, pinned to the conversation's foot, over the box's top, holding the placeholder.
     const bar = await v.locator('.reply-bar').boundingBox();
     const conv = await v.locator('.conversation').boundingBox();
@@ -276,15 +359,15 @@ test.describe('on a phone', () => {
     const max = await end(v);
     await scrollTo(v, max);
     await scrollTo(v, max - 400);
-    expect((await foot(v)).fy).toBe(25);
+    expect((await foot(v)).fy).toBe(73);
     await scrollTo(v, max - 337);
-    expect((await foot(v)).fy).toBe(25);
+    expect((await foot(v)).fy).toBe(73);
     await scrollTo(v, max - 336);
     expect(await foot(v)).toMatchObject({ fy: 0, state: 'returned', solid: false });
     await scrollTo(v, max - 367);
     expect((await foot(v)).fy).toBe(0);
     await scrollTo(v, max - 368);
-    expect(await foot(v)).toMatchObject({ fy: 25, state: 'compact' });
+    expect(await foot(v)).toMatchObject({ fy: 73, state: 'compact' });
     await scrollTo(v, max);
     expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest' });
   });
@@ -325,7 +408,7 @@ test.describe('on a phone', () => {
     const max = await end(v);
     await scrollTo(v, max);
     await scrollTo(v, max - 400);
-    expect((await foot(v)).fy).toBe(25);
+    expect((await foot(v)).fy).toBe(73);
     // At once: no slide, the box whole in the same frame.
     const at = await v.evaluate((el) => {
       el.querySelector('form.reply textarea').focus();
@@ -342,7 +425,7 @@ test.describe('on a phone', () => {
     await scrollTo(v, max - 531);
     expect((await foot(v)).fy).toBe(0);
     await scrollTo(v, max - 532);
-    expect((await foot(v)).fy).toBe(25);
+    expect((await foot(v)).fy).toBe(73);
   });
 
   test('a question waiting at the end is clear of the reply area, its notice and all', async ({ page }) => {
@@ -351,7 +434,7 @@ test.describe('on a phone', () => {
     await expect(box(v).locator('.reply-held')).toBeVisible();
     await settle(v);
     await scrollTo(v, await end(v));
-    expect(await foot(v)).toMatchObject({ fy: 0, room: 51 });
+    expect(await foot(v)).toMatchObject({ fy: 0, room: 99 });
     const answer = await v.locator('.question-slot .answer').boundingBox();
     expect(answer.y + answer.height).toBeLessThanOrEqual((await v.locator('.reply-slot').boundingBox()).y);
   });
@@ -396,7 +479,7 @@ test.describe('on a phone', () => {
       sc.scrollTo({ top: sc.scrollTop - 40, behavior: 'instant' });
     }));
     expect(fade).toEqual({ fading: true, props: 'opacity', fy: '0px' });
-    await expect.poll(async () => (await foot(v)).fy).toBe(25);
+    await expect.poll(async () => (await foot(v)).fy).toBe(73);
     await expect(v.locator('.reply-slot')).not.toHaveCSS('opacity', '0');
   });
 

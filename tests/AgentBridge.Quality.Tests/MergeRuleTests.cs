@@ -1082,11 +1082,14 @@ public class MergeRuleTests
     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
     //   verdict and a finished one needn't re-judge anything, #2454),
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+    //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
+    //   request; docs/app-windows.md, "Spacing").
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+        "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
@@ -1845,11 +1848,12 @@ public class MergeRuleTests
     }
 
     // CI finishing on main must re-judge every pull request, so their verdicts follow main to red
-    // and back; main's other runs still start nothing.
+    // and back; main's other runs still start nothing, and nor does CI starting on main: main's verdict
+    // is its newest COMPLETED evidence, so a start changes none (#4104, the sweep backlog).
     [Theory]
     [InlineData("workflow_run", "completed", "CI", "main", "push", "danswett/agent-bridge", null, true)]
-    [InlineData("workflow_run", "requested", "CI", "main", "push", "danswett/agent-bridge", null, true)]
-    [InlineData("workflow_run", "in_progress", "CI", "main", "push", "danswett/agent-bridge", null, true)]
+    [InlineData("workflow_run", "requested", "CI", "main", "push", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "in_progress", "CI", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "requested", "Pages", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "completed", "Pages", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "completed", "CI", "main", "workflow_dispatch", "danswett/agent-bridge", null, false)]
@@ -1894,7 +1898,7 @@ public class MergeRuleTests
         string Scalar(YamlMappingNode node, string key) => node.Children[new YamlScalarNode(key)].ToString();
         var group = Scalar(admission, "group");
         Assert.StartsWith("merge-rule-admit-${{", group, StringComparison.Ordinal);
-        Assert.False(IfExpression.Evaluate(Scalar(admission, "cancel-in-progress")[3..^2], github));
+        var cancel = Scalar(admission, "cancel-in-progress")[3..^2];
         Assert.Equal("merge-rule", Scalar(writer, "group"));
         Assert.Equal("false", Scalar(writer, "cancel-in-progress"));
         Assert.Equal("max", Scalar(writer, "queue"));
@@ -1910,6 +1914,16 @@ public class MergeRuleTests
                 : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
             Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+            // Only the newest run per pull request or head survives: a newer run of the same key cancels an older one,
+            // waiting or judging, and judges that key itself. A sweep never cancels; the kill switch turns it all off.
+            // A boolean for every event, not an operand: A && B || C returns B or C, and a head's sha there (#4374's P1)
+            // would be no boolean GitHub's cancel-in-progress takes.
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
+            if (runs) { Assert.Equal(sweep is null, IfExpression.Evaluate(cancel, github)); }
+            github["vars.FLEET_MERGERULE"] = "off";
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
+            Assert.False(IfExpression.Evaluate(cancel, github));
+            github["vars.FLEET_MERGERULE"] = null;
             var name = Scalar(job, "name");
             if (runs)
                 Assert.Equal(sweep is null ? "merge-rule-scoped-v1" : "merge-rule-sweep-v1",
@@ -1920,6 +1934,101 @@ public class MergeRuleTests
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
     }
 
+    // A status event judges again on any failure, error or pending, whatever its context, and on a success only for
+    // the contexts the verdict reads by name (the receipts, Copilot's, CodeQL's); merge-rule's own posts never.
+    // The accepted residual (#4104, the run backlog): an unlisted status going pending to success waits for the next
+    // event or sweep: a slower merge, never a wrong verdict, since every state that can hold a pull request still acts.
+    [Theory]
+    [InlineData("external-policy", "failure", true)]
+    [InlineData("external-policy", "error", true)]
+    [InlineData("external-policy", "pending", true)]
+    [InlineData("external-policy", "success", false)]
+    [InlineData("independent-review", "success", true)]
+    [InlineData("independent-review-2", "success", true)]
+    [InlineData("independent-review", "failure", true)]
+    [InlineData("Copilot code review", "success", true)]
+    [InlineData("CodeQL", "success", true)]
+    [InlineData("merge-rule", "failure", false)]
+    [InlineData("merge-rule", "success", false)]
+    public void A_status_judges_again_on_any_failure_error_or_pending_but_on_success_only_for_the_contexts_read_by_name(string context, string state, bool runs)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var document = (YamlMappingNode)stream.Documents[0].RootNode;
+        var job = (YamlMappingNode)((YamlMappingNode)document["jobs"])["evaluate"];
+        var group = ((YamlMappingNode)document["concurrency"])["group"].ToString();
+        var github = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github.event_name"] = "status", ["github.event.context"] = context, ["github.event.state"] = state,
+            ["github.event.sha"] = Head, ["github.run_id"] = "run-1",
+        };
+
+        Assert.Equal(runs, IfExpression.Evaluate(job["if"].ToString(), github));
+        // Admission agrees: a status that doesn't judge holds no head's slot, so it never cancels one that does.
+        Assert.Equal(runs ? Head : "run-1", IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+    }
+
+    // A run cancelled in progress never leaves merge-rule pending for good: the evaluator posts only verdicts (no
+    // placeholder before judging), and only a newer run of the same admission key cancels it, which judges that same
+    // pull request (--pr, its current head) or head (--sha, every open pull request on it) or sweeps all of them.
+    [Fact]
+    public void Only_a_newer_run_that_judges_the_same_pull_request_head_or_sweep_cancels_one_in_progress()
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var document = (YamlMappingNode)stream.Documents[0].RootNode;
+        var evaluate = (YamlMappingNode)((YamlMappingNode)document["jobs"])["evaluate"];
+        var script = string.Join("\n", ((YamlSequenceNode)evaluate["steps"]).Cast<YamlMappingNode>()
+            .Where(s => s.Children.ContainsKey("run")).Select(s => s["run"].ToString()));
+        Assert.Contains("pull_request_target) [ -n \"$PR_NUMBER\" ] && scope=(--pr \"$PR_NUMBER\")", script, StringComparison.Ordinal);
+        Assert.Contains("status) [ -n \"$STATUS_SHA\" ] && scope=(--sha \"$STATUS_SHA\")", script, StringComparison.Ordinal);
+        Assert.Contains("workflow_run) [ -n \"$RUN_SHA\" ] && [ \"$RUN_BRANCH\" != main ] && scope=(--sha \"$RUN_SHA\")", script, StringComparison.Ordinal);
+        Assert.Contains("check_suite) [ -n \"$SUITE_SHA\" ] && [ \"$SUITE_BRANCH\" != main ] && scope=(--sha \"$SUITE_SHA\")", script, StringComparison.Ordinal);
+        // The writer lock never cancels: a run already judging is cancelled only through admission, by a newer run
+        // that then waits for this lock and judges after it.
+        var writer = (YamlMappingNode)evaluate["concurrency"];
+        Assert.Equal("false", writer["cancel-in-progress"].ToString());
+        // One post per head, its verdict: nothing marks the head pending before judging, so a cancel mid-run leaves
+        // the last verdict standing until the newer run posts its own.
+        var github = new FakeGitHub(GraphQLPullRequest(Head));
+        var config = WriteConfig();
+        try
+        {
+            Assert.Equal(0, MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain));
+            Assert.StartsWith($"{Head} ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+    // Each sweep source has its own admission slot and none cancels (#4104): a cron run can't replace or cancel a main
+    // sweep waiting for the writer lock, nor can a dispatch; a newer main sweep replaces only the main sweep waiting.
+    [Fact]
+    public void A_waiting_main_sweep_survives_a_cron_run_and_a_dispatch()
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var admission = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)["concurrency"];
+        var group = admission["group"].ToString();
+        var cancel = admission["cancel-in-progress"].ToString().Trim();
+        Dictionary<string, string?> Run(string eventName, string id) => new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github.repository"] = "danswett/agent-bridge", ["github.event_name"] = eventName, ["github.run_id"] = id,
+            ["github.event.action"] = eventName == "workflow_run" ? "completed" : null,
+            ["github.event.workflow_run.name"] = eventName == "workflow_run" ? "CI" : null,
+            ["github.event.workflow_run.event"] = eventName == "workflow_run" ? "push" : null,
+            ["github.event.workflow_run.head_branch"] = eventName == "workflow_run" ? "main" : null,
+            ["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? Head : null,
+            ["github.event.workflow_run.head_repository.full_name"] = eventName == "workflow_run" ? "danswett/agent-bridge" : null,
+        };
+        string Slot(Dictionary<string, string?> run) => (string)IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], run)!;
+        var main = Run("workflow_run", "run-main");
+        var cron = Run("schedule", "run-cron");
+        var dispatch = Run("workflow_dispatch", "run-dispatch");
+
+        Assert.Equal(["merge-rule-admit-sweep", "merge-rule-admit-backstop", "merge-rule-admit-dispatch"],
+            new[] { main, cron, dispatch }.Select(r => "merge-rule-admit-" + Slot(r)));
+        Assert.All(new[] { main, cron, dispatch }, run => Assert.False(IfExpression.Evaluate(cancel[3..^2], run)));
+        Assert.Equal(Slot(main), Slot(Run("workflow_run", "run-main-2")));
+    }
     [Theory]
     [InlineData("skipped", false, true)]
     [InlineData("skipped", true, false)]
@@ -2029,7 +2138,9 @@ public class MergeRuleTests
                 {
                     var equal = tokens[position++] == "==";
                     var right = Primary();
-                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase) : left is null && right is null;
+                    // GitHub's loose equality: a value that isn't there (null) equals '' as well as null.
+                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase)
+                        : left is null or "" && right is null or "";
                     return equal == same;
                 }
                 return left;
@@ -2056,6 +2167,16 @@ public class MergeRuleTests
                     while (tokens[position] == ",") { position++; args.Add(Or()); }
                     Assert.Equal(")", tokens[position++]);
                     return string.Format(System.Globalization.CultureInfo.InvariantCulture, format, args.ToArray());
+                }
+                if (token == "startsWith")
+                {
+                    // GitHub's startsWith ignores case, and is false for a value that isn't there.
+                    Assert.Equal("(", tokens[position++]);
+                    var text = Or();
+                    Assert.Equal(",", tokens[position++]);
+                    var prefix = Assert.IsType<string>(Or());
+                    Assert.Equal(")", tokens[position++]);
+                    return text is string s && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
                 }
                 if (token == "cancelled")
                 {

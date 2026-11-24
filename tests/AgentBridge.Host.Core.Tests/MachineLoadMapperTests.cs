@@ -12,6 +12,26 @@ public class MachineLoadMapperTests
     static ProcessLoadReport Report(LocalMachine? machine = null, Dictionary<string, LocalSession>? sessions = null) =>
         new(Now.AddSeconds(-2), machine ?? new(4, 25.5, 400, TotalMemoryBytes: 1000), sessions ?? []);
 
+    [Theory]
+    [InlineData(null, 2, false)]
+    [InlineData(-1d, 2, false)]
+    [InlineData(double.NaN, 2, false)]
+    [InlineData(double.PositiveInfinity, 2, false)]
+    [InlineData(2147483648d, 2, false)]
+    [InlineData(0d, 2, true)]
+    [InlineData(8.5, 15, true)]
+    [InlineData(8.5, 16, false)]
+    [InlineData(8.5, -1, false)]
+    public void Queue_only_samples_preserve_real_zero_and_omit_unknown_invalid_or_old_figures(double? queue, int age, bool present)
+    {
+        var report = Report(new(4, null, null, RunQueueAvg: queue)) with { SampledAt = Now.AddSeconds(-age) };
+        var record = MachineLoadMapper.Map(report, Now, Limit);
+        var json = JsonSerializer.SerializeToElement(record, ProtocolJson.Options);
+        Assert.Equal(present, json.TryGetProperty("runQueueAvg", out var value));
+        if (present) { Assert.Equal(queue, value.GetDouble()); }
+        Assert.Equal(present ? MachineLoadState.Partial : age > 15 ? MachineLoadState.Stale : MachineLoadState.Unavailable, record.State);
+    }
+
     [Fact]
     public void The_mapper_preserves_measured_numbers_and_emits_only_approved_strings()
     {
