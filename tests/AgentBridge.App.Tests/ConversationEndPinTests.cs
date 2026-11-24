@@ -779,6 +779,47 @@ public sealed class ConversationEndPinTests
         Assert.Equal([47042.0], view.Scroller.Targets);
     }
 
+    // #4243: a wheel notch's animation starts before its first view change reaches us. A correction of ours
+    // landing in that gap (a row realised above the top block, an earlier-history prepend) is a ChangeView
+    // without animation, which cancels the notch where it is: identical notches then move different distances.
+    [Theory]
+    [InlineData("top-block")]
+    [InlineData("earlier-history")]
+    public void Identical_wheel_notches_move_the_same_distance_while_rows_realise_between_them(string work)
+    {
+        var view = new SessionView();
+        if (work == "earlier-history")
+        {
+            view.PrepareHistoryForProbe();
+            view.LayoutDuringMeasure = () => view.Scroller.ScrollableHeight = 48000 + view.ShownCount * 160;
+            view.FirstFrameForProbe();
+        }
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48160);
+        view.Moved(30000);
+        const double notch = 144; // one 120 wheel delta: three 48 DIP lines
+        var moved = new List<double>();
+        // Tool rows realise 112 taller than estimated, text rows 42.
+        foreach (var grew in new[] { 112.0, 42, 112, 42, 112, 42, 112, 42 })
+        {
+            var from = view.Scroller.VerticalOffset;
+            view.Scroller.Targets.Clear();
+            view.Scroller.Wheel();
+            if (work == "top-block") { view.TakeAnchorForProbe(40 - grew); view.LaidOutForProbe(); }
+            else { view.DrawEarlierForProbe(); view.DrainForProbe(); }
+            // Measured as the app would see it: the notch ends at our target if we asked for one, else where it was sent.
+            var to = view.Scroller.Targets.Count > 0 ? view.Scroller.Targets[^1] : from - notch;
+            view.Moved(from - notch / 2, final: false);
+            view.Moved(to);
+            moved.Add(Math.Round(from - to, 2));
+        }
+        Assert.True(moved.All(d => d == notch), $"requested {notch} per notch, moved: {string.Join(", ", moved)}");
+        // Once the notch's own view changes arrive, the corrections work again.
+        view.Scroller.Targets.Clear();
+        view.TakeAnchorForProbe(-72);
+        view.LaidOutForProbe();
+        Assert.Equal([view.Scroller.VerticalOffset + 112], view.Scroller.Targets);
+    }
+
     [Fact]
     public void Follow_does_not_correct_the_end_while_the_person_is_scrolling()
     {
