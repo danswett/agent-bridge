@@ -1,0 +1,244 @@
+From 868a7be6b9352dd227a450579da368ea99884ce7 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 21:17:55 -0800
+Subject: [PATCH] CI S2, piece 6a4 (2/2): ci.yml and FULL stage the public
+ self-test text through build/stage-selftest-text.ps1 (workflow part, Part of
+ #4104)
+
+ci.yml's two pasted staging blocks (app, app-installer) become calls to the script, so the refusals (links, control characters, dump/zip/ELF
+signatures, bad JSON) live in one place; step ids, if: always() and the upload steps are unchanged. FULL's app-selftest and app-installer get the
+same two staging steps and 7-day uploads with the same allow-lists. Tests: every staging step calls the script, runs always and is followed by a
+7-day upload of exactly what it stages; both workflows pass the same allow-list; no workflow holds the refusals inline. Sensitive (public uploads).
+Needs build/stage-selftest-text.ps1 from the 6a4 (1/2) PR.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml                      | 54 +-----------
+ .github/workflows/full.yml                    | 39 +++++++++
+ .../StageStepsWorkflowTests.cs                | 85 +++++++++++++++++++
+ 3 files changed, 128 insertions(+), 50 deletions(-)
+ create mode 100644 tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f8c5a457b..e9bac3f7c 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -712,30 +712,8 @@ jobs:
+         id: selftest-text
+         shell: pwsh
+         run: |
+-          $ErrorActionPreference = 'Stop'
+-          $source = Join-Path $env:RUNNER_TEMP 'selftest'
+-          $out = Join-Path $env:RUNNER_TEMP 'public-selftest'
+-          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+-          $utf8 = [Text.UTF8Encoding]::new($false, $true)
+-          function Read-DiagnosticText([string]$path) {
+-            $file = Get-Item -LiteralPath $path
+-            for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+-              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic directory refused' }
+-            }
+-            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic input refused' }
+-            $text = $utf8.GetString([IO.File]::ReadAllBytes($file.FullName)).TrimStart([char]0xFEFF)
+-            if ($text -match '[\x00-\x08\x0B\x0C\x0E-\x1F]' -or $text -match '^(MDMP|PAGEDUMP|PAGEDU64|PK\x03\x04|\x7FELF)') {
+-              throw 'Binary diagnostic input refused'
+-            }
+-            return $text
+-          }
+-          foreach ($name in 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt') {
+-            $path = Join-Path $source $name
+-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+-            $text = Read-DiagnosticText $path
+-            if ($name.EndsWith('.json')) { $null = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+-            [IO.File]::WriteAllText((Join-Path $out $name), $text, $utf8)
+-          }
++          ./build/stage-selftest-text.ps1 -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out (Join-Path $env:RUNNER_TEMP 'public-selftest') `
++            -Names 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt'
+       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+         if: always() && steps.selftest-text.outcome == 'success'
+         with:
+@@ -832,32 +810,8 @@ jobs:
+         id: installed-selftest-text
+         shell: pwsh
+         run: |
+-          $ErrorActionPreference = 'Stop'
+-          $source = Join-Path $env:RUNNER_TEMP 'selftest'
+-          $out = Join-Path $env:RUNNER_TEMP 'public-installed-selftest'
+-          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+-          $utf8 = [Text.UTF8Encoding]::new($false, $true)
+-          function Read-DiagnosticText([string]$path) {
+-            $file = Get-Item -LiteralPath $path
+-            for ($item = $file.Directory; $null -ne $item; $item = $item.Parent) {
+-              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic directory refused' }
+-            }
+-            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked diagnostic input refused' }
+-            $text = $utf8.GetString([IO.File]::ReadAllBytes($file.FullName)).TrimStart([char]0xFEFF)
+-            if ($text -match '[\x00-\x08\x0B\x0C\x0E-\x1F]' -or $text -match '^(MDMP|PAGEDUMP|PAGEDU64|PK\x03\x04|\x7FELF)') {
+-              throw 'Binary diagnostic input refused'
+-            }
+-            return $text
+-          }
+-          foreach ($name in 'installer-input.json', 'installed/result.json', 'installed/app-exit-cause.json', 'installed/app.stderr.log', 'installed/app.log', 'installed/setup.log', 'installed/distribution-evidence.json', 'installed/app-crash-analysis.txt') {
+-            $path = Join-Path $source $name
+-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+-            $text = Read-DiagnosticText $path
+-            if ($name.EndsWith('.json')) { $null = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+-            $target = Join-Path $out $name
+-            New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+-            [IO.File]::WriteAllText($target, $text, $utf8)
+-          }
++          ./build/stage-selftest-text.ps1 -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out (Join-Path $env:RUNNER_TEMP 'public-installed-selftest') `
++            -Names 'installer-input.json', 'installed/result.json', 'installed/app-exit-cause.json', 'installed/app.stderr.log', 'installed/app.log', 'installed/setup.log', 'installed/distribution-evidence.json', 'installed/app-crash-analysis.txt'
+       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+         if: always() && steps.installed-selftest-text.outcome == 'success'
+         with:
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index cf7829c48..31291adf5 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -569,6 +569,24 @@ jobs:
+         run: |
+           Write-Output "::error title=app-selftest (win-arm64)::the self-test failed on both attempts (#2026)"
+           exit 1
++      - name: Stage named self-test text, never WER dumps or archives
++        if: always()
++        id: selftest-text
++        shell: pwsh
++        run: |
++          ./build/stage-selftest-text.ps1 -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out (Join-Path $env:RUNNER_TEMP 'public-selftest') `
++            -Names 'result.json', 'app-exit-cause.json', 'app.stderr.log', 'app.log', 'app-crash-analysis.txt'
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: always() && steps.selftest-text.outcome == 'success'
++        with:
++          name: app-self-test-${{ matrix.runtime }}
++          path: |
++            ${{ runner.temp }}/public-selftest/result.json
++            ${{ runner.temp }}/public-selftest/app-exit-cause.json
++            ${{ runner.temp }}/public-selftest/app.stderr.log
++            ${{ runner.temp }}/public-selftest/app.log
++            ${{ runner.temp }}/public-selftest/app-crash-analysis.txt
++          retention-days: 7
+ 
+   app-installer:
+     # The packed Windows app installed the way a person installs it (#1766): the Setup.exe app-pack built in THIS run, run silently per user into its own channel and
+@@ -652,6 +670,27 @@ jobs:
+         if: ${{ !cancelled() }}
+         shell: pwsh
+         run: ./build/test-app-self-test-cause.ps1 -Evidence "$env:RUNNER_TEMP/selftest/installed/app-exit-cause.json"
++      - name: Stage named installed self-test text, never WER dumps or archives
++        if: always()
++        id: installed-selftest-text
++        shell: pwsh
++        run: |
++          ./build/stage-selftest-text.ps1 -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out (Join-Path $env:RUNNER_TEMP 'public-installed-selftest') `
++            -Names 'installer-input.json', 'installed/result.json', 'installed/app-exit-cause.json', 'installed/app.stderr.log', 'installed/app.log', 'installed/setup.log', 'installed/distribution-evidence.json', 'installed/app-crash-analysis.txt'
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: always() && steps.installed-selftest-text.outcome == 'success'
++        with:
++          name: app-installer-self-test-${{ matrix.runtime }}
++          path: |
++            ${{ runner.temp }}/public-installed-selftest/installer-input.json
++            ${{ runner.temp }}/public-installed-selftest/installed/result.json
++            ${{ runner.temp }}/public-installed-selftest/installed/app-exit-cause.json
++            ${{ runner.temp }}/public-installed-selftest/installed/app.stderr.log
++            ${{ runner.temp }}/public-installed-selftest/installed/app.log
++            ${{ runner.temp }}/public-installed-selftest/installed/setup.log
++            ${{ runner.temp }}/public-installed-selftest/installed/distribution-evidence.json
++            ${{ runner.temp }}/public-installed-selftest/installed/app-crash-analysis.txt
++          retention-days: 7
+ 
+   full-gate:
+     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+diff --git a/tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs
+new file mode 100644
+index 000000000..ed8d3273c
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/StageStepsWorkflowTests.cs
+@@ -0,0 +1,85 @@
++using System.Text.RegularExpressions;
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// The self-test text a run uploads to a PUBLIC artifact is staged by one script, build/stage-selftest-text.ps1 (S2, #4104): ci.yml's app and
++/// app-installer jobs and full.yml's app-selftest and app-installer jobs all call it, with one allow-list per kind and the same 7-day uploads, and no
++/// workflow holds the refusals (links, control characters, dump/zip/ELF signatures, bad JSON) inline: they live in the script, proven equal to the
++/// block they replaced by StageSelftestTextTests.
++/// </summary>
++public class StageStepsWorkflowTests
++{
++    static string Read(string file) => File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github/workflows", file));
++
++    static YamlMappingNode Job(string file, string job)
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(Read(file)));
++        return (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)["jobs"])[job];
++    }
++
++    static List<YamlMappingNode> Steps(string file, string job) => ((YamlSequenceNode)Job(file, job)["steps"]).Children.OfType<YamlMappingNode>().ToList();
++
++    static string Value(YamlMappingNode node, string key) => node.Children.TryGetValue(key, out var v) ? ((YamlScalarNode)v).Value! : "";
++
++    /// <summary>The staging step with this id, the upload that follows it, and the allow-list the step passes.</summary>
++    static (YamlMappingNode Stage, YamlMappingNode Upload, string[] Names) Staging(string file, string job, string id)
++    {
++        var steps = Steps(file, job);
++        var at = steps.FindIndex(s => Value(s, "id") == id);
++        Assert.True(at >= 0, $"{file} {job} has no step {id}");
++        var names = Regex.Matches(Regex.Match(Value(steps[at], "run"), @"-Names\s+(.+)", RegexOptions.Singleline).Groups[1].Value, "'([^']+)'").Select(m => m.Groups[1].Value).ToArray();
++        return (steps[at], steps[at + 1], names);
++    }
++
++    static readonly (string Job, string Id, string Artifact)[] Kinds =
++    [
++        ("app", "selftest-text", "app-self-test-${{ matrix.runtime }}"),
++        ("app-installer", "installed-selftest-text", "app-installer-self-test-${{ matrix.runtime }}"),
++    ];
++
++    [Theory]
++    [InlineData("ci.yml", "app", "selftest-text", "app-self-test-${{ matrix.runtime }}")]
++    [InlineData("ci.yml", "app-installer", "installed-selftest-text", "app-installer-self-test-${{ matrix.runtime }}")]
++    [InlineData("full.yml", "app-selftest", "selftest-text", "app-self-test-${{ matrix.runtime }}")]
++    [InlineData("full.yml", "app-installer", "installed-selftest-text", "app-installer-self-test-${{ matrix.runtime }}")]
++    public void Every_staging_step_calls_the_script_runs_always_and_is_followed_by_a_seven_day_upload_of_what_it_staged(string file, string job, string id, string artifact)
++    {
++        var (stage, upload, names) = Staging(file, job, id);
++        var run = Value(stage, "run");
++
++        Assert.StartsWith("./build/stage-selftest-text.ps1 -Source (Join-Path $env:RUNNER_TEMP 'selftest') -Out (Join-Path $env:RUNNER_TEMP 'public-", run.Trim(), StringComparison.Ordinal);
++        Assert.Equal("always()", Value(stage, "if"));
++        Assert.NotEmpty(names);
++        Assert.Equal($"always() && steps.{id}.outcome == 'success'", Value(upload, "if"));
++        Assert.StartsWith("actions/upload-artifact@", Value(upload, "uses"), StringComparison.Ordinal);
++        Assert.Equal("7", Value((YamlMappingNode)upload["with"], "retention-days"));
++        Assert.Equal(artifact, Value((YamlMappingNode)upload["with"], "name"));
++        // The upload names exactly the files the step stages, no more (nothing unnamed leaves the runner).
++        var out_ = Regex.Match(run, @"-Out \(Join-Path \$env:RUNNER_TEMP '([^']+)'\)").Groups[1].Value;
++        Assert.Equal(names.Select(n => $"${{{{ runner.temp }}}}/{out_}/{n}").Order(StringComparer.Ordinal),
++            Value((YamlMappingNode)upload["with"], "path").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Order(StringComparer.Ordinal));
++    }
++
++    [Fact]
++    public void Both_workflows_pass_the_same_allow_list_for_each_kind_of_self_test()
++    {
++        foreach (var (_, id, _) in Kinds)
++        {
++            var ci = Staging("ci.yml", id == "selftest-text" ? "app" : "app-installer", id).Names;
++            var full = Staging("full.yml", id == "selftest-text" ? "app-selftest" : "app-installer", id).Names;
++            Assert.Equal(ci, full);
++        }
++    }
++
++    [Fact]
++    public void No_workflow_holds_the_refusals_inline_because_they_live_in_the_script_only()
++    {
++        foreach (var file in new[] { "ci.yml", "full.yml" })
++            foreach (var marker in new[] { "Read-DiagnosticText", "Linked diagnostic", "MDMP", "Binary diagnostic input refused", "ConvertFrom-Json -InputObject $text" })
++                Assert.DoesNotContain(marker, Read(file), StringComparison.Ordinal);
++        Assert.Contains("Read-DiagnosticText", File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "build/stage-selftest-text.ps1")), StringComparison.Ordinal);
++    }
++}
+-- 
+2.56.1.windows.1
+
