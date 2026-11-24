@@ -37,6 +37,9 @@ internal sealed class ShardPlanFile
 
     public int Shards { get; }
 
+    /// <summary>The projects the plan names, by class or whole.</summary>
+    public IEnumerable<string> Projects => projects.Keys.Concat(whole.SelectMany(l => l)).Distinct(StringComparer.Ordinal);
+
     static List<string>[] NewLists(int shards) => [.. Enumerable.Range(0, Math.Max(shards - 1, 0)).Select(_ => new List<string>())];
 
     public static ShardPlanFile Parse(string json)
@@ -134,8 +137,8 @@ internal sealed class ShardPlanFile
             {
                 ShardRun.All => true,
                 ShardRun.None => false,
-                _ when choice.Filter!.StartsWith("FullyQualifiedName!~", StringComparison.Ordinal) => choice.Filter.Split('&').All(t => !testFullName.Contains(t["FullyQualifiedName!~".Length..], StringComparison.Ordinal)),
-                _ => choice.Filter.Split('|').Any(t => testFullName.Contains(t["FullyQualifiedName~".Length..], StringComparison.Ordinal)),
+                _ when choice.Filter!.StartsWith("FullyQualifiedName!~", StringComparison.Ordinal) => choice.Filter.Split('&').All(t => !testFullName.Contains(t["FullyQualifiedName!~".Length..], StringComparison.OrdinalIgnoreCase)),
+                _ => choice.Filter.Split('|').Any(t => testFullName.Contains(t["FullyQualifiedName~".Length..], StringComparison.OrdinalIgnoreCase)),
             };
             if (runs) { yield return shard; }
         }
