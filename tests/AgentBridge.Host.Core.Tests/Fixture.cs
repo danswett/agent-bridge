@@ -114,6 +114,14 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(ClaudeRegistrations, fileName ?? id + ".json"), json.ToJsonString());
     }
 
+    // An <id>.ask.json as this host's claude/ask hook writes it: the AskUserQuestion the transcript has not written yet (#3838).
+    public void ClaudeAskMarker(string id, string toolUseId, JsonObject input, DateTimeOffset? created = null)
+    {
+        Directory.CreateDirectory(ClaudeRegistrations);
+        var json = new JsonObject { ["SessionId"] = id, ["ToolUseId"] = toolUseId, ["Created"] = (created ?? T0.AddSeconds(5)).ToString("o"), ["Input"] = input.DeepClone() };
+        File.WriteAllText(Path.Combine(ClaudeRegistrations, id + ".ask.json"), json.ToJsonString());
+    }
+
     // Codex's thread-writer-locks/<id>.lock, held open by whichever process writes the thread.
     public string CodexLock(string id)
     {

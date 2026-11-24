@@ -134,6 +134,9 @@ public static class CloseCodes
     public const int Replaced = 4009;
     public const int TooLarge = 4013;
     public const int TooManyDevices = 4029;
+    // The account's roster is in enforce mode and a removal of this device's key is in it (docs/protocol/devices.md, enforce).
+    // Advisory: the relay is never the gate, but it lets the device say so.
+    public const int Removed = 4030;
     // Sent by a relay that is shutting down: reconnect soon, spread over a few seconds
     // (ReconnectBackoff), and land on a replica that is not.
     public const int Restarting = 1012;

@@ -284,6 +284,173 @@ public class BackgroundTests
     }
 
     [Fact]
+    public async Task A_shell_that_never_reported_back_stops_counting_once_it_is_older_than_the_stale_limit_with_no_new_events()
+    {
+        await using var s = new Session_();
+        var started = await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        Assert.Equal(new Background { Shells = 1 }, started.Activity.Background);
+
+        // Both clocks count from the host first seeing the mark, so the limit passes only after a full limit watched.
+        s.F.Time.Advance(Limits.BackgroundShellStale - TimeSpan.FromMinutes(10));
+        await s.Source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+
+        // Only the clock moved: nothing was written to the transcript.
+        s.F.Time.Advance(TimeSpan.FromMinutes(20));
+        await s.Source.RefreshAsync();
+        Assert.Null(s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_shell_announced_again_counts_from_its_latest_mark_so_a_live_long_command_stays_counted()
+    {
+        await using var s = new Session_();
+        await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+
+        // The command keeps saying it is still running, every three hours: eight hours in all, twice the limit,
+        // and never more than three hours since its latest mark.
+        foreach (var hours in new[] { 3, 6, 7 })
+        {
+            await s.After(Copilot.ToolResult("c" + hours, "<command with shellId: ci is still running after 30 seconds. The command is still running. You will be automatically notified when it completes.>", hours * 3600));
+        }
+        s.F.Time.Advance(TimeSpan.FromHours(7)); // the fixture's clock started at hour 1: now is hour 8
+        await s.Source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+
+        // Silent from then on, it goes the same way once its latest mark is the limit old.
+        s.F.Time.Advance(Limits.BackgroundShellStale);
+        await s.Source.RefreshAsync();
+        Assert.Null(s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task The_limit_is_exact_a_shell_counts_up_to_the_limit_less_a_millisecond_and_not_at_the_limit()
+    {
+        await using var s = new Session_();
+        // The mark's own time is the fixture clock's start, so both clocks count the same age from zero.
+        await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 3600));
+
+        s.F.Time.Advance(Limits.BackgroundShellStale - TimeSpan.FromMilliseconds(1));
+        await s.Source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+
+        s.F.Time.Advance(TimeSpan.FromMilliseconds(1));
+        await s.Source.RefreshAsync();
+        Assert.Null(s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_Claude_run_in_background_command_is_never_refreshed_so_it_ages_out_while_an_agent_End_still_sees_it()
+    {
+        const string ClaudeId = "c1a0de00-0000-4000-8000-000000000031";
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(ClaudeId);
+        f.ClaudeRegistration(ClaudeId, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        var started = System.Text.Json.Nodes.JsonNode.Parse(Claude.ToolResult("bash1", 3))!.AsObject();
+        started["toolUseResult"] = new System.Text.Json.Nodes.JsonObject { ["backgroundTaskId"] = "bg1" };
+        Fixture.Append(transcript, Claude.User("go", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("bash1", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "sleep 99999", ["run_in_background"] = true })),
+            started.ToJsonString());
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, source.Get(ClaudeId)!.Activity.Background);
+
+        // Claude writes no "still running" mark: nothing refreshes it, so after the limit it is no longer shown...
+        f.Time.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(1));
+        await source.RefreshAsync();
+        var aged = source.Get(ClaudeId)!;
+        Assert.Null(aged.Activity.Background);
+        // ...but an agent's End still sees it.
+        Assert.Equal(new Background { Shells = 1 }, aged.BackgroundUnaged);
+    }
+
+    [Fact]
+    public async Task A_stale_shell_leaves_the_shown_background_but_the_unaged_count_keeps_it_for_an_agent_End()
+    {
+        await using var s = new Session_();
+        var fresh = await s.After(Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        Assert.Null(fresh.BackgroundUnaged); // nothing aged out: the one count is the shown one
+
+        s.F.Time.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(1));
+        await s.Source.RefreshAsync();
+        var stale = s.Source.Get(Id)!;
+        Assert.Null(stale.Activity.Background);
+        Assert.Equal(new Background { Shells = 1 }, stale.BackgroundUnaged);
+        Assert.DoesNotContain("BackgroundUnaged", System.Text.Json.JsonSerializer.Serialize(stale, ProtocolJson.Options));
+    }
+
+    [Fact]
+    public async Task A_clock_step_alone_never_makes_a_running_shell_stale_it_fails_toward_counted()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var clock = new SteppableClock(Fixture.T0.AddHours(1));
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, clock);
+        Fixture.Append(events, Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
+
+        // The wall clock jumps ten hours (a resumed VM, a time sync); the host's own monotonic clock does not.
+        clock.Step(TimeSpan.FromHours(10));
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
+
+        // Only when the host has itself watched the limit pass, with no new mark, does it stop counting.
+        clock.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(1));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_shell_dropped_for_age_counts_again_when_the_wall_clock_steps_back_with_no_new_events()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var clock = new SteppableClock(Fixture.T0.AddHours(1));
+        await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, clock);
+        Fixture.Append(events, Copilot.ToolResult("c1", "<command started in background with shellId: ci>", 8));
+        await source.RefreshAsync();
+
+        clock.Advance(Limits.BackgroundShellStale + TimeSpan.FromMinutes(1));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.Background); // dropped: nothing shown counts it now
+
+        // The wall clock is corrected backwards: the mark is young again by it, and the shell counts, rebuilt without any event.
+        clock.Step(TimeSpan.FromHours(-3));
+        await source.RefreshAsync();
+        Assert.Equal(new Background { Shells = 1 }, source.Get(Id)!.Activity.Background);
+        Assert.Null(source.Get(Id)!.BackgroundUnaged);
+    }
+
+    // A wall clock and a monotonic one kept apart: time passing moves both (Advance), a clock step moves only the wall clock (Step).
+    sealed class SteppableClock(DateTimeOffset start) : TimeProvider
+    {
+        DateTimeOffset _wall = start;
+        long _ticks;
+        public override DateTimeOffset GetUtcNow() => _wall;
+        public override long GetTimestamp() => _ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public void Advance(TimeSpan by) { _wall += by; _ticks += by.Ticks; }
+        public void Step(TimeSpan by) => _wall += by;
+    }
+
+    [Fact]
+    public async Task A_stale_shell_leaves_a_working_agent_and_a_fresh_shell_counted()
+    {
+        await using var s = new Session_();
+        await s.After([.. Delegate("t1", "a1", 1), Copilot.ToolResult("c1", "<command started in background with shellId: old>", 8)]);
+        await s.After(Copilot.ToolResult("c2", "<command started in background with shellId: fresh>", 7000));
+
+        s.F.Time.Advance(Limits.BackgroundShellStale);
+        await s.Source.RefreshAsync();
+
+        Assert.Equal(new Background { Agents = 1, Shells = 1 }, s.Source.Get(Id)!.Activity.Background);
+    }
+
+    [Fact]
     public async Task A_host_that_starts_after_the_CLI_was_replaced_does_not_count_the_old_CLIs_work()
     {
         using var f = new Fixture();
