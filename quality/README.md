@@ -970,8 +970,11 @@ start within about a minute; a queue that grows is the signal to add runners or 
   `pull_request_target` or `workflow_run` can run all fail (`CiRunnerRoutingTests`, `CiRunnerGuardProbeTests`). It
   fails closed: a runner is hosted only when every value it can take is on the hosted allowlist (`ubuntu-*`,
   `windows-latest`, `windows-20xx`, `windows-11-arm`, `macos-*`), the self-hosted value is a literal, and the one runtime
-  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `CiRunnerResolutionTests`. This lint
-  passing is a precondition of setting `AB_CI_SELF_HOSTED` to `true`.
+  matrix allowed, `ci.yml` product's `product-os`, is pinned to that list by `quality/product-os-pin.ps1`. The pin reads
+  `plan.ps1` with the PowerShell parser (`ProductOsPinTests`). It allow-lists command, type and function names and refuses the
+  member and variable forms that reach around them. It catches accidents and plain-text edits; it does not claim to stop
+  deliberately obfuscated PowerShell by an author who can also edit the pin (review does). This lint passing is a precondition of setting
+  `AB_CI_SELF_HOSTED` to `true`.
   **The one alternative to the guard: a run by hand on main.** `(<guard>) || github.event_name == 'workflow_dispatch' &&
   github.ref == 'refs/heads/main' && inputs.use_ab_ci` may also reach the pool, to try it before `AB_CI_SELF_HOSTED` flips.
   `use_ab_ci` must be declared as a **boolean** `workflow_dispatch` input (`type: boolean, default: false`); the lint
