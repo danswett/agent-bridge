@@ -1211,6 +1211,23 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   nothing new costs no rate limit. The Quality Lead puts its one-line result in the 08:00 digest and
   in the weekly report. A failure that went green on a re-run is invisible to it, so it undercounts.
   Offline test: `quality/test-red-minutes.ps1` (catalog suite `red-minutes-script`).
+- **CI speed on main** (#4104): `pwsh quality/ci-speed.ps1 [-Runs 100] [-Csv runs.csv] [-DaysCsv days.csv]` measures, for the last N
+  `ci.yml` push runs on main, the merge gate's wall time **from the run's created_at** (what a merger waits, queue included) and
+  **from run_started_at** (labelled apart), the full run, the longest wait of a gate job for a runner, and the red rate per Pacific
+  day (labelled with the year). The gate is the jobs matching `-GatePattern` (default `product` and `quality-gate`, which needs every
+  other job; give the fast lane's job names once it is split out), and the summary line names the gate jobs it matched. Cancelled
+  and skipped runs and runs still going are left out of every median and counted apart, other conclusions are counted as "other",
+  and red is the red-minutes rule. A median is the nearest-rank (lower) one, and an empty window says "no data". **Re-runs:** a
+  re-run keeps its first created_at but restarts run_started_at, so its gate-from-created figure includes the earlier attempt and
+  the first failed attempt is invisible to the red rate (it undercounts, like red-minutes); re-runs are counted on the line and in
+  the CSV (attempt). It prints one summary line (median and p90) and writes the CSVs. Read-only (GET only), and **it fails closed
+  on the rate limit**: it reads the budget from `gh api rate_limit` (free) before its first call and from every response's
+  `x-ratelimit-*` headers before each run page and each batch of at most six job reads, and makes only the calls that keep the
+  remaining budget above 10 % of the limit; a header that is missing, not a number, or zero stops it, and the line then says
+  "STOPPED EARLY" and the figures cover only the runs read. Reads use an ETag cache (a 304 is free). Offline test:
+  `quality/test-ci-speed.ps1` (catalog suite `ci-speed-script`, `planned` until `ci.yml` runs it: the step is
+  `patches/ci-speed-step-4104.patch`, for Quality to apply).
+
 - **The win-arm64 waiver** (#2564, owner decision 2026-11-13; **made permanent by the owner on Nov 22**,
   [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336), applying his
   Nov 18 tiered gating): `quality-gate` counts a failed needed job as success when its only failures are

@@ -589,6 +589,22 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: ci-speed-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # How fast main's CI is (#4104): the merge-gate wall from created_at and from run_started_at, the full run, the gate's queue
+    # wait and the red rate per day, on a fixed run and job list. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/ci-speed.ps1, quality/test-ci-speed.ps1]
+    command: pwsh -NoProfile -File quality/test-ci-speed.ps1
+    where: ci.yml light
+    # planned until the ci.yml step lands (patches/ci-speed-step-4104.patch, applied by Quality): until then only a local run tests it.
+    # Flip to exists with that patch.
+    status: planned
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
