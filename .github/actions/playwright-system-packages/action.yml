@@ -19,6 +19,12 @@ inputs:
       Anything else downloads as before.
     required: false
     default: 'false'
+  save:
+    description: >
+      'true' only where the job may write the archives cache: each ci.yml call says so. The default is false, the safe one, and full.yml says false
+      itself: it runs in the default branch's context on a workflow_run and so never writes a cache (only restores).
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -53,7 +59,7 @@ runs:
       run: |
         read -ra browsers <<< "$BROWSERS"
         bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"
-    - if: always() && steps.packages.outputs.cache-ready == 'true'
+    - if: always() && steps.packages.outputs.cache-ready == 'true' && inputs.save == 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/playwright-apt-debs

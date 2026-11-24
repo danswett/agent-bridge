@@ -8,7 +8,7 @@ namespace AgentBridge.Quality.Tests;
 /// </summary>
 public class FullWorkflowTests
 {
-    const string Sha = "${{ github.event.workflow_run.head_sha || inputs.sha }}";
+    const string Sha = "${{ needs.trigger.outputs.sha }}";
 
     static string Root => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
 
@@ -111,5 +111,53 @@ public class FullWorkflowTests
         var missing = ((YamlSequenceNode)green["jobs"]).Children.Select(j => j.ToString()).Where(j => !ciJobs.Contains(j.Split(" (")[0]));
 
         Assert.Empty(missing);
+    }
+
+    /// <summary>
+    /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written from there could be
+    /// poisoned by that code (CodeQL's cache-poisoning alerts on #4254), so FULL only restores: no job saves a cache, and the system-package
+    /// action, which saves by default for ci.yml, is told not to.
+    /// </summary>
+    [Fact]
+    public void Full_yml_never_writes_a_cache_it_only_restores_and_tells_the_package_action_not_to_save()
+    {
+        var text = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml"));
+        var steps = ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Values
+            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>()).ToList();
+        var packageCalls = steps.Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
+
+        Assert.DoesNotContain("actions/cache/save", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("actions/cache@", text, StringComparison.Ordinal);
+        Assert.NotEmpty(packageCalls);
+        Assert.All(packageCalls, s => Assert.Equal("false", Scalar(s["with"], "save")));
+        var action = Load(".github/actions/playwright-system-packages/action.yml");
+        Assert.Equal("false", Scalar(((YamlMappingNode)action["inputs"])["save"], "default")); // the safe default: a call that forgets it never writes a cache
+        var ciCalls = ((YamlMappingNode)Load(".github/workflows/ci.yml")["jobs"]).Children.Values
+            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>())
+            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
+        Assert.All(ciCalls, s => Assert.Equal("true", Scalar(s["with"], "save"))); // ci.yml saves today, so it says so
+        var save = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>()
+            .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
+        Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// CodeQL's cache-poisoning alerts on #4254: FULL runs in the default branch's context and checks out a commit to test. Only the trigger job reads the
+    /// event's commit: it reads the CI run itself through the API (by number), refuses anything but 40 lowercase hex, and every other job checks out that
+    /// output, so no checkout or cache step takes a commit straight from the event.
+    /// </summary>
+    [Fact]
+    public void Only_the_trigger_reads_the_events_commit_and_hands_on_a_verified_one_that_every_checkout_uses()
+    {
+        var text = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml")).Replace("\r\n", "\n");
+        var trigger = (YamlMappingNode)Jobs("full.yml")["trigger"];
+        var step = ((YamlSequenceNode)trigger["steps"]).Children.OfType<YamlMappingNode>().Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "commit");
+        var script = Scalar(step, "run");
+
+        Assert.Equal("${{ steps.commit.outputs.sha }}", Scalar(trigger["outputs"], "sha"));
+        Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
+        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\" --jq .head_sha", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
+            Assert.Contains(part, script, StringComparison.Ordinal);
+        Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
     }
 }
