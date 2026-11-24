@@ -120,11 +120,12 @@ async function scrollsOnItsOwn(page, pane) {
   await pane.evaluate((el) => { el.scrollTop = 0; });
   expect(await pane.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
   // Near its foot: on a phone the session's header lies over the top of the conversation (ui.md §6.2)
-  // and the reply area over its foot (§6.5), so the pointer goes just above that.
+  // and the reply area over its foot (§6.5), so the pointer goes just above that, and to the left of the
+  // "Jump to latest" pill (§6.4 H3) that rides there, centred, once the conversation is back from its end.
   const box = await pane.boundingBox();
   const slot = await page.locator('.session-view:not([hidden]) .reply-slot').boundingBox();
   const foot = slot && slot.y < box.y + box.height ? slot.y - box.y : box.height;
-  await pane.hover({ position: { x: box.width / 2, y: foot - 12 } });
+  await pane.hover({ position: { x: 24, y: foot - 12 } });
   await page.mouse.wheel(0, 120);
   await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.evaluate(() => scrollY)).toBe(0);
