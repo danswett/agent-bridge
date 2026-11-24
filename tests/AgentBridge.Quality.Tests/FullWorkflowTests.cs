@@ -43,7 +43,8 @@ public class FullWorkflowTests
         Assert.Equal(["CI"], ((YamlSequenceNode)run["workflows"]).Children.Select(c => c.ToString()));
         Assert.Equal(["completed"], ((YamlSequenceNode)run["types"]).Children.Select(c => c.ToString()));
         Assert.Equal(["main"], ((YamlSequenceNode)run["branches"]).Children.Select(c => c.ToString()));
-        Assert.False(dispatch is YamlMappingNode withInputs && withInputs.Children.ContainsKey("inputs")); // a run by hand names no commit (see A_run_by_hand_takes_no_input...)
+        // a run by hand names no commit: its one input is the apt-fallback boolean (see A_run_by_hand_takes_no_commit_input_and_the_one_boolean_never_reaches_a_checkout)
+        Assert.Equal(["force-apt-fallback"], ((YamlMappingNode)((YamlMappingNode)dispatch)["inputs"]).Children.Keys.Select(k => k.ToString()));
     }
 
     [Theory]
@@ -191,6 +192,84 @@ public class FullWorkflowTests
             foreach (var checkout in ((YamlSequenceNode)((YamlMappingNode)job.Value)["steps"]).Children.OfType<YamlMappingNode>()
                          .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal)))
                 Assert.Equal("${{ needs.trigger.outputs.tested }}", Scalar(checkout["with"], "ref"));
+    }
+
+    /// <summary>
+    /// The by-hand proof that pwa-ui's WebKit legs fall back to Canonical (quality/README.md section 4.7) needs ONE input: a boolean. It names no commit or ref, so nothing a person types can
+    /// reach a checkout (the CodeQL alerts on #4254 followed a sha input). It is read in exactly two places, neither a checkout: the trigger's guard step (an env flag) and pwa-ui's action input.
+    /// </summary>
+    [Fact]
+    public void A_run_by_hand_takes_no_commit_input_and_the_one_boolean_never_reaches_a_checkout()
+    {
+        var inputs = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)Load(".github/workflows/full.yml")["on"])["workflow_dispatch"])["inputs"];
+        var jobs = (YamlMappingNode)Load(".github/workflows/full.yml")["jobs"];
+        var text = string.Join("\n", File.ReadAllLines(Path.Combine(Root, ".github", "workflows", "full.yml")).Where(l => !l.TrimStart().StartsWith('#')));
+
+        Assert.Equal(["force-apt-fallback"], inputs.Children.Keys.Select(k => k.ToString()));
+        Assert.Equal(["boolean", "false"], [Scalar(inputs["force-apt-fallback"], "type"), Scalar(inputs["force-apt-fallback"], "default")]);
+        Assert.DoesNotContain("inputs.sha", text, StringComparison.Ordinal);
+        // every use of an input is that boolean
+        Assert.All(System.Text.RegularExpressions.Regex.Matches(text, @"inputs\.[A-Za-z0-9_-]+").Select(m => m.Value), v => Assert.Equal("inputs.force-apt-fallback", v));
+        foreach (var (name, job) in jobs.Children.Select(j => (j.Key.ToString(), (YamlMappingNode)j.Value)))
+            foreach (var step in ((YamlSequenceNode)job["steps"]).Children.OfType<YamlMappingNode>())
+            {
+                var stepText = string.Concat(step.Children.Select(c => c.Value.ToString() + " "));
+                if (step.Children.ContainsKey("uses") && Scalar(step, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal))
+                    Assert.DoesNotContain("inputs.", step["with"].ToString() + stepText, StringComparison.Ordinal);
+                if (name == "trigger" && step.Children.ContainsKey("id") && Scalar(step, "id") == "commit")
+                    Assert.DoesNotContain("inputs.", stepText, StringComparison.Ordinal);
+            }
+        // the only places it is read: an env flag of the trigger's guard step, and the restore action's input in pwa-ui
+        var users = jobs.Children.SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j.Value)["steps"]).Children.OfType<YamlMappingNode>()
+            .Where(s => s.ToString()!.Contains("inputs.force-apt-fallback", StringComparison.Ordinal)).Select(s => (Job: j.Key.ToString(), Step: s))).ToList();
+        Assert.Equal(["pwa-ui", "trigger"], users.Select(u => u.Job).Order(StringComparer.Ordinal));
+        Assert.Equal("${{ inputs.force-apt-fallback }}", Scalar(users.Single(u => u.Job == "trigger").Step["env"], "FORCE"));
+        var ui = users.Single(u => u.Job == "pwa-ui").Step;
+        Assert.Equal("./.github/actions/playwright-system-packages", Scalar(ui, "uses"));
+        Assert.Equal("${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}", Scalar(ui["with"], "force-apt-fallback"));
+    }
+
+    // The guard step, run for real under bash with a stub gh: a run by hand without the flag is on main; with it, on a branch's own new commit that is neither main's head nor an open pull request's.
+    static (int Code, string Output) RunGuard(string force, string refName, string sha, string mainHead, string openPrHeads = "")
+    {
+        var bash = OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe") : "/bin/bash";
+        var step = ((YamlSequenceNode)((YamlMappingNode)Jobs("full.yml")["trigger"])["steps"]).Children.OfType<YamlMappingNode>()
+            .Single(s => s.Children.ContainsKey("name") && Scalar(s, "name").StartsWith("A run by hand is", StringComparison.Ordinal));
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"guard-{Guid.NewGuid():N}")).FullName;
+        var script = "gh() { case \"$*\" in *git/ref/heads/main*) echo \"$MAIN\";; *pulls*) printf '%s\\n' $PR_HEADS;; esac; }\n" + Scalar(step, "run");
+        var start = new System.Diagnostics.ProcessStartInfo(bash, ["-c", script]) { RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var (key, value) in new[] { ("FORCE", force), ("REF", refName), ("SHA", sha), ("REPO", "o/r"), ("GH_TOKEN", "x"), ("MAIN", mainHead), ("PR_HEADS", openPrHeads), ("RUNNER_TEMP", dir) })
+            start.Environment[key] = value;
+        using var p = System.Diagnostics.Process.Start(start)!;
+        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        return (p.ExitCode, output);
+    }
+
+    [Theory]
+    [InlineData("false", "refs/heads/main", "own", true)]                 // a normal run by hand: on main
+    [InlineData("false", "refs/heads/topic", "own", false)]               // not for a branch without the flag
+    [InlineData("", "refs/heads/topic", "own", false)]
+    [InlineData("true", "refs/heads/main", "own", false)]                 // the proof never on main
+    [InlineData("true", "refs/tags/v1", "own", false)]                    // nor on a tag
+    [InlineData("true", "refs/heads/topic", "own", true)]                 // a branch's own new commit
+    [InlineData("true", "refs/heads/topic", "main", false)]               // main's head is not new
+    [InlineData("true", "refs/heads/topic", "pr", false)]                 // an open pull request's head would stand in for its own run
+    public void A_run_by_hand_is_on_main_or_a_fallback_proof_on_a_branchs_own_new_commit(string force, string refName, string commit, bool accepted)
+    {
+        string own = new('c', 40), main = new('a', 40), pr = new('b', 40);
+        var sha = commit switch { "main" => main, "pr" => pr, _ => own };
+
+        var (code, output) = RunGuard(force, refName, sha, main, pr);
+
+        Assert.True(accepted == (code == 0), output);
+    }
+
+    [Fact]
+    public void The_guard_refuses_a_proof_when_it_cannot_read_main_or_the_open_pull_requests()
+    {
+        Assert.NotEqual(0, RunGuard("true", "refs/heads/topic", new string('c', 40), "").Code);
+        Assert.NotEqual(0, RunGuard("true", "refs/heads/topic", new string('c', 40), new string('a', 40), "not-a-sha").Code);
     }
 
     [Fact]

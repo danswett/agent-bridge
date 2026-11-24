@@ -28,8 +28,8 @@
 # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
 # edit, it fails rather than go on waiting on the same mirror.
 #
-# PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback; no workflow passes it today: the by-hand
-# proof has no trigger until the follow-up that gives full.yml's dispatch a boolean input; quality/README.md §4.7) skips the first download and takes
+# PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback, which full.yml's pwa-ui passes only on a run by hand that
+# asks for it, from the dispatch's one boolean input; quality/README.md §4.7) skips the first download and takes
 # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
 # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
 # proof, so a webkit download with none fails; any other, whose packages the runner may already
