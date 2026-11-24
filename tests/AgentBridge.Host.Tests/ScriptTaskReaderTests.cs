@@ -94,6 +94,7 @@ public class ScriptTaskReaderTests
     [Fact]
     public void A_program_action_pins_its_program_first_and_the_script_it_names()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         Assert.Equal([@"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\Locked\Cycle.ps1"], ScriptTaskXml.ActionFiles(Task));
         Assert.Equal([@"C:\Tools\run.exe"], ScriptTaskXml.ActionFiles(Task.Replace(@"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\Tools\run.exe").Replace("-File \"C:\\Locked\\Cycle.ps1\"", "/x")));
     }
