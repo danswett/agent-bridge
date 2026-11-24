@@ -1,24 +1,31 @@
 namespace AgentBridge.App.Tests;
 
-// #4243: the transcript's wheel and trackpad scrolling, measured offline through the end-pin harness
-// (ConversationEndPinHarness), with no product change. Each input asks the view to move one step; the layout
-// then realises a row off its estimate and the top block's correction may ask for another place. A sample is
-// what the input asked for against where the view actually was once the layout had settled, so a fix is
-// pointed at it with Assert.True(ScrollMeasure.Steady(samples)) and the table (Table) names the notch that broke.
+// #4243 / #4301: the transcript's wheel and trackpad scrolling, measured offline through the end-pin harness
+// (ConversationEndPinHarness). Each input asks the view to move one step; the layout then realises a row off its
+// estimate, which moves the block being read, and the top-block correction may ask for another offset to put it back.
+//
+// What a person sees is where the READ BLOCK is on screen, not the scroller's raw offset: a row realised above it
+// that is 112 px taller than estimated pushes the block down 112, and the correction's +112 on the offset takes
+// exactly that back. A sample therefore records the block's on-screen displacement for the step (Visible), and
+// what it would have been had the correction been held back (VisibleIfHeld).
 public enum ScrollInput { Wheel, Pan }
 
-public readonly record struct ScrollSample(int Step, double From, double Requested, double Actual, bool Corrected)
+public readonly record struct ScrollSample(int Step, double From, double Requested, double Actual, bool Corrected, double Growth)
 {
-    // How far the view really moved on this step, against the Requested - From it was asked for.
-    public double Moved => Actual - From;
+    // How far the read block moved on screen: the layout's growth above it, less what the offset moved (positive is down).
+    public double Visible => Growth - (Actual - From);
+    // The same, had the correction not asked for another place.
+    public double VisibleIfHeld => Growth - (Requested - From);
+    // What the input asked of the block (a notch down is minus one notch).
+    public double Asked => -(Requested - From);
 }
 
 public static class ScrollMeasure
 {
     public const double Notch = 48;
 
-    // Tall tool rows (estimated 48, real 160) and text rows (estimated 48, real 90) realising around the top block
-    // as the view goes by: positive when the block is taken lower than it was, negative when a row shrinks under it.
+    // Tall tool rows (estimated 48, real 160) and text rows (estimated 48, real 90) realising above the top block
+    // as the view goes by: positive when the block is pushed down, negative when a row shrinks under it.
     public static readonly IReadOnlyList<double> TallToolRows = [112, -30, 112, 42, -30, 112, 42, 112, -30, 42];
 
     // Steps toward the end from start, by a wheel (a final view change per notch, nothing held between them) or a
@@ -36,16 +43,19 @@ public static class ScrollMeasure
             var requested = Math.Clamp(offset + step, 0, view.Scroller.ScrollableHeight);
             if (input == ScrollInput.Wheel) { view.Scroller.Wheel(); }
             view.Moved(requested, final: input == ScrollInput.Wheel);
-            offset = Settle(view, growth[i % growth.Count], requested, out var corrected);
-            samples.Add(new(i, samples.Count == 0 ? start : samples[^1].Actual, requested, offset, corrected));
+            var from = offset;
+            var g = growth[i % growth.Count];
+            offset = Settle(view, g, requested, out var corrected);
+            samples.Add(new(i, from, requested, offset, corrected, g));
         }
         if (input == ScrollInput.Pan)
         {
             // Let go: the view is still again, and the layout since may now be put back.
             view.GestureForProbe("none");
             view.Moved(offset);
-            var released = Settle(view, growth[steps % growth.Count], offset, out var corrected);
-            samples.Add(new(steps, offset, offset, released, corrected));
+            var g = growth[steps % growth.Count];
+            var released = Settle(view, g, offset, out var corrected);
+            samples.Add(new(steps, offset, offset, released, corrected, g));
         }
         return samples;
     }
@@ -53,6 +63,8 @@ public static class ScrollMeasure
     // The anchor was taken at the view change; the layout then moved the top block by growth, and the correction runs.
     static double Settle(SessionView view, double growth, double requested, out bool corrected)
     {
+        // Rows realised taller than estimated also lengthen what there is to scroll, by as much.
+        view.Scroller.ScrollableHeight += growth;
         view.TakeAnchorForProbe(40 - growth);
         view.LaidOutForProbe();
         view.DrainForProbe();
@@ -63,10 +75,10 @@ public static class ScrollMeasure
         return actual;
     }
 
-    // Every step moved the view as asked, so each notch went the same distance (a step against the end is clamped
-    // by the request itself), and the view never went back.
-    public static bool Steady(IEnumerable<ScrollSample> samples) => samples.All(s => !s.Corrected && s.Actual >= s.From);
+    // Every step moved the read block on screen exactly as asked (a notch, a clamp at the end, nothing at a pan's
+    // release), whatever the layout realised above it: the correction takes the growth back.
+    public static bool Steady(IEnumerable<ScrollSample> samples) => samples.All(s => Math.Abs(s.Visible - s.Asked) < 0.5);
 
     public static string Table(IEnumerable<ScrollSample> samples) =>
-        string.Join('\n', samples.Select(s => $"step {s.Step,2}: from {s.From,8:0.#} asked {s.Requested,8:0.#} got {s.Actual,8:0.#} moved {s.Moved,6:0.#}{(s.Corrected ? "  CORRECTED" : "")}"));
+        string.Join("\n", samples.Select(s => $"step {s.Step,2}: asked {s.Asked,5:0.#}  layout pushed {s.Growth,5:0.#}  offset {s.From,8:0.#} -> {s.Actual,8:0.#}  block moves {s.Visible,5:0.#} on screen (held back: {s.VisibleIfHeld,5:0.#}){(s.Corrected ? "  corrected" : "")}"));
 }
