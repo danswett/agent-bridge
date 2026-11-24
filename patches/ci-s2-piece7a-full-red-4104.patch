@@ -1,4 +1,4 @@
-From 34b90e11880c844c600acedf8f01ed34e98e070c Mon Sep 17 00:00:00 2001
+From e39b7ec28e6417ce5f1330045ad1555f8cdcf159 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
 Date: Mon, 23 Nov 2026 17:19:09 -0800
 Subject: [PATCH] CI S2, piece 7a: full-red.yml runs full-red.ps1 after each
@@ -12,11 +12,11 @@ the merge rule's exclusion list, and FullRedWorkflowTests (the if: against a for
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/ci.yml                      |  6 ++
- .github/workflows/full-red.yml                | 47 +++++++++++++++
+ .github/workflows/full-red.yml                | 46 +++++++++++++++
  quality/catalog.yml                           |  6 +-
  .../FullRedWorkflowTests.cs                   | 58 +++++++++++++++++++
  .../MergeRuleTests.cs                         |  3 +-
- 5 files changed, 115 insertions(+), 5 deletions(-)
+ 5 files changed, 114 insertions(+), 5 deletions(-)
  create mode 100644 .github/workflows/full-red.yml
  create mode 100644 tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 
@@ -46,10 +46,10 @@ index 17f2db33c..cad5bdcaa 100644
          if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
 diff --git a/.github/workflows/full-red.yml b/.github/workflows/full-red.yml
 new file mode 100644
-index 000000000..065b2f48d
+index 000000000..c8e2f1d7d
 --- /dev/null
 +++ b/.github/workflows/full-red.yml
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,46 @@
 +name: Full red
 +
 +# The alert for a red FULL lane (quality/README.md section 4.7; S2, #4104): one open issue per red job, labelled full-red, a comment on it for each later
@@ -64,13 +64,6 @@ index 000000000..065b2f48d
 +permissions:
 +  contents: read
 +
-+# Queued, not dropped: with a plain group GitHub keeps one pending run and drops the rest, and a dropped run is a dropped alert. One at a time, so two runs
-+# never race to open the same job's issue.
-+concurrency:
-+  group: full-red
-+  queue: max
-+  cancel-in-progress: false
-+
 +jobs:
 +  report:
 +    # Only this repository's own Full run on main, made by workflow_run or by hand: the branches filter alone also matches a fork's pull request whose
@@ -79,6 +72,12 @@ index 000000000..065b2f48d
 +      github.event.workflow_run.head_repository.full_name == github.repository &&
 +      github.event.workflow_run.head_branch == 'main' &&
 +      (github.event.workflow_run.event == 'workflow_run' || github.event.workflow_run.event == 'workflow_dispatch')
++    # Queued, not dropped: with a plain group GitHub keeps one pending run and drops the rest, and a dropped run is a dropped alert. One at a time, so two runs
++    # never race to open the same job's issue. At job level, where build/actionlint-findings.ps1 lets actionlint's queue-key error through.
++    concurrency:
++      group: full-red
++      queue: max
++      cancel-in-progress: false
 +    runs-on: ubuntu-latest
 +    timeout-minutes: 5
 +    permissions:
@@ -117,7 +116,7 @@ index 5f966a022..7a8e1260a 100644
      validation_plan: native
 diff --git a/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 new file mode 100644
-index 000000000..a6407371a
+index 000000000..ec75887ca
 --- /dev/null
 +++ b/tests/AgentBridge.Quality.Tests/FullRedWorkflowTests.cs
 @@ -0,0 +1,58 @@
@@ -169,7 +168,7 @@ index 000000000..a6407371a
 +    {
 +        var on = (YamlMappingNode)Workflow()["on"];
 +        var run = (YamlMappingNode)on["workflow_run"];
-+        var concurrency = (YamlMappingNode)Workflow()["concurrency"];
++        var concurrency = (YamlMappingNode)Report()["concurrency"];
 +        var permissions = (YamlMappingNode)Report()["permissions"];
 +
 +        Assert.Equal(["workflow_run"], on.Children.Keys.Select(k => k.ToString()));
