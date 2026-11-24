@@ -11,6 +11,21 @@ public sealed partial class MainViewModel
     public static IReadOnlyList<string> SortChoices { get; } = ["Your order", "Most recent", "Machine"];
 
     public SessionOrder Order { get; }
+    public IReadOnlyList<SessionGroup> Groups => Order.Groups.Items;
+    public IReadOnlyDictionary<string, int> GroupCounts => Order.Groups.Counts();
+
+    public string CreateGroup(string name)
+    {
+        var id = Order.Groups.Create(name);
+        Rearrange(chosen: true);
+        return id;
+    }
+
+    public void RenameGroup(string id, string name) { Order.Groups.Rename(id, name); Rearrange(chosen: true); }
+    public void DeleteGroup(string id) { Order.Groups.Delete(id); Rearrange(chosen: true); }
+    public void MoveToGroup(SessionCardViewModel card, string id) { Order.Groups.SetGroup(KeyOf(card), id); Rearrange(chosen: true); }
+    public void RemoveFromGroup(SessionCardViewModel card) { Order.Groups.SetGroup(KeyOf(card), null); Rearrange(chosen: true); }
+
     public bool CanSort(int index) => index >= 0 && index < SortChoices.Count
         && (index != (int)SessionSort.Yours || Order.Usable);
 
@@ -112,6 +127,8 @@ public sealed partial class MainViewModel
             if (c.Pinned) { pinnedSeen = true; } else { restSeen = true; }
         }
         SyncEnded(a.Ended);
+        Raise(nameof(Groups));
+        Raise(nameof(GroupCounts));
         // Saving failed (the file can't be written), here or in the change before: the list is Most
         // recent now, and says so.
         if (Order.Sort != toldSort)
