@@ -34,7 +34,7 @@ static class Program
               metadata alone (no test code runs) and fails unless every one runs in exactly one shard
               under VSTest's containment rule; also fails on an unreadable plan or assembly, an assembly
               with no tests, or none given. Names the offending methods.
-          shard-filter --plan FILE (--check | --project NAME --shard N)
+          shard-filter --plan FILE [--of M] (--check | --project NAME --shard N)
               What test shard N of a plan (quality/test-shards.json) runs of a project: prints none,
               all, or the dotnet test --filter to use. Shard N of N is the remainder: it runs what
               no other shard lists. --check only reads the plan, and fails if it is malformed,
@@ -140,7 +140,7 @@ static class Program
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run", "check" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary", "owner",
-        "runners", "jobs", "max-queued", "max-wait", "min-online", "now", "project", "shard", "shards", "out", "whole-under", "dll", "max-seconds" };
+        "runners", "jobs", "max-queued", "max-wait", "min-online", "now", "project", "shard", "shards", "out", "whole-under", "dll", "max-seconds", "of" };
 
     /// <summary>
     /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX
@@ -156,6 +156,9 @@ static class Program
     {
         string Need(string name) => options.GetValueOrDefault(name) ?? throw new ArgumentException($"shard-filter needs --{name}.");
         var plan = ShardPlanFile.Parse(File.ReadAllText(Need("plan")));
+        // A CI matrix of M jobs on a plan of N shards would never run the last ones, the remainder among them: --of M turns that into a failure (#4104).
+        if (options.TryGetValue("of", out var of) && int.Parse(of, System.Globalization.CultureInfo.InvariantCulture) != plan.Shards)
+            throw new ArgumentException($"The plan has {plan.Shards} shards, not {of}: a matrix of {of} would never run shard {plan.Shards}, the remainder.");
         if (options.ContainsKey("check"))
         {
             output.WriteLine($"ok: {plan.Shards} shards");
