@@ -504,9 +504,20 @@ Restart replay (owner-approved warm-up). The envelope replay cache is in memory.
 after a host start the receiver refuses all `fleet.launch` envelopes until 120 s plus the 30 s clock skew has passed
 (about 2.5 minutes); any envelope sealed before the restart has expired by then, so it cannot replay. Expect remote
 launches to be refused with `policy` for about 2.5 minutes after a host restart; senders get a refusal, not a queue, and
-retry with a fresh request. No store or new file is added. Noted alternative, not chosen: a durable (sourceDevice, nonce)
+after a REFUSAL the caller may retry with a fresh envelope and the SAME request id (never a new request id: that would be a new operation and could double-launch); an UNCONFIRMED result is never retried or resent, it is resolved with `launches status`. No store or new file is added. Noted alternative, not chosen: a durable (sourceDevice, nonce)
 file that survives restart and removes the pause, at the cost of a private atomic store and its recovery rules.
 The sender's envelope `generation` is diagnostic only: the receiver fences on its own grant generation (as local launches do).
+
+Wire operation (G9c2). `fleet.launch` is listed in `RemoteAuthorization.HostOperations`, so it is served only to a
+host peer of the same account, over the relay channel, and never on this machine's own pipe. A launch that is
+accepted returns a receipt that carries the id of the session it started; every refusal returns one of the
+documented reasons and has no side effect. The lite kill (`ILiteMode.On`, the switch that turns lite messaging off) is also the remote-launch kill switch: with it off the receiver refuses `kill-switch` before any parse.
+
+Sender gates (G9c2), copied from `AgentLiteSender`, not a new check. The sending host checks `ILiteMode.On` (it reads the `agentMessaging.remote` setting and any
+recorded lite kill, the same switch lite messaging uses) before AND after signing, and rechecks the agent credential after the signer returns, so a kill, the setting
+turned off or a lapsed caller signs and sends nothing. A kill while waiting for the reply, or a cancel, after the send is `unconfirmed` (exit 7), never a refusal and
+never a resend. The source host audits its own refusals before anything is sent, with the same row and hourly limiter as every other refused launch (the caller is the local agent principal; the receiver's own refusal row belongs to #4170, not this slice), and the refusal is
+`audit-unavailable` if it cannot be written. The peer's receipt is rebuilt from fixed fields only: a reason outside the CLI refusal table becomes the one generic code `policy`, and no free-text reason, peer cwd or trust question is shown.
 
 Receiver order:
 

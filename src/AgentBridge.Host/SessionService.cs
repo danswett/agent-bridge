@@ -212,6 +212,9 @@ public sealed class SessionService
     internal Func<SecureChannel, ClientIdentity?>? ClientOf { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
     public Lite.LiteKill? LiteKill { get; init; }
+    // G9: fleet.launch from another host of this account, through the relay only (never this machine's pipe).
+    // Set once by FleetRemoteLaunch.Wire after the launch pipeline exists (the service is built before it).
+    public FleetRemoteLaunch? FleetRemoteLaunch { get; internal set; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -310,6 +313,8 @@ public sealed class SessionService
                 return await transfers.ServeAsync(secure, data);
             case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
                 return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
+            case FleetRemoteLaunch.Op when FleetRemoteLaunch is not null && channel is SecureChannel secure:
+                return await FleetRemoteLaunch.ReceiveAsync(Lite.LiteChannel.Of(secure), data);
             case Lite.LiteKill.Op when LiteKill is not null && channel is SecureChannel secure:
                 return LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data);
             // A person's device through the relay, with a command it signed. Never this machine's

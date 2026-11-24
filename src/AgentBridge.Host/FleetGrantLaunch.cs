@@ -32,6 +32,13 @@ public sealed class FleetGrantLaunch(string folder, P256KeyPair key, Func<string
     { PropertyNameCaseInsensitive = false, NumberHandling = JsonNumberHandling.Strict,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, RespectRequiredConstructorParameters = true };
 
+    // A request that does not parse is left to the local path, which refuses and audits it.
+    internal static FleetLaunchInput? TryParse(JsonElement data)
+    {
+        try { return Parse(data); }
+        catch (Exception e) when (e is FleetLaunchDenied or JsonException) { return null; }
+    }
+
     internal static FleetLaunchInput Parse(JsonElement data)
     {
         if (data.ValueKind != JsonValueKind.Object || ProtocolJson.ByteCount(data) > LaunchProtocol.MaxRequest
