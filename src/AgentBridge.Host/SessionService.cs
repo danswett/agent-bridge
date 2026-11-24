@@ -40,6 +40,8 @@ public sealed class SessionService
     // Why this machine is read-only for other devices now (agent-ha-bridge running for the user,
     // design G5), or null: said in hello, beside the capabilities it takes away.
     public Func<string?>? ReadOnly { get; init; }
+    // The owner's agents.fleetLaunch.enabled, read fresh (#2770); unset means off, so every fleet launch is refused.
+    internal Func<bool>? FleetLaunchSwitch { get; init; }
 
     // The host's shared G5 check, held for each hello so its readOnly and every capability G5 takes
     // away come from one look (SharedAgentHaBridgeProbe.Hold); null where nothing shares it.
@@ -105,9 +107,10 @@ public sealed class SessionService
     {
         if (launcher is null || audit is null) { return new(LaunchOutcome.Refused, "fleet launch service or audit is unavailable"); }
         if (ReadOnly?.Invoke() is { } readOnly) { return new(LaunchOutcome.Refused, readOnly); }
-        // #2770 must wire atomic, durable hourly/live admission before fleet activation.
-        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable")
-            ?? "fleet launch is disabled until fleet hourly/live admission controls are wired";
+        if (FleetLaunchSwitch?.Invoke() != true)
+        { return new(LaunchOutcome.Refused, "fleet launch is off until the owner enables it (agents.fleetLaunch.enabled in config.json); the hourly and live admission controls apply once it is on"); }
+        // The route is a config switch, off by default (FleetLaunchGrant.CheckLaunch); the hourly and live admission is atomic and durable in LaunchService (#2770).
+        string? Check() => refusal() ?? (launcher.FleetConfig is { } actual ? dispatchCheck(actual) : "fleet dispatch settings are unavailable");
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: Check);

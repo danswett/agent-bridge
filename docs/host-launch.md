@@ -107,6 +107,20 @@ and isolated, approved workspace labels in that grant. It retains offered models
 efforts and contexts, but no paths, resumable sessions, profiles or trust questions.
 The read scope is sufficient; missing or revoked credentials cannot read these choices.
 
+## Fleet launch caps (#2770)
+
+The fleet route is a script credential with the `launch:fleet` grant, in a ticked, isolated workspace. **The F7 dispatcher starts its workers through this route**, so
+these caps are the dispatcher's: it stays at **6 workers running and 8 launches an hour until the owner raises them**. Three settings, all in the host's config and set
+only by the person at the machine (never read from a wire request, and nothing an agent can call changes them):
+
+- `agents.fleetLaunch.enabled`: the route itself, **off by default**. Off, every fleet launch is refused whatever else is right.
+- `agents.limits.fleetPerHour` (default 8) and `agents.limits.liveFleetWorkers` (default 6): the owner can raise them to a hard ceiling of **60** each. A larger
+  number is read as 60, and zero, a negative or anything that is not a whole number is read as the default: never unlimited.
+
+Admission is atomic and survives a restart: the hourly count and the live count are taken from the host's durable launch record inside its own lock, and a new fleet
+launch reserves its slot in the same step, so two launches at once cannot both take the last one. A fleet launch refused for a cap says which cap and its number in the
+refusal reason, which is what the launch audit records. Agent-started sessions and coordinators have their own caps above and are not counted here, so a full fleet never blocks a coordinator.
+
 Only the person at the machine changes `agents.limits` in the host's config.
 The hourly defaults and ceilings are 3 launches per agent, 10 per machine and 20
 attempts per agent; they may be lowered, never made unlimited. The gate reads changes

@@ -790,6 +790,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var loadService = new LoadService(source, () => load.Current, () => settings.LoadEnabled, Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
+        FleetLaunchSwitch = () => HostSettings.CurrentAgents(identity.Folder) is { Problem: null } fleet && fleet.Policy.FleetLaunchEnabled,
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
@@ -1248,6 +1249,9 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         // The cached readiness scan, not the Codex home: a launch never reads the agent's files.
         HooksNotSetUp = hooksNotSetUp,
         Config = settings.Launch,
+        // The fleet route's hourly and live caps, read fresh for each launch from the owner's config.json (#2770).
+        FleetAdmission = () => serveFolder is not null && HostSettings.CurrentAgents(serveFolder) is { Problem: null } current
+            ? new AgentBridge.Host.Delivery.Launch.FleetLimits(current.Policy.Limits.Launch.FleetPerHour, current.Policy.Limits.Launch.LiveFleetWorkers) : null,
         HomeAssistantEnabled = settings.HomeAssistant.Enabled || settings.HomeAssistant.EnabledRequested,
         HomeAssistantBaseUrl = settings.HomeAssistant.BaseUrl,
         // A session waiting to be restored keeps its worktree as a live one does (#780).

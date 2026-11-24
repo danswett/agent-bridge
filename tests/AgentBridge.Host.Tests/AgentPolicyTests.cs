@@ -152,4 +152,43 @@ public sealed class AgentPolicyTests
         var s = Parse("{\"agents\":{\"inbound\":{\"local\":{\"launch\":{\"workspaces\":\"approved\",\"permissions\":\"ask\",\"allowAllLaunch\":" + value + "}}}}}");
         Assert.Equal(expected, s.Agents.InboundLocal.Launch?.AllowAllLaunch ?? false);
     }
+    // #2770: fleet launch limits (the dispatcher's route) are owner-set in config.json only, default 8 an hour and 6 live, raisable to a hard ceiling of 60.
+    [Fact]
+    public void The_fleet_limits_default_to_8_an_hour_and_6_live_and_the_route_is_off()
+    {
+        var s = Parse("""{ "agents": { "enabled": true } }""");
+        Assert.Equal((8, 6), (s.Agents.Limits.Launch.FleetPerHour, s.Agents.Limits.Launch.LiveFleetWorkers));
+        Assert.False(s.Agents.FleetLaunchEnabled);
+        Assert.Empty(s.AgentsProblems);
+    }
+
+    [Fact]
+    public void The_owner_can_raise_the_fleet_limits_and_a_value_above_60_is_clamped_to_60()
+    {
+        var s = Parse("""{ "agents": { "enabled": true, "fleetLaunch": { "enabled": true }, "limits": { "fleetPerHour": 20, "liveFleetWorkers": 70 } } }""");
+        Assert.True(s.Agents.FleetLaunchEnabled);
+        Assert.Equal((20, 60), (s.Agents.Limits.Launch.FleetPerHour, s.Agents.Limits.Launch.LiveFleetWorkers));
+        Assert.Contains(s.AgentsProblems, p => p.Contains("liveFleetWorkers") && p.Contains("60"));
+        Assert.DoesNotContain(s.AgentsProblems, p => p.Contains("not a setting"));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-3")]
+    [InlineData("2.5")]
+    [InlineData("\"many\"")]
+    [InlineData("null")]
+    public void A_fleet_limit_that_is_not_a_whole_number_from_1_is_the_default_never_unlimited(string value)
+    {
+        var s = Parse("{ \"agents\": { \"limits\": { \"fleetPerHour\": " + value + ", \"liveFleetWorkers\": " + value + " } } }");
+        Assert.Equal((8, 6), (s.Agents.Limits.Launch.FleetPerHour, s.Agents.Limits.Launch.LiveFleetWorkers));
+    }
+
+    [Fact]
+    public void An_unknown_fleetLaunch_key_is_said_and_ignored_and_the_route_stays_off()
+    {
+        var s = Parse("""{ "agents": { "fleetLaunch": { "enabled": "yes", "maxInFlight": 60 } } }""");
+        Assert.False(s.Agents.FleetLaunchEnabled);
+        Assert.Contains(s.AgentsProblems, p => p.Contains("fleetLaunch"));
+    }
 }

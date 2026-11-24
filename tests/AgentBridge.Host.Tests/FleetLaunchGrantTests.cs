@@ -15,8 +15,8 @@ public sealed class FleetLaunchGrantTests : IDisposable
     static AgentCredential Script => AgentCredential.Script("fixture", "machine", "dispatcher", Now) with { FleetLaunch = true };
     static LaunchRequest Request => new() { Request = Guid.NewGuid().ToString("D"), Agent = "claude",
         Workspace = "workers", Permissions = LaunchProtocol.AllowAll };
-    void Config(string workspace = "workers", bool isolate = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
-        JsonSerializer.Serialize(new { agents = new { enabled = true, fleet = new { workspaces = new[] { workspace } } },
+    void Config(string workspace = "workers", bool isolate = true, bool fleetLaunch = true) => File.WriteAllText(Path.Combine(folder, HostSettings.FileName),
+        JsonSerializer.Serialize(new { agents = new { enabled = true, fleetLaunch = new { enabled = fleetLaunch }, fleet = new { workspaces = new[] { workspace } } },
             launch = new { workspaces = new[] { new { label = "workers", path = folder, isolate } } } }));
     public void Dispose() => Directory.Delete(folder, true);
 
@@ -32,6 +32,19 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Contains("isolated", grant.CheckLaunch(Script, Outside, Request));
         Config();
         Assert.Contains("listed", grant.CheckLaunch(Script, Outside, Request with { Workspace = "unknown" }));
+    }
+
+    // #2770: the route is a config switch, off by default, set only by the owner in config.json: with it off a launch is refused whatever else is right.
+    [Fact]
+    public void The_fleet_launch_route_is_off_until_the_owner_sets_agents_fleetLaunch_enabled()
+    {
+        var grant = new FleetLaunchGrant(folder);
+        Config(fleetLaunch: false);
+        Assert.Contains("fleetLaunch", grant.CheckLaunch(Script, Outside, Request));
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{"agents":{"enabled":true,"fleet":{"workspaces":["workers"]}}}""");
+        Assert.Contains("fleetLaunch", grant.CheckLaunch(Script, Outside, Request));
+        Config();
+        Assert.Null(grant.CheckLaunch(Script, Outside, Request));
     }
 
     [Fact]
