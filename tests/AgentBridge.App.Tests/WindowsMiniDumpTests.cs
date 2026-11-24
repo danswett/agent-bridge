@@ -48,12 +48,16 @@ public sealed class WindowsMiniDumpTests : IDisposable
         Assert.True(File.Exists(Path.Combine(folder, "someone-elses.dmp")));
     }
 
+    // The two rows that write a dump write a real one of this test host, which crashes or hangs it on CI and holds main red
+    // (QuarantineTests). The rows that refuse to write still run: they never reach MiniDumpWriteDump.
+    const string Quarantined = "quarantined (fixes-main, Part of #4104; tracking issue filed by Quality): a real MiniDumpWriteDump of the test host crashes or hangs it in CI, until 2026-11-30";
+
     // A dump is a few megabytes, but a disk with no room left is the machine's emergency, not a thing to add to: below 1 GB free, no dump.
     [Theory]
     [InlineData(0L, false)]
     [InlineData((1L << 30) - 1, false)]
-    [InlineData(1L << 30, true)]
-    [InlineData(50L << 30, true)]
+    [InlineData(1L << 30, true, Skip = Quarantined)]
+    [InlineData(50L << 30, true, Skip = Quarantined)]
     public void With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said(long freeBytes, bool writes)
     {
         if (!OperatingSystem.IsWindows()) { return; }

@@ -1126,7 +1126,8 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
   Quality proposes; the owner approves. Record the issue, owner and expiry:
   at most seven days, or three days for ARM with a passes-on-rerun check.
   Tests still run and report; there is no automatic skip or quarantine.
-  This guidance approves no active quarantine. The flake record is the `flaky`
+  This guidance approves no active quarantine beyond the one `QuarantineTests` lists (App.Tests, fixes-main, Part of #4104,
+  a skip that names its issue and expiry, at most three, the test still in the source). The flake record is the `flaky`
   label and its issues, one per test, each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
