@@ -141,24 +141,43 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
     public bool TaskLocked(string task) => Task(task, t => Call(t, "GetSecurityDescriptor", 5) as string) is { } sddl && TaskAccess.Unchangeable(sddl, folder: false) == true;
 
     // The file and every folder above it, none of them reached through a link, none changeable by this user.
-    public bool FileLocked(string path)
+    public bool FileLocked(string path) => LockedChain(path, e => e switch
+    {
+        FileInfo f => f.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Owner | AccessControlSections.Access),
+        DirectoryInfo d => d.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Owner | AccessControlSections.Access),
+        _ => throw new NotSupportedException(),
+    });
+
+    // The walk from a file up to the volume root, with `descriptor` giving each level's owner and discretionary list.
+    internal static bool LockedChain(string path, Func<FileSystemInfo, string> descriptor)
     {
         try
         {
             if (!Path.IsPathFullyQualified(path) || new FileInfo(path) is not { Exists: true } file || file.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return false; }
-            var chain = new List<(bool Folder, string Sddl)> { (false, file.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Owner | AccessControlSections.Access)) };
+            var chain = new List<(bool Folder, string Sddl)> { (false, descriptor(file)) };
             for (var dir = file.Directory; dir is not null; dir = dir.Parent)
             {
                 if (dir.Attributes.HasFlag(FileAttributes.ReparsePoint)) { return false; }
-                chain.Add((true, dir.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Owner | AccessControlSections.Access)));
+                chain.Add((true, descriptor(dir)));
             }
             return AllLocked(chain);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or InvalidOperationException) { return false; }
     }
 
-    // The file's own descriptor and each folder's above it, all of which must say this user cannot change them.
-    internal static bool AllLocked(IEnumerable<(bool Folder, string Sddl)> chain) => chain.All(c => TaskAccess.Unchangeable(c.Sddl, c.Folder) == true);
+    // The file's own descriptor and each folder's above it, all of which must say this user cannot change them. The first folder in the
+    // chain is the one holding the file, which must also take no additions.
+    internal static bool AllLocked(IEnumerable<(bool Folder, string Sddl)> chain)
+    {
+        var beside = true;
+        foreach (var (folder, sddl) in chain)
+        {
+            // Additions are refused only in the folder holding the file (lead-approved): adding higher up puts nothing beside the program, and a parent's delete-child, delete and re-permission are still checked.
+            if (TaskAccess.Unchangeable(sddl, folder, folder && beside) != true) { return false; }
+            if (folder) { beside = false; }
+        }
+        return true;
+    }
 
     public string? FileSha256(string path)
     {

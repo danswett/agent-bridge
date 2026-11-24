@@ -20,7 +20,7 @@ public static class TaskAccess
     const int FileWriteData = 0x2;
     // What changing, deleting or replacing a file takes, and what replacing something in a folder takes (a script credential's pinned
     // files and the folders above them, docs/design/script-credentials.md section 6): adding a file or a subfolder replaces nothing.
-    const int AppendData = 0x4, DeleteChild = 0x40, Delete = 0x10000, WriteDac = 0x40000, WriteOwner = 0x80000;
+    const int AddFile = 0x2, AppendData = 0x4, DeleteChild = 0x40, Delete = 0x10000, WriteDac = 0x40000, WriteOwner = 0x80000;
     const int ChangeFile = FileWriteData | AppendData | Delete | WriteDac | WriteOwner;
     const int ChangeFolder = DeleteChild | Delete | WriteDac | WriteOwner;
     const int GenericAll = 0x10000000, GenericExecute = 0x20000000, GenericWrite = 0x40000000, GenericRead = unchecked((int)0x80000000);
@@ -35,25 +35,29 @@ public static class TaskAccess
     // True when the user can neither change, delete nor replace a file (folder: nor delete or re-permission a folder or its children),
     // false when it can, null when the descriptor cannot decide it. An owner may always change the permissions of what it owns
     // unless an OWNER RIGHTS entry says otherwise, so an object the user owns is never locked.
-    public static bool? Unchangeable(string sddl, bool folder, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null)
+    // `beside`: the folder holds a pinned file, so adding a file or a subfolder to it also counts as changing it (a library planted beside a
+    // pinned program runs in its place). A descriptor with no owner cannot say who may re-permission it, so it is undecided.
+    public static bool? Unchangeable(string sddl, bool folder, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly = null, bool beside = false)
     {
-        var wanted = folder ? ChangeFolder : ChangeFile;
-        return Granted(sddl, user, groups, denyOnly, wanted) is { } granted ? (granted & wanted) == 0 : null;
+        var wanted = folder ? ChangeFolder | (beside ? AddFile | AppendData : 0) : ChangeFile;
+        return Granted(sddl, user, groups, denyOnly, wanted, needOwner: true) is { } granted ? (granted & wanted) == 0 : null;
     }
 
-    public static bool? Unchangeable(string sddl, bool folder)
+    public static bool? Unchangeable(string sddl, bool folder, bool beside = false)
     {
         using var identity = WindowsIdentity.GetCurrent();
         if (identity.User is not { } user) { return null; }
         var denyOnly = identity.Claims.Where(c => c.Type == ClaimTypes.DenyOnlySid).Select(c => new SecurityIdentifier(c.Value)).ToList();
-        return Unchangeable(sddl, folder, user, identity.Groups?.OfType<SecurityIdentifier>() ?? [], denyOnly);
+        return Unchangeable(sddl, folder, user, identity.Groups?.OfType<SecurityIdentifier>() ?? [], denyOnly, beside);
     }
 
     // The rights among `wanted` the descriptor grants, or null when an entry that could still decide one of them cannot be evaluated here.
-    static int? Granted(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly, int wanted)
-    {        RawSecurityDescriptor descriptor;
+    static int? Granted(string sddl, SecurityIdentifier user, IEnumerable<SecurityIdentifier> groups, IEnumerable<SecurityIdentifier>? denyOnly, int wanted, bool needOwner = false)
+    {
+        RawSecurityDescriptor descriptor;
         try { descriptor = new RawSecurityDescriptor(sddl); }
         catch (Exception e) when (e is ArgumentException or FormatException) { return null; }
+        if (needOwner && descriptor.Owner is null) { return null; }
         // No discretionary list at all grants everyone everything.
         if (descriptor.DiscretionaryAcl is not { } acl) { return wanted; }
         var who = new HashSet<SecurityIdentifier>(groups) { user };
