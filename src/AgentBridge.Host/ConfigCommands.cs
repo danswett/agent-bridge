@@ -113,30 +113,24 @@ public static class ConfigCommands
 
     static int Add(string path, string folder, string? label, bool isolate, Func<string, bool> isSystemDirectory, TextWriter output, TextWriter error)
     {
-        string full;
-        try { full = Path.GetFullPath(Folders.Expand(folder) ?? folder); }
-        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { error.WriteLine($"{folder} is not a folder path"); return 1; }
-        if (Folders.Physical(full) is not { } physical) { error.WriteLine($"{full} does not exist"); return 1; }
-        if (isSystemDirectory(physical)) { error.WriteLine($"{full} is a system folder (Windows, Program Files, ProgramData, temp or a drive root); no session should be launched there"); return 1; }
-        if (isolate && !Git.Run(physical, ["rev-parse", "--show-toplevel"]).Ok) { error.WriteLine($"{full} is not in a git repository, so its sessions cannot have worktrees of their own; add it without --isolate"); return 1; }
-
-        var root = Read(path);
-        var launch = Object(root, "launch");
-        var workspaces = launch["workspaces"] as JsonArray ?? [];
-        launch["workspaces"] = workspaces;
-        var (current, _) = HostSettings.Load(Path.GetDirectoryName(path)!);
-        if (current.Launch.Workspaces.FirstOrDefault(w => Folders.Physical(w.Path) is { } p && Folders.Same(p, physical)) is { } existing)
+        // The command line may be given a path relative to where it was run; the shared check takes an absolute one only.
+        var given = folder;
+        try { if (Folders.Expand(folder) is null) { given = Path.GetFullPath(folder); } } catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { }
+        var added = WorkspaceApproval.Add(Path.GetDirectoryName(path)!, given, label, isolate, isSystemDirectory);
+        var refusal = added.Code switch
         {
-            error.WriteLine($"{full} is already approved, as '{existing.Label}'");
-            return 1;
-        }
-        label = string.IsNullOrWhiteSpace(label) ? Folders.DefaultLabel(full) : label.Trim();
-        if (current.Launch.Workspaces.Any(w => w.Label == label)) { error.WriteLine($"another workspace is already labelled '{label}'; choose one with --label"); return 1; }
-        var entry = new JsonObject { ["path"] = full, ["label"] = label };
-        if (isolate) { entry["isolate"] = true; }
-        workspaces.Add(entry);
-        if (!Save(path, root, error)) { return 1; }
-        output.WriteLine($"Approved {full} as '{label}' for launching sessions from your devices{(isolate ? "; each new session starts in a git worktree of its own" : "")}.");
+            WorkspaceApproval.Added => null,
+            WorkspaceApproval.NotAPath => $"{folder} is not a folder path",
+            WorkspaceApproval.Missing => $"{added.Path} does not exist",
+            WorkspaceApproval.SystemFolder => $"{added.Path} is a system folder (Windows, Program Files, ProgramData, temp or a drive root); no session should be launched there",
+            WorkspaceApproval.NotGit => $"{added.Path} is not in a git repository, so its sessions cannot have worktrees of their own; add it without --isolate",
+            WorkspaceApproval.AlreadyApproved => $"{added.Path} is already approved, as '{added.Label}'",
+            WorkspaceApproval.LabelInUse => $"another workspace is already labelled '{added.Label}'; choose one with --label",
+            WorkspaceApproval.TooMany => $"at most {AgentBridge.Protocol.LaunchProtocol.MaxWorkspaces} workspaces can be approved; remove one first",
+            _ => added.Detail,
+        };
+        if (refusal is not null) { error.WriteLine(refusal); return 1; }
+        output.WriteLine($"Approved {added.Path} as '{added.Label}' for launching sessions from your devices{(isolate ? "; each new session starts in a git worktree of its own" : "")}.");
         output.WriteLine("Restart agent-bridge-host serve to apply it.");
         return 0;
     }
@@ -193,7 +187,7 @@ public static class ConfigCommands
         return 0;
     }
 
-    static JsonObject Read(string path)
+    internal static JsonObject Read(string path)
     {
         if (!File.Exists(path)) { return new JsonObject { ["version"] = HostSettings.Version }; }
         var node = JsonNode.Parse(File.ReadAllText(path), documentOptions: HostSettings.Options) as JsonObject
@@ -201,7 +195,7 @@ public static class ConfigCommands
         return node;
     }
 
-    static JsonObject Object(JsonObject parent, string name)
+    internal static JsonObject Object(JsonObject parent, string name)
     {
         if (parent[name] is JsonObject o) { return o; }
         if (parent[name] is not null) { throw new JsonException($"{name} is not an object; fix it first"); }
@@ -212,7 +206,7 @@ public static class ConfigCommands
 
     // Checked as serve would read it, in memory, so a change that is refused is never written
     // anywhere; then written in one step.
-    static bool Save(string path, JsonObject root, TextWriter error)
+    internal static bool Save(string path, JsonObject root, TextWriter error)
     {
         root["version"] ??= HostSettings.Version;
         var text = root.ToJsonString(Pretty) + Environment.NewLine;
@@ -225,8 +219,12 @@ public static class ConfigCommands
             return false;
         }
         var temp = Path.Combine(folder, $".{HostSettings.FileName}.{Guid.NewGuid():N}.tmp");
-        File.WriteAllText(temp, text);
-        File.Move(temp, path, overwrite: true);
+        try
+        {
+            File.WriteAllText(temp, text);
+            File.Move(temp, path, overwrite: true);
+        }
+        finally { File.Delete(temp); }
         return true;
     }
 }
