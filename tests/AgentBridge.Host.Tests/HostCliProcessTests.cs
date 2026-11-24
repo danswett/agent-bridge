@@ -175,6 +175,7 @@ public sealed class HostCliProcessTests(ITestOutputHelper output)
             start.ArgumentList.Add(home);
         }
         start.Environment["TMP"] = start.Environment["TEMP"] = Path.Combine(fixture.Root, "tmp");
+        HostProcessIsolation.Isolate(start, Path.Combine(fixture.Root, "profiles")); // beside the fixture's home, not in it (#4520)
         using var child = Process.Start(start)!;
         var output = child.StandardOutput.ReadToEndAsync();
         var error = child.StandardError.ReadToEndAsync();

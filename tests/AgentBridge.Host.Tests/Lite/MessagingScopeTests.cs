@@ -162,7 +162,7 @@ public sealed class MessagingScopeTests
             var start = new System.Diagnostics.ProcessStartInfo("dotnet") { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
             start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "agent-bridge-host.dll"));
             foreach (var arg in new[] { "config", verb, key, value }.Where(a => a.Length > 0)) { start.ArgumentList.Add(arg); }
-            start.Environment["LOCALAPPDATA"] = local;
+            HostProcessIsolation.Isolate(start, local); // LOCALAPPDATA is no isolation: the host ignores it on Windows (#4520)
             start.Environment[AgentBridge.Local.AgentAncestry.SessionVariable] = "agent-session-1";
             using var process = System.Diagnostics.Process.Start(start)!;
             var error = await process.StandardError.ReadToEndAsync();
