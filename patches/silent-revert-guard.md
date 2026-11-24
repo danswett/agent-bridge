@@ -1,0 +1,9 @@
+# The silent-revert guard: the plan job's step and the catalog flip (patch for Quality, Q10)
+
+Part of #4465. For the PR on branch `sg-silent-revert-guard` (head `1bd97e624833f2b660af5f778cef5c3eadc0603a`), which adds `agent-bridge-quality silent-revert`. Apply this **after** that PR has landed; `git apply --check patches/silent-revert-guard.patch` is clean on that head, and `agent-bridge-quality check` says "The catalog is complete." on the patched tree. I do not push workflow files.
+
+- `.github/workflows/ci.yml`: one step in the **plan** job, after "The catalog is complete" (the selector is built by then): **Silent-revert guard (a warning only, #4465)**, `if: github.event_name == 'pull_request'`, `continue-on-error: true`, `timeout-minutes: 5`, bash. It deepens the 2-commit checkout (`git fetch --no-tags --unshallow origin`, falling back to `--depth=20000`) because blame needs history, then runs `silent-revert --base HEAD^1 --head HEAD --pr "$PR" --summary "$GITHUB_STEP_SUMMARY"`. On a pull request the checkout is the merge commit, so `HEAD^1` is the base tip and the diff base to merge commit is exactly what merging does, including a main merge that silently reverts something (the #3968 case).
+- `quality/catalog.yml`: suite `silent-revert-guard` from `planned` to `exists`.
+- It **warns, never fails**: the tool exits 0 and the step is `continue-on-error`. The plan job has no secrets (`contents`, `pull-requests` and `actions` are read-only).
+- Cost: the unshallow fetch of the repo's history plus one `git blame` per file the change deletes lines from. If that is too slow on a large deletion, the lever is `--depth` on the fetch.
+- Job name for the required-check and merge-rule questions: it is a step of `plan`, not a job, so `quality-gate`'s existing `needs: plan` already covers it and there is no new check name.
