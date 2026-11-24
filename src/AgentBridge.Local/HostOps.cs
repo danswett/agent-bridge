@@ -163,7 +163,7 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
         && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
-        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && AgentMessagingScope == other.AgentMessagingScope;
+        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && (AgentMessagingScope ?? "same-person") == (other.AgentMessagingScope ?? "same-person");
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
