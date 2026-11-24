@@ -1,0 +1,260 @@
+From 70069def2dbf1077ae291b8798de7ce2199aad58 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 19:25:22 -0800
+Subject: [PATCH] Release train part B: attest (FULL's SBOMs), purge and the
+ dry-run report (S2 piece C2b, Part of #4104)
+
+attest ports ci.yml's job to the train: provenance and SBOM attestations for the release's own assets, downloaded back, with FULL's SBOMs
+(the FAST run has none), in a job of its own with contents read plus the OIDC token; it runs when publish uploaded, even if publish then
+failed. purge (P0's train-3) refreshes the release-list CDN after a successful publish, in the release-purge environment; failing there
+never unpublishes anything. report says what a live run would have published whenever the train is not live, red when verification fails.
+Tests first: who may write, who may sign, who may have an environment, the three if: conditions, the SBOM source.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/release-train.yml           | 134 ++++++++++++++++++
+ docs/app-windows.md                           |   3 +-
+ quality/catalog.yml                           |   4 +-
+ .../ReleaseTrainWorkflowTests.cs              |  38 ++++-
+ 4 files changed, 172 insertions(+), 7 deletions(-)
+
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+index b853eeff0..028254e07 100644
+--- a/.github/workflows/release-train.yml
++++ b/.github/workflows/release-train.yml
+@@ -236,3 +236,137 @@ jobs:
+           if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
+           $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
+           ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
++
++  attest:
++    name: Attest the published packages
++    # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md section 3.3, supply-chain), so anyone can check a download with
++    # `gh attestation verify <file> -R danswett/agent-bridge`. The subjects are the release's own assets, downloaded back (publishing may rebuild a delta after it was
++    # packed); the SBOMs are FULL's, of the bytes it built. Only when this run uploaded them, and in a job of its own: contents read plus the OIDC token, nothing more.
++    needs: [pick, publish]
++    if: ${{ !cancelled() && needs.publish.outputs.published == 'true' }}
++    runs-on: ubuntu-latest
++    timeout-minutes: 15
++    permissions:
++      contents: read # the release's assets
++      actions: read # FULL's SBOM artifacts
++      id-token: write # signs through Sigstore with this run's identity
++      attestations: write
++    env:
++      APP_VERSION: ${{ needs.pick.outputs.version }}
++    steps:
++      - name: Download the packages publish uploaded
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++        run: |
++          tag="v$APP_VERSION"
++          # Velopack's names (build/app-channels.ps1): x64's `win` channel has no suffix.
++          gh release download "$tag" -R "$REPO" -D "$RUNNER_TEMP/release/win-x64" \
++            -p "*-$APP_VERSION-full.nupkg" -p "*-$APP_VERSION-delta.nupkg" -p '*-win-Setup.exe' -p '*-win-Portable.zip'
++          gh release download "$tag" -R "$REPO" -D "$RUNNER_TEMP/release/win-arm64" \
++            -p "*-$APP_VERSION-win-arm64-full.nupkg" -p "*-$APP_VERSION-win-arm64-delta.nupkg" -p '*-win-arm64-Setup.exe' -p '*-win-arm64-Portable.zip'
++          for dir in win-x64 win-arm64; do
++            for kind in '-full.nupkg' '-Setup.exe' '-Portable.zip'; do
++              compgen -G "$RUNNER_TEMP/release/$dir/*$kind" > /dev/null || { echo "::error::$tag has no $dir *$kind"; exit 1; }
++            done
++          done
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          pattern: sbom-*-${{ env.APP_VERSION }}
++          path: ${{ runner.temp }}/sbom
++          merge-multiple: true
++          run-id: ${{ needs.pick.outputs.full-run }}
++          github-token: ${{ github.token }}
++      - name: Attest the packages' build provenance
++        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
++        with:
++          subject-path: ${{ runner.temp }}/release/*/*
++      - name: Attest the x64 packages' SBOM
++        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
++        with:
++          subject-path: ${{ runner.temp }}/release/win-x64/*
++          sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-x64-${{ env.APP_VERSION }}.cdx.json
++      - name: Attest the Arm64 packages' SBOM
++        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
++        with:
++          subject-path: ${{ runner.temp }}/release/win-arm64/*
++          sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
++
++  purge:
++    name: Refresh the release-list CDN
++    # After a release is published, purge the relay's list pages by URL and check the relay serves the new release (#3870 option A). Failing here never
++    # unpublishes anything: the release is out, the relay is just not yet showing it. Holds the secret CF_PURGE_TOKEN (Cloudflare Cache Purge on the slipgates.com
++    # zone, nothing else) and the variable CF_ZONE_ID, set in GitHub settings, never typed in a terminal.
++    needs: [pick, publish]
++    if: needs.publish.result == 'success'
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    environment: release-purge
++    permissions: {}
++    steps:
++      - name: Purge the list pages by URL, then check the relay serves the published release
++        shell: pwsh
++        env:
++          CF_PURGE_TOKEN: ${{ secrets.CF_PURGE_TOKEN }}
++          CF_ZONE_ID: ${{ vars.CF_ZONE_ID }}
++          TAG: v${{ needs.pick.outputs.version }}
++        run: |
++          $ErrorActionPreference = 'Stop'
++          if (-not $env:CF_PURGE_TOKEN -or -not $env:CF_ZONE_ID) { throw 'CF_PURGE_TOKEN or CF_ZONE_ID is not set in the release-purge environment' }
++          # The public zone URLs the Worker keys its cache on: the page clients read (first ten) and the larger page older clients still ask for.
++          $base = 'https://releases.slipgates.com/repos/danswett/agent-bridge/releases'
++          $urls = @("${base}?per_page=10&page=1", "${base}?per_page=100&page=1")
++          $headers = @{ Authorization = "Bearer $env:CF_PURGE_TOKEN" }
++          $body = @{ files = $urls } | ConvertTo-Json -Compress
++          $answer = Invoke-RestMethod -Method Post -Uri "https://api.cloudflare.com/client/v4/zones/$env:CF_ZONE_ID/purge_cache" -Headers $headers -ContentType 'application/json' -Body $body
++          if (-not $answer.success) { throw "Cloudflare refused the purge: $(($answer.errors | ForEach-Object { $_.message }) -join '; ')" }
++          Write-Host "purged $($urls.Count) URLs"
++          # Re-fetch until both pages name the published tag with a fresh copy, within a minute.
++          $stale = $null
++          foreach ($attempt in 1..6) {
++            $stale = $null
++            foreach ($url in $urls) {
++              $response = Invoke-WebRequest -Uri $url -Headers @{ Accept = 'application/vnd.github+json' } -SkipHttpErrorCheck
++              $age = [int](@($response.Headers['Age'])[0] ?? -1)
++              $tags = if ($response.StatusCode -eq 200) { @(($response.Content | ConvertFrom-Json) | ForEach-Object { $_.tag_name }) } else { @() }
++              if ($response.StatusCode -ne 200) { $stale = "$url answered $($response.StatusCode)" }
++              elseif ($tags -cnotcontains $env:TAG) { $stale = "$url does not list $env:TAG yet (Age $age)" }
++              elseif ($age -lt 0 -or $age -gt 120) { $stale = "$url lists $env:TAG but its copy is $age seconds old" }
++            }
++            if (-not $stale) { break }
++            Start-Sleep -Seconds 10
++          }
++          if ($stale) {
++            Write-Host "::error title=release train::the relay is still stale after the purge: $stale. The release is published; the CDN list was not refreshed."
++            exit 1
++          }
++          Write-Host "the relay serves $env:TAG"
++
++  report:
++    name: Dry run report
++    # Whenever the train does not publish (TRAIN_LIVE is not true, or a dry run): says what it would have published and whether verification passed,
++    # and fails the run when verification would have failed, so the soak shows a problem before the train is switched on.
++    needs: [pick, verify]
++    if: always() && needs.pick.result == 'success' && needs.pick.outputs.live != 'true'
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    permissions: {}
++    steps:
++      - name: What a live run would do
++        env:
++          SHA: ${{ needs.pick.outputs.sha }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          FULL_RUN: ${{ needs.pick.outputs.full-run }}
++          WAIVED: ${{ needs.pick.outputs.waived }}
++          VERIFY: ${{ needs.verify.result }}
++        run: |
++          if [ -z "$SHA" ]; then
++            echo "### Release train dry run: nothing to publish (no new verified commit)" >> "$GITHUB_STEP_SUMMARY"
++            exit 0
++          fi
++          echo "### Release train dry run: would publish v$VERSION (commit $SHA, FULL run $FULL_RUN); verification: $VERIFY" >> "$GITHUB_STEP_SUMMARY"
++          if [ -n "$WAIVED" ]; then echo "$WAIVED" >> "$GITHUB_STEP_SUMMARY"; fi
++          if [ "$VERIFY" != "success" ]; then
++            echo "::error title=release train dry run::verification would fail: nothing would be published"
++            exit 1
++          fi
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index fc6edfc3e..9039ebe0e 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -1261,7 +1261,8 @@ for a later app change either, so a green run publishes its own commit without w
+   the version, the FAST run's id and **the FULL run's id**, which every download reads (the FAST run builds no package). `verify` installs and self-tests FULL's exact
+   bytes on each architecture; **the package and its hash are required on both, the install and self-test are required on x64 and only recorded on Arm64** (the
+   owner's waiver, said in the run's summary and in the publish summary). `publish` runs only while the repository variable `TRAIN_LIVE` is exactly `true`, never on a
+-  dry run, and only after verification passed. Otherwise it picks and verifies only (red if verification fails), so the train can soak on FULL's packages.
++  dry run, and only after verification passed; then `attest` signs the release's own assets with FULL's SBOMs and `purge` refreshes the release-list CDN (#3870). Otherwise
++  `report` says what it would have published (red if verification fails), so the train can soak on FULL's packages.
+ * **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+   unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 7cb74e314..791de812f 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1010,12 +1010,12 @@ suites:
+     select: affected
+     # The release train (S2, #4104; #2225): hourly and by hand it picks the newest main commit whose FAST and FULL lanes both passed, installs and self-tests FULL's exact
+     # packages on both architectures (the Arm64 install and self-test only recorded: the owner's waiver) and, only while TRAIN_LIVE is true, publishes them, never a
+-    # rebuild. Its selector and the pick's outputs are tested offline by build/test-select-release-commit.ps1; the workflow's shape by ReleaseTrainWorkflowTests.
++    # rebuild, then attests them and refreshes the release-list CDN; otherwise it reports what it would have done. Its selector and the pick's outputs are tested offline by build/test-select-release-commit.ps1; the workflow's shape by ReleaseTrainWorkflowTests.
+     platforms: [win-x64, win-arm64]
+     runner: hosted
+     triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
+     command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
+-    where: release-train.yml pick, verify, publish
++    where: release-train.yml pick, verify, publish, attest, purge, report
+     status: exists
+   - id: pwa-iphone
+     validation_plan: native
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+index 465d74602..b740f54ec 100644
+--- a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -40,7 +40,7 @@ public class ReleaseTrainWorkflowTests
+         Assert.Equal(["schedule", "workflow_dispatch"], on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+         Assert.Equal(("release-train", "false"), (concurrency["group"].ToString(), concurrency["cancel-in-progress"].ToString()));
+         Assert.Equal("read", ((YamlMappingNode)Workflow()["permissions"])["contents"].ToString());
+-        Assert.Equal(["pick", "publish", "verify"], Jobs().Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["attest", "pick", "publish", "purge", "report", "verify"], Jobs().Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+     }
+ 
+     [Fact]
+@@ -87,15 +87,45 @@ public class ReleaseTrainWorkflowTests
+     }
+ 
+     [Fact]
+-    public void Only_publish_writes_and_nothing_signs_or_attests_here_yet()
++    public void Only_publish_writes_only_attest_signs_and_only_purge_has_an_environment()
+     {
+         foreach (var (id, job) in Jobs().Children)
+         {
+             var permissions = ((YamlMappingNode)job).Children.TryGetValue("permissions", out var p) ? ((YamlMappingNode?)p)?.Children.Select(c => $"{c.Key}: {c.Value}").ToArray() ?? [] : [];
+             Assert.Equal(id.ToString() == "publish", permissions.Contains("contents: write"));
+-            Assert.DoesNotContain(permissions, x => x.StartsWith("id-token", StringComparison.Ordinal));
++            Assert.Equal(id.ToString() == "attest", permissions.Contains("id-token: write"));
++            Assert.Equal(id.ToString() == "attest", permissions.Contains("attestations: write"));
++            Assert.Equal(id.ToString() == "purge" ? "release-purge" : null, ((YamlMappingNode)job).Children.TryGetValue("environment", out var e) ? e.ToString() : null);
+         }
+-        Assert.DoesNotContain("environment:", Raw, StringComparison.Ordinal);
++    }
++
++    [Theory]
++    [InlineData("true", "true", true)]
++    [InlineData("true", "false", true)] // published, then failed (pruning old releases, say): attest is the release's one chance
++    [InlineData("false", "true", false)]
++    [InlineData("", "true", false)]
++    public void Attest_follows_an_upload_and_purge_a_publish_that_succeeded(string published, string publishSucceeded, bool attests)
++    {
++        var attest = MergeRuleTests.IfExpression.Evaluate(Expression(Scalar(Job("attest"), "if")), new Dictionary<string, string?> { ["needs.publish.outputs.published"] = published });
++        var purge = MergeRuleTests.IfExpression.Evaluate(Expression(Scalar(Job("purge"), "if")), new Dictionary<string, string?> { ["needs.publish.result"] = publishSucceeded == "true" ? "success" : "failure" });
++
++        Assert.Equal(attests, attest);
++        Assert.Equal(publishSucceeded == "true", purge);
++    }
++
++    [Fact]
++    public void Attest_signs_the_releases_own_assets_with_FULLs_SBOMs_and_the_report_says_what_a_dry_run_would_do()
++    {
++        var uses = Steps("attest").Where(s => s.Children.ContainsKey("uses")).Select(s => Scalar(s, "uses")).ToList();
++        var report = Expression(Scalar(Job("report"), "if"));
++        Assert.StartsWith("always() && ", report, StringComparison.Ordinal);
++        report = report["always() && ".Length..]; // the evaluator has no always(); the rest is what decides
++
++        Assert.Equal(3, uses.Count(u => u.StartsWith("actions/attest@", StringComparison.Ordinal)));
++        Assert.Contains("gh release download", string.Join("\n", Steps("attest").Where(s => s.Children.ContainsKey("run")).Select(s => Scalar(s, "run"))), StringComparison.Ordinal);
++        Assert.True(MergeRuleTests.IfExpression.Evaluate(report, new Dictionary<string, string?> { ["needs.pick.result"] = "success", ["needs.pick.outputs.live"] = "false" }));
++        Assert.False(MergeRuleTests.IfExpression.Evaluate(report, new Dictionary<string, string?> { ["needs.pick.result"] = "success", ["needs.pick.outputs.live"] = "true" }));
++        Assert.False(MergeRuleTests.IfExpression.Evaluate(report, new Dictionary<string, string?> { ["needs.pick.result"] = "skipped", ["needs.pick.outputs.live"] = "" }));
+     }
+ 
+     [Theory]
+-- 
+2.56.1.windows.1
+
