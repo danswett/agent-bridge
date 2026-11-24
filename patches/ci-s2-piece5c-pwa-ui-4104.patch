@@ -1,6 +1,6 @@
-From a8aebc075639aa7c8b50a8258ca560ca5372fb50 Mon Sep 17 00:00:00 2001
+From 70770596cdfcdc4ebd2c8795ab085bdeaa396394 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:10:39 -0800
+Date: Mon, 23 Nov 2026 22:21:45 -0800
 Subject: [PATCH] s 5c
 
 ---
@@ -294,7 +294,7 @@ index f930a1a52..85cbe77a3 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index f00adb695..5d2bd8f9a 100644
+index 5119350e3..7473199f8 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -321,8 +321,8 @@ index f00adb695..5d2bd8f9a 100644
  
  permissions:
    contents: read
-@@ -36,6 +40,38 @@ jobs:
-     outputs:
+@@ -40,6 +44,38 @@ jobs:
+       sha: ${{ steps.commit.outputs.sha }}
        ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
      steps:
 +      # A run by hand is one of two things, and anything else fails here before a job runs. Its checks land on the commit it runs
@@ -357,10 +357,10 @@ index f00adb695..5d2bd8f9a 100644
 +            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
 +            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
 +          done < "$RUNNER_TEMP/pr-heads"
+       # The commit every other job checks out. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
+       # the event's text, and either is refused unless it is 40 lowercase hex: no job reads the event's commit, they all read this output.
        - name: The commit under test
-         env:
-           SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
-@@ -227,13 +263,8 @@ jobs:
+@@ -248,13 +284,8 @@ jobs:
          with:
            browsers: chromium webkit
            working-directory: pwa
@@ -375,7 +375,7 @@ index f00adb695..5d2bd8f9a 100644
        - run: npx playwright test test/e2e
        - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
          if: failure()
-@@ -252,11 +283,124 @@ jobs:
+@@ -273,11 +304,124 @@ jobs:
            if-no-files-found: warn
            retention-days: 7
  
@@ -421,7 +421,7 @@ index f00adb695..5d2bd8f9a 100644
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
-+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          ref: ${{ needs.trigger.outputs.sha }}
 +          persist-credentials: false
 +      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
 +        with:
@@ -624,7 +624,7 @@ index bf10713d0..f10753641 100644
      {
          var (code, output) = RunGuard(critical, reason, reference, force);
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 63766e209..b957571d1 100644
+index 2f130c50e..6e0653623 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -638,9 +638,9 @@ index 63766e209..b957571d1 100644
      }
  
      [Fact]
-@@ -140,4 +140,38 @@ public class FullWorkflowTests
-             .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
-         Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
+@@ -160,4 +160,38 @@ public class FullWorkflowTests
+             Assert.Contains(part, script, StringComparison.Ordinal);
+         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
      }
 -}
 \ No newline at end of file
