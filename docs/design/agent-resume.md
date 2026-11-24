@@ -45,6 +45,63 @@ reboot restore). A session can never set or raise its own role. Each is a test.
 **Known limit:** sessions launched before this ships have NO recorded role, so nobody can resume them by this op (fail
 closed) until they are relaunched; the owner resumes those by hand meanwhile.
 
+## Which callers count as a coordinator, and how the host knows
+
+The host decides from facts it recorded itself, never from a name, a title or what the caller says. A caller must (1) reach the
+agent's local pipe and present its own session token through `agent.hello` (the host binds the channel to that credential; a
+script, the app, the host CLI and any relay peer cannot reach `fleet.resume`), (2) hold a live **session** credential with
+`read+reply+launch` scope at depth 0 that was not adopted (the same standing check `fleet.end` and a granted launch use), and
+(3) have its **own session's recorded launch role** listed in the person's `agents.resume.roles`.
+
+| Caller | Coordinator? | Why |
+|---|---|---|
+| A session a person launched with a role the person listed, with launch scope (`agents.issue.launched` is `read+reply+launch`) | **Yes** | The role was recorded by a person's launch; this is the only way a role is recorded |
+| The same, with no role recorded, or a role not listed | No (`policy`) | Pre-ship sessions have no role; an empty list means resume is off |
+| A fleet worker or builder (read+reply credential, depth 1, launched by an agent or the dispatcher) | No | An agent's launch records no role (owner decision, item 2) |
+| A session launched through `fleet launch` by a script, including a lead the dispatcher starts | No | Same: it records no role. Coordinators are started by a person (the owner) |
+| An adopted session, a script credential, the app, the host CLI | No | Wrong credential kind, or not on this op; a person resumes with the app's own Launch |
+| Another machine | No | `fleet.resume` is on the local pipe only; nothing crosses machines or people |
+
+**Open, found while writing this:** the app's Launch screen sends no `role`, so a person has no one-click way to record a coordinator
+role today (a person-class `session.launch` with `role` does record it). Until a Role field or a documented command exists, resume is
+off for everyone and the owner resumes by hand (fail closed). It is slice 3 below, small, and needed before the owner lists any role.
+
+## How it relates to kill-aware messaging (#4403) and the launch caps
+
+- **Kill switches.** Resume obeys the agent and launch switches (`agents.enabled`, `launch.enabled`, not read-only), refusing
+  `kill-switch`, as a launch does. It does not read the messaging kill (`agentMessaging`, `LiteKill`): resuming a session is not
+  messaging. A resumed worker is then an ordinary session under #4403: after a recorded kill it sends nothing unless
+  `LiteKill.IsOn` says messaging is on, and no resume path turns messaging on or changes the kill record.
+- **Caps.** A resume takes **no** slot under the host's live agent-launch limit and is not counted by the hourly launch caps yet (that
+  gate is bound to the person-launch policy); this is the known limit above and slice 4. What prevents a pile-up meanwhile: a running
+  session refuses (`running`), one start per session, one request id resumes once, the host's one-launch-at-a-time start turn, and the
+  shared builder cap (26), which is the dispatcher's and counts sessions, not launches. A resumed session is the same session id, so
+  it replaces the ended one rather than adding a seat.
+
+## When the session's folder or credential is gone
+
+Nothing is created, guessed or widened; the receipt is `refused` (the host log says why) and the session's launch record is left as it was.
+- **Worktree or folder gone** (finished idle worktrees are reclaimed by the host's own rules, docs/host-launch.md): the existing resume path
+  refuses with "the original directory must exist and be an approved workspace". Resume never makes a new worktree: that would be a new
+  session, which needs a person. The owner relaunches.
+- **Credential gone or unissuable:** an old credential is never reused (it was tied to the old process). A fresh read+reply fleet worker
+  credential is minted for the new process; if the credential store cannot issue one, the resume refuses with "a read+reply fleet worker
+  credential could not be issued" and nothing starts (probe-tested), the old record intact.
+- **Recorded launch settings gone:** refuses (`policy`); the machine's defaults are never used (Allow all is never guessed).
+- **Agent signed out or account refused:** the launcher's own pre-start refusal (Copilot account check) comes back as `refused`.
+
+## Slices (each under 400 whole lines, tests first)
+
+| # | What | State |
+|---|---|---|
+| 1 | Launch record keeps the role; `WasFleetLaunched`, `RoleOf`, role guards (#4325) | built, armed |
+| 2a | `ResumeFleetAsync` in place, settings restored, `agents.resume.roles`, record superseded (#4325) | built, armed |
+| 2b | `fleet.resume` op, audit, pipe wiring, role carried, no role on a child launch (#4360) | built, stacked on #4325; closes #4318 |
+| 3 | A way for a person to record a coordinator role at launch (app Role field or a documented command) | to do, small |
+| 4 | Take a slot under the live-launch limit; a durable intent row | to do (known limits) |
+| 5 | MCP tool `resume_agent_session`, a thin wrapper over `fleet.resume` (`{session_id, request?}` returning `{id, request, outcome, reason?}`), offered with the `sessions.launch` capability, after the .NET MCP port | after the port |
+| later | A combined restart flag (end then resume) only if wanted after the beta | not built by design |
+
 ## Rules (each is a test)
 
 1. **Provenance, not a name.** Only a session the host's own launch record shows an agent started through the fleet route
