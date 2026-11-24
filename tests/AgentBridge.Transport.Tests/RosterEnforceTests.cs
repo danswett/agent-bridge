@@ -234,6 +234,21 @@ public class RosterEnforceTests
     }
 
     [Fact]
+    public async Task An_account_in_enforce_holds_at_most_eight_pending_devices_and_the_ninth_is_refused()
+    {
+        var (relay, roster, w, token) = await StartAsync();
+        await using var lifetime = relay;
+        var phone = await relay.ConnectAsync(token, "phone-g", "phone", KeyOf("G"));
+        Assert.True(await phone.Relay.EnforceRosterAsync());
+        for (var i = 0; i < RelayHub.MaxPending; i++) { await relay.ConnectAsync(token, $"app-{i}", "app"); }
+
+        var refused = await Assert.ThrowsAsync<RelayRefusedException>(() => relay.ConnectAsync(token, "app-9", "app"));
+        Assert.Equal(CloseCodes.TooManyDevices, refused.Code);
+        // An approved device is not counted against it.
+        await relay.ConnectAsync(token, "phone-again", "phone", KeyOf("G"));
+    }
+
+    [Fact]
     public async Task A_stranger_or_a_host_cannot_switch_the_account()
     {
         var (relay, roster, w, token) = await StartAsync();

@@ -218,6 +218,23 @@ the hour plus the lock, so a replay never ends a lock early. The relay keeps no 
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
 
+## Enrollment refusals
+
+When an enrollment is refused, the refusing side answers with a `refusal` member holding one of these codes (`{ "value": null, "refusal": "wrong-code" }`, the shape the host's enrollment answers already use), and the other side is told the same code, so both ends can say why. `EnrollmentRefusal` (`src/AgentBridge.Roster/EnrollmentRefusal.cs`) and `pwa/js/roster/enrollment-refusal.js` hold the same list, and tests compare each with this table. The host's own step errors (`attempt-store`, `no-attempt`, `locked`, and so on) are not on it and are not shown to a person as a reason; a code a client does not know is shown as a generic refusal.
+
+| Code | When |
+|---|---|
+| `wrong-code` | The code typed does not match (§4.2); three in a row end the attempt (§4.4) |
+| `expired` | The attempt is over its 5 minutes |
+| `already-approved` | The joining key is already active in the roster |
+| `removed` | A signed removal of this key is in the roster: "this device was removed; sign out and in again to make a new key" |
+| `unknown-kind` | The kind is not one of `host`, `app`, `pwa`, `phone` |
+| `roster-limit` | The roster already holds the most active devices it can (64) |
+| `approver-probation` | The approver is on probation (§3.4) or held by one |
+| `no-presence` | The approver is not in the roster, or cannot prove a person is present (`presence: none`, §4.6) |
+
+`EnrollmentRefusal.Check(verifier, approver, joiner, kind)` gives the first of the roster-based reasons, in this order: `unknown-kind`, `already-approved`, `removed`, `roster-limit`, `approver-probation`, `no-presence`. `wrong-code` and `expired` come from the exchange itself. Nothing here changes who may approve: it names the refusals the rules already make.
+
 ### Host descriptor foundation (#2289)
 
 The `HostEnrollment` library, live behind the app's local pipe since brief 184 (#3450), describes
@@ -574,7 +591,7 @@ In `enforce` the relay tags each connecting key from its own verified copy of th
 
 A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). Enforce does not fail open. The relay latches an account in memory once it has seen or set `enforce` (the mode only moves one way). For a latched account, a store that cannot answer (an error, a timeout, a body that does not read, a roster that has gone missing, a mode that has gone back) closes the connecting device with `1012` (`try-later`, a fixed reason that carries no error text) and it reconnects with the usual backoff; a re-tag that cannot read the store keeps every connected device's current tag, so a transient error never un-pends one. The latch is memory only and is lost when the relay restarts: until its first good read after a restart, an account that is in `enforce` is served as `observe` through a store outage. It is not persisted, on purpose: a persisted latch would live in the same store that failed. A stored mode that reads back as anything but `enforce` for a latched account (`observe`, `off`, a value the relay does not know) is refused the same way. An account the relay has never seen in `enforce` is served as before through an outage. The hosts' own gate (`security.roster enforce`) is still the one that counts. Accounts in `observe` are unchanged byte for byte.
 
-Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the pending and attempt limits, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
+An account in `enforce` holds at most 8 pending devices connected at once; the next is closed with `4029` (`too-many-devices`). Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the 20-attempts-an-hour limit and the hour cap on a pending socket, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
 
 ## The host's verifier (OFF mode)
 

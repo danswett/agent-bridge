@@ -306,6 +306,7 @@ accepts a caller that is a member of that job when the chain does not reach the 
   named job vanishes from its namespace when the last handle closes (a host restart), and any process of the user can open, squat or
   guess a name. With no name there is nothing another session can open, join or trust; the only ways in are this handle and inheriting
   membership from a process already in the job. A job is never believed by name.
+* **The handle is not inheritable**, and no limit or security attribute is set that would make it so: a child the host starts (with handle inheritance on) does not receive it. Process start times are checked on the handle each call opened (`Enroll` before the process is assigned, `Contains` for the root and for the caller), never on a separate lookup, so the process that is checked is the process that is asked about. `Contains` holds a reference to the job's handle for the whole question, so a release that races it cannot close the handle or let its value be recycled. A credential revoked while its job is being made leaves no job held: `Bind` lets it go.
 * **Believed only with the recorded root in it.** `Contains` asks about this credential's own job and requires the recorded root
   (`rootPid` with `rootStartUtc`) to be in it, and the caller by pid *and* start time, and neither to have exited. A recycled id, a
   missing start time, a partial ancestry read, a dead root, or another credential's job each refuse. A job never overrides step 2's
@@ -801,7 +802,7 @@ are listed separately, off, each with its warning. Until a host is in roster
 | `session.answer`: an approval (Copilot permission, Claude permission, Codex approval) | **Never** | Not in the action set (§4.3), and refused on the pipe for agent connections (`LocalApi.cs:44-47`'s rule kept) |
 | `session.answer`: an `ask_user` or `AskUserQuestion` form | **No in v1** (Q3) | As above. Decision 1 lists read, reply and launch only |
 | `launch.trust.answer` (folder trust, Bypass Permissions warning) | **Never** | Relay person-device only (v1-launch.md:216-219), and not in the action set |
-| `session.stop` | **No in v1** (Q12) | Not in the action set |
+| `session.stop` | **No**; `fleet.end` only for an agent-launched session (Q12, #2741) | Not in the action set; the launch record decides |
 | `attachment.*` | **No in v1** | Not in the action set |
 | `update.*`, `push.*`, `host.*`, `machine.forget`, `pairing.*`, roster ops, settings | **Never** | Not in the action set. Pipe management ops are already refused inside agent sessions |
 
@@ -3820,8 +3821,10 @@ Each has a recommendation. None is decided by this note.
 11. **Q11. Use the trusted-peer floor (#407) as an interim for cross-machine agent messaging?**
     **Recommended: no.** Decision 4 says wait for the roster, and the floor is for disposable
     evaluation (host-config.md:145-148). It may host AP5's tests on disposable hosts only.
-12. **Q12. May an agent stop a session?** **Recommended: not in v1** (decision 1). Revisit
-    allowing a session to stop sessions *it launched*, which is the useful case.
+12. **Q12. May an agent stop a session?** **Corrected (#2741, owner Nov 16):** yes, but only a
+    session the host's own launch record shows an agent started through the fleet launch route
+    (`fleet.end`, docs/host-launch.md), never a person-started one, and fail closed with no record.
+    `session.stop` itself stays person-only.
 13. **Q13. Read scope within the account.** **Recommended:** the same `Session` a person's device
     gets (decision 2: "any session"), minus `inbound.exclude`. Cross-account uses the projection
     (§7.4).

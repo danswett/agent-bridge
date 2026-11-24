@@ -276,7 +276,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             RevokeEnded(rootAlive);
             if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
             // One credential per session: a resume or a relaunch gets a new one and the old one is dead (§3.4).
-            foreach (var replaced in records.Where(r => r.Credential.Session == session)) { jobs?.Release(replaced.Hash); }
+            foreach (var replaced in records.Where(r => r.Credential.Session == session)) { LetGo(replaced.Hash); }
             records.RemoveAll(r => r.Credential.Session == session);
             records.Add(new Record(Hash(token), credential));
             Save();
@@ -366,8 +366,13 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
             catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
         }
         // The session job (§3.4): best effort and outside the gate. A launch that gets none is still bound, and the ancestor rule alone applies.
-        try { jobs?.Enroll(key, processId, startedAt); }
-        catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to this session"); }
+        if (jobs is null) { return; }
+        try { jobs.Enroll(key, processId, startedAt); }
+        catch (Exception e) { log($"agent credentials: no session job was made ({e.GetType().Name}); the ancestor rule alone applies to this session"); return; }
+        // Revoked or replaced while the job was being made: its Release found nothing, so this job would be held for a credential that is gone.
+        bool stale;
+        lock (gate) { stale = !records.Any(r => r.Hash == key); }
+        if (stale) { LetGo(key); }
     }
 
     public void Abandon(string launchId)
@@ -699,14 +704,21 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         var gone = records.Where(r => which(r)).ToList();
         if (gone.Count == 0) { return false; }
         records.RemoveAll(which);
-        foreach (var r in gone) { jobs?.Release(r.Hash); }
         // Revoke, expiry and rotation all end here: a script whose credentials changed is not what an earlier confirmation was asked for.
         foreach (var r in gone.Where(r => r.Credential.Kind == "script" && r.Credential.Principal is not null)) { BumpGeneration(NameOf(r.Credential.Principal!)); }
         foreach (var r in gone) { log($"agent credentials: revoked {r.Credential.Id} for {PrincipalOf(r.Credential)}: {why}"); }
         try { Save(); }
         catch (IOException e) { Fault($"could not save: {e.Message}"); }
         catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
+        // After the record is gone from disk, and guarded: a job that will not let go can never keep a revoked credential alive.
+        foreach (var r in gone) { LetGo(r.Hash); }
         return true;
+    }
+
+    void LetGo(string key)
+    {
+        try { jobs?.Release(key); }
+        catch (Exception e) { log($"agent credentials: a session job could not be let go ({e.GetType().Name})"); }
     }
 
     void Load()

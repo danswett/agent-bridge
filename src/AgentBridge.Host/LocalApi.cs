@@ -70,6 +70,13 @@ public static class LocalApi
             { throw Refuse(op, caller, "only the local app may read or change workspace fleet workers", log); }
             return control.WorkspaceFleetWorkers(data);
         }
+        if (op == HostOps.WorkspaceAdd)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "person-only: only the person in the local app may approve a folder", log); }
+            return control.WorkspaceAdd(data);
+        }
         if (op == SamePcPinProtocol.Op)
         {
             // Ruling item 3 (#3450): the person's signed-in app on this machine, never an agent, script, CLI or relay peer.
@@ -283,7 +290,7 @@ public static class LocalApi
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
-            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability, HostOps.WorkspacesCapability,
                 .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability, HostOps.ScriptCredentialsCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
