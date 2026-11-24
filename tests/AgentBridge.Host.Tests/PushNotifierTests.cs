@@ -999,6 +999,43 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(2, sender.Sent.Count);
     }
 
+    // Session watch S2 (docs/design/session-watch.md): ONE host-built digest per machine per pass, in the existing needs-you class and
+    // question kind (the pair the folder-trust notice uses), visible and never silent, one slot per device so a newer digest replaces
+    // an older one that has not gone yet.
+    [Fact]
+    public async Task A_watch_digest_sends_one_visible_needs_you_notice_per_device_in_the_question_kind()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        notifier.NotifyWatch("2 sessions need you", "2 waiting at a prompt: a, b");
+        await After(TimeSpan.FromSeconds(1));
+
+        var sent = Received();
+        Assert.Equal([Phone, Laptop], sent.Select(r => r.Device).Order());
+        var (_, n, ttl, urgency, topic) = sent.Single(r => r.Device == Phone);
+        Assert.Equal(("2 sessions need you", "2 waiting at a prompt: a, b"), (n.GetProperty("title").GetString(), n.GetProperty("body").GetString()));
+        var data = n.GetProperty("data");
+        Assert.Equal(("question", "needsYou", Machine), (Kind(n), data.GetProperty("class").GetString(), data.GetProperty("machine").GetString()));
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&needsyou=1", n.GetProperty("navigate").GetString());
+        Assert.Equal("high", urgency);
+        Assert.False(n.TryGetProperty("silent", out _));
+    }
+
+    [Fact]
+    public async Task A_newer_watch_digest_replaces_one_that_has_not_gone_yet()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyWatch("1 session needs you", "1 waiting at a prompt: a");
+        notifier.NotifyWatch("2 sessions need you", "2 waiting at a prompt: a, b");
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Equal("2 sessions need you", Assert.Single(Received()).Notification.GetProperty("title").GetString());
+    }
+
     [Fact]
     public async Task A_trust_question_answered_in_time_sends_nothing_and_a_later_question_is_a_new_episode()
     {
