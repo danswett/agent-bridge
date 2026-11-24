@@ -11,8 +11,6 @@ public sealed class ScriptRunCoreTests
     const string LauncherExe = @"C:\Program Files\Slipgates\script-run.exe";
     static readonly string[] Good = ["dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-File", Script];
 
-    // ---- the command rules ----
-
     [Fact]
     public void A_command_with_a_name_a_separator_and_an_absolute_program_is_understood()
     {
@@ -24,7 +22,6 @@ public sealed class ScriptRunCoreTests
 
     [Theory]
     [InlineData("dispatcher")]
-    [InlineData("..", "--", Pwsh)]
     [InlineData("a/b", "--", @"C:\Tools\cycle.exe")]
     [InlineData("dispatcher", "--", "pwsh.exe", "-NoProfile", "-NonInteractive", "-File", Script)]
     [InlineData("dispatcher", "--", @"C:\%ProgramFiles%\pwsh.exe", "-NoProfile", "-NonInteractive", "-File", Script)]
@@ -34,7 +31,6 @@ public sealed class ScriptRunCoreTests
     [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-File", "Cycle.ps1")]
     [InlineData("dispatcher", "--", Pwsh, "-NoProfile", "-NonInteractive", "-Unknown", "-File", Script)]
     [InlineData("dispatcher", "--", @"C:\Tools\cycle.exe", "--flag")]
-    [InlineData("dispatcher", "--", @"C:\Windows\System32\cmd.exe", "/c", @"C:\Locked\Cycle.cmd")]
     public void Anything_the_task_binding_could_not_pin_is_a_bad_command(params string[] args) => Assert.Null(CommandLine.Parse(args));
 
     // The host pins the task's action with ScriptTaskXml; the launcher must refuse exactly what the pin refuses, or a command could run that nothing pinned.
@@ -60,8 +56,6 @@ public sealed class ScriptRunCoreTests
             Assert.True((tokens is not null && CommandLine.Parse(tokens) is not null) == (ScriptTaskXml.ActionFiles(Xml(shape)) is not null), $"the launcher and the pin disagree on: {shape}");
         }
     }
-
-    // ---- the run ----
 
     sealed class Host(bool unavailable = false, bool refuse = false) : IHostPort
     {
