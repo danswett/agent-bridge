@@ -137,10 +137,14 @@ public sealed class UnpushedWorkTests : IDisposable
         Directory.CreateDirectory(other);
         Git(other, "init", "-b", "main");
         File.WriteAllText(Path.Combine(other, "x.txt"), "dirty and unpushed");
-        var saved = Environment.GetEnvironmentVariable("GIT_DIR");
-        Environment.SetEnvironmentVariable("GIT_DIR", Path.Combine(other, ".git"));
-        try { Assert.False(UnpushedWork.Pending(Work)); }
-        finally { Environment.SetEnvironmentVariable("GIT_DIR", saved); }
+        // Handed to the check as the environment it would inherit, never set on this process: xunit runs other test classes that start
+        // git at the same time, and a process-wide GIT_DIR here broke them (the flake in #4356's run).
+        var inherited = new Dictionary<string, string>
+        {
+            ["GIT_DIR"] = Path.Combine(other, ".git"), ["GIT_WORK_TREE"] = other, ["GIT_INDEX_FILE"] = Path.Combine(other, ".git", "index"),
+        };
+        Assert.False(UnpushedWork.Pending(Work, inherited));
+        Assert.Null(Environment.GetEnvironmentVariable("GIT_DIR") is { } leaked && leaked.Contains("other") ? leaked : null);
     }
 
     [Fact]
