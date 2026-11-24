@@ -3093,6 +3093,114 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(SettingsViewModel.WhenReadyBetweenTurns, settings.WhenReadyNote);
         Assert.DoesNotContain("at the machine", settings.WhenReadyNote, StringComparison.Ordinal);
     }
+
+    // #4468 slice 2: when this machine installs by itself, per machine and profile: the update window (02:00-05:00 Pacific
+    // Time unless set), any time, or a hold. A person's own Restart to update is never limited, and each choice says so.
+    [Fact]
+    public async Task The_update_window_starts_at_02_to_05_Pacific_Time_and_says_what_it_does()
+    {
+        await Connected();
+
+        Assert.Equal(0, settings.InstallWhenIndex);
+        Assert.True(settings.InstallWindowEditable);
+        Assert.Equal(new TimeSpan(2, 0, 0), settings.InstallWindowStartTime);
+        Assert.Equal(new TimeSpan(5, 0, 0), settings.InstallWindowEndTime);
+        Assert.Equal("Installs by itself only from 02:00 to 05:00 Pacific Time. Restart to update is never limited.", settings.InstallWhenNote);
+        Assert.False(prefs.InstallHold);
+        Assert.Null(prefs.InstallWindowStart);
+    }
+
+    [Fact]
+    public async Task Each_install_choice_is_kept_for_the_machine_and_a_new_page_shows_it()
+    {
+        await Connected();
+
+        settings.InstallWhenIndex = 1;
+        Assert.Equal(("00:00", "00:00", false), (prefs.InstallWindowStart, prefs.InstallWindowEnd, prefs.InstallHold));
+        Assert.True(InstallWindow.Of(prefs).IsOpen(Make.T0));
+        Assert.False(settings.InstallWindowEditable);
+        Assert.Equal("Installs by itself at any hour. Restart to update is never limited.", settings.InstallWhenNote);
+
+        settings.InstallWhenIndex = 2;
+        Assert.True(prefs.InstallHold);
+        Assert.False(InstallWindow.Of(prefs).IsOpen(Make.T0));
+        Assert.False(settings.InstallWindowEditable);
+        Assert.Equal("Nothing installs by itself. Restart to update still works.", settings.InstallWhenNote);
+        var again = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        Assert.Equal(2, again.InstallWhenIndex);
+
+        // Back to the window: the default hours return, not the all day it was.
+        settings.InstallWhenIndex = 0;
+        Assert.Equal(((string?)null, (string?)null, false), (prefs.InstallWindowStart, prefs.InstallWindowEnd, prefs.InstallHold));
+        Assert.Equal(0, settings.InstallWhenIndex);
+        Assert.Equal(new TimeSpan(2, 0, 0), settings.InstallWindowStartTime);
+    }
+
+    [Fact]
+    public async Task A_hold_keeps_the_hours_the_person_set_for_when_it_is_turned_off()
+    {
+        await Connected();
+        settings.InstallWindowStartTime = new TimeSpan(1, 30, 0);
+        settings.InstallWindowEndTime = new TimeSpan(4, 0, 0);
+        Assert.Equal(("01:30", "04:00"), (prefs.InstallWindowStart, prefs.InstallWindowEnd));
+        Assert.Equal(0, settings.InstallWhenIndex);
+
+        settings.InstallWhenIndex = 2;
+        settings.InstallWhenIndex = 0;
+
+        Assert.Equal(("01:30", "04:00", false), (prefs.InstallWindowStart, prefs.InstallWindowEnd, prefs.InstallHold));
+        Assert.Equal("Installs by itself only from 01:30 to 04:00 Pacific Time. Restart to update is never limited.", settings.InstallWhenNote);
+    }
+
+    [Theory]
+    [InlineData(2, 0)]
+    [InlineData(5, 0)]
+    [InlineData(-1, 0)]
+    [InlineData(24, 0)]
+    public async Task A_window_time_that_is_the_other_end_or_not_a_time_of_day_is_refused_and_the_picker_told(int hours, int minutes)
+    {
+        await Connected();
+        var told = new List<string?>();
+        settings.PropertyChanged += (_, e) => told.Add(e.PropertyName);
+        var before = prefs;
+
+        // Start 02:00 is the default, so an end of 02:00 would make it all day, and 05:00 as a start the same.
+        if (hours == 5) { settings.InstallWindowStartTime = new TimeSpan(hours, minutes, 0); } else { settings.InstallWindowEndTime = new TimeSpan(hours, minutes, 0); }
+
+        Assert.Equal(before, prefs);
+        Assert.Equal(0, settings.InstallWhenIndex);
+        Assert.Contains(hours == 5 ? nameof(SettingsViewModel.InstallWindowStartTime) : nameof(SettingsViewModel.InstallWindowEndTime), told);
+    }
+
+    // The note says it where a person looks: a release ready and held back by the window or a hold, and when it goes.
+    [Fact]
+    public async Task A_ready_update_the_window_or_a_hold_keeps_waiting_says_so_and_when_it_installs()
+    {
+        await Connected();
+        prefs = new() { WhenUpdateReady = UpdateWhenReady.InstallBetweenTurns };
+        var clock = new FakeTimeProvider(Make.T0);
+        var page = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default", time: clock);
+        Assert.False(page.HasInstallWaitNote);
+
+        // 21:00 Pacific, outside 02:00-05:00.
+        updater.Ready = "0.2.0";
+        Assert.True(page.HasInstallWaitNote);
+        Assert.Equal("An update is ready; it installs at 02:00 Pacific Time.", page.InstallWaitNote);
+
+        // 02:00 Pacific: inside the window, nothing is held back by it.
+        clock.Advance(TimeSpan.FromHours(5));
+        Assert.Equal("", page.InstallWaitNote);
+        Assert.False(page.HasInstallWaitNote);
+
+        page.InstallWhenIndex = 2;
+        Assert.Equal("An update is ready; it is held until you turn the hold off or choose Restart to update.", page.InstallWaitNote);
+
+        // Restart to update mode, or downloads off: nothing installs by itself, so nothing is waiting for the window.
+        prefs = prefs with { WhenUpdateReady = UpdateWhenReady.RestartToUpdate };
+        Assert.Equal("", page.InstallWaitNote);
+        prefs = prefs with { WhenUpdateReady = UpdateWhenReady.InstallBetweenTurns, AutoUpdate = false };
+        Assert.Equal("", page.InstallWaitNote);
+    }
     // Copilot on eae43827 (r4488279975): the app ticks its updater when a preference changes, so
     // the shared updater must already know the source changed when it hears Include pre-releases did.
     [Fact]

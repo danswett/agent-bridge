@@ -1567,6 +1567,63 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await QuietTicksAsync();
         Assert.Single(host.Sent(HostOps.Restart));
     }
+
+    // #4468 slice 2: the window and the hold are the person's, per machine (Settings). A hold keeps what installs unasked
+    // waiting at every hour, the window's own included; a person's press still installs.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_hold_keeps_a_ready_release_waiting_even_inside_the_window_and_Restart_to_update_still_installs()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        prefs = prefs with { InstallHold = true };
+        await StartAsync();
+        await QuietTicksAsync(3);
+        AdvanceTo(WindowOpens);
+        await QuietTicksAsync(3);
+
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal((UpdatePhase.Waiting, true), (auto.State.Phase, auto.State.Automatic));
+        Assert.Contains("updates are held on this machine", auto.State.Waiting);
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.True(updater.Applied);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_hold_keeps_the_host_restart_waiting_inside_the_window_in_either_mode(bool betweenTurns)
+    {
+        DefaultWindow();
+        prefs = prefs with { InstallHold = true };
+        await StartOldHostAsync(betweenTurns);
+        AdvanceTo(WindowOpens);
+        await QuietTicksAsync(3);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_window_a_person_set_decides_when_a_release_installs_at_the_fake_clock()
+    {
+        InstallBetweenTurns();
+        prefs = prefs with { InstallWindowStart = "03:00", InstallWindowEnd = "04:00", InstallWindowZone = null };
+        await StartAsync();
+        await QuietTicksAsync(3);
+        Assert.False(updater.Applied);
+        Assert.Contains("waits for the update window 03:00-04:00 Pacific Time", auto.State.Waiting);
+
+        // 21:00 Pacific is inside a window set to 21:00-23:00, so the same release goes at once.
+        prefs = prefs with { InstallWindowStart = "21:00", InstallWindowEnd = "23:00" };
+        await QuietTicksAsync(2);
+        await Wait.UntilAsync(() => updater.Applied, "the install inside the person's window", TimeSpan.FromSeconds(5));
+    }
+
     // #3307: unasked, nothing installs over bad-release protection this machine could not check
     // (stale or unreadable); it holds and says why. A fresh policy installs as before.
     [Theory]
