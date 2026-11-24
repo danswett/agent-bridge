@@ -11,6 +11,9 @@ public static class WheelNotchRule
     public const double PerNotchOnAverage = 1;
     public const int MinimumNotches = 4;
 
+    // Judged in tenths of a pixel, what the self-test measures: a sum that is exactly on the edge must not fail because the doubles added up to a hair past it (#4521). Both edges are inclusive.
+    static double Tenths(double difference) => Math.Round(Math.Abs(difference), 1, MidpointRounding.AwayFromZero);
+
     /// <summary>Null when the notches pass; otherwise which rule failed and the numbers.</summary>
     public static string? Failure(IReadOnlyList<double> moved, double notch)
     {
@@ -18,9 +21,9 @@ public static class WheelNotchRule
         if (moved.Count < MinimumNotches) { return $"too few notches measured ({moved.Count}, need {MinimumNotches})"; }
         for (var i = 0; i < moved.Count; i++)
         {
-            if (Math.Abs(moved[i] - notch) > PerNotch) { return $"per-notch rule: notch {i + 1} moved {N(moved[i])}, more than {N(PerNotch)} from {N(notch)}"; }
+            if (Tenths(moved[i] - notch) > PerNotch) { return $"per-notch rule: notch {i + 1} moved {N(moved[i])}, more than {N(PerNotch)} from {N(notch)}"; }
         }
         var (sum, expected, allowed) = (moved.Sum(), moved.Count * notch, moved.Count * PerNotchOnAverage);
-        return Math.Abs(sum - expected) > allowed ? $"sum rule: the {moved.Count} notches moved {N(sum)} together, more than {N(allowed)} from {N(expected)}" : null;
+        return Tenths(sum - expected) > allowed ? $"sum rule: the {moved.Count} notches moved {N(sum)} together, more than {N(allowed)} from {N(expected)}" : null;
     }
 }
