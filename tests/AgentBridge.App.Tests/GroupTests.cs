@@ -159,7 +159,7 @@ public sealed class GroupTests : IDisposable
         var removal = records.GetProperty("membership").GetProperty(K("a"));
         Assert.Equal("counter,deviceTag,value", Keys(removal));  // a removal is a null value, not a tombstone
         Assert.Equal(JsonValueKind.Null, removal.GetProperty("value").ValueKind);
-        Assert.DoesNotContain("collapsed", System.IO.File.ReadAllText(FilePath), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("collapsed", records.GetRawText(), StringComparison.OrdinalIgnoreCase);  // collapse is this device's, outside the registers
     }
 
     [Fact]

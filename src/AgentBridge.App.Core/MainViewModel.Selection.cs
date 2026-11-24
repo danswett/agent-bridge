@@ -28,12 +28,16 @@ public sealed partial class MainViewModel
             var before = open;
             if (!Set(ref open, value)) { return; }
             if (before is not null) { before.Selected = false; }
-            if (value is null) { return; }
+            if (value is null) { if (before is not null && Folded(before)) { Rearrange(chosen: true); } return; }
             value.Selected = true;
             Order.MarkSeen(KeyOf(value), value.Session.Activity?.ResponseTurn);
             value.Unread = false;
+            // A session in a collapsed group is listed while it is open (and folded away again once it is not).
+            if (Folded(value) || before is not null && Folded(before)) { Rearrange(chosen: true); }
         }
     }
+
+    bool Folded(SessionCardViewModel card) => Order.Groups.GroupOf(KeyOf(card)) is { } id && Order.IsGroupCollapsed(id);
 
     void RestoreSelection(Machine machine)
     {

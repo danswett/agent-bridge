@@ -67,6 +67,7 @@ public sealed class SessionOrder
         public List<string> Order { get; set; } = [];
         public Dictionary<string, string?> SeenTurns { get; set; } = [];
         public GroupRecordSet GroupRecords { get; set; } = new();
+        public List<string> CollapsedGroups { get; set; } = [];  // this device's, never roamed
         public string? GroupDeviceTag { get; set; }
     }
 
@@ -85,6 +86,7 @@ public sealed class SessionOrder
         if (!Usable) { state.Sort = SessionSort.Recent; }
         if (!Guid.TryParseExact(state.GroupDeviceTag, "N", out _)) { state.GroupDeviceTag = Guid.NewGuid().ToString("N"); }
         state.GroupRecords ??= new();
+        state.CollapsedGroups ??= [];
         Groups = new(state.GroupRecords.Groups ??= [], state.GroupRecords.Membership ??= [],
             state.GroupDeviceTag, this.time, Save, key =>
             {
@@ -98,6 +100,17 @@ public sealed class SessionOrder
     }
 
     public SessionGroups Groups { get; }
+
+    // Collapse is this device's (session-order-roaming.md §3): kept in the local file beside the order, never in the group registers.
+    public bool IsGroupCollapsed(string id) => state.CollapsedGroups.Contains(id) && Groups.Items.Any(g => g.Id == id);
+
+    public void SetGroupCollapsed(string id, bool collapsed)
+    {
+        if (!Groups.Items.Any(g => g.Id == id)) { throw new ArgumentOutOfRangeException(nameof(id), "Group does not exist."); }
+        state.CollapsedGroups.Remove(id);
+        if (collapsed) { state.CollapsedGroups.Add(id); }
+        Save();
+    }
 
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
@@ -345,6 +358,7 @@ public sealed class SessionOrder
     void Save()
     {
         seenDirty = false;
+        state.CollapsedGroups.RemoveAll(id => Groups.Items.All(g => g.Id != id));  // a deleted group takes its collapse with it
         // A failed read left fallback state, not the person's saved order. Never overwrite it.
         if (Failure == SessionOrderFailure.LoadFailed || path is null) { return; }
         try

@@ -130,6 +130,9 @@ G2 (#1615) draws those groups between Pinned and Sessions. Collapse is kept only
 local order, outside the group registers. Collapsed groups retain visible needs-you rows; search
 and Needs you temporarily expand matching groups without changing the saved collapse.
 
+Windows G5a (#1618) keeps the collapse in the local order file (`collapsedGroups`, outside `groupRecords`) and draws the headers;
+the Windows app has no list filter, so a collapsed group lists its rows that need you and the session that is open.
+
 G3a (#1859) wires Move to group, New group and Remove from group into the PWA row menu,
 using the same local records. The chooser checks current membership and uses a sheet on phones;
 desktop name entry is inline at the foot of the groups. Pin and Unpin retain membership.
