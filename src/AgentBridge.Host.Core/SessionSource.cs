@@ -726,7 +726,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
 
         // A host that has just started: what it listed when it last ran, if that process (pid and start) still runs
-        // as a terminal with a readable start (the saved record alone is not trusted to name a server or another Codex).
+        // as a terminal with a readable command line and start: a server or an unreadable one is refused, but a same-user state file can still name another running interactive Codex.
         foreach (var s in _remembered ?? [])
         {
             if (s.Agent == AgentKind.Codex && s.ProcessId is { } pid && s.ProcessStartedAt is not null && newest.Any(r => r.SessionId == s.Id)
