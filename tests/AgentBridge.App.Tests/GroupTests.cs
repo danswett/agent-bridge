@@ -78,7 +78,12 @@ public sealed class GroupTests : IDisposable
         Assert.True(order.Place(K("a"), K("b"), false));
         order.Arrange(rows);
         Assert.Equal(id, order.Groups.GroupOf(K("a")));
-        Assert.False(order.Move(K("a"), 1));
+        Assert.True(order.Move(K("a"), 1));  // past the group's last row, a unpinned row leaves for Sessions (G5c)
+        Assert.Null(order.Groups.GroupOf(K("a")));
+        order.Arrange(rows);
+        Assert.True(order.Move(K("a"), -1));
+        Assert.Equal(id, order.Groups.GroupOf(K("a")));
+        order.Arrange(rows);
         Assert.False(order.Place(K("a"), K("b"), false));
         Assert.True(order.Move(K("a"), -1));
         Assert.Equal(["a", "c", "b"], order.Arrange(rows).Sessions.Select(e => e.Session.Id));

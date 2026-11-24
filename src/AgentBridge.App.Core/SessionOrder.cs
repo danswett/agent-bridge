@@ -259,13 +259,29 @@ public sealed class SessionOrder
     List<string>? GroupOf(string key) => shownPinned.Contains(key, StringComparer.Ordinal) ? shownPinned
         : shownSessions.Contains(key, StringComparer.Ordinal) ? shownSessions.Where(k => Groups.GroupOf(k) == Groups.GroupOf(key)).ToList() : null;
 
-    // Whether a row on screen can move by one (-1 up, 1 down) within its group: not a row its machine
-    // hasn't finished sending, nor past one.
+    // Whether a row on screen can move by one (-1 up, 1 down) within its group, or past its edge into the next group:
+    // not a row its machine hasn't finished sending, nor past one.
     public bool CanMove(string key, int delta)
     {
         if (Sort != SessionSort.Yours || GroupOf(key) is not { } g || pending.Contains(key)) { return false; }
         var i = g.IndexOf(key) + delta;
-        return i >= 0 && i < g.Count && !pending.Contains(g[i]);
+        return i >= 0 && i < g.Count ? !pending.Contains(g[i]) : Crossing(key, delta, out _);
+    }
+
+    // Past the first or last row of its group, an unpinned row goes into the next open group in that direction, or
+    // Sessions (null) after the last group: never into or out of Pinned, and a collapsed group is skipped (G5c).
+    bool Crossing(string key, int delta, out string? target)
+    {
+        target = null;
+        if (IsPinned(key)) { return false; }
+        var sections = Groups.Items.Select(g => (string?)g.Id).Append(null).ToList();
+        for (var j = sections.IndexOf(Groups.GroupOf(key)) + delta; j >= 0 && j < sections.Count; j += delta)
+        {
+            if (sections[j] is { } id && IsGroupCollapsed(id)) { continue; }
+            target = sections[j];
+            return true;
+        }
+        return false;
     }
 
     // Moves a row past its neighbour on screen. Rows remembered for sessions not shown keep
@@ -274,7 +290,13 @@ public sealed class SessionOrder
     {
         if (!CanMove(key, delta)) { return false; }
         var g = GroupOf(key)!;
-        Insert(key, g[g.IndexOf(key) + delta], delta > 0);
+        var i = g.IndexOf(key) + delta;
+        if (i >= 0 && i < g.Count) { Insert(key, g[i], delta > 0); return true; }
+        Crossing(key, delta, out var target);
+        // Going down, the row arrives at the top of the next group (what SetGroup does); going up, at the bottom of the one before.
+        var last = delta < 0 ? shownSessions.LastOrDefault(k => k != key && Groups.GroupOf(k) == target) : null;
+        Groups.SetGroup(key, target);
+        if (last is not null) { Insert(key, last, true); }
         return true;
     }
 
