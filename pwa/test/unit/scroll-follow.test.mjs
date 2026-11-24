@@ -180,6 +180,10 @@ test('away is more than a screen above the end, said once for each change, from 
     assert.equal(follow.away, away, `at ${top}`);
   }
   assert.deepEqual(seen, [{ away: true, count: 0 }, { away: false, count: 0 }], 'one report for each change, not each scroll');
+  at(pane, 300);
+  Object.assign(pane, { scrollHeight: 0, clientHeight: 0 });
+  follow.remember();
+  assert.equal(seen.length, 3, 'a view with no height (hidden) says nothing: it cannot hide the pill of a reader still back');
 });
 
 test('turns arriving while away are counted; the live turn, and turns at the end, are not; reading to the end clears it', (t) => {
@@ -220,17 +224,6 @@ test('jump goes to the end and draws what waits there; a smooth one scrolls once
   assert.equal(follow.following, false, 'a touch that stops it, with no scroll after it, is the person reading');
   at(pane, 500);
   assert.deepEqual([follow.following, follow.away], [false, true], 'the person is reading again');
-});
-
-test('a view with no height (hidden) says nothing, so it cannot hide the pill of a reader who is still back', (t) => {
-  const pane = new JumpPane();
-  const seen = [];
-  const follow = new ScrollFollow(pane, { onPosition: (s) => seen.push(s) });
-  t.after(() => follow.dispose());
-  at(pane, 300);
-  Object.assign(pane, { scrollHeight: 0, clientHeight: 0 });
-  follow.remember();
-  assert.equal(seen.length, 1);
 });
 
 test('a smooth jump ends following the end: landing with or without scrollend, and when the end moved', (t) => {

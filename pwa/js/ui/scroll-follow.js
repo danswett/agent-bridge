@@ -70,9 +70,8 @@ export class ScrollFollow {
     this.#tell();
   }
 
-  // The reader has gone back more than a screen from the end (the "Jump to latest" pill, ui.md §6.4 H3), and how many
-  // turns have come in below since, from what it already holds. A layout that has not reached the end yet (a session
-  // opening) is not the reader going back: while it is still following, it is not away.
+  // The reader has gone back more than a screen (the "Jump to latest" pill, ui.md §6.4 H3), and how many turns have come
+  // in below since, from what it holds. A session still laying out is not the reader going back: while following, not away.
   get away() { return !this.following && awayFrom({ top: this.#top, max: this.#max, client: this.#client }); }
   get newCount() { return this.#pending.size; }
 
