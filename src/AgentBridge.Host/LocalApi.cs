@@ -79,6 +79,13 @@ public static class LocalApi
             { throw Refuse(op, caller, "person-only: only the person in the local app may approve a folder", log); }
             return control.WorkspaceAdd(data);
         }
+        if (op is HostOps.WorkspaceList or HostOps.WorkspaceRemove)
+        {
+            var caller = callers.Classify(channel, fresh: true);
+            if (channel is not LocalChannel || caller.Kind != CallerKind.App || credentials?.Of(channel) is not null)
+            { throw Refuse(op, caller, "person-only: only the person in the local app may see or remove an approved folder", log); }
+            return op == HostOps.WorkspaceList ? control.WorkspaceList() : control.WorkspaceRemove(data);
+        }
         if (op == SamePcPinProtocol.Op)
         {
             // Ruling item 3 (#3450): the person's signed-in app on this machine, never an agent, script, CLI or relay peer.
