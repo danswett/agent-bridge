@@ -506,8 +506,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      NuGet for `spikes`, Playwright's browsers (keyed by Playwright's version) for `spikes-linux`,
      `pwa-ui` and `pwa-e2e`, and the archives-only apt cache, through the restore-only `playwright-system-packages` action (it never writes; only `ci.yml` calls the separate `-save` action). It runs from a `workflow_run` in the default branch's context, so it never writes a
      cache (CodeQL's cache-poisoning alerts, S2 piece 4), and nothing else writes those keys now
-     (they were saved by the `ci.yml` jobs that moved into FULL): they stay cold, a known cost,
-     slower and still correct. A pull request's cache entry cannot seed what the FULL lane restores.
+     (they were saved by the `ci.yml` jobs that moved into FULL): they stay cold, a known cost.
+     **Until the prime-cache workflow (`prime-playwright-cache.yml`, S2, a patch for Quality) merges, the apt archives cache FULL restores is COLD**: nothing fills it, so every FULL job that needs
+     Playwright's system packages (`pwa-ui`, `pwa-e2e`, `spikes-linux`) downloads them all, slower and still correct. A pull request's cache entry cannot seed what the FULL lane restores.
      `app` and `publish` restore nothing:
      the package main publishes is built from what the feeds serve.
    - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
