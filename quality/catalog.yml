@@ -657,6 +657,7 @@ suites:
     command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
     where: ci.yml light, stale-pwa.yml check
     status: exists
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
