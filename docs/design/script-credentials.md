@@ -152,7 +152,9 @@ others: `scripts.list`, `scripts.confirm`, `scripts.add` (mint, or rotate when t
 live credential), `scripts.revoke`, and `scripts.grant-fleet` / `scripts.revoke-fleet` (the `launch:fleet`
 tick). They are for the person's app on this machine, or still the host command line until the app path
 ships and the CLI is app-gated (P3). An agent, a script, an unclassified caller and any connection that has
-passed `agent.hello` are refused.
+passed `agent.hello` are refused. Those are the app's operations. The scheduled-task launcher of [script-credentials-run.md](script-credentials-run.md) (not built yet) adds two operations of its own,
+`scripts.admit` and `scripts.finished`, which only a bound task's own descendant may call (the second only from the caller that was admitted, once); they are not the app's
+and the app's list above does not widen.
 
 * **Bound confirmation.** An app press must carry a confirmation the host issued for exactly that action. The app
   asks `scripts.confirm` for it, shows the person what it will do, and sends it back with the press. Per script
