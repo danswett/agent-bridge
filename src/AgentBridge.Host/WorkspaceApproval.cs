@@ -77,7 +77,7 @@ internal static class WorkspaceApproval
         string? expanded;
         try { expanded = string.IsNullOrWhiteSpace(folder) ? null : Folders.Expand(folder); }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { expanded = null; }
-        if (expanded is null || !System.IO.Path.IsPathRooted(expanded)) { return new(NotAPath); }
+        if (expanded is null) { return new(NotAPath); }
         using var gate = new Mutex(false, GateName(configFolder));
         bool held;
         try { held = gate.WaitOne(wait ?? GateWait); } catch (AbandonedMutexException) { held = true; }
