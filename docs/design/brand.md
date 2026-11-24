@@ -18,7 +18,7 @@ The boards are in [proposals/536-slipgates-brand/](proposals/536-slipgates-brand
 eleven on one [contact sheet](proposals/536-slipgates-brand/contact-sheet.png). They are drawn
 from `design/canvas/Proposal-536-*.dc.html` by
 [tools/design-mockups](../../tools/design-mockups/README.md), from the same generated tokens,
-glyphs and icons the clients use. The demo machines are ULTRA and DEV-VM1. Every session,
+glyphs and icons the clients use. The demo machines are ULTRA and Desk-A. Every session,
 time and path on them is made up.
 
 ## 1. What the name means

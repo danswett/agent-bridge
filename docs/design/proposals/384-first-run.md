@@ -21,7 +21,7 @@ The mock-ups are in [384-first-run/](384-first-run/), with every board on one
 [contact sheet](384-first-run/contact-sheet.png). They are drawn from boards in
 [`/design/canvas`](../../../design/canvas) (`Proposal-384-*.dc.html`) with
 [tools/design-mockups](../../../tools/design-mockups/README.md), from the same tokens, glyphs
-and icons as every other board. The demo machine is ULTRA, the Dev Box is DEV-VM1, and every
+and icons as every other board. The demo machine is ULTRA, the Dev Box is Desk-A, and every
 time, version and path is made up.
 
 ## 1. The problem
@@ -271,7 +271,7 @@ pane (ui.md §7):
 - **Agents tabs** carry an amber dot when that agent needs the person, and the nav item the
   same badge. **Remove bridge integration** removes only Slipgates's registrations and
   blocks; uninstalling a CLI or its credentials is never on this page.
-- **Dev Box keep-awake** appears only on a Dev Box ("DEV-VM1 · Dev Box"), with its
+- **Dev Box keep-awake** appears only on a Dev Box ("Desk-A · Dev Box"), with its
   consequences on the row: "Signs in with az login · an awake Dev Box keeps billing", Off by
   default.
 - **Changes revalidate:** editing a folder, the permission mode or a hook re-runs the checks
