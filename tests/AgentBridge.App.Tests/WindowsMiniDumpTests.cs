@@ -15,7 +15,7 @@ public sealed class WindowsMiniDumpTests : IDisposable
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
-    [Fact]
+    [Fact(Skip = Quarantined)]
     public void A_dump_is_a_real_minidump_named_for_its_time_and_process_and_far_smaller_than_a_full_one()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -31,7 +31,7 @@ public sealed class WindowsMiniDumpTests : IDisposable
         Assert.InRange(bytes.Length, 1024, 64 * 1024 * 1024);
     }
 
-    [Fact]
+    [Fact(Skip = Quarantined)]
     public void Only_the_newest_few_dumps_are_kept()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -48,8 +48,9 @@ public sealed class WindowsMiniDumpTests : IDisposable
         Assert.True(File.Exists(Path.Combine(folder, "someone-elses.dmp")));
     }
 
-    // The two rows that write a dump write a real one of this test host, which crashes or hangs it on CI and holds main red
-    // (QuarantineTests). The rows that refuse to write still run: they never reach MiniDumpWriteDump.
+    // The tests that write a dump write a real one of this test host: MiniDumpWriteDump on its own process, which Microsoft warns can
+    // deadlock while other threads run, and hung the test host on CI three times, holding main red (QuarantineTests). The rows that
+    // refuse to write, and the one whose file already exists, still run: they throw before MiniDumpWriteDump.
     const string Quarantined = "quarantined (fixes-main, Part of #4104; tracking issue filed by Quality): a real MiniDumpWriteDump of the test host crashes or hangs it in CI, until 2026-11-30";
 
     // A dump is a few megabytes, but a disk with no room left is the machine's emergency, not a thing to add to: below 1 GB free, no dump.
