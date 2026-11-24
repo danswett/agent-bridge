@@ -108,12 +108,16 @@ $ring1Ci = if ($ring1) { $ring1.jobs['ci.yml'] ?? @{} } else { @{} }
 # ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a change
 # to either must still package the app, which the workflows-wide global trigger can't say.
 $packagingEdited = $false
+# The x64 self-test's own files: its action, and full.yml, which runs it after every merge (#4104).
+$selfTestEdited = $false
 if ($ring1) {
     $edited = @(git -C $root diff --name-only "$Base...$Head")
     $packagingEdited = @($edited | Where-Object { $_ -eq '.github/workflows/ci.yml' -or $_ -like '.github/actions/install-trivy/*' }).Count -gt 0
+    $selfTestEdited = $packagingEdited -or @($edited | Where-Object { $_ -eq '.github/workflows/full.yml' -or $_ -like '.github/actions/app-self-test/*' }).Count -gt 0
 }
 function Test-OwnReason([string] $job) {
-    if ($packagingEdited -and $job -in 'app', 'app-installer') { return $true }
+    if ($packagingEdited -and $job -in 'app', 'app-installer', 'app-sbom', 'app-self-test') { return $true }
+    if ($selfTestEdited -and $job -eq 'app-self-test') { return $true }
     $own = @($ring1Ci[$job] ?? @())
     @($ring1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
 }

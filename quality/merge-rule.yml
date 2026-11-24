@@ -101,6 +101,8 @@ main_green:
     - ha-integration
     - light
     - app (win-x64)
+    # The x64 desktop self-test, split off app (#4104): skipped on a plan that did not select it (a skip counts as green).
+    - app-self-test (win-x64)
     - app (win-arm64)
   # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
   # source-dependent installs (npm ci, Playwright's pin, its system-packages action), which fail
@@ -118,6 +120,12 @@ main_green:
       - Save NuGet packages to main's cache
     ha-integration: *dotnet_infra
     app: *dotnet_infra
+    app-self-test:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - The publish folder app packed
     light:
       - Set up job
       - Complete job

@@ -896,7 +896,7 @@ a missing or skipped shard are later pieces.
 
 **What gates main: two lanes (decided, owner, Nov 23, S2, #4104; built in the pieces below, each marking itself done here).** `ci.yml` is to become the **FAST lane**, the only
 one the merge rule, main-red and the ruleset read (through `quality-gate`): `plan`, `product` (the build and the affected tests, on Windows and on
-Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it compiles; it neither self-tests nor packs). **No `pwa-ui` or
+Linux), `ha-integration`, `light`, and `app (win-x64)` as the **build and pack** (publish, pack, the release-host identity check and the publish dry run; it does not self-test, #4104), with `app-sbom (win-x64)` and, when the plan selects it, `app-self-test (win-x64)` (below). **No `pwa-ui` or
 `pwa-e2e` is to be in it:** the owner's decision A moved WebKit and `pwa-ui` off the merge path. A second workflow, `full.yml` (built, pieces 4 and 5), is the
 **FULL lane**, which never gates a merge: the x64 app self-test (sharded), `app-pack` and `app-installer` for x64 and Arm64,
 `app (win-arm64)`, `product (windows-11-arm)`, `pwa-ui` and `pwa-e2e` (Chromium and WebKit), `spikes` and `spikes-linux`, and an aggregate
@@ -952,7 +952,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   was given, and each job's `actions/checkout` is that sha, so a run that tested another commit than the one it is found for is visible. The first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
-  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof has no trigger until the follow-up (#4508) gives `full.yml`'s dispatch its one boolean `force-apt-fallback` (`ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof has no trigger until the follow-up (#4508) gives `full.yml`'s dispatch its one boolean `force-apt-fallback` (`ci.yml` keeps its `workflow_dispatch` for Quality's critical release only: `critical-release` and `critical-reason`, no `force-apt-fallback`), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`, first part built (#4104): the x64 self-test and SBOM left `app`, `app-self-test` and `app-sbom` are `ci.yml` jobs and `full.yml` runs the self-test after every merge (the pack and the installers still follow);
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names, done. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
 `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
@@ -960,11 +960,11 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 were cancelled.) Pull requests keep one group per PR with `cancel-in-progress: true`. A re-run keeps its own group, as
 now. Release order no longer rests on `ci.yml`: the release train orders releases.
 
-**Where jobs run.** The Windows x64 build-and-test jobs (`product (windows-latest)`, and the `app` job's build) run on
+**Where jobs run.** The Windows x64 build-and-test jobs (`product (windows-latest)`, and `app (win-x64)`'s build and pack, once its `runs-on` takes the guard below) run on
 the **`ab-ci` pool**, labels `[self-hosted, windows, x64, ab-ci]`, ephemeral repo-level runners that SRE R4 registers on
 SRE-owned machines (tools: git, pwsh 7, the .NET SDK from `global.json`, Node 20, Visual Studio Build Tools and the
 Windows SDK). **Stay on GitHub-hosted runners:** Linux (until a WSL2 plan), Windows on Arm, and the app's UI self-test jobs
-(they need a desktop).
+(they need a desktop: the runners are services of a non-admin account with no interactive logon) and the x64 SBOM (`app-sbom`, which needs Trivy's download).
 
 * **The routing guard is required** (the repository is public and the runners persist). A job takes `ab-ci` only for a
   `push` or a pull request whose head is this repository:
@@ -1014,9 +1014,12 @@ start within about a minute; a queue that grows is the signal to add runners or 
   - every package required to carry nuget.org's repository signature (its current and two earlier certificates).
 
   A missing or other mirror, a mirror that is down, or a package nuget.org didn't sign fails the leg; nothing falls
-  back to another source. A hosted leg restores from nuget.org as before. Only product runs on ab-ci: `app` (vpk,
-  publish) has no mirror config and would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
+  back to another source. A hosted leg restores from nuget.org as before. `app (win-x64)` takes the same
+  state and mirror steps as product (it publishes and packs through the mirror, and vpk is installed with `--tool-path` under `RUNNER_TEMP`, never `-g`, which
+  persists on a reused machine); a job that still has no mirror config would fail at restore if routed there. A self-hosted leg's NuGet cache key carries
   an `ab-ci-` part, so it never shares packages with the hosted Windows leg.
+
+**What a pull request runs of the app, and why (#4104).** The desktop self-test left the build job: it draws windows, so it runs hosted (`app-self-test (win-x64)`, from the publish folder `app` packed and uploaded, so the bytes tested are the bytes packed). A pull request runs it only when the plan selects `app-package` (the app's own files, what it builds from, and the pack and self-test scripts: `quality/catalog.yml`), and skips it as a plan-skip, never a failure, otherwise. **So a pull request that changes only docs, the PWA, the host alone (`src/AgentBridge.Host`) or tests no longer runs the app's UI self-test**; the packed host is still built, packed and attested (`app`, `app-sbom`). Every main commit runs it in `full.yml` (`app-selftest (win-x64)`, from the FAST run's publish folder and version, which a run by hand finds as that commit's newest green push run of CI, or fails), and the release train reads that result. The reason is the owner's priority, main PR-to-merge under 5 minutes (#4104): the self-test is about 7.5 of the 12 minutes `app` took, and most pull requests do not touch what it checks. `main_green` names `app-self-test (win-x64)`.
 
 **Warm caches (proposed).** Nothing persists on an `ab-ci` runner between jobs: each job uses its own NuGet packages folder
 (`NUGET_PACKAGES` under `RUNNER_TEMP`), wiped when the job ends. Speed comes from restoring `actions/cache` entries keyed on

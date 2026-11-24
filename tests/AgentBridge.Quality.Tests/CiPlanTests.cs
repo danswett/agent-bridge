@@ -466,7 +466,7 @@ public class CiPlanTests
         // The waiver's steps come first; the check is the one that reads the needs.
         var check = steps.Children.Cast<YamlDotNet.RepresentationModel.YamlMappingNode>()
             .Single(step => step.Children.ContainsKey("run") && step["run"].ToString().Contains(".key == \"plan\" or ($all", StringComparison.Ordinal));
-        Assert.Contains(".key == \"plan\" or ($all and .key != \"app\" and .key != \"app-installer\") or $plan[.key] == \"true\"",
+        Assert.Contains(".key == \"plan\" or ($all and (.key | IN(\"app\", \"app-installer\", \"app-sbom\", \"app-self-test\") | not)) or $plan[.key] == \"true\"",
             check["run"].ToString(), StringComparison.Ordinal);
         // A pull request skips post-merge jobs, so its gate doesn't count them as selected (#3209).
         foreach (var part in new[] { "jq -r --arg off \"$PR_OFF\" '", "($off | split(\" \")) as $off", "| select(.key | IN($off[]) | not)" })
@@ -512,7 +512,8 @@ public class CiPlanTests
         stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"))));
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)((YamlDotNet.RepresentationModel.YamlMappingNode)stream.Documents[0].RootNode)["jobs"];
         var steps = (YamlDotNet.RepresentationModel.YamlSequenceNode)((YamlDotNet.RepresentationModel.YamlMappingNode)jobs[job])["steps"];
-        var prep = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[1];
+        // app holds the per-job state step (a reused ab-ci machine, CachePolicy) between checkout and the foreground step (#4104).
+        var prep = (YamlDotNet.RepresentationModel.YamlMappingNode)steps.Children[job == "app" ? 2 : 1];
         Assert.Equal("./.github/actions/arm64-foreground", prep["uses"].ToString());
         Assert.Equal("matrix.runtime == 'win-arm64' && matrix.runner == 'windows-11-arm'", prep["if"].ToString());
         Assert.False(prep.Children.ContainsKey("continue-on-error"));
@@ -562,7 +563,7 @@ public class CiPlanTests
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
         Assert.Equal(new[] { "plan", "product", "ha-integration", "app",
-            "app-installer", "light" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+            "app-installer", "app-sbom", "app-self-test", "light" }.Order(), needs.Children.Select(n => n.ToString()).Order());
         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
         Assert.Equal(new[] { "plan", "app" },

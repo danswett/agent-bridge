@@ -86,16 +86,18 @@ static partial class CiPlan
     // Main is planned like a pull request (quality/README.md §4.7): only the whole ring, which the
     // plan decides apart from the selector, runs a gated job or step whatever the selector says.
     const string WholeRingBypass = "env.WHOLE_RING == 'true'";
-    // App and installer use their own plan outputs, on main too (#1910); manual whole-ring
-    // plans still select both. Other jobs keep the selector-independent whole-ring bypass.
+    // App and its follow-on jobs use their own plan outputs, on main too (#1910); manual whole-ring
+    // plans still select all of them. Other jobs keep the selector-independent whole-ring bypass.
     // A job whose every leg the catalog makes post-merge skips pull requests (#3209).
+    static readonly string[] PackagingJobs = ["app", "app-installer", "app-sbom", "app-self-test"];
     static string GatedJobIf(string id, bool postMerge)
     {
-        var selected = id is "app" or "app-installer"
+        var selected = PackagingJobs.Contains(id, StringComparer.Ordinal)
             ? $"needs.plan.outputs.{id} == 'true'"
             : $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
-        // A selected installer must fail on unavailable input, not inherit app's implicit skip.
-        var guards = (id == "app-installer" ? "!cancelled() && " : "") + (postMerge ? NotPullRequest + " && " : "");
+        // A selected installer, SBOM or self-test must fail on unavailable input, not inherit app's implicit skip: app's
+        // matrix is red when only its waived Arm64 leg is, and that must not skip the x64 SBOM publish and attest read (#4104).
+        var guards = (id is "app-installer" or "app-sbom" or "app-self-test" ? "!cancelled() && " : "") + (postMerge ? NotPullRequest + " && " : "");
         return guards.Length == 0 ? selected : $"{guards}({selected})";
     }
 

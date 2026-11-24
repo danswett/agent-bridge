@@ -88,7 +88,7 @@ public class HaValidationCoverageTests
 
         Assert.Equal(
             new[] { "plan", "product", "ha-integration", "app",
-                "app-installer", "light" },
+                "app-installer", "app-sbom", "app-self-test", "light" },
             Needs(jobs, "quality-gate"));
         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
         Assert.Equal("${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}",

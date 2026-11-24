@@ -794,8 +794,11 @@ suites:
     # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
     # host's own closure.
     triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
-    command: see ci.yml app and app-installer jobs
-    where: ci.yml app, app-installer
+    command: see ci.yml app, app-sbom, app-self-test and app-installer jobs
+    # app (win-x64) is the build, pack and identity check; app-self-test (win-x64) is its desktop self-test, hosted, on the
+    # publish folder app uploaded, and runs only when THIS suite is selected, so a pull request that leaves the app's own
+    # files alone (docs, PWA, the host alone) skips it; main runs it in full.yml after every merge (app-selftest-full, #4104).
+    where: ci.yml app, app-self-test, app-sbom, app-installer
     # Arm64 packaging and both installers run after merge (#3208); app (win-x64) blocks.
     tier: post-merge
     tier_jobs: [app (win-arm64), app-installer (win-x64), app-installer (win-arm64)]
@@ -811,8 +814,23 @@ suites:
     platforms: [win-x64, win-arm64]
     runner: hosted
     builds: src/AgentBridge.Host
-    command: see ci.yml app and app-installer jobs
-    where: ci.yml app, app-installer
+    command: see ci.yml app, app-sbom and app-installer jobs
+    # The host alone packages and attests the app but does not re-run its desktop self-test (that is app-package's, #4104).
+    where: ci.yml app, app-sbom, app-installer
+    status: exists
+
+  # The x64 desktop self-test after every merge (#4104): FULL lane, hosted (it needs a desktop, which the ab-ci runners have
+  # none of), on the publish folder the FAST run's app (win-x64) packed; a pull request runs it in ci.yml (app-package).
+  - id: app-selftest-full
+    validation_plan: native
+    kind: packaging
+    ring: 2
+    select: always
+    lane: full
+    platforms: [win-x64]
+    runner: hosted
+    command: see full.yml app-self-test
+    where: full.yml app-self-test
     status: exists
 
   - id: app-publish
