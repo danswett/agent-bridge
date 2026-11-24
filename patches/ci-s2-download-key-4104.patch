@@ -1,24 +1,22 @@
-From 1c3c58278b907de75929cb2d528b6582e4978900 Mon Sep 17 00:00:00 2001
+From ba00a65dc05609be4bea8fc76b83681182c84954 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Tue, 24 Nov 2026 01:02:40 -0800
+Date: Tue, 24 Nov 2026 04:30:01 -0800
 Subject: [PATCH] CI S2: the archives cache key carries the signed indexes'
- hash, so a moved index is a cache miss, never a failed verification (Part of
- #4104)
+ hash (action.yml part), so a moved index is a cache miss, never a failed
+ verification (Part of #4104)
 
-On main's logs every failing job restored an exact-key playwright-apt-v3-debs cache that FAILED verification against the signed indexes (the index had moved since the cache
-was written, and an exact key is immutable, so it failed on every run until someone deleted the key). download.sh --cache-key (the scripts PR #4410) outputs index-hash, a hash
-of the Date line of the release, -updates and -security InRelease files; this puts it in the key and in the restore prefix, so a moved index is a MISS (a fresh download, saved
-under a fresh key by ci.yml) and a prefix never restores an entry written under another index. The signed-index verification of a hit is unchanged. Safe in either order with
-#4410: without index-hash the segment is empty and the key is as before.
+PATCH BRANCH: sg-patch/ci-s2-download-key-4104 (danswett/agent-bridge); the file is patches/ci-s2-download-key-4104.patch.
+APPLY ON: the key PR's branch ci/dl-key-test-4104 (it holds the test that goes with this), cut from main with #4410 merged: git apply patches/ci-s2-download-key-4104.patch
+FOR: Quality (action files).
 
-Test: the key and every restore prefix carry the index hash (proved red by dropping it).
+download.sh --cache-key (#4410, on main) outputs index-hash, a hash of the Date line of the release, -updates and -security InRelease files. This puts it in the exact key AND in the restore
+prefix, so (1) a moved index is a MISS, not an exact-key hit whose archives fail verification against the new index, and (2) no restore-keys prefix can restore an entry written under an OLDER
+index against a newer one (the prefix ends in packages-hash-index-hash-). The signed-index verification of a cache hit is unchanged.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
- .../playwright-system-packages/action.yml     |  6 ++--
- .../PlaywrightPackagesCacheKeyTests.cs        | 35 +++++++++++++++++++
- 2 files changed, 39 insertions(+), 2 deletions(-)
- create mode 100644 tests/AgentBridge.Quality.Tests/PlaywrightPackagesCacheKeyTests.cs
+ .github/actions/playwright-system-packages/action.yml | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/action.yml b/.github/actions/playwright-system-packages/action.yml
 index 0b94d2bdf..12ed75e9c 100644
@@ -45,48 +43,6 @@ index 0b94d2bdf..12ed75e9c 100644
      - id: packages
        shell: bash
        working-directory: ${{ inputs.working-directory }}
-diff --git a/tests/AgentBridge.Quality.Tests/PlaywrightPackagesCacheKeyTests.cs b/tests/AgentBridge.Quality.Tests/PlaywrightPackagesCacheKeyTests.cs
-new file mode 100644
-index 000000000..a4cd629ee
---- /dev/null
-+++ b/tests/AgentBridge.Quality.Tests/PlaywrightPackagesCacheKeyTests.cs
-@@ -0,0 +1,35 @@
-+using YamlDotNet.RepresentationModel;
-+
-+namespace AgentBridge.Quality.Tests;
-+
-+/// <summary>
-+/// On main's logs every failing job restored an exact-key archives cache that failed verification against the signed indexes: the index had moved since the
-+/// cache was written, and an exact key is immutable, so it failed on every run. The key carries the index hash (download.sh --cache-key), and so does the restore
-+/// prefix, so a moved index is a miss and a prefix never restores an entry written under another index. (S2, #4104)
-+/// </summary>
-+public class PlaywrightPackagesCacheKeyTests
-+{
-+    static YamlMappingNode Action()
-+    {
-+        var stream = new YamlStream();
-+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "actions", "playwright-system-packages", "action.yml"))));
-+        return (YamlMappingNode)stream.Documents[0].RootNode;
-+    }
-+
-+    static string Scalar(YamlNode node, string key) => ((YamlScalarNode)((YamlMappingNode)node)[key]).Value!;
-+
-+    [Fact]
-+    public void The_archives_cache_key_carries_the_signed_indexes_hash_in_its_key_and_its_restore_prefix()
-+    {
-+        var debs = ((YamlSequenceNode)((YamlMappingNode)Action()["runs"])["steps"]).Children.OfType<YamlMappingNode>()
-+            .Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "debs");
-+        var with = (YamlMappingNode)debs["with"];
-+        const string Packages = "${{ steps.identity.outputs.packages-hash }}", Index = "${{ steps.identity.outputs.index-hash }}", Ref = "${{ steps.identity.outputs.ref-hash }}";
-+
-+        Assert.Contains($"{Packages}-{Index}-{Ref}", Scalar(with, "key"), StringComparison.Ordinal);
-+        var prefixes = Scalar(with, "restore-keys").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-+        Assert.NotEmpty(prefixes);
-+        Assert.All(prefixes, p => Assert.EndsWith($"{Packages}-{Index}-", p, StringComparison.Ordinal));
-+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(Scalar(with, "key"), System.Text.RegularExpressions.Regex.Escape(Index)));
-+    }
-+}
-\ No newline at end of file
 -- 
 2.56.1.windows.1
 
