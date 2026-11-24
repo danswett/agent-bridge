@@ -50,6 +50,20 @@ public sealed class ReplyClearTests
         Assert.Equal(0, h.Replies);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Only_a_person_class_reply_is_shown_the_box_never_an_agent_or_unclassified_sender(bool person)
+    {
+        await using var h = await Harness.Create(); h.Draft = "a draft someone left here";
+        var request = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true,
+            IntentSource = () => person ? ReplyIntent.Steer : ReplyIntent.Unknown };
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Equal(person, result.Input is not null);
+        Assert.Equal(person, JsonSerializer.Serialize(result, ProtocolJson.Options).Contains("someone left"));
+    }
+
     [Fact]
     public async Task An_empty_box_has_no_input_to_show()
     {
