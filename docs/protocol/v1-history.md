@@ -332,7 +332,8 @@ and render all replies in the current turn, not just the latest live text. A liv
 second copy. Clients must not infer message boundaries from text prefixes. The
 existing text/count caps still apply. If `responseId` is absent, the legacy
 single-live-reply fallback is unchanged; older hosts omit it. A client applies it to an id-less last part only: a reply with no
-id that follows an identified one starts a new part and never rewrites that one (#3649).
+id that follows an identified one starts a new part and never rewrites that one (#3649). From a host that serves history, a reply with no id updates an id-less live part
+only when its words continue that part's (a stream grows its text); other words are the next reply and a new part (#4245).
 Older clients ignore the optional field and continue reading `response`/`own.response`.
 Codex can revise the same identified slot after a full history page: a part's time
 and non-truncated text are not completion markers. Clients accept newer live

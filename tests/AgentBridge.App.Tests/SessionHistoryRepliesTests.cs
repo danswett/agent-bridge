@@ -72,6 +72,22 @@ public sealed class SessionHistoryRepliesTests
         Assert.Equal(["a"], history.Turns.Single().Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Id).Take(1));
     }
 
+    // #4245: a text-only reply with no id (so a live part), then the next reply, which called tools before its text and has no id
+    // either, is a different reply: it must not rewrite the first.
+    [Fact]
+    public async Task An_id_less_reply_that_does_not_continue_the_id_less_one_before_it_is_a_new_part_not_a_rewrite()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said(null, "First, text only."));
+        history.Observe(Said(null, "Second, after tools."));
+        Assert.Equal(["First, text only.", "Second, after tools."], Replies(history));
+        history.Observe(Said(null, "Second, after tools. And more."));
+        Assert.Equal(["First, text only.", "Second, after tools. And more."], Replies(history));
+        history.Observe(Said(null, "Third."));
+        Assert.Equal(["First, text only.", "Second, after tools. And more.", "Third."], Replies(history));
+    }
+
     [Fact]
     public async Task Id_less_streaming_updates_stay_in_one_part()
     {
@@ -387,13 +403,13 @@ public sealed class SessionHistoryRepliesTests
             if (budget) { card.Update(original with { Activity = original.Activity with { Notice = original.Activity.Notice! with { Prompt = null, Parts = [], Truncated = true } } }); }
             else
             {
-                card.Update(Snapshot("owner", "Owner question", "Complete newer answer", "owner", 2));
-                card.Update(Snapshot("queued", "Next question", "Complete newer answer", "owner", 3));
+                card.Update(Snapshot("owner", "Owner question", "Old, and the complete newer answer", "owner", 2));
+                card.Update(Snapshot("queued", "Next question", "Old, and the complete newer answer", "owner", 3));
             }
             release.SetResult();
             await loading;
             var row = HistoryDraw.Rows(card.Stored.Turns, card.UserMessage).Single(r => r.Id == old.Id);
-            var expected = budget ? "New from history" : "Complete newer answer";
+            var expected = budget ? "New from history" : "Old, and the complete newer answer";
             Assert.Equal(expected, Assert.Single(row.Blocks).Text);
             if (!budget) { Assert.Equal("Owner question", row.Prompt); Assert.Null(row.Reply); }
             host.On(HistoryProtocol.Op, _ => new HistoryResult { Turns = [Notice(old.Id, expected, 0) with { Kind = old.Kind, Prompt = new HistoryPrompt { Text = budget ? "Command finished" : "Owner question", From = budget ? UserMessageFrom.Notification : null } }] });

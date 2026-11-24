@@ -152,10 +152,12 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 var turn = Held(a.ResponseTurn);
                 var parts = turn.Parts.ToList();
                 // #3649: a reply with no id may update only an id-less (live) last part, or restate the last reply's words; if the last
-                // reply part has an id, it starts a new part and never rewrites that one.
+                // reply part has an id, it starts a new part and never rewrites that one. #4245: and a live part is updated only by words
+                // that continue it (a stream grows its text); the next reply, which says other words, is a new part and not its rewrite. A host
+                // without history is the legacy single streaming slot: it never says which reply is which.
                 var lastReply = parts.FindLastIndex(p => p.Kind == HistoryPartKind.Response);
                 var last = !string.IsNullOrEmpty(a.ResponseId) ? parts.FindIndex(p => p.Kind == HistoryPartKind.Response && p.Id == a.ResponseId)
-                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
+                    : lastReply >= 0 && (parts[lastReply].Id.StartsWith($"{turn.Id}:live", StringComparison.Ordinal) && (!host.Can(HistoryProtocol.Capability) || Continues(parts[lastReply].Text, voice.Response)) || parts[lastReply].Text == voice.Response) ? lastReply : -1;
                 var mutable = session.Agent == AgentKind.Codex && !string.IsNullOrEmpty(a.ResponseId);
                 var items = revisions.GetValueOrDefault(a.ResponseTurn);
                 var prior = items?.GetValueOrDefault(a.ResponseId ?? "") ?? default;
@@ -375,6 +377,15 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             }
         }
         return added;
+    }
+
+    // Whether the words are the same reply still streaming: the new words begin with the held ones (or the held begin with the new,
+    // when a longer reply is cut again). Compared trimmed; an empty side continues anything.
+    static bool Continues(string? held, string? words)
+    {
+        var a = held?.Trim() ?? "";
+        var b = words?.Trim() ?? "";
+        return a.Length == 0 || b.Length == 0 || b.StartsWith(a, StringComparison.Ordinal) || a.StartsWith(b, StringComparison.Ordinal);
     }
 
     static IReadOnlyList<HistoryPart> MergeReplies(IReadOnlyList<HistoryPart> held, IReadOnlyList<HistoryPart> page, bool keepLive, HashSet<string>? keepItems = null)
