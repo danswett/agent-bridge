@@ -493,7 +493,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
+     job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
+     docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
@@ -536,7 +537,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    or not (#4104), as long as main's head, read under the lock, still follows its commit (an
    unreadable or off-main head stops publishing); main's later run publishes its own higher
    version over it. When GitHub numbered a descendant's run lower, that version is refused and
-   its app change waits for main's next run: delayed, not lost (#938's trade). One reaching
+   its app change waits for main's next run: delayed, not lost (#938's trade). Releases are
+   spaced 15 minutes apart (owner decision; docs/app-windows.md, "Spacing"): a run inside that
+   publishes nothing and says `deferred=true`; `publish-pending.yml` re-runs that publish job
+   once the window opens, even with main idle, unless a later run publishes first. Quality, on
+   an owner or Chief call, may dispatch `critical-release` with a reason. One reaching
    `publish` after a newer release publishes nothing. `publish` runs exactly when
    `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
    `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
@@ -875,7 +880,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 * **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
   that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
-  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows; (4) `spikes` and `spikes-linux` to
+  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
   `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with

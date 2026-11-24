@@ -109,9 +109,16 @@ static class AppLog
 // View models change on the UI thread; the host's events arrive on the pipe's.
 sealed class QueueDispatcher(DispatcherQueue queue) : IUiDispatcher
 {
-    public void Post(Action action)
+    public void Post(Action action) => TryPost(action);
+
+    // False when the queue has shut down and took nothing (the hang watchdog stops then rather than call it a hang).
+    public bool TryPost(Action action)
     {
-        if (queue.HasThreadAccess) { action(); }
-        else { queue.TryEnqueue(() => action()); }
+        if (queue.HasThreadAccess)
+        {
+            action();
+            return true;
+        }
+        return queue.TryEnqueue(() => action());
     }
 }
