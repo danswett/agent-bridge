@@ -22,7 +22,9 @@ public static class FleetEndCommands
         public string Time => DateTime.UtcNow.ToString("O");
     }
     static readonly string[] Reasons = ["grant-missing", "grant-expired", "grant-revoked", "grant-exhausted", "scope",
-        "duplicate-id", "kill-switch", "person-required", "audit-unavailable", "policy", "bad-argument", "still-running", "unavailable"];
+        "duplicate-id", "kill-switch", "person-required", "audit-unavailable", "policy", "bad-argument", "still-running", "unavailable",
+        // A remote end (G10) is refused by the sending host before anything is sent for these two (fleet-grants-cli.md, Refusal codes).
+        "target-offline", "peer-not-trusted"];
 
     public static Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error) =>
         RunAsync(args, root, output, error, Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN"), null);
