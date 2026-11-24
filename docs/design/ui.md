@@ -1812,6 +1812,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   first movement as well as during the drag; history arriving meanwhile cannot restore the pin,
   and the layout's top-block correction cannot move the view under it (#1756): a thumb drag's
   steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
+  A layout drawn while the person held the thumb or a pan is not undone on release, which may
+  raise no view change: the top-block anchor starts again from where they left it (#4243, trackpad release).
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
   A wheel notch owns the view from its input, before its first view change arrives, so no correction
   cancels it in flight; a wheel event that raises no view change lets go after 250 ms (#4243). A wheel
