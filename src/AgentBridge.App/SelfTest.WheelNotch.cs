@@ -130,6 +130,47 @@ static partial class SelfTest
             while (!settle.Done && clock.Elapsed < giveUp) { await Frame(); settle.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
             check(settle.Passed,
                 $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}, {(clock.Elapsed - settleFrom).TotalSeconds:0.#} s, pin {view.PinState()}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+            // The owner's wheel (#4243): real OS notches (120 each; Windows animates every one) at the transcript centre, the pointer over it, in
+            // the shapes a hand makes: three within a frame, a quick run, a slow run past the 250 ms the wheel's start window lasts. Once with the
+            // transcript idle, once with turns arriving while it spins. Never back up, and at the end once it stops.
+            if (RealWheelSkip() is { } skipped) { check(true, $"real wheel down to the end: skipped ({skipped})"); }
+            else
+            {
+                var centre = scroll.TransformToVisual(window.RootElement).TransformPoint(new Windows.Foundation.Point(scroll.ViewportWidth / 2, scroll.ViewportHeight / 2));
+                var (scale, at) = (scroll.XamlRoot.RasterizationScale, new WheelPoint());
+                at.X = (int)(centre.X * scale); at.Y = (int)(centre.Y * scale);
+                if (ClientToScreen(window.Handle, ref at) == 0) { check(false, "real wheel setup: the transcript centre could not be located"); return; }
+                try
+                {
+                    WatchWheel();
+                    PointRealWheel(window.Handle, at.X, at.Y);
+                    var next = 301;
+                    foreach (var growing in new[] { false, true })
+                    {
+                        phase = growing ? "real-wheel:growing" : "real-wheel:idle";
+                        for (var n = 0; n < 8; n++) { await Notch(-1); }
+                        var (peak, fall, start) = (scroll.VerticalOffset, 0.0, scroll.VerticalOffset);
+                        async Task Pause(int ms)
+                        {
+                            var until = clock.ElapsedMilliseconds + ms;
+                            do { var seen = await Frame(); (fall, peak) = (Math.Max(fall, peak - seen), Math.Max(peak, seen)); } while (clock.ElapsedMilliseconds < until);
+                        }
+                        var bursts = new[] { (3, 100), (1, 40), (1, 40), (1, 40), (1, 300), (1, 300), (2, 150), (1, 30), (1, 30), (1, 300), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80), (1, 80) };
+                        for (var i = 0; i < bursts.Length; i++)
+                        {
+                            SendWheelNotches(-120, bursts[i].Item1);
+                            if (growing && i < 10 && i % 3 == 0) { stored.AddLive(MixedTurn(next++)); }
+                            await Pause(bursts[i].Item2);
+                        }
+                        check(peak - start > notch, $"real wheel reaches the transcript ({(growing ? "turns arriving" : "idle")}; from {start:0.#} to {peak:0.#}; this thread took {wheelTaken} wheel messages)");
+                        var arrive = new ScrollSettle(peak, fall);
+                        var arriveBy = clock.Elapsed + TimeSpan.FromSeconds(90);
+                        while (!arrive.Done && clock.Elapsed < arriveBy) { await Frame(); arrive.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
+                        check(arrive.Passed, $"real wheel down to the end, {(growing ? "turns arriving" : "idle")}: never moves back up and rests at the end ({arrive.Describe()}; pin {view.PinState()})");
+                    }
+                }
+                finally { StopWatchingWheel(); }
+            }
         }
         finally
         {

@@ -58,12 +58,27 @@ static unsafe partial class SelfTest
     // keys need already held (PrepareNativeInput), then SendInput, as a mouse's wheel is.
     static void SendRealWheel(nint window, int x, int y)
     {
+        PointRealWheel(window, x, y);
+        SendWheelNotches(120, 1);
+    }
+
+    // The foreground and the cursor, once, so notches can then follow one another as a hand's do (#4243).
+    static void PointRealWheel(nint window, int x, int y)
+    {
         PrepareNativeInput(window);
         if (!GetCursorPosition(out var was)) { throw new InvalidOperationException("The cursor could not be read."); }
-        wheelCursor = was;
+        wheelCursor ??= was;
         if (!SetCursorPosition(x, y)) { throw new InvalidOperationException("The cursor could not be moved to the wheel target."); }
-        var input = new NativeInput { Type = 0, Mouse = new NativeMouse { Data = 120, Flags = 0x0800 } };
-        if (SendInput(1, ref input, Marshal.SizeOf<NativeInput>()) != 1) { throw new InvalidOperationException("The wheel could not be sent."); }
+    }
+
+    // `count` OS wheel events of `delta` (120 is a notch; negative is down the transcript), one after another within a frame.
+    static void SendWheelNotches(int delta, int count)
+    {
+        var input = new NativeInput { Type = 0, Mouse = new NativeMouse { Data = unchecked((uint)delta), Flags = 0x0800 } };
+        for (var n = 0; n < count; n++)
+        {
+            if (SendInput(1, ref input, Marshal.SizeOf<NativeInput>()) != 1) { throw new InvalidOperationException("The wheel could not be sent."); }
+        }
     }
 
     /// <summary>What the wheel met: where it was sent, what was there, what took it and whether the app heard it.</summary>

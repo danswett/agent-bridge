@@ -908,34 +908,40 @@ public sealed class ConversationEndPinTests
     // view change could re-pin it, so the wheel's release still stands when the last rows realise (a tall tool row over its
     // estimate) and the list lands one viewport (about four notches) short of the new end. The undo of that move needed the
     // pin the wheel had just released, and the pointer over the conversation holds the end, so nothing put the view back.
-    // Whole notches, and a trackpad's sub-notch deltas with an inertial tail that outlasts the 250 ms start window.
+    // The owner's wheel (stepped notches, the pointer over the transcript): three notches in one frame, then one at a time; the
+    // wheel's 250 ms start window lapsing before a notch's first view change (a busy UI thread); and a reply growing meanwhile.
     [Theory]
-    [InlineData(120)]
-    [InlineData(20)]
-    public void The_layout_landing_one_viewport_short_of_the_end_mid_gesture_is_undone_though_the_wheel_released_the_pin(int delta)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void The_layout_landing_one_viewport_short_of_the_end_mid_gesture_is_undone_though_the_wheel_released_the_pin(bool lapseBeforeView, bool growing)
     {
         var view = new SessionView();
         (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
         view.Moved(48000);
         view.FollowState.PointerOver(7);
         view.Scroller.Wheel(); view.Moved(47712, final: false); view.Moved(47424);
-        var offset = 47424.0;
-        while (offset < 48000)
+        var (offset, end) = (47424.0, 48000.0);
+        view.Scroller.Wheel(-120); view.Scroller.Wheel(-120);
+        while (offset < end)
         {
-            view.Scroller.Wheel(-delta);
-            offset = Math.Min(offset + delta * 144.0 / 120, 48000);
+            view.Scroller.Wheel(-120);
+            if (lapseBeforeView) { view.LapseWheelForProbe(); }
+            offset = Math.Min(offset + 144, end);
             view.Moved(offset, final: false);
+            if (growing && end == 48000 && offset >= 47712) { end = view.Scroller.ScrollableHeight = 48100; view.ReplyForProbe(); view.DrainForProbe(); }
         }
         Assert.False(view.Pinned);
         // Outside our own layout wrapper: the framework's measure, as the owner's machine runs it.
-        view.Scroller.ScrollableHeight = 48112;
-        view.Moved(47512, final: false);
-        for (var tail = 0; tail < 3; tail++) { view.LapseWheelForProbe(); view.Scroller.Wheel(-4); }
-        view.Moved(47512);
+        view.Scroller.ScrollableHeight = end + 112;
+        view.Moved(end + 112 - 600, final: false);
+        view.Scroller.Wheel(-120);
+        view.Moved(end + 112 - 600);
         view.LapseWheelForProbe();
         view.DrainForProbe();
         view.Follow();
-        Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == 48112, $"not put back at the end: {view.PinState()}");
+        Assert.True(view.Scroller.Targets.Count > 0 && view.Scroller.Targets[^1] == end + 112, $"not put back at the end: {view.PinState()}");
     }
 
     // The same landing under a trackpad pan (DirectManipulation), which holds the view and released the pin when it began.
