@@ -1,33 +1,28 @@
-From cfd15a55631ead4d7c24034ff9aca019140b37cc Mon Sep 17 00:00:00 2001
+From 93cde307a9895f4942ee4741582a50def1ecda76 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 18:24:08 -0800
-Subject: [PATCH] CI S2: full.yml's trigger also requires the run to be this
- repository's (Part of #4104)
+Date: Mon, 23 Nov 2026 22:21:26 -0800
+Subject: [PATCH] s 4b
 
-The trigger job's ok output tests head_repository.full_name == github.repository beside conclusion, event and branch, so a fork's run
-never starts a FULL job (the catalog check requires it). The event-table test gains the repository column and fork rows.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/full.yml                     |  2 +-
  .../FullWorkflowTests.cs                       | 18 +++++++++++-------
  2 files changed, 12 insertions(+), 8 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index fe432bc54..02fb4d633 100644
+index b9717b4e6..ea7f81eb5 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
-@@ -34,7 +34,7 @@ jobs:
-     runs-on: ubuntu-latest
-     timeout-minutes: 5
+@@ -38,7 +38,7 @@ jobs:
+       contents: read
      outputs:
+       sha: ${{ steps.commit.outputs.sha }}
 -      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
 +      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
      steps:
-       - name: The commit under test
-         env:
+       # The commit every other job checks out. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
+       # the event's text, and either is refused unless it is 40 lowercase hex: no job reads the event's commit, they all read this output.
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 03dc1bc5b..624d6ced6 100644
+index c30c5aace..c2e6dff0f 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -47,13 +47,15 @@ public class FullWorkflowTests
