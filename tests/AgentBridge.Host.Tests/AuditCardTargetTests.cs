@@ -82,6 +82,7 @@ public sealed class AuditCardTargetTests : IDisposable
         Assert.Equal(b.Invalidated, a.Invalidated);
         var (withField, without) = (PhoneApprovalEvidence.Project(rows, complete, ["0123456789abcdef"]), PhoneApprovalEvidence.Project(stripped, complete, ["0123456789abcdef"]));
         Assert.Equal(without.Clients, withField.Clients);
-        Assert.Equal((without.Missing, without.Complete), (withField.Missing, withField.Complete));
+        Assert.Equal(without.Missing, withField.Missing);
+        Assert.Equal(without.Complete, withField.Complete);
     }
 }

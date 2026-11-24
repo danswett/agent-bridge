@@ -29,6 +29,109 @@ public sealed class FleetProvenanceTests : IDisposable
     }
 
     [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void A_session_is_fleet_launched_by_its_record_alone_even_after_its_process_is_gone(bool fleet, bool expected)
+    {
+        var store = Open();
+        var request = Guid.NewGuid();
+        store.Preparing(request, Session, fleet ? "fleet" : null);
+        store.Bound(request, Session, Process);
+        var reopened = Open();
+        Assert.Equal(expected, reopened.WasFleetLaunched(Session));
+        Assert.False(reopened.WasFleetLaunched(Guid.NewGuid().ToString()));
+    }
+
+    [Fact]
+    public void A_resumed_fleet_worker_replaces_its_old_record_so_only_its_new_process_is_a_fleet_worker()
+    {
+        var store = Open();
+        var first = Guid.NewGuid();
+        store.Preparing(first, Session, "fleet");
+        store.Bound(first, Session, Process);
+        var again = Guid.NewGuid();
+        var second = Process with { Id = 701 };
+        store.Preparing(again, Session, "fleet", null, supersedes: true);
+        Assert.Throws<InvalidOperationException>(() => store.WasFleetLaunched(Session));      // unfinished until bound
+        store.Bound(again, Session, second);
+        var reopened = Open();
+        Assert.True(reopened.IsFleetWorker(Session, second));
+        Assert.False(reopened.IsFleetWorker(Session, Process));
+        Assert.True(reopened.WasFleetLaunched(Session));
+    }
+
+    [Fact]
+    public void A_resume_never_supersedes_a_session_any_person_launch_touched()
+    {
+        var store = Open();
+        var person = Guid.NewGuid();
+        store.Preparing(person, Session);
+        store.Bound(person, Session, Process);
+        Assert.Throws<InvalidOperationException>(() => store.Preparing(Guid.NewGuid(), Session, "fleet", null, supersedes: true));
+        Assert.False(Open().WasFleetLaunched(Session));
+        Assert.True(Open().Contains(Session, Process));
+    }
+
+    [Fact]
+    public void A_mixed_or_unfinished_record_never_proves_a_fleet_launch_and_an_unreadable_one_throws()
+    {
+        var store = Open();
+        var fleet = Guid.NewGuid();
+        store.Preparing(fleet, Session, "fleet");
+        store.Bound(fleet, Session, Process);
+        var person = Guid.NewGuid();
+        store.Preparing(person, Session);
+        store.Bound(person, Session, Process with { Id = 701 });
+        Assert.False(Open().WasFleetLaunched(Session));
+        store.Preparing(Guid.NewGuid(), "");
+        Assert.Throws<InvalidOperationException>(() => Open().WasFleetLaunched(Session));
+        File.WriteAllText(Path, "{ not json");
+        Assert.Throws<InvalidOperationException>(() => Open().WasFleetLaunched(Session));
+    }
+
+    [Fact]
+    public void The_launch_role_is_recorded_durably_and_a_conflicting_or_missing_one_reads_as_none()
+    {
+        var store = Open();
+        var request = Guid.NewGuid();
+        store.Preparing(request, Session, null, "quality-lead");
+        store.Bound(request, Session, Process);
+        Assert.Equal("quality-lead", Open().RoleOf(Session));
+        Assert.Null(Open().RoleOf(Guid.NewGuid().ToString()));
+        var other = Guid.NewGuid();
+        store.Preparing(other, Session, null, "builder");
+        store.Bound(other, Session, Process);
+        Assert.Null(Open().RoleOf(Session));
+        var bare = Guid.NewGuid();
+        var second = "88888888-8888-4888-8888-888888888888";
+        store.Preparing(bare, second);
+        store.Bound(bare, second, Process);
+        Assert.Null(Open().RoleOf(second));
+    }
+
+    [Fact]
+    public void A_role_is_recorded_only_for_a_person_launch_or_a_launch_within_the_launching_sessions_own_role()
+    {
+        var store = Open();
+        const string coordinator = "99999999-9999-4999-8999-999999999999", builder = "55555555-5555-4555-8555-555555555555";
+        var own = Guid.NewGuid();
+        store.Preparing(own, coordinator, null, "quality-lead");
+        store.Bound(own, coordinator, Process);
+        var plain = Guid.NewGuid();
+        store.Preparing(plain, builder);
+        store.Bound(plain, builder, Process);
+        var reopened = Open();
+        Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", null));                      // a person's launch
+        Assert.Null(reopened.RoleFor(null, null));
+        Assert.Equal("quality-lead", reopened.RoleFor("quality-lead", $"agent:m/{coordinator}")); // a coordinator within its own role
+        Assert.Null(reopened.RoleFor("chief", $"agent:m/{coordinator}"));                          // never a higher or other role
+        Assert.Null(reopened.RoleFor("quality-lead", $"agent:m/{builder}"));                       // a builder never records a coordinator role
+        Assert.Null(reopened.RoleFor("quality-lead", "agent:m/11111111-1111-4111-8111-111111111111")); // an unknown session has none
+        store.Preparing(Guid.NewGuid(), "");                                                       // an unreadable record: none, not a throw
+        Assert.Null(Open().RoleFor("quality-lead", $"agent:m/{coordinator}"));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void A_conflicting_person_or_process_record_never_inherits_fleet_authority(bool changedProcess)

@@ -1,0 +1,17 @@
+name: Save Playwright's system-package archives
+description: >
+  Saves the archives-only cache that ../playwright-system-packages restored and filled. ci.yml only: it runs where the job may write a cache
+  (a push or a pull request, never a workflow_run), after the restore action, gated on its cache-ready output. full.yml never calls this.
+
+inputs:
+  key:
+    description: The cache key, the restore action's cache-key output.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/playwright-apt-debs
+        key: ${{ inputs.key }}
