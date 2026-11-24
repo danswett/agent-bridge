@@ -50,16 +50,52 @@ read -ra pkgs <<< "$list"
 if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "::error::playwright install-deps --dry-run named no packages to download"; exit 1
 fi
-if [ "$key_only" = true ]; then
-  hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum); echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
-  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum); echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
-  exit 0
-fi
 apt_etc=${PLAYWRIGHT_APT_ETC:-/etc/apt}
 apt_archives=${PLAYWRIGHT_APT_ARCHIVES:-/var/cache/apt/archives}
 cache_debs="$HOME/.cache/playwright-apt-debs"
 limit=${PLAYWRIGHT_APT_LIMIT:-60s}
 mirrors="$apt_etc/apt-mirrors.txt"
+
+# The mirrors apt is given, in its order, then Canonical's HTTPS archive, each as <scheme>://<host>/ubuntu (no trailing slash).
+mirror_bases() {
+  local seen=' ' base
+  { sed -n 's/^\(https\{0,1\}:\/\/[^[:space:]]*\).*/\1/p' "$mirrors" 2>/dev/null || true; echo https://archive.ubuntu.com/ubuntu/; } |
+    while read -r base; do
+      base=${base%/}
+      case "$seen" in *" $base "*) continue ;; esac
+      seen+="$base "; printf '%s\n' "$base"
+    done
+}
+# What the signed indexes say today: a hash of the Date line of the release, -updates and -security InRelease files. The cache key carries it, so an index that
+# moved is a cache MISS (a fresh download, saved under a fresh key) and never an exact-key hit whose archives fail verification against the new index, which an
+# immutable cache key could not be repaired from. Verification itself is unchanged (see below). If no index can be read the key is unique to the run.
+index_identity() {
+  local codename pocket base date dates='' got=false hash
+  codename=${PLAYWRIGHT_APT_CODENAME:-$(. /etc/os-release 2>/dev/null && printf '%s' "${VERSION_CODENAME:-}")}
+  if [ -n "$codename" ]; then
+    for pocket in "$codename" "$codename-updates" "$codename-security"; do
+      date=''
+      while read -r base; do
+        date=$(curl --fail --silent --max-time "${PLAYWRIGHT_APT_INDEX_TIMEOUT:-15}" "$base/dists/$pocket/InRelease" 2>/dev/null </dev/null | sed -n 's/^Date: //p' | head -n 1) || date=''
+        [ -z "$date" ] || break
+      done < <(mirror_bases)
+      [ -z "$date" ] || got=true
+      dates+="$pocket=$date;"
+    done
+  fi
+  if [ "$got" = true ]; then
+    hash=$(printf '%s' "$dates" | sha256sum); echo "index-hash=${hash%% *}"
+  else
+    echo "::warning::could not read the signed indexes' dates; this run's archives cache key is unique to it"
+    echo "index-hash=unknown-${GITHUB_RUN_ID:-0}"
+  fi
+}
+if [ "$key_only" = true ]; then
+  hash=$(printf '%s\n' "${pkgs[@]}" | sha256sum); echo "packages-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  hash=$(printf '%s' "${GITHUB_REF:-}" | sha256sum); echo "ref-hash=${hash%% *}" >> "$GITHUB_OUTPUT"
+  index_identity | tee /dev/stderr | grep '^index-hash=' >> "$GITHUB_OUTPUT"
+  exit 0
+fi
 force=false
 [ "${PLAYWRIGHT_APT_FORCE_FALLBACK:-}" != true ] || force=true
 cache_hit=false
@@ -145,7 +181,20 @@ leave_azure() {
   fi
   left_azure=true; network_host=archive.ubuntu.com
 }
-fail() { echo "::error::apt $1 failed (exit $2); see the attempt log above"; exit "$2"; }
+cache_failed=false
+# What the final error blames: a timeout or network failure, or apt rejecting what it fetched (verification, a dependency, a signature), so the log is read the right way.
+cause() {
+  if [ "$1" -eq 124 ] || [ "$network_failed" = true ]; then
+    printf 'network or timeout (the mirrors were too slow or unreachable), not a package or signature problem'
+  else
+    printf 'apt rejected the %s (a package, dependency or signature error), not a network failure' "$2"
+  fi
+}
+fail() {
+  local why; why=$(cause "$2" "${3:-packages}")
+  [ "$cache_failed" = false ] || why+="; the restored cache had failed verification against the signed indexes and was discarded"
+  echo "::error::apt $1 failed (exit $2): $why; see the attempt log above"; exit "$2"
+}
 
 # timeout returns 137 if --kill-after had to KILL it; that still takes the timeout fallback.
 bounded() {
@@ -155,7 +204,7 @@ bounded() {
 }
 # Never interrupt dpkg with the network timeout while it is modifying installed packages.
 install_offline() {
-  sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || fail install "$?"
+  sudo apt-get install -y --no-install-recommends --no-download "${pkgs[@]}" || { rc_install=$?; network_failed=false; fail install "$rc_install" packages; }
 }
 if grep -q '^http://azure\.archive\.ubuntu\.com/' "$mirrors"; then
   probe_rc=0
@@ -175,7 +224,7 @@ if [ "$rc" -ne 0 ]; then
     rc=0; retry update bounded apt-get update || rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
-    fail update "$rc"
+    fail update "$rc" indexes
   fi
 fi
 if [ "$cache_hit" = true ]; then
@@ -205,6 +254,7 @@ if [ "$cache_hit" = true ]; then
     install_offline
     exit 0
   fi
+  cache_failed=true
   if [ "${DEBS_CACHE_EXACT_HIT:-}" = true ]; then
     echo "::warning::cached archives failed verification; immutable exact-key cache cannot be replaced; discarding it locally and using quiet authenticated downloads (delete the cache key to recover)"
     download_options=(-qq)
@@ -214,6 +264,66 @@ if [ "$cache_hit" = true ]; then
   find "$cache_debs" -maxdepth 1 -type f -name '*.deb' -delete
   cache_available=false
 fi
+# (S2, #4104) Fetch each planned package on its own, with a short bounded try, a few tries and a mirror fallback, and keep only bytes that match the signed
+# size and sha256 apt printed for it (the same signed index check as the cache's: the hash comes from the index apt-get update authenticated, so no mirror is
+# trusted). A mirror that times out for one package is not asked first for the next (the one that worked is kept). Apt's own download then finds what was
+# fetched; anything not fetched in time or never served is left to apt's bounded download below, so this only ever adds a fast path. Not in a forced
+# fallback proof (apt's own Get: lines are the proof there) and not past PLAYWRIGHT_APT_PREFETCH_BUDGET seconds in all.
+fetch_tries=${PLAYWRIGHT_APT_FETCH_TRIES:-3}
+fetch_timeout=${PLAYWRIGHT_APT_FETCH_TIMEOUT:-60}
+prefetch_budget=${PLAYWRIGHT_APT_PREFETCH_BUDGET:-600}
+prefetch() {
+  [ "${PLAYWRIGHT_APT_PREFETCH:-true}" = true ] && [ "$force" = false ] || return 0
+  local plan work_dir uri file size hash extra rel base bases=() urls=() left=() sticky=0 planned=0 fetched=0 i try idx nb started=$SECONDS spent=false got
+  if [ "$prefetch_budget" -le 0 ]; then
+    echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget is spent before it began; apt downloads every package"; return 0
+  fi
+  plan=$(mktemp -d); work_dir=$(mktemp -d)
+  if ! sudo apt-get -o Dir::Cache::archives="$plan/" -o Acquire::ForceHash=sha256 --print-uris --download-only install -y --no-install-recommends "${pkgs[@]}" > "$plan/uris"; then
+    echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::could not plan the packages to fetch one by one; apt downloads them"
+    sudo rm -rf -- "$plan" "$work_dir"; return 0
+  fi
+  mapfile -t bases < <(mirror_bases); nb=${#bases[@]}
+  while read -r uri file size hash extra; do
+    [[ "$uri" == \'* ]] || continue
+    if [[ ! "$file" =~ ^[[:alnum:]][[:alnum:].+%_~:-]*\.deb$ ]] || [[ ! "$size" =~ ^[0-9]+$ ]] || [[ ! "$hash" =~ ^SHA256:[[:xdigit:]]{64}$ ]] || [ -n "${extra:-}" ]; then
+      continue
+    fi
+    planned=$((planned + 1))
+    if [ -f "$apt_archives/$file" ] && [ "$(wc -c < "$apt_archives/$file")" -eq "$size" ] && printf '%s  %s\n' "${hash#SHA256:}" "$apt_archives/$file" | sha256sum --check --status; then
+      fetched=$((fetched + 1)); continue
+    fi
+    if [ "$spent" = true ] || [ $((SECONDS - started)) -ge "$prefetch_budget" ]; then spent=true; left+=("$file"); continue; fi
+    rel=${uri#\'}; rel=${rel%\'}; urls=()
+    case "$rel" in
+      */ubuntu/*) rel=${rel#*/ubuntu/}; for ((i = 0; i < nb; i++)); do urls+=("$(( (sticky + i) % nb ))|${bases[$(( (sticky + i) % nb ))]}/$rel"); done ;;
+      *) urls=("-1|$rel") ;;
+    esac
+    got=false
+    for base in "${urls[@]}"; do
+      idx=${base%%|*}; base=${base#*|}
+      for ((try = 1; try <= fetch_tries; try++)); do
+        if curl --fail --silent --show-error --location --connect-timeout 10 --max-time "$fetch_timeout" -o "$work_dir/$file" "$base" 2>/dev/null </dev/null &&
+          [ "$(wc -c < "$work_dir/$file")" -eq "$size" ] && printf '%s  %s\n' "${hash#SHA256:}" "$work_dir/$file" | sha256sum --check --status; then
+          got=true; break 2
+        fi
+        rm -f "$work_dir/$file"
+        [ "$try" -ge "$fetch_tries" ] || sleep $((try * 2))
+      done
+    done
+    if [ "$got" = true ]; then
+      sudo cp -- "$work_dir/$file" "$apt_archives/$file"; rm -f "$work_dir/$file"
+      [ "$idx" -lt 0 ] || sticky=$idx
+      fetched=$((fetched + 1))
+    else left+=("$file"); fi
+  done < "$plan/uris"
+  sudo rm -rf -- "$plan" "$work_dir"
+  echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::fetched $fetched of $planned planned packages one by one, each checked against the signed index"
+  [ "$spent" = false ] || echo "::notice title=${GITHUB_JOB:-playwright-system-packages}::the prefetch budget ($prefetch_budget s) ran out; the rest is left to apt"
+  [ "${#left[@]}" -eq 0 ] || echo "::warning title=${GITHUB_JOB:-playwright-system-packages}::left to apt's own bounded download: ${left[*]}"
+  return 0
+}
+prefetch
 # Downloads have their own bound, independent of the update limit.
 limit=${PLAYWRIGHT_APT_LIMIT:-180s}
 rc=0

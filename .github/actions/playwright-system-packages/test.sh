@@ -136,7 +136,24 @@ cat > "$work/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SLEEP_LOG"
 EOF
-chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout"
+# curl serves files from CURL_FIXTURES/<host>/<path> and records each URL. CURL_DOWN_HOSTS time out (28), CURL_BAD_HOSTS serve other bytes,
+# and the first CURL_FAIL_FIRST requests for any one URL time out. Nothing here touches the network.
+cat > "$work/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+url=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; --max-time|--connect-timeout|--retry) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac
+done
+seen=$(grep -cxF "$url" "$CURL_LOG" || true); echo "$url" >> "$CURL_LOG"
+host=${url#*://}; host=${host%%/*}; path=${url#*://"$host"}
+case " ${CURL_DOWN_HOSTS:-} " in *" $host "*) exit 28 ;; esac
+[ "$seen" -ge "${CURL_FAIL_FIRST:-0}" ] || exit 28
+file="$CURL_FIXTURES/$host$path"
+[ -f "$file" ] || exit 22
+case " ${CURL_BAD_HOSTS:-} " in *" $host "*) size=$(wc -c < "$file"); file=$CURL_FIXTURES/corrupt; head -c "$size" /dev/zero | tr '\0' X > "$file" ;; esac
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
+EOF
+chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout" "$work/bin/curl"
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
 export TIMEOUT_LOG="$work/timeout.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
@@ -144,6 +161,8 @@ export HOME="$work/cache-fixture/home" GITHUB_OUTPUT="$work/cache-fixture/output
 export PLAYWRIGHT_APT_LISTS="$work/cache-fixture/lists" PLAYWRIGHT_APT_ARCHIVES="$work/cache-fixture/archives"
 unset GITHUB_JOB
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+# The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
+export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_FIXTURES="$work/curl-fixtures"
 
 azure=$'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1'
 canonical=$'https://archive.ubuntu.com/ubuntu/\tpriority:2'
@@ -170,6 +189,8 @@ reset() {
   unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
+  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES
+  export PLAYWRIGHT_APT_PREFETCH=false; rm -rf "$CURL_FIXTURES"; mkdir -p "$CURL_FIXTURES"; : > "$CURL_LOG"
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -192,6 +213,88 @@ check() {
   fi
 }
 
+# A robust download (S2, #4104). On main's logs every failing job restored an exact-key archives cache that failed verification against the signed indexes,
+# then downloaded past the job's limit. So: the key carries the signed indexes' dates (a moved index is a MISS, not a failed verify), each package is fetched
+# with a short bounded retry and a mirror fallback and checked against the signed hash, and the final error says what failed.
+serve() { mkdir -p "$CURL_FIXTURES/$1$(dirname "$2")"; printf '%s' "$3" > "$CURL_FIXTURES/$1$2"; }
+index_fixtures() { local pocket; for pocket in noble noble-updates noble-security; do serve "$1" "/ubuntu/dists/$pocket/InRelease" "Origin: Ubuntu"$'\n'"Date: $2"$'\n'; done; }
+index_hash() {
+  local code=0; : > "$GITHUB_OUTPUT"
+  GITHUB_RUN_ID=77 bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || code=$?
+  [ "$code" -eq 0 ] || { echo "exit-$code"; return 0; }
+  sed -n 's/^index-hash=//p' "$GITHUB_OUTPUT"
+}
+# deb <file> <content>: the package on both mirrors; prints its plan line (the signed size and hash).
+deb() {
+  local hash; hash=$(printf '%s' "$2" | sha256sum); hash=${hash%% *}
+  serve azure.archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"; serve archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"
+  printf "'http://azure.archive.ubuntu.com/ubuntu/pool/main/%s' %s %s SHA256:%s" "$1" "$1" "${#2}" "$hash"
+}
+expect() { if eval "$2"; then echo "ok: $1"; else echo "FAIL: $1"; failures=$((failures + 1)); fi; }
+dl() { DL_CODE=0; bash "$here/download.sh" chromium webkit > "$work/out" 2>&1 || DL_CODE=$?; }
+curls() { grep -c -- "$1" "$CURL_LOG" || true; }
+index_cases() {
+  local first second third
+  reset "$azure" "$canonical"; index_fixtures azure.archive.ubuntu.com 'Mon, 24 Nov 2026 03:00:00 UTC'
+  first=$(index_hash); second=$(index_hash)
+  expect "the cache key carries a hash of the signed indexes' dates, the same for the same dates" '[ "$first" = "$second" ] && [[ "$first" =~ ^[0-9a-f]{64}$ ]]'
+  serve azure.archive.ubuntu.com /ubuntu/dists/noble-updates/InRelease $'Origin: Ubuntu\nDate: Tue, 25 Nov 2026 03:00:00 UTC\n'
+  third=$(index_hash)
+  expect "a moved index changes the key, so the old cache is a miss instead of a failed verification" '[ -n "$third" ] && [ "$third" != "$first" ]'
+  reset "$azure" "$canonical"; index_fixtures archive.ubuntu.com 'Mon, 24 Nov 2026 03:00:00 UTC'; export CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  expect "the key is the same whichever mirror answered, and a mirror that is down is skipped" '[ "$(index_hash)" = "$first" ]'
+  reset "$azure" "$canonical"; export CURL_DOWN_HOSTS='azure.archive.ubuntu.com archive.ubuntu.com'
+  expect "with no index readable the key is unique to the run, never a shared stale one" '[ "$(index_hash)" = unknown-77 ]'
+}
+prefetch_cases() {
+  local a b calls
+  reset "$azure" "$canonical"
+  a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  calls=$(printf 'update\n%s\n%s' "$verify" "$download")
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b"
+  check "every planned package is fetched and verified before apt's own download, which then finds them" 0 "$calls" "$azure" "$canonical"
+  expect "the verified packages are in apt's archives" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ] && [ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/libb_1_amd64.deb")" = "package b" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_FAIL_FIRST=2
+  check "a package that times out twice is fetched on the third try, each try bounded" 0 "$calls" "$azure" "$canonical"
+  expect "the retries were on the same mirror and backed off" '[ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/liba")" -eq 3 ] && [ "$(curls "//archive.ubuntu.com")" -eq 0 ] && [ -s "$SLEEP_LOG" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  check "a mirror that is down falls back to the next one, and the rest stay on the mirror that worked" 0 "$calls" "$azure" "$canonical"
+  expect "Azure was tried (three times) only for the first package; Canonical served both" '[ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/liba")" -eq 3 ] && [ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/libb")" -eq 0 ] && [ "$(curls "//archive.ubuntu.com/ubuntu/pool/main/libb")" -eq 1 ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_BAD_HOSTS=azure.archive.ubuntu.com
+  check "a mirror serving the wrong bytes fails the signed hash and the next mirror is used" 0 "$calls" "$azure" "$canonical"
+  expect "only bytes that match the signed hash reach apt's archives" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_DOWN_HOSTS='azure.archive.ubuntu.com archive.ubuntu.com'
+  check "a package no mirror serves is left to apt's own bounded download, which still runs" 0 "$calls" "$azure" "$canonical"
+  expect "and the log names it" 'grep -q "left to apt.*liba_1_amd64.deb" "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_PREFETCH_BUDGET=0
+  check "a spent prefetch budget hands everything to apt without a single fetch" 0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+  expect "no package was fetched and the log says why" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && grep -q budget "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_FORCE_FALLBACK=true
+  dl
+  expect "a forced fallback proof leaves downloading to apt, so its Get: lines stay the proof" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ]'
+}
+cause_cases() {
+  reset "$azure" "$canonical"; export APT_UPDATE_EXIT=100; dl
+  expect "an update apt rejected says so, not a network failure" '[ "$DL_CODE" -eq 100 ] && grep -q "^::error::apt update failed (exit 100): .*not a network failure" "$work/out"'
+  reset "$canonical"; export APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "a download that timed out names network or timeout as the cause" '[ "$DL_CODE" -eq 124 ] && grep -q "^::error::apt download failed (exit 124): network or timeout" "$work/out"'
+  reset "$canonical"; export APT_DOWNLOAD_EXIT=100; dl
+  expect "a download apt rejected names a package or signature problem, not the network" '[ "$DL_CODE" -eq 100 ] && grep -q "^::error::apt download failed (exit 100): .*not a network failure" "$work/out"'
+  reset "$canonical"; export DEBS_CACHE_HIT=true DEBS_CACHE_EXACT_HIT=true APT_VERIFY_ERROR='E: bad plan' APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "a timeout after a cache that failed verification says both, so the log reads as it happened" '[ "$DL_CODE" -eq 124 ] && grep -q "network or timeout" "$work/out" && grep -q "restored cache had failed verification" "$work/out"'
+}
+robust_cases() { index_cases; prefetch_cases; cause_cases; }
+if [ "${1:-}" = --robust ]; then
+  robust_cases
+  [ "$failures" -eq 0 ] || { echo "::error::$failures of download.sh's robust checks failed"; exit 1; }
+  exit 0
+fi
 # Cached-list cases guard isolation only; archive, tampered-Packages and live-* cases are the sensors.
 cache_auth_cases() {
   local damage hash size calls want
@@ -635,6 +738,8 @@ export APT_ERROR=$'E: Temporary failure resolving azure.archive.ubuntu.com\nE: H
 check "a corrupt package alongside a DNS failure still refuses retry and fallback" \
   100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+# The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
+export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_FIXTURES="$work/curl-fixtures"
 
 # force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.
@@ -699,6 +804,7 @@ cache_auth_cases
 cache_ref_case
 cache_copy_cases
 followup_cases
+robust_cases
 fi
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1
