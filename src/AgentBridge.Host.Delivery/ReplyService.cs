@@ -233,7 +233,9 @@ public sealed partial class ReplyService : ISessionReplier
         // authority cannot inherit escrow, even with the same device and request UUID.
         var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource,
             request.ClearConfirmation is null ? null : request.IntentSource,
-            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText);
+            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText,
+            // The caller class: a refusal that shows a person the box is never replayed from the cache to anyone else (#804).
+            request.Intent == ReplyIntent.Steer);
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"),
             owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request") with { KeyDisposition = ReplyKeyDisposition.NoKeysSent }));
@@ -438,7 +440,7 @@ public sealed partial class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(early, occupied.State)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(request, early, occupied.State)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -517,9 +519,9 @@ public sealed partial class ReplyService : ISessionReplier
             Func<string?>? clearFence = null;
             if (box is null)
             {
-                if (request.ClearConfirmation is null) { return Done(Unverified(problem!, state)); }
+                if (request.ClearConfirmation is null) { return Done(Unverified(request, problem!, state)); }
                 (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
-                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
+                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(request, problem!)); }
             }
             // Both are held to the footer's mode too, in the same read: the box's rows read the same
             // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
@@ -1083,11 +1085,19 @@ public sealed partial class ReplyService : ISessionReplier
     // What went wrong goes to the host's log only: the person is given fixed words, never an
     // exception's text (#802, #995).
     ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e)) { Refusal = ReplyRefusal.ComposerUnverified };
-    static ReplyResult Unverified(string reason, CopilotInputBoxState? box = null) => Refused(reason) with
+    // The refusal for a box that is not ready. Only a reply classified as a person's (never an agent's, an MCP child's or an
+    // unclassified sender's) is told what the box holds, in the reason and in input; everyone else gets the draft's length
+    // only, as a log or Home Assistant does (#804).
+    static ReplyResult Unverified(ReplyRequest request, string reason, CopilotInputBoxState? box = null)
     {
-        Refusal = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 }
-            ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
-    };
+        var person = request.Intent == ReplyIntent.Steer;
+        var occupied = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 };
+        return Refused(person ? reason : ReplyReasons.Shared(reason)) with
+        {
+            Refusal = occupied ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
+            Input = occupied && person ? ComposerInput.From(box!.Content) : null,
+        };
+    }
 
     string Logged(string what, Exception e)
     {

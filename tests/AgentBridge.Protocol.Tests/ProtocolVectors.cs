@@ -654,10 +654,16 @@ public static class ProtocolVectors
         f.Record<ClearedComposer>(Host)
             .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
             .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
+        // What a refused reply shows of a full Copilot box (#804): escaped, capped, digest of the whole text; never clearable yet.
+        var shownBox = ComposerInput.From("rerun the build‮ gol");
+        f.Record<ComposerInput>(Host)
+            .Valid("a-plain-box", ComposerInput.From("rerun the tests"))
+            .Valid("an-escaped-box", shownBox);
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
             .Valid("refused-without-bindings", new ReplyResult(AnswerOutcome.Refused, "the session is asking a question"))
+            .Valid("refused-with-the-box", new ReplyResult(AnswerOutcome.Refused, "something is already typed") { Input = shownBox })
             .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
             .Reads("unreadable-bindings-are-absent", """{"outcome":"delivered","attachments":"wrong"}""")
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
