@@ -1571,12 +1571,17 @@ jobs:
       # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
       # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
+        id: system-packages
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: ${{ matrix.project }}
           working-directory: pwa
           force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
-          save: 'true'
+      - name: Save Playwright's system-package archives
+        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+        uses: ./.github/actions/playwright-system-packages-save
+        with:
+          key: ${{ steps.system-packages.outputs.cache-key }}
       - run: npx playwright install "$PROJECT"
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -1678,11 +1683,16 @@ jobs:
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
       - name: Download Playwright's system packages
+        id: system-packages
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: chromium webkit
           working-directory: pwa
-          save: 'true'
+      - name: Save Playwright's system-package archives
+        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+        uses: ./.github/actions/playwright-system-packages-save
+        with:
+          key: ${{ steps.system-packages.outputs.cache-key }}
       - run: npx playwright install chromium webkit
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'

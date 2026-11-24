@@ -763,8 +763,8 @@ fi
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
-if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF "if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml"; then
-  echo "ok: successfully downloaded archives can be saved after a fatal install failure"
+if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF 'value: ${{ steps.packages.outputs.cache-ready }}' "$here/action.yml"; then
+  echo "ok: successfully downloaded archives are reported ready after a fatal install failure, for the save action"
 else echo "FAIL: a later install failure prevented saving downloaded archives"; failures=$((failures + 1)); fi
 if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
@@ -776,15 +776,17 @@ check "a forced proof cannot use a cache hit to ignore update DNS failures" \
   100 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
 ! grep -q 'npx playwright install --with-deps' "$here/../../workflows/ci.yml" \
   || { echo "FAIL: a downstream browser install would run apt update again"; failures=$((failures + 1)); }
-[ "$(grep -c 'path: ~/.cache/playwright-apt-debs$' "$here/action.yml")" = 2 ] &&
+[ "$(cat "$here/action.yml" "$here/../playwright-system-packages-save/action.yml" | grep -c 'path: ~/.cache/playwright-apt-debs$')" = 2 ] &&
+  ! grep -q 'actions/cache/save' "$here/action.yml" &&
+  grep -q 'actions/cache/save' "$here/../playwright-system-packages-save/action.yml" &&
   ! grep -q 'playwright-apt-lists' "$here/action.yml" &&
   grep -q 'key:.*packages-hash.*ref-hash' "$here/action.yml" &&
   grep -q 'restore-keys:' "$here/action.yml" &&
-  grep -qF "    - if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
+  { ! grep -q 'playwright-system-packages-save' "$here/../../workflows/ci.yml" || grep -qF "if: always() && steps.system-packages.outputs.cache-ready == 'true'" "$here/../../workflows/ci.yml"; } \
   || { echo "FAIL: versioned archives-only caches must restore and save after successful cold runs"; failures=$((failures + 1)); }
 awk '
   /^  [[:alnum:]_-]+:/ { actions=0 }
-  /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
+  /uses: \.\/\.github\/actions\/playwright-system-packages$/ { actions++ }
   /npx playwright install / { if (actions-- <= 0) bad=1; installs++ }
   END { exit bad || installs != 4 }
 ' "$here/../../workflows/ci.yml" "$here/../../workflows/full.yml" \

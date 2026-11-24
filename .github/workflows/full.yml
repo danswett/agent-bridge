@@ -178,13 +178,11 @@ jobs:
         with:
           browsers: chromium webkit
           working-directory: spikes/s2-noise-interop
-          save: 'false'
       - name: Download Playwright's system packages, S4
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: chromium webkit
           working-directory: spikes/s4-relay
-          save: 'false'
       # In each spike, so a spike that moves to another Playwright still gets its own browsers;
       # the second is quick while they agree.
       - name: Playwright's browsers, for both

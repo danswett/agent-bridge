@@ -114,34 +114,6 @@ public class FullWorkflowTests
     }
 
     /// <summary>
-    /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written from there could be
-    /// poisoned by that code (CodeQL's cache-poisoning alerts on #4254), so FULL only restores: no job saves a cache, and the system-package
-    /// action, which saves by default for ci.yml, is told not to.
-    /// </summary>
-    [Fact]
-    public void Full_yml_never_writes_a_cache_it_only_restores_and_tells_the_package_action_not_to_save()
-    {
-        var text = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml"));
-        var steps = ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Values
-            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>()).ToList();
-        var packageCalls = steps.Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
-
-        Assert.DoesNotContain("actions/cache/save", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("actions/cache@", text, StringComparison.Ordinal);
-        Assert.NotEmpty(packageCalls);
-        Assert.All(packageCalls, s => Assert.Equal("false", Scalar(s["with"], "save")));
-        var action = Load(".github/actions/playwright-system-packages/action.yml");
-        Assert.Equal("false", Scalar(((YamlMappingNode)action["inputs"])["save"], "default")); // the safe default: a call that forgets it never writes a cache
-        var ciCalls = ((YamlMappingNode)Load(".github/workflows/ci.yml")["jobs"]).Children.Values
-            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>())
-            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("./.github/actions/playwright-system-packages", StringComparison.Ordinal)).ToList();
-        Assert.All(ciCalls, s => Assert.Equal("true", Scalar(s["with"], "save"))); // ci.yml saves today, so it says so
-        var save = ((YamlSequenceNode)((YamlMappingNode)action["runs"])["steps"]).Children.OfType<YamlMappingNode>()
-            .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
-        Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// CodeQL's cache-poisoning alerts on #4254: FULL runs in the default branch's context and checks out a commit to test. Only the trigger job reads the
     /// event's commit: it reads the CI run itself through the API (by number), refuses anything but 40 lowercase hex, and every other job checks out that
     /// output, so no checkout or cache step takes a commit straight from the event.
@@ -159,5 +131,39 @@ public class FullWorkflowTests
         foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\" --jq .head_sha", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// full.yml runs from a workflow_run, in the default branch's context, and checks out a commit to test. A cache written there could be poisoned by that code
+    /// (CodeQL's cache-poisoning alerts on #4254), and CodeQL cannot see through an input that gates a save. So FULL has no save at all: it uses only the system-packages
+    /// action, which restores and never writes a cache, and never the separate save action, which only ci.yml calls (one per restore call, after it).
+    /// </summary>
+    [Fact]
+    public void Full_yml_never_writes_a_cache_it_uses_only_the_restore_only_package_action_and_never_the_save_action()
+    {
+        var text = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml"));
+        IEnumerable<YamlMappingNode> StepsOf(string file) => ((YamlMappingNode)Load($".github/workflows/{file}")["jobs"]).Children.Values
+            .SelectMany(j => ((YamlSequenceNode)((YamlMappingNode)j)["steps"]).Children.OfType<YamlMappingNode>());
+        bool Uses(YamlMappingNode s, string action) => s.Children.ContainsKey("uses") && Scalar(s, "uses") == action;
+        const string Restore = "./.github/actions/playwright-system-packages", Save = "./.github/actions/playwright-system-packages-save";
+
+        Assert.DoesNotContain("actions/cache/save", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("actions/cache@", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("playwright-system-packages-save", text, StringComparison.Ordinal);
+        Assert.All(StepsOf("full.yml").Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith(Restore, StringComparison.Ordinal)), s => Assert.Equal(Restore, Scalar(s, "uses")));
+        Assert.Contains(StepsOf("full.yml"), s => Uses(s, Restore));
+        // The restore action holds no cache write and takes no save input; the save action holds only the save.
+        var restoreText = File.ReadAllText(Path.Combine(Root, ".github", "actions", "playwright-system-packages", "action.yml"));
+        Assert.DoesNotContain("actions/cache/save", restoreText, StringComparison.Ordinal);
+        Assert.DoesNotContain("actions/cache@", restoreText, StringComparison.Ordinal);
+        Assert.False(((YamlMappingNode)Load(".github/actions/playwright-system-packages/action.yml")["inputs"]).Children.ContainsKey("save"));
+        var saveSteps = ((YamlSequenceNode)((YamlMappingNode)Load(".github/actions/playwright-system-packages-save/action.yml")["runs"])["steps"]).Children.OfType<YamlMappingNode>().ToList();
+        Assert.Single(saveSteps);
+        Assert.StartsWith("actions/cache/save@", Scalar(saveSteps[0], "uses"), StringComparison.Ordinal);
+        // ci.yml saves once per restore call, right after it, even when a later step failed, and only when the archives are ready.
+        var ci = StepsOf("ci.yml").ToList();
+        var saves = ci.Where(s => Uses(s, Save)).ToList();
+        Assert.Equal(ci.Count(s => Uses(s, Restore)), saves.Count);
+        Assert.All(saves, s => Assert.Equal("always() && steps.system-packages.outputs.cache-ready == 'true'", Scalar(s, "if")));
     }
 }
