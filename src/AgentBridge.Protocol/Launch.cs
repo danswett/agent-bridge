@@ -58,6 +58,8 @@ public static partial class LaunchProtocol
         // A role is matched exactly against launch.workerMcp and names MCP servers to start, so
         // only a plain name is taken.
         if (launch.Role is not null && !RoleName().IsMatch(launch.Role)) { return $"'{Cut(launch.Role)}' is not a role name; use letters, digits and hyphens, at most {MaxRole}"; }
+        if (launch.CoordinatorRole is not null && !RoleName().IsMatch(launch.CoordinatorRole)) { return $"'{Cut(launch.CoordinatorRole)}' is not a coordinator role name; use letters, digits and hyphens, at most {MaxRole}"; }
+        if (launch.CoordinatorRole is not null && (launch.Resume is not null || launch.Transfer is not null)) { return "a coordinator role is for a new session"; }
         if (launch.Resume is not null && launch.Workspace is not null)
         {
             return "a resumed session reopens in its own folder; name a workspace or a session to resume, not both";
@@ -137,6 +139,10 @@ public sealed record LaunchRequest
     // with a role has its MCP servers narrowed, to those launch.workerMcp lists for that role
     // (none when it lists none); a launch without one is a person's and keeps their own.
     public string? Role { get; init; }
+    // The role a PERSON gives a coordinator session they launch (the app's Role box; leads, Quality, SRE, the Chief). Not the worker role above:
+    // it narrows no MCP servers. The host records it in the launch record, and only a person's launch can (an agent's or a script's is refused);
+    // a later fleet.resume judges the caller by it (docs/design/agent-resume.md).
+    public string? CoordinatorRole { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
     // With sessions.transfer: a session from another machine, resumed here as one of its own

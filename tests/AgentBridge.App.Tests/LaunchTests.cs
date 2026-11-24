@@ -98,6 +98,29 @@ public sealed class LaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => opened.Contains("new-1"), "the new session's card to open");
     }
 
+    // #4318: the Role box. A coordinator role a person types goes with a NEW session only; blank is not sent.
+    [Fact]
+    public async Task A_typed_coordinator_role_is_sent_with_a_new_session_and_blank_is_not()
+    {
+        ui.Post(() => { launch.CoordinatorRole = "quality-lead"; launch.Prompt = "go"; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal("quality-lead", Assert.Single(Sent()).GetProperty("coordinatorRole").GetString());
+        await Wait.UntilAsync(() => launch.CoordinatorRole == "" && launch.Prompt == "", "the role cleared like the prompt, so a second launch never makes another coordinator unasked");
+        ui.Post(() => { launch.CoordinatorRole = "  "; launch.Prompt = "again"; launch.Launch(); });
+        await Wait.UntilAsync(() => Sent().Count() == 2, "second launch");
+        Assert.False(Sent().Last().TryGetProperty("coordinatorRole", out _));
+    }
+
+    [Fact]
+    public async Task The_role_box_is_hidden_and_not_sent_when_resuming()
+    {
+        ui.Post(() => { launch.CoordinatorRole = "sre"; launch.Resume = Pick(launch.Resumes, "old-1"); });
+        Assert.False(launch.ShowCoordinatorRole);
+        ui.Post(launch.Launch);
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.False(Assert.Single(Sent()).TryGetProperty("coordinatorRole", out _));
+    }
+
     // #1064: a resume the host holds back while its discovery is held is a wait, not a refusal.
     [Fact]
     public async Task A_resume_the_host_holds_back_while_its_discovery_is_held_says_it_waits_for_the_machine()

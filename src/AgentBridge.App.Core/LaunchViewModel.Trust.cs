@@ -313,7 +313,7 @@ public sealed partial class LaunchViewModel
             if (askedBy.TryGetValue(answer.Machine, out var by) && SameQuestion(by.Question, answer.Question))
             {
                 askedBy.Remove(answer.Machine);
-                if ((string.IsNullOrWhiteSpace(prompt) ? null : prompt) == by.Prompt) { Prompt = ""; }
+                if ((string.IsNullOrWhiteSpace(prompt) ? null : prompt) == by.Prompt) { Prompt = ""; CoordinatorRole = ""; }
                 // That launch's own status says so too, rather than that it was not confirmed,
                 // whether or not its session could be followed (Codex's has no id until it starts;
                 // a Copilot's may be listed already).
@@ -324,7 +324,7 @@ public sealed partial class LaunchViewModel
                 // Its unchanged prompt goes too: once late is let go, StartedLate never clears it.
                 if (lost is null && last is { } launched && launched.Request == late!.Request)
                 {
-                    if (launched.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+                    if (launched.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; CoordinatorRole = ""; }
                     startedLate = late.Request;
                     Show();
                 }

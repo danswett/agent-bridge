@@ -70,6 +70,7 @@ public sealed partial class LaunchViewModel : Observable
     bool shown;
     sealed record Picks(Choice? Resume, Choice? Agent, Choice? Workspace, Choice? Profile, Choice? Model, Choice? Effort, Choice? Context, Choice? Permissions, bool PermissionsSet, string Scope);
     string prompt = "";
+    string coordinatorRole = "";
     // What stops the form being launched now (no prompt for Codex, too long...): about the form,
     // not the last launch, so it is said apart from that launch's outcome and its Try again.
     string problem = "";
@@ -231,6 +232,10 @@ public sealed partial class LaunchViewModel : Observable
             Raise(nameof(CountTooLong));
         }
     }
+    // The Role box (#4318): the job a person gives a coordinator session they launch (a lead, Quality, SRE, the Chief); a new session only.
+    // The host records it so a coordinator can later resume a stuck worker. Blank sends nothing.
+    public string CoordinatorRole { get => coordinatorRole; set => Set(ref coordinatorRole, value ?? ""); }
+    public bool ShowCoordinatorRole => Resumed is null && Brought is null;
     public string CountText
     {
         get
@@ -605,7 +610,7 @@ public sealed partial class LaunchViewModel : Observable
         finally { filling = false; }
         foreach (var p in new[] { nameof(Resumes), nameof(Resume), nameof(Agents), nameof(Agent), nameof(Workspaces), nameof(Workspace), nameof(Profiles), nameof(Profile),
             nameof(Models), nameof(Model), nameof(Efforts), nameof(Effort), nameof(Contexts), nameof(Context), nameof(Permissions),
-            nameof(ShowForm), nameof(ShowResume), nameof(ShowResumeIncomplete), nameof(ShowWorkspace), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
+            nameof(ShowForm), nameof(ShowResume), nameof(ShowResumeIncomplete), nameof(ShowWorkspace), nameof(ShowCoordinatorRole), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
             nameof(ShowReload), nameof(ReloadText), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
         {
             Raise(p);
@@ -641,6 +646,7 @@ public sealed partial class LaunchViewModel : Observable
             Effort = ShowEffort ? effort?.Value : null,
             Context = ShowContext ? context?.Value : null,
             Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt,
+            CoordinatorRole = ShowCoordinatorRole && !string.IsNullOrWhiteSpace(coordinatorRole) ? coordinatorRole.Trim() : null,
         };
     }
 
@@ -762,7 +768,7 @@ public sealed partial class LaunchViewModel : Observable
         if (outcome == "started")
         {
             // Only the prompt that went: one typed since for the next launch stays.
-            if (d.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; }
+            if (d.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; CoordinatorRole = ""; }
             Open(m, d);
         }
         // What it offers has changed: a resumed session is no longer resumable, a worktree counts.

@@ -76,6 +76,9 @@ public sealed class LaunchServiceOptions
     // here. Null: not known, and nothing is refused. Only Codex is asked (see CodexHooksMissing).
     public Func<string, bool>? HooksNotSetUp { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
+    // The coordinator roles the person listed in agents.resume.roles, read when a launch names one. Null or empty: not checked (the role is
+    // recorded and has no authority until a person lists it). Listed: a person's launch naming another role is a typo, refused with the list.
+    public Func<IReadOnlyList<string>>? CoordinatorRoles { get; init; }
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
     public bool HomeAssistantEnabled { get; init; }
     public Uri? HomeAssistantBaseUrl { get; init; }
@@ -886,7 +889,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null, string? CoordinatorRole = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -910,6 +913,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 return Refused("Home Assistant reply path is not ready: homeAssistant.baseUrl must be an absolute URL without a query, fragment or userinfo");
             }
             if (LaunchProtocol.Check(request) is { } invalid) { return Refused(invalid); }
+            // Only a person's launch gives a session a coordinator role: a new coordinator needs the owner (Nov 23 decision, item 2).
+            if (request.CoordinatorRole is not null && (fleet || peer.StartsWith("agent:", StringComparison.Ordinal)))
+            { return Refused("a coordinator role is for a person's launch, not an agent's or a script's"); }
+            if (request.CoordinatorRole is { } named && options.CoordinatorRoles?.Invoke() is { Count: > 0 } listed && !listed.Contains(named, StringComparer.Ordinal))
+            { return Refused($"'{named}' is not a coordinator role this machine lists in agents.resume.roles; use one of: {string.Join(", ", listed)}"); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
                 .Where(x => x.Item2 is not null).Select(x => $"{x.Item1}={x.Item2}"));
             log($"launch {Short(key)} received ({(settings.Length > 0 ? settings : "machine defaults")}; prompt of {(request.Prompt ?? "").Length} chars{((request.Attachments?.Count ?? 0) > 0 ? $", {request.Attachments!.Count} attachment(s)" : "")})");
@@ -1114,7 +1122,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role, r.CoordinatorRole), null);
     }
 
     // No account checker is a refusal, not a pass: production always wires one, and a launch must
@@ -1347,7 +1355,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
             provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
-                provenance.RoleFor(plan.Role, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+                provenance.RoleFor(plan.CoordinatorRole, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
