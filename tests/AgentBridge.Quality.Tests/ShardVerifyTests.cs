@@ -133,6 +133,9 @@ public sealed class ShardVerifyTests
             Assert.Contains("Whole.Tests", Verify(Dll), StringComparison.Ordinal);       // a project the plan lists whole is named too
             Assert.Contains("Corrupt.Tests", Verify(corrupt), StringComparison.Ordinal);
             Assert.Contains("Empty.Tests", Verify(empty), StringComparison.Ordinal);
+            var late = new StringWriter();
+            Assert.Equal(1, ShardVerify.Run(plan, [Dll], late, TimeSpan.FromTicks(-1)));   // the time box ran out: not verified is a failure
+            Assert.Contains("time box", late.ToString(), StringComparison.Ordinal);
             File.WriteAllText(plan, "not json");
             Assert.Contains("shard plan", Verify(Dll), StringComparison.OrdinalIgnoreCase);
         }
