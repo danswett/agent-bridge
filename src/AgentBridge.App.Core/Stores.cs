@@ -158,6 +158,9 @@ public sealed record AppPreferences
     public string? InstallWindowStart { get; init; }
     public string? InstallWindowEnd { get; init; }
     public string? InstallWindowZone { get; init; }
+    // A person's hold (Settings, #4468): nothing unasked installs at any hour until they turn it off; their press still does.
+    // The hours above are kept meanwhile, for when it is off.
+    public bool InstallHold { get; init; }
     // Set just before an update is applied, and cleared by the new version's first start, which
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }

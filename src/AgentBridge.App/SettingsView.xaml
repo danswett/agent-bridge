@@ -452,6 +452,48 @@
                         Style="{StaticResource AbSecondaryText}"
                         AutomationProperties.AutomationId="WhenUpdateReadyNote"
                         Text="{x:Bind ViewModel.WhenReadyNote, Mode=OneWay}" />
+                    <!-- When this machine installs by itself, per machine and profile (#4468): the update window, any time, or a hold. -->
+                    <RadioButtons
+                        Margin="0,12,0,0"
+                        AutomationProperties.AutomationId="InstallWhen"
+                        AutomationProperties.Name="When updates install by themselves"
+                        SelectedIndex="{x:Bind ViewModel.InstallWhenIndex, Mode=TwoWay}">
+                        <RadioButtons.Header>
+                            <TextBlock Text="When updates install by themselves" FontFamily="{StaticResource ContentControlThemeFontFamily}" FontSize="{ThemeResource ControlContentThemeFontSize}" Foreground="{ThemeResource ToggleSwitchHeaderForeground}" />
+                        </RadioButtons.Header>
+                        <RadioButton AutomationProperties.AutomationId="InstallInWindowMode" AutomationProperties.Name="Only in the update window" AutomationProperties.HelpText="The default">
+                            <StackPanel>
+                                <TextBlock Text="Only in the update window" />
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="The default" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton AutomationProperties.AutomationId="InstallAnyTimeMode" AutomationProperties.Name="Any time" AutomationProperties.HelpText="At any hour">
+                            <StackPanel>
+                                <TextBlock Text="Any time" />
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="At any hour" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton AutomationProperties.AutomationId="InstallHoldMode" AutomationProperties.Name="Hold" AutomationProperties.HelpText="Only when you choose Restart to update">
+                            <StackPanel>
+                                <TextBlock Text="Hold" />
+                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="Only when you choose Restart to update" />
+                            </StackPanel>
+                        </RadioButton>
+                    </RadioButtons>
+                    <local:WrapRow Spacing="12">
+                        <TimePicker Header="Window starts" AutomationProperties.AutomationId="InstallWindowStart" ClockIdentifier="24HourClock" IsEnabled="{x:Bind ViewModel.InstallWindowEditable, Mode=OneWay}" Time="{x:Bind ViewModel.InstallWindowStartTime, Mode=TwoWay}" />
+                        <TimePicker Header="Window ends" AutomationProperties.AutomationId="InstallWindowEnd" ClockIdentifier="24HourClock" IsEnabled="{x:Bind ViewModel.InstallWindowEditable, Mode=OneWay}" Time="{x:Bind ViewModel.InstallWindowEndTime, Mode=TwoWay}" />
+                    </local:WrapRow>
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        AutomationProperties.AutomationId="InstallWhenNote"
+                        Text="{x:Bind ViewModel.InstallWhenNote, Mode=OneWay}" />
+                    <!-- A release ready and kept waiting by the window or a hold, and when it goes. -->
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        AutomationProperties.AutomationId="InstallWaitNote"
+                        Visibility="{x:Bind local:Ui.Show(ViewModel.HasInstallWaitNote), Mode=OneWay}"
+                        Text="{x:Bind ViewModel.InstallWaitNote, Mode=OneWay}" />
                     <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
                     <local:WrapRow Spacing="8">
                         <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />
