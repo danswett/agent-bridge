@@ -112,6 +112,17 @@ public sealed class FleetResumeTests : IDisposable
         Assert.Equal(why switch { "running" => "running", "derived" => "bad-argument", "norecord" => "policy", _ => "scope" }, receipt.Reason);
         Assert.Empty(resumed);
     }
+    // A busy refusal is a wait, not an answer: the same request id asked again is tried again, not told "busy" for good.
+    [Fact]
+    public async Task A_busy_refusal_is_not_remembered_for_the_same_request_id()
+    {
+        var request = Guid.NewGuid();
+        outcome = new(LaunchOutcome.Busy, "busy");
+        Assert.Equal("busy", (await Resume(request: request)).Reason);
+        outcome = new(LaunchOutcome.Started, null);
+        Assert.Equal("resumed", (await Resume(request: request)).Outcome);
+        Assert.Equal(2, resumed.Count);
+    }
     [Fact]
     public async Task A_host_with_agents_off_or_a_bad_request_is_refused_and_a_repeat_returns_the_first_answer_once()
     {

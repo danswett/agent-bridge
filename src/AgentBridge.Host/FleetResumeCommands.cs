@@ -39,7 +39,7 @@ public sealed class FleetResumeCommands(string folder, AgentCredentials credenti
                 var receipt = new FleetResumeReceipt(input?.Request ?? Guid.Empty, outcome, reason, session);
                 var written = audit.Append(new AgentAuditEntry("local", receipt.Request.ToString(), principal, caller.Chain, Op, session ?? "",
                     outcome, reason ?? "none"));
-                if (input is not null)
+                if (input is not null && reason != "busy")   // busy is a wait: asking again with the same id is tried again
                 {
                     answered[(principal, input.Request)] = receipt;
                     order.Enqueue((principal, input.Request));
