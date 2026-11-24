@@ -39,8 +39,20 @@ static partial class SelfTest
             await stored.LoadNewestAsync();
             for (var n = 1; n <= 300; n++) { stored.AddLive(MixedTurn(n)); }
             view = await Choose(window, main, id, "Response");
-            if (view is null || ConversationScroller(view) is not { } scroll)
+            if (view is null || ConversationScroller(view) is not { } scroll || ById<ListView>(view, "Conversation") is not { } list)
             { check(false, "wheel notch setup: has the conversation scroller"); return; }
+            // Where each drawn block of the reply starts in the viewport: what the person sees move.
+            Dictionary<int, double> Tops()
+            {
+                var tops = new Dictionary<int, double>();
+                if (list.ItemsPanelRoot is not ItemsStackPanel panel || panel.FirstVisibleIndex < 0) { return tops; }
+                for (var i = panel.FirstVisibleIndex; i <= panel.LastVisibleIndex; i++)
+                {
+                    if (list.ContainerFromIndex(i) is Microsoft.UI.Xaml.FrameworkElement c) { tops[i] = c.TransformToVisual(scroll).TransformPoint(default).Y; }
+                }
+                return tops;
+            }
+            var samples = new List<(double Offset, double Extent, bool Moving)>();
             // The owner's pointer rests over the transcript as they wheel.
             view.HoldConversationPointer(4243);
             var moving = false;
@@ -58,6 +70,7 @@ static partial class SelfTest
                 try { await drawn.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
                 finally { CompositionTarget.Rendering -= rendered; }
                 trace.Add(new { ms = clock.ElapsedMilliseconds, phase, kind = "frame", offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, moving });
+                samples.Add((scroll.VerticalOffset, scroll.ScrollableHeight, moving));
                 return scroll.VerticalOffset;
             }
             const double notch = 3 * ConversationKeyboard.Line;
@@ -80,33 +93,40 @@ static partial class SelfTest
             }
             for (var n = 0; n < 30; n++) { await Frame(); }
             phase = "up";
-            // Measured from the end, as the person sees it: older turns drawn above during a notch raise the offset by
-            // their height while what is read stays put (CI 45303880104 read -660, -306, … as raw offset). Eight notches
-            // stay within the first viewport above the end, where every row below is already laid out.
+            // Measured as the person sees it, by a block drawn before and after (WheelNotchMeasure): older turns drawn
+            // above raise the raw offset (CI 45303880104), and rows re-measured below change the distance from the end.
             var moved = new List<double>();
             for (var n = 0; n < 8; n++)
             {
-                var fromEnd = scroll.ScrollableHeight - scroll.VerticalOffset;
+                var before = Tops();
                 var (_, to, _) = await Notch(-1);
-                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); }
+                if (to > 0.5 && WheelNotchMeasure.OnScreenMove(before, Tops(), scroll.ViewportHeight) is { } seen) { moved.Add(Math.Round(seen, 1)); }
             }
             check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
-                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)})");
+                $"wheel notch distance: identical notches up move what is read {notch} each while older history draws (moved {string.Join(", ", moved)})");
             phase = "down";
             var (offsets, back) = (new List<double>(), 0.0);
             var high = scroll.VerticalOffset;
-            for (var n = 0; n < 14; n++)
+            // Fourteen notches pass the end; spinning on until one lands on it (rows growing under the last can leave it
+            // short), as the person would, re-engages the pin there.
+            for (var n = 0; n < 30 && (n < 14 || scroll.ScrollableHeight - scroll.VerticalOffset > 0.5); n++)
             {
                 var (_, _, low) = await Notch(1);
                 back = Math.Max(back, high - Math.Min(low, scroll.VerticalOffset));
                 high = Math.Max(high, scroll.VerticalOffset);
                 offsets.Add(Math.Round(scroll.VerticalOffset, 1));
             }
+            // Under the pointer the end is deliberately not followed as the last rows re-measure (#261's hold), so the
+            // gap then is timing, not a bounce (main run 45346121000: quiet gap 771, never back). The pointer leaves, as
+            // the person's would, and the pinned end is followed once layout has settled.
+            phase = "release";
+            view.ReleaseConversationPointer(4243);
+            for (var n = 0; n < 300 && !WheelNotchMeasure.Settled(samples, frames: 10); n++) { await Frame(); }
             phase = "quiet";
             var gap = 0.0;
-            for (var n = 0; n < 60; n++) { await Frame(); gap = Math.Max(gap, scroll.ScrollableHeight - scroll.VerticalOffset); }
+            for (var n = 0; n < 30; n++) { await Frame(); gap = Math.Max(gap, scroll.ScrollableHeight - scroll.VerticalOffset); }
             check(back <= 1.5 && gap <= 1.5,
-                $"wheel down to the end: never moves back up and stays at the end (worst back {back:0.#}, quiet gap {gap:0.#}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+                $"wheel down to the end: never moves back up, and rests at the end once the pointer leaves (worst back {back:0.#}, settled gap {gap:0.#}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
         }
         finally
         {
