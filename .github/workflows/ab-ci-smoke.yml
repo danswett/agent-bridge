@@ -13,10 +13,6 @@ on:
         description: Run on the ab-ci pool (main only), to prove a runner's environment
         type: boolean
         default: false
-      run_tests:
-        description: Also run App.Tests and the Quality.Tests efficiency tests (proves the host-process and timing fixes under load)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -70,13 +66,15 @@ jobs:
       - name: Build the whole solution, Release
         shell: pwsh
         run: dotnet build AgentBridge.slnx -c Release --no-restore --nologo
-      - name: App.Tests (HostManagerTests) and efficiency tests, opt-in
-        if: inputs.run_tests
+      # The tests that failed only on ab-ci runners and passed hosted (#4361): HostManagerTests saw the runner VM's real
+      # host process, and the efficiency viewer and rates tests lost their time to pwsh's cold start on a shared VM. Run
+      # as the runner, so the smoke proves the fix before AB_CI_SELF_HOSTED is set again (#4104).
+      - name: The tests that failed only on ab-ci (HostManagerTests, efficiency viewer and rates)
         shell: pwsh
         run: |
-          dotnet test tests/AgentBridge.App.Tests -c Release --no-build --nologo
+          dotnet test tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~HostManagerTests" --blame-hang --blame-hang-timeout 5m
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          dotnet test tests/AgentBridge.Quality.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~Efficiency"
+          dotnet test tests/AgentBridge.Quality.Tests/AgentBridge.Quality.Tests.csproj -c Release --no-build --nologo --filter "FullyQualifiedName~EfficiencyActiveSessionTests" --blame-hang --blame-hang-timeout 5m
       - name: Stop this job's build servers
         if: always()
         run: dotnet build-server shutdown
