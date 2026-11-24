@@ -359,7 +359,11 @@ public sealed class AgentLiteKillTests : IDisposable
         // G9: fleet.launch is a host role's op only (never a person's or service's), served from a SecureChannel by the same channel rule.
         var authorization = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs"));
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(authorization, @"FleetRemoteLaunch\.Op"));
-        Assert.Contains("FleetRemoteLaunch.Op];", authorization);
+        Assert.Contains("FleetRemoteLaunch.Op,", authorization);
+        // G10 PR2: fleet.end is a host role's op only, served only when the host sets a receiver (dormant by default).
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(authorization, @"FleetRemoteEnd.Op"));
+        Assert.Contains("FleetRemoteEnd.Op];", authorization);
+        Assert.Contains("case FleetRemoteEnd.Op when FleetRemoteEnd is not null && channel is SecureChannel secure:", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "SessionService.cs")));
         Assert.Contains("FleetRemoteLaunch.ReceiveAsync(Lite.LiteChannel.Of(secure), data)", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "SessionService.cs")));
     }
 
