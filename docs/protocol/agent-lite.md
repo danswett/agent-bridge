@@ -83,6 +83,14 @@ This source cut adds no dispatcher, shared store, CLI/helper rollout or live pro
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
    could message his sessions, and any message from a present own host is typed into a session there that is idle (or a working Claude with the proposed flag on), has its input box on screen (empty for Copilot; see Claude under `notReplyTarget`), and is host-launched or allow-all (see the next limit).
 
+### Optional `sentAt` (additive, #4435; no version change)
+
+The relay message may carry `sentAt`: the Unix seconds when the sender FIRST asked to send, kept by a tool that retries a busy send.
+It sits beside the envelope, unsigned, and a host that does not know it ignores it. A receiver uses it only to order messages from the
+same authenticated sender to the same session and to print `STALE: sent HH:mm PT, ...` on an older one that arrives after a newer one;
+never for authorization, expiry, dedupe or anything else. It is believed only within two minutes after and a day before the envelope's
+own `issuedAt`; otherwise it is ignored and the header says `send time not given`. Absent, `issuedAt` is used and nothing changes.
+
 ## Receipt lookup for an unconfirmed send (design; slices 1 to 3)
 
 When a send ends `unconfirmed` (no acknowledgement in 10 s, the channel lost, or the mode switched off while waiting) the sender
