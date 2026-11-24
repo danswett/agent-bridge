@@ -3789,7 +3789,11 @@ they are un-parked.
   and a centred search box. System caption buttons.
 - **Search:** finds sessions on every machine by the words of their title, repository, branch,
   agent or machine, titles starting with them first, then the most recently updated, whatever
-  machine the list shows, and opens the one chosen as a notification does.
+  machine the list shows, and opens the one chosen as a notification does. It finds a session by its
+  **id** too (owner request 09:33 PT Nov 24): the full GUID, or any prefix of 4 or more hex
+  characters (`0287fdf0`, `0287-fdf0`), in any case, with or without dashes. An id match shows the
+  session even when no word of its title matches; fewer than 4 hex characters match names only. The
+  phone app's sessions-list search does the same (`pwa/js/session-id-search.js`).
 - **Navigation:** a compact `NavigationView` rail (Sessions, Fleet, Launch, Usage;
   Settings at the foot) with a selection pill. Settings opens its one page (§6.9). **Not built
   yet (#384 slice 5):** Settings' own pane of sections beside the rail, which first-run

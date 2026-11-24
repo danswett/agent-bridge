@@ -1,5 +1,6 @@
 // The two lists on screen: online machines, and the sessions of the machines shown.
 import { h, icon } from './dom.js';
+import { matchesSessionId } from '../session-id-search.js';
 import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
@@ -129,10 +130,12 @@ export class SessionListView {
     this.render();
   }
 
-  #matches(hostId, s) {
+  // A session is in the search when a word it shows holds the query, or the query names its id (session-id-search.js).
+  matches(hostId, s) {
     if (!this.filter) { return true; }
     const m = this.machine(hostId);
-    return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter));
+    return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter))
+      || matchesSessionId(this.filter, s.id);
   }
 
   get moving() { return !this.filter && !this.needsOnly && this.order.sort === 'yours'; }
@@ -179,7 +182,7 @@ export class SessionListView {
     const scroller = !before.size ? null : pane && /auto|scroll/.test(getComputedStyle(pane).overflowY) ? pane : this.container.ownerDocument.scrollingElement;
     const scrollTop = scroller?.scrollTop;
     const anchor = scroller?.scrollTop > 0 ? [...before.keys()].find((el) => seen(el)) : null;
-    const matches = (e) => this.#matches(e.hostId, e.session);
+    const matches = (e) => this.matches(e.hostId, e.session);
     const current = (e) => { const stale = this.stale(e.hostId); return !stale || stale.grace === true; };
     const waiting = entries.filter((e) => e.session.question && current(e));
     this.needsCount = waiting.length;

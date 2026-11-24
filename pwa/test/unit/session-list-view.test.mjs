@@ -6,6 +6,7 @@ import { SessionOrder, orderKey } from '../../js/session-order.js';
 import { RecentOrder } from '../../js/recent-order.js';
 import { ReadDwell, DWELL_MS } from '../../js/read-dwell.js';
 import { SessionsStore } from '../../js/sessions-store.js';
+import { matchesSessionId } from '../../js/session-id-search.js';
 
 const document = { activeElement: null, addEventListener() {} };
 
@@ -49,7 +50,7 @@ class Card {
 const source = readFileSync(new URL('../../js/ui/views.js', import.meta.url), 'utf8')
   .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
 const SessionListView = vm.runInNewContext(`${source}\nSessionListView`, {
-  h: () => new Element(), SessionCard: Card, RowMenu: class {}, SessionOrder, RecentOrder, ReadDwell,
+  h: () => new Element(), SessionCard: Card, RowMenu: class {}, SessionOrder, RecentOrder, ReadDwell, matchesSessionId,
   whileVisible() {}, document, queueMicrotask, AbortController,
   flip: (_container, mutate) => mutate(),
   setTimeout: (...args) => globalThis.setTimeout(...args),
