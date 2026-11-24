@@ -18,12 +18,48 @@ public class MachineNameScanTests
         "design/", "docs/design/", "pwa/",
     ];
 
+    // What the scan leaves alone: the recorded JSON under a fixtures folder, and nothing else. A source file dropped into Fixtures is read (Q10's P2 on #4390).
+    static bool Exempt(string path) =>
+        path.Split('/').Any(part => part.Equals("fixtures", StringComparison.OrdinalIgnoreCase));
+
+    [Theory]
+    [InlineData("tests/AgentBridge.HomeAssistant.Tests/Fixtures/ha-contract.json", true)]
+    [InlineData("tests/fixtures/claude/session.json", true)]
+    [InlineData("tests/AgentBridge.HomeAssistant.Tests/Fixtures/Recorded.cs", false)]
+    [InlineData("quality/fixtures/run.ps1", false)]
+    [InlineData("tests/fixtures/claude/transcript.jsonl", false)]
+    [InlineData("src/AgentBridge.HomeAssistant/Contract.json", false)]
+    public void Only_the_recorded_JSON_under_fixtures_is_exempt(string path, bool exempt)
+    {
+        Assert.Equal(exempt, Exempt(path));
+    }
+
+    // The spellings of a numbered VM and the company's host that the scan must see (built in pieces: this file is scanned too).
+    [Theory]
+    [InlineData("a host named vm" + "-4 here")]
+    [InlineData("a host named \"vm" + " 4\" here")]
+    [InlineData("host_vm" + "_4")]
+    [InlineData("on dsw" + "ett-arm" + "8 today")]
+    [InlineData("the arm" + "8 box")]
+    public void The_scan_sees_these_spellings(string line)
+    {
+        Assert.Matches(MachineName, line);
+    }
+
+    [Theory]
+    [InlineData("a vm-less roster and a vm with no number")]
+    [InlineData("charm" + "8x and arm" + "64")]
+    public void The_scan_leaves_neutral_text_alone(string line)
+    {
+        Assert.DoesNotMatch(MachineName, line);
+    }
+
     [Fact]
     public void Repo_scan_finds_no_machine_names_outside_fixtures()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var named = ChangedFiles.Tracked(root)
-            .Where(path => !path.Split('/').Any(part => part.Equals("fixtures", StringComparison.OrdinalIgnoreCase)))
+            .Where(path => !Exempt(path))
             .Where(path => File.Exists(Path.Combine(root, path)) && File.ReadAllText(Path.Combine(root, path)) is var text
                 && !text.Contains('\0') && MachineName.IsMatch(text))
             .ToList();

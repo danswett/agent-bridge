@@ -17,10 +17,9 @@ public sealed class MachineNamesLintTests
         return root;
     }
 
-    [Fact]
-    public void No_test_source_in_this_project_names_a_machine()
+    // The sources of a project and the lines of them that name a machine.
+    static (List<string> Files, List<string> Hits) Scan(string project)
     {
-        var project = Path.Combine(Root(), "tests", "AgentBridge.HomeAssistant.Tests");
         var skipped = new[] { "bin", "obj", "Fixtures" };
 
         // Judged on the path inside the project, so a checkout under a folder that is itself called bin or obj is still read.
@@ -29,10 +28,17 @@ public sealed class MachineNamesLintTests
             .Where(r => r != "MachineNamesLintTests.cs" && !r.Split(Path.DirectorySeparatorChar).Take(1).Any(skipped.Contains))
             .ToList();
         var hits = files
-            .SelectMany(r => File.ReadAllLines(Path.Combine(project, r)).Select((line, i) => (File: r, Line: i + 1, Text: line)))
+            .SelectMany(r => File.ReadAllLines(Path.Combine(project, r)).Select((line, i) => (File: r.Replace(Path.DirectorySeparatorChar, '/'), Line: i + 1, Text: line)))
             .Where(l => Names.IsMatch(l.Text))
             .Select(l => $"{l.File}:{l.Line}")
             .ToList();
+        return (files, hits);
+    }
+
+    [Fact]
+    public void No_test_source_in_this_project_names_a_machine()
+    {
+        var (files, hits) = Scan(Path.Combine(Root(), "tests", "AgentBridge.HomeAssistant.Tests"));
 
         Assert.Contains("AuthBackoffTests.cs", files);
         Assert.True(files.Count > 20, "the lint must have read the project's sources");
@@ -56,6 +62,26 @@ public sealed class MachineNamesLintTests
         Assert.Empty(other);
     }
 
+    // Only the recorded JSON is exempt (Q10's P2 on #4390): a source file dropped into Fixtures is read like any other.
+    [Fact]
+    public void A_cs_file_under_Fixtures_is_read_while_the_recorded_JSON_there_is_not()
+    {
+        var project = Path.Combine(Path.GetTempPath(), "lint-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(project, "Fixtures"));
+        try
+        {
+            File.WriteAllText(Path.Combine(project, "Fixtures", "Recorded.cs"), "const string M = \"" + "dsw" + "ett-dev-vm" + "1\";");
+            File.WriteAllText(Path.Combine(project, "Fixtures", "ha.json"), "{\"machine\": \"" + "dsw" + "ett_dev_vm" + "1\"}");
+            File.WriteAllText(Path.Combine(project, "Fine.cs"), "const string M = Contract.Machine;");
+
+            var (files, hits) = Scan(project);
+
+            Assert.Contains("Fine.cs", files);
+            Assert.Equal(["Fixtures/Recorded.cs:1"], hits);
+        }
+        finally { Directory.Delete(project, true); }
+    }
+
     [Theory]
     [InlineData("const string Machine = \"" + "DSW" + "ETT-DEV-VM" + "1\";")]
     [InlineData("MachineName = \"" + "DSW" + "ETT-ARM" + "8\"")]
@@ -65,6 +91,9 @@ public sealed class MachineNamesLintTests
     [InlineData("a host named vm" + "3 here")]
     [InlineData("host_vm" + "1")]
     [InlineData("vm" + "10")]
+    [InlineData("a host named vm" + "-4 here")]
+    [InlineData("a host named \"vm" + " 4\" here")]
+    [InlineData("host_vm" + "_4")]
     public void The_lint_sees_the_names_it_is_about(string line)
     {
         Assert.Matches(Names, line);
