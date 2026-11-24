@@ -50,7 +50,7 @@ internal static class ScriptTaskXml
         var program = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim().Trim('"');
         if (program is null || !Pinnable(program)) { return null; }
         if (Launcher.Equals(program[(program.LastIndexOfAny(['\\', '/']) + 1)..], StringComparison.OrdinalIgnoreCase)) { return LauncherFiles(task, exec, program); }
-        var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
+        if (Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "") is not { } args) { return null; }
         if (args.Count == 0) { return [program]; }
         if (!Interpreters.Contains(program[(program.LastIndexOfAny(['\\', '/']) + 1)..])) { return null; }
         for (var i = 0; i < args.Count; i++)
@@ -75,8 +75,8 @@ internal static class ScriptTaskXml
     static IReadOnlyList<string>? LauncherFiles(XElement task, XElement exec, string launcher)
     {
         if (Part(task, "Principals")?.Elements().ToList() is not [{ } principal]
-            || principal.Elements().SingleOrDefault(e => e.Name.LocalName == "LogonType")?.Value.Trim() != "InteractiveToken") { return null; }
-        var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
+            || principal.Elements().Where(e => e.Name.LocalName == "LogonType").ToList() is not [{ } logon] || logon.Value.Trim() != "InteractiveToken") { return null; }
+        if (Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "") is not { } args) { return null; }
         if (args.Count < 3 || args[1] != "--" || !ScriptName.IsMatch(args[0]) || args[0] is "." or ".." || !Pinnable(args[2])) { return null; }
         var child = args[2];
         if (!Interpreters.Contains(child[(child.LastIndexOfAny(['\\', '/']) + 1)..])) { return args.Count == 3 ? [launcher, child] : null; }
@@ -97,7 +97,7 @@ internal static class ScriptTaskXml
         return null;
     }
 
-    static readonly System.Text.RegularExpressions.Regex ScriptName = new(@"^[A-Za-z0-9._-]{1,64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    static readonly System.Text.RegularExpressions.Regex ScriptName = new(@"^[A-Za-z0-9._-]{1,64}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     static readonly HashSet<string> Interpreters = new(["pwsh.exe", "powershell.exe"], StringComparer.OrdinalIgnoreCase);
     static readonly HashSet<string> PlainSwitches = ["noprofile", "nologo", "noninteractive", "mta", "sta"];
@@ -109,18 +109,33 @@ internal static class ScriptTaskXml
         && path[2] is '\\' or '/' && path.IndexOfAny(['%', '$', '*', '?', '<', '>', '|', '"'], 2) < 0 && !path.Any(char.IsControl) && path.IndexOf(':', 2) < 0
         && !path[3..].Split('\\', '/').Any(s => s is "." or "..");
 
-    static List<string> Tokens(string line)
+    // The argv Windows' CommandLineToArgvW (which pwsh uses) would hand the program, or null when this reading could differ from it. A backslash-quote is a literal
+    // quote there but a toggle here, so it is refused; a quote may only wrap a WHOLE token (opening at its start, closing at its end), and anything else is refused, so
+    // what the reader pinned is exactly what the program runs (#4524).
+    static List<string>? Tokens(string line)
     {
+        if (line.Contains("\\\"", StringComparison.Ordinal)) { return null; }
         var tokens = new List<string>();
-        var current = new StringBuilder();
-        var quoted = false;
-        foreach (var c in line)
+        var i = 0;
+        while (i < line.Length)
         {
-            if (c == '"') { quoted = !quoted; }
-            else if (char.IsWhiteSpace(c) && !quoted) { if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); } }
-            else { current.Append(c); }
+            if (char.IsWhiteSpace(line[i])) { i++; continue; }
+            if (line[i] == '"')
+            {
+                var close = line.IndexOf('"', i + 1);
+                if (close < 0 || (close + 1 < line.Length && !char.IsWhiteSpace(line[close + 1]))) { return null; }
+                tokens.Add(line[(i + 1)..close]);
+                i = close + 1;
+                continue;
+            }
+            var start = i;
+            while (i < line.Length && !char.IsWhiteSpace(line[i]))
+            {
+                if (line[i] == '"') { return null; }
+                i++;
+            }
+            tokens.Add(line[start..i]);
         }
-        if (current.Length > 0) { tokens.Add(current.ToString()); }
         return tokens;
     }
 }
