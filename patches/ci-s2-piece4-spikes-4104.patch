@@ -1,0 +1,740 @@
+From 88fcc79774cd40aafabfff46e27e1ebb3738d170 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 17:09:30 -0800
+Subject: [PATCH] CI S2, piece 4: spikes and spikes-linux move to full.yml, the
+ FULL lane (Part of #4104)
+
+full.yml (new): a trigger job (a green push run of CI on main, or a run by hand), the two spikes jobs moved from ci.yml with
+the commit under test checked out, and full-gate (needs every job, if always(), fails on any that did not pass, a skipped one
+included). ci.yml loses the jobs, their plan outputs, the JOBS entries and quality-gate's needs. The catalog marks spikes lane
+full and names the trigger and full-gate; merge-rule.yml's main_green no longer waits on the spikes; the merge rule's exclusion
+list gains Full. Tests first: FullWorkflowTests (the triggers, the trigger job's event table, the checkouts, the group, and
+main_green naming only ci.yml jobs); the job lists the tests pin lose the spikes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml                      | 156 +------------
+ .github/workflows/full.yml                    | 218 ++++++++++++++++++
+ quality/README.md                             |  10 +-
+ quality/catalog.yml                           |  21 +-
+ quality/merge-rule.yml                        |   4 -
+ .../AgentBridge.Quality.Tests/CiPlanTests.cs  |   2 +-
+ .../FullWorkflowTests.cs                      | 115 +++++++++
+ .../HaValidationCoverageTests.cs              |   2 +-
+ .../MergeRuleTests.cs                         |   3 +-
+ .../PlanScriptTests.cs                        |   4 +-
+ 10 files changed, 366 insertions(+), 169 deletions(-)
+ create mode 100644 .github/workflows/full.yml
+ create mode 100644 tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 17f2db33c..bafee7708 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -78,8 +78,6 @@ jobs:
+       whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
+       product: ${{ steps.select.outputs.product }}
+       ha-integration: ${{ steps.select.outputs.ha-integration }}
+-      spikes: ${{ steps.select.outputs.spikes }}
+-      spikes-linux: ${{ steps.select.outputs.spikes-linux }}
+       app: ${{ steps.select.outputs.app }}
+       app-installer: ${{ steps.select.outputs.app-installer }}
+       light: ${{ steps.select.outputs.light }}
+@@ -238,7 +236,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
++          JOBS: product ha-integration app app-installer light pwa-ui pwa-e2e
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -607,61 +605,6 @@ jobs:
+       - name: Home Assistant's log
+         if: failure()
+         run: docker logs homeassistant 2>&1 | tail -n 300
+-  spikes:
+-    needs: plan
+-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
+-    runs-on: windows-latest
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+-        with:
+-          dotnet-version: '10.0.x'
+-      - name: NuGet packages from main's cache
+-        id: nuget
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.nuget/packages
+-          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+-          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
+-      - name: Build spike projects
+-        shell: pwsh
+-        run: |
+-          $projects = Get-ChildItem spikes -Recurse -Filter *.csproj
+-          foreach ($p in $projects) {
+-            dotnet build $p.FullName -c Release --nologo
+-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+-          }
+-      - name: Save NuGet packages to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.nuget/packages
+-          key: ${{ steps.nuget.outputs.cache-primary-key }}
+-      - name: Parse spike scripts
+-        shell: pwsh
+-        run: |
+-          $bad = 0
+-          foreach ($f in Get-ChildItem spikes -Recurse -Filter *.ps1) {
+-            $errors = $null
+-            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+-            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
+-          }
+-          exit $bad
+-      - name: S3 publish carries the compiled XAML
+-        # The build output runs either way; only a published copy fails at startup when
+-        # the app's .pri is missing, so check the publish folder itself.
+-        shell: pwsh
+-        run: |
+-          dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
+-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+-          if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
+-      - name: S6 device keys
+-        # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
+-        shell: pwsh
+-        run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
+-
+   app:
+     # The Windows app (docs/app-windows.md): published with the host into one folder, packed
+     # with Velopack, then the published copy is started in demo mode to check that it draws
+@@ -1273,99 +1216,6 @@ jobs:
+           subject-path: ${{ runner.temp }}/release/win-arm64/*
+           sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
+ 
+-  spikes-linux:
+-    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
+-    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
+-    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
+-    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
+-    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
+-    #    Chromium and WebKit through the same relay, then the container build.
+-    needs: plan
+-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
+-    runs-on: ubuntu-24.04
+-    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
+-    # minutes the download step gives a slow apt mirror and a full download from Canonical's
+-    # archive, on top of the checks.
+-    timeout-minutes: 35
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+-        with:
+-          dotnet-version: '10.0.x'
+-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+-        with:
+-          node-version: '22'
+-      - name: S2 builds and checks its vectors
+-        working-directory: spikes/s2-noise-interop
+-        run: |
+-          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
+-      - name: S2 fresh vectors from .NET, replayed in Node
+-        working-directory: spikes/s2-noise-interop
+-        run: |
+-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
+-          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
+-          node js/test-node.mjs
+-      - name: S4 builds and checks the relay against a fake GitHub
+-        working-directory: spikes/s4-relay
+-        run: |
+-          dotnet build src/S4.DevStack -c Release --nologo
+-          dotnet build src/S4.Host -c Release --nologo
+-          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+-          node js/test-sw.mjs
+-      - name: npm ci, for both
+-        run: |
+-          npm ci --prefix spikes/s2-noise-interop
+-          npm ci --prefix spikes/s4-relay
+-      - name: Which Playwright
+-        id: playwright
+-        working-directory: spikes/s4-relay
+-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
+-      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
+-      # on a miss and installs their system packages either way.
+-      - name: Playwright's browsers from main's cache
+-        id: browsers
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+-      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
+-      # download.sh says why). The second spike's finds them downloaded while the two agree.
+-      - name: Download Playwright's system packages, S2
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: chromium webkit
+-          working-directory: spikes/s2-noise-interop
+-      - name: Download Playwright's system packages, S4
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: chromium webkit
+-          working-directory: spikes/s4-relay
+-      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
+-      # the second is quick while they agree.
+-      - name: Playwright's browsers, for both
+-        run: |
+-          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
+-          (cd spikes/s4-relay && npx playwright install chromium webkit)
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+-      - name: S2 in Chromium and WebKit
+-        working-directory: spikes/s2-noise-interop
+-        run: node js/test-browsers.mjs
+-      - name: S4 the PWA through the relay
+-        working-directory: spikes/s4-relay
+-        run: node js/test-pwa.mjs
+-      - name: S4 container builds
+-        working-directory: spikes
+-        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
+-
+   light:
+     # The small Linux checks, on one runner instead of one each (#459): each step runs when its
+     # suite is selected, and every selected one runs even after another fails. When the whole
+@@ -1683,7 +1533,7 @@ jobs:
+       - name: Which Playwright
+         id: playwright
+         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
++      # Playwright's browser from main's cache, as in full.yml's spikes-linux, keyed by browser so each leg
+       # restores only the one it runs.
+       - name: Playwright's browsers from main's cache
+         id: browsers
+@@ -1849,7 +1699,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
++    needs: [plan, product, ha-integration, app, app-installer, light, pwa-ui, pwa-e2e]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+new file mode 100644
+index 000000000..fe432bc54
+--- /dev/null
++++ b/.github/workflows/full.yml
+@@ -0,0 +1,218 @@
++name: Full
++
++# The FULL lane (quality/README.md section 4.7; S2, #4104): the checks the merge gate no longer waits for. ci.yml is the FAST lane
++# and the only one the merge rule, main-red and the ruleset read; this workflow never gates a merge, so it has no pull_request,
++# merge_group or push trigger (quality/catalog.yml `lane: full`, and the catalog check enforces it). It runs after a push to main
++# whose FAST run finished green (a workflow_run of CI), or by hand for a commit (the release train dispatches it for one it wants
++# to publish). Every job tests the commit the FAST run passed on, never the branch tip. A newer push cancels an older run: the
++# latest wins. Piece 4 has the spikes here; the app's self-test, pack and installers, pwa-ui and pwa-e2e follow (pieces 5 and 6).
++on:
++  # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
++  # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
++  workflow_run: # zizmor: ignore[dangerous-triggers]
++    workflows: [CI]
++    types: [completed]
++    branches: [main]
++  workflow_dispatch:
++    inputs:
++      sha:
++        description: The main commit to test
++        type: string
++        required: true
++
++permissions:
++  contents: read
++
++concurrency:
++  group: ${{ github.event_name == 'workflow_run' && 'full-main' || format('full-{0}', inputs.sha) }}
++  cancel-in-progress: true
++
++jobs:
++  trigger:
++    # Whether there is anything to test: a run by hand, or a CI run that was a green push to main. Every other job needs this and
++    # runs only when it says so, and full-gate says why when it didn't.
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    outputs:
++      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
++    steps:
++      - name: The commit under test
++        env:
++          SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++        run: echo "FULL lane for commit $SHA" >> "$GITHUB_STEP_SUMMARY"
++
++  spikes:
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    runs-on: windows-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - name: NuGet packages from main's cache
++        id: nuget
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.nuget/packages
++          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
++      - name: Build spike projects
++        shell: pwsh
++        run: |
++          $projects = Get-ChildItem spikes -Recurse -Filter *.csproj
++          foreach ($p in $projects) {
++            dotnet build $p.FullName -c Release --nologo
++            if ($LASTEXITCODE) { exit $LASTEXITCODE }
++          }
++      - name: Save NuGet packages to main's cache
++        if: github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.nuget/packages
++          key: ${{ steps.nuget.outputs.cache-primary-key }}
++      - name: Parse spike scripts
++        shell: pwsh
++        run: |
++          $bad = 0
++          foreach ($f in Get-ChildItem spikes -Recurse -Filter *.ps1) {
++            $errors = $null
++            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
++            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
++          }
++          exit $bad
++      - name: S3 publish carries the compiled XAML
++        # The build output runs either way; only a published copy fails at startup when
++        # the app's .pri is missing, so check the publish folder itself.
++        shell: pwsh
++        run: |
++          dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
++          if ($LASTEXITCODE) { exit $LASTEXITCODE }
++          if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
++      - name: S6 device keys
++        # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
++        shell: pwsh
++        run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
++
++  spikes-linux:
++    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
++    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
++    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
++    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
++    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
++    #    Chromium and WebKit through the same relay, then the container build.
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    runs-on: ubuntu-24.04
++    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
++    # minutes the download step gives a slow apt mirror and a full download from Canonical's
++    # archive, on top of the checks.
++    timeout-minutes: 35
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - name: S2 builds and checks its vectors
++        working-directory: spikes/s2-noise-interop
++        run: |
++          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
++          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
++      - name: S2 fresh vectors from .NET, replayed in Node
++        working-directory: spikes/s2-noise-interop
++        run: |
++          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
++          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
++          node js/test-node.mjs
++      - name: S4 builds and checks the relay against a fake GitHub
++        working-directory: spikes/s4-relay
++        run: |
++          dotnet build src/S4.DevStack -c Release --nologo
++          dotnet build src/S4.Host -c Release --nologo
++          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
++          node js/test-sw.mjs
++      - name: npm ci, for both
++        run: |
++          npm ci --prefix spikes/s2-noise-interop
++          npm ci --prefix spikes/s4-relay
++      - name: Which Playwright
++        id: playwright
++        working-directory: spikes/s4-relay
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
++      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
++      # on a miss and installs their system packages either way.
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
++      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
++      # download.sh says why). The second spike's finds them downloaded while the two agree.
++      - name: Download Playwright's system packages, S2
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: chromium webkit
++          working-directory: spikes/s2-noise-interop
++      - name: Download Playwright's system packages, S4
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: chromium webkit
++          working-directory: spikes/s4-relay
++      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
++      # the second is quick while they agree.
++      - name: Playwright's browsers, for both
++        run: |
++          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
++          (cd spikes/s4-relay && npx playwright install chromium webkit)
++      - name: Save Playwright's browsers to main's cache
++        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.browsers.outputs.cache-primary-key }}
++      - name: S2 in Chromium and WebKit
++        working-directory: spikes/s2-noise-interop
++        run: node js/test-browsers.mjs
++      - name: S4 the PWA through the relay
++        working-directory: spikes/s4-relay
++        run: node js/test-pwa.mjs
++      - name: S4 container builds
++        working-directory: spikes
++        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
++
++  full-gate:
++    # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
++    # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
++    # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
++    needs: [trigger, spikes, spikes-linux]
++    if: always()
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    steps:
++      - name: Every FULL job passed
++        env:
++          NEEDS: ${{ toJSON(needs) }}
++        run: |
++          if [ "$(echo "$NEEDS" | jq -r '.trigger.result')" != success ]; then
++            echo "::error::the trigger job did not succeed"
++            exit 1
++          fi
++          if [ "$(echo "$NEEDS" | jq -r '.trigger.outputs.ok')" != true ]; then
++            echo "The FAST run was not a green push to main, so there was nothing to test." >> "$GITHUB_STEP_SUMMARY"
++            exit 0
++          fi
++          bad=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.key != "trigger" and .value.result != "success") | "\(.key): \(.value.result)"')
++          if [ -n "$bad" ]; then
++            echo "::error::FULL jobs that did not pass: $bad"
++            exit 1
++          fi
+diff --git a/quality/README.md b/quality/README.md
+index 8ca213408..bb74b4448 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -494,8 +494,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      timeout, on any run, is the one above (#817 first proposed failing
+      that one on an Azure fetch too, and dropped it). A run by hand runs every
+      job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
+-   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
+-     It runs only when `spikes/` changes, like `spikes` on Windows.
++   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers;
++     `spikes` is the Windows build. Both are in `full.yml`, the FULL lane, since S2 piece 4 (#4104): they never gate a merge.
+    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,
+      runner and every `*.csproj`, `Directory.*` file, `nuget.config`, `global.json` and the
+      tool manifest; Playwright's browsers for `spikes-linux`, `pwa-ui` (per browser) and
+@@ -607,8 +607,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      queued or in-progress named jobs pass the run over. A failed plan or a
+      classification-skipped product family also passes it over. A newer main head still running
+      does not block; the pull request's own running checks still do. The single
+-     `main_green.jobs` list pins exact display names for ha-integration, spikes, spikes-linux,
+-     light, pwa-ui, pwa-e2e and app, including every static shard and runtime. Product is a
++     `main_green.jobs` list pins exact display names for ha-integration,
++     light, pwa-ui, pwa-e2e and app (`spikes` and `spikes-linux` left it with S2 piece 4: they are the FULL lane's), including every static shard and runtime. Product is a
+      dynamic family: at least one entry must exist and every present instance must pass; runners
+      omitted by the plan are not required. Entirely absent families still hold.
+      Optional `main_green.leg_families` adds lists of exact alternative check names to
+@@ -876,7 +876,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
+   that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
+ * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
+   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
+-  `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
++  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
+ **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
+ `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 95b337a51..6e4c3bbab 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1174,8 +1174,25 @@ suites:
+     platforms: [win-x64, linux-x64]
+     runner: hosted
+     triggers: [spikes/**]
+-    command: see ci.yml spikes, spikes-linux
+-    where: ci.yml spikes, spikes-linux
++    # The FULL lane since S2 piece 4 (#4104): a change under spikes/ no longer waits on these in a pull request; they run in
++    # full.yml after the merge, and a red one opens a full-red issue (piece 7) and never holds a merge.
++    command: see full.yml spikes, spikes-linux
++    where: full.yml spikes, spikes-linux
++    lane: full
++    status: exists
++
++  - id: full-gate
++    validation_plan: native
++    kind: static
++    ring: 2
++    select: always
++    # The FULL lane's own plumbing (full.yml, S2, #4104): the trigger job that says whether the FAST run was a green push to main,
++    # and full-gate, which fails when any FULL job did not pass (a skipped one included), as quality-gate does for ci.yml.
++    platforms: [linux-x64]
++    runner: hosted
++    command: see full.yml trigger, full-gate
++    where: full.yml trigger, full-gate
++    lane: full
+     status: exists
+ 
+   # ---------------------------------------------------------------- live, on disposable machines
+diff --git a/quality/merge-rule.yml b/quality/merge-rule.yml
+index ac4c7cdfd..0df2ac4fd 100644
+--- a/quality/merge-rule.yml
++++ b/quality/merge-rule.yml
+@@ -98,8 +98,6 @@ main_green:
+   jobs:
+     - product
+     - ha-integration
+-    - spikes
+-    - spikes-linux
+     - light
+     - pwa-ui (chromium 1/3)
+     - pwa-ui (chromium 2/3)
+@@ -125,7 +123,6 @@ main_green:
+       - NuGet packages from main's cache
+       - Save NuGet packages to main's cache
+     ha-integration: *dotnet_infra
+-    spikes: *dotnet_infra
+     app: *dotnet_infra
+     light:
+       - Set up job
+@@ -144,7 +141,6 @@ main_green:
+       - Playwright's browsers from main's cache
+       - Save Playwright's browsers to main's cache
+     pwa-e2e: *browser_infra
+-    spikes-linux: *browser_infra
+ 
+ # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
+ # never block a merge; the independent-review receipts are the gate. A pull request needs a success
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index 466695a42..5cdc97e00 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -561,7 +561,7 @@ public class CiPlanTests
+         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+-        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++        Assert.Equal(new[] { "plan", "product", "ha-integration", "app",
+             "app-installer", "light", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+new file mode 100644
+index 000000000..03dc1bc5b
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -0,0 +1,115 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// full.yml, the FULL lane (S2, #4104, quality/README.md §4.7). Piece 4 moved the spikes jobs here from ci.yml; a FULL job never
++/// gates a merge, so none of it may run for a pull request, and each job tests the commit the FAST run passed on.
++/// </summary>
++public class FullWorkflowTests
++{
++    const string Sha = "${{ github.event.workflow_run.head_sha || inputs.sha }}";
++
++    static string Root => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
++
++    static YamlMappingNode Load(string path)
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(File.ReadAllText(Path.Combine(Root, path))));
++        return (YamlMappingNode)stream.Documents[0].RootNode;
++    }
++
++    static YamlMappingNode Jobs(string workflow) => (YamlMappingNode)Load($".github/workflows/{workflow}")["jobs"];
++
++    static string Scalar(YamlNode node, string key) => ((YamlScalarNode)((YamlMappingNode)node)[key]).Value!;
++
++    static string Expression(string value) => value.Trim().StartsWith("${{", StringComparison.Ordinal) ? value.Trim()[3..^2].Trim() : value.Trim();
++
++    [Fact]
++    public void Full_yml_has_the_trigger_job_the_spikes_and_the_gate_and_ci_yml_no_longer_has_the_spikes()
++    {
++        Assert.Equal(["full-gate", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal));
++    }
++
++    [Fact]
++    public void Full_yml_runs_after_a_finished_ci_run_on_main_or_by_hand_and_never_for_a_pull_request_or_a_push()
++    {
++        var on = (YamlMappingNode)Load(".github/workflows/full.yml")["on"];
++        var run = (YamlMappingNode)on["workflow_run"];
++        var dispatch = (YamlMappingNode)on["workflow_dispatch"];
++
++        Assert.Equal(["workflow_dispatch", "workflow_run"], on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["CI"], ((YamlSequenceNode)run["workflows"]).Children.Select(c => c.ToString()));
++        Assert.Equal(["completed"], ((YamlSequenceNode)run["types"]).Children.Select(c => c.ToString()));
++        Assert.Equal(["main"], ((YamlSequenceNode)run["branches"]).Children.Select(c => c.ToString()));
++        Assert.Equal("true", Scalar(((YamlMappingNode)dispatch["inputs"])["sha"], "required"));
++    }
++
++    [Theory]
++    [InlineData("workflow_run", "success", "push", "main", true)]
++    [InlineData("workflow_run", "failure", "push", "main", false)]
++    [InlineData("workflow_run", "cancelled", "push", "main", false)]
++    [InlineData("workflow_run", "success", "pull_request", "main", false)]
++    [InlineData("workflow_run", "success", "push", "feature", false)]
++    [InlineData("workflow_dispatch", null, null, null, true)]
++    public void The_trigger_job_says_ok_only_for_a_green_push_run_of_ci_on_main_or_a_run_by_hand(string eventName, string? conclusion, string? runEvent, string? branch, bool ok)
++    {
++        var job = (YamlMappingNode)Jobs("full.yml")["trigger"];
++        var output = Scalar(job["outputs"], "ok");
++
++        var value = MergeRuleTests.IfExpression.Value(Expression(output), new Dictionary<string, string?>
++        {
++            ["github.event_name"] = eventName,
++            ["github.event.workflow_run.conclusion"] = conclusion,
++            ["github.event.workflow_run.event"] = runEvent,
++            ["github.event.workflow_run.head_branch"] = branch,
++        });
++
++        Assert.Equal(ok, value is true || value is string s && s == "true");
++    }
++
++    [Fact]
++    public void Every_other_job_waits_for_the_trigger_and_runs_only_when_it_says_ok_and_each_checkout_is_the_commit_ci_passed_on()
++    {
++        var jobs = Jobs("full.yml");
++        foreach (var (id, job) in jobs.Children.Where(j => j.Key.ToString() is not ("trigger" or "full-gate")))
++        {
++            var needs = ((YamlMappingNode)job)["needs"];
++            Assert.Equal(["trigger"], needs is YamlSequenceNode many ? many.Children.Select(c => c.ToString()) : [needs.ToString()]);
++            Assert.Equal("needs.trigger.outputs.ok == 'true'", Expression(Scalar(job, "if")));
++        }
++        foreach (var (id, job) in jobs.Children)
++            foreach (var step in ((YamlSequenceNode)((YamlMappingNode)job)["steps"]).Children.OfType<YamlMappingNode>()
++                .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal)))
++            {
++                var with = (YamlMappingNode)step["with"];
++                Assert.True(Scalar(with, "ref") == Sha, $"{id}'s checkout isn't the commit the FAST run passed on");
++                Assert.Equal("false", Scalar(with, "persist-credentials"));
++            }
++    }
++
++    [Fact]
++    public void A_newer_main_run_cancels_the_older_one_and_a_run_by_hand_has_a_group_per_commit()
++    {
++        var concurrency = (YamlMappingNode)Load(".github/workflows/full.yml")["concurrency"];
++
++        var run = MergeRuleTests.IfExpression.Value(Expression(Scalar(concurrency, "group")), new Dictionary<string, string?> { ["github.event_name"] = "workflow_run" });
++        var hand = MergeRuleTests.IfExpression.Value(Expression(Scalar(concurrency, "group")), new Dictionary<string, string?> { ["github.event_name"] = "workflow_dispatch", ["inputs.sha"] = "abc123" });
++
++        Assert.Equal("full-main", run);
++        Assert.Equal("full-abc123", hand);
++        Assert.Equal("true", Scalar(concurrency, "cancel-in-progress"));
++    }
++
++    [Fact]
++    public void The_merge_rule_waits_only_on_jobs_ci_yml_has()
++    {
++        var ciJobs = Jobs("ci.yml").Children.Keys.Select(k => k.ToString()).ToHashSet(StringComparer.Ordinal);
++        var green = (YamlMappingNode)Load("quality/merge-rule.yml")["main_green"];
++
++        var missing = ((YamlSequenceNode)green["jobs"]).Children.Select(j => j.ToString()).Where(j => !ciJobs.Contains(j.Split(" (")[0]));
++
++        Assert.Empty(missing);
++    }
++}
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index 8dd2f93e1..3c3bec4d3 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -87,7 +87,7 @@ public class HaValidationCoverageTests
+         var jobs = CiJobs();
+ 
+         Assert.Equal(
+-            new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
++            new[] { "plan", "product", "ha-integration", "app",
+                 "app-installer", "light", "pwa-ui", "pwa-e2e" },
+             Needs(jobs, "quality-gate"));
+         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index d36aad039..df5347a6d 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1082,10 +1082,11 @@ public class MergeRuleTests
+     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
+     //   verdict and a finished one needn't re-judge anything, #2454),
+     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
++    //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
+     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+     [
+         "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+-        "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
++        "Full", "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+     ];
+ 
+     static YamlMappingNode LoadWorkflow(string file)
+diff --git a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+index 2b00ff66b..9538bc323 100644
+--- a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
++++ b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+@@ -105,7 +105,7 @@ public class PlanScriptTests
+                     platforms: [linux-x64, win-x64, win-arm64]
+                     runner: hosted
+                     command: see ci.yml
+-                    where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
++                    where: ci.yml product, ha-integration, light, pwa-ui, pwa-e2e
+                     status: exists
+                   - id: docs
+                     validation_plan: native
+@@ -230,7 +230,7 @@ public class PlanScriptTests
+             var expected = packages ? "true" : "false";
+             Assert.Equal($"app={expected}\napp-installer={expected}",
+                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
+-            foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
++            foreach (var job in new[] { "product", "ha-integration", "pwa-ui", "pwa-e2e" })
+                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
+                     && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                     : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
+-- 
+2.56.1.windows.1
+
