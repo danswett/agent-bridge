@@ -832,6 +832,72 @@ test('late history during a native question reveal preserves visibility after a 
   await lateHistoryDuringReveal(page, { pendingReaderScroll: true });
 });
 
+// A question already in sight as its session opens makes no scroll to bring it there, but the history
+// drawn above it a moment later can still push it out of sight (#4408: the taller reply box left the
+// view a few pixels off the end on WebKit, which then did not follow). The history is held until the
+// app has made its reveal, so the order is the same on every run; `reader` is what the person does
+// in that same moment, before the history lands.
+async function historyAfterInSightOpen(page, { reader = null } = {}) {
+  await openDemo(page, { width: 390, height: 664 });
+  await page.evaluate(({ id, reader }) => {
+    const client = window.agentBridgeDemo.client;
+    const history = client.history.bind(client);
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    client.history = async (sessionId, options) => {
+      const result = await history(sessionId, options);
+      if (sessionId === id) { await gate; }
+      return result;
+    };
+    window.__reveals = 0;
+    const scrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (options) {
+      const mine = this.matches('.question-slot .question') && this.closest(`[data-id="${id}"]`);
+      const first = mine && !window.__reveals;
+      if (mine) { window.__reveals += 1; }
+      scrollIntoView.call(this, options);
+      // Once the app has finished with its reveal, the reader acts, and then the history lands.
+      if (first) {
+        setTimeout(() => {
+          const sc = this.closest('.stream-scroll');
+          window.__taken = window.__reveals;
+          if (reader === 'wheel') { sc.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 1 })); }
+          if (reader === 'touch') { sc.dispatchEvent(new Event('touchstart', { bubbles: true })); }
+          release();
+        }, 0);
+      }
+    };
+  }, { id: CODEX, reader });
+  await askCodex(page, choices('q-in-sight'));
+  // As a person opens it from Needs you, which brings the question into sight (sessions-page.js, showSession).
+  const entry = page.locator(`#needs-you .needs-entry[data-id="${CODEX}"]`);
+  await expect(entry).toHaveCount(1);
+  await expect(page.locator('#needs-you .needs-you-list[data-arriving]')).toHaveCount(0);
+  await entry.getByRole('button', { name: /open the session/ }).click();
+  const v = view(page, CODEX);
+  await expect(v).toBeVisible();
+  await expect(v.locator('.history-turn')).toHaveCount(2);
+  await atRest(page, v.locator('.stream-scroll'));
+  return v;
+}
+
+test('a question already in sight as its session opens is brought back when history is then drawn above it', async ({ page }) => {
+  const v = await historyAfterInSightOpen(page);
+  // The reveal was made again for the history drawn after the first, and the question is where it can be answered.
+  expect(await page.evaluate(() => window.__reveals - window.__taken)).toBeGreaterThan(0);
+  await expect(v.locator('.question-slot .question:not(.resolved)')).toBeInViewport();
+});
+
+for (const reader of ['wheel', 'touch']) {
+  test(`a reader's ${reader} just after a question was brought into sight is not undone when history is then drawn`, async ({ page }) => {
+    await historyAfterInSightOpen(page, { reader });
+    // Nothing brought the question back over the reader: no reveal after theirs.
+    const taken = await page.evaluate(() => window.__taken);
+    expect(taken).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__reveals)).toBe(taken);
+  });
+}
+
 test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
   await openDemo(page, { height: 600 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');

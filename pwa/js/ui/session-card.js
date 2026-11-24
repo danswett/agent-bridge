@@ -2044,7 +2044,7 @@ export class SessionCard {
     // A scroll the app makes leaves the header as it was.
     if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
-    if (!moves || behavior !== 'smooth') { release(); return; }
+    if (!moves || behavior !== 'smooth') { release(); this.#retainReveal(view, behavior); return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped
     // moving: `scroll` fires in every engine, where `scrollend` isn't in Safari yet. Listening
     // stops at `scrollend`, once the steps stop, or as soon as the person takes the scroller
@@ -2073,6 +2073,22 @@ export class SessionCard {
     sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
     for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) { this.view.addEventListener(type, () => done(), { signal, passive: true, capture: true }); }
     setTimeout(() => done(), 3 * QUESTION_ARRIVAL_GUARD_MS);
+  }
+
+  // A reveal that needed no scroll, or a jump, is kept as a smooth one is: older turns drawn above the question just after it was brought into sight (the opening session's
+  // history) push it out of sight, and a view a few pixels off the end does not follow them. Until the reader takes over, or a little while has passed, whatever moves it is
+  // answered by bringing it back (the draw's and the anchor's `#revealing`). #4408's taller reply area made WebKit lose this race.
+  #retainReveal(view, behavior) {
+    const sc = this.els.scroll;
+    if (!sc.getClientRects().length) { return; }
+    const ended = this.#scrollEnd = new AbortController();
+    const reveal = this.#revealing = { view, behavior };
+    const stop = () => {
+      ended.abort();
+      if (this.#revealing === reveal) { this.#revealing = null; }
+    };
+    for (const type of ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown']) { this.view.addEventListener(type, stop, { signal: ended.signal, passive: true, capture: true }); }
+    setTimeout(stop, 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer
