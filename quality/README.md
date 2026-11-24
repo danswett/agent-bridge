@@ -753,7 +753,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      It is not a resolver job per event. The PR dry run in
      `.github/workflows/weekly-report.yml` and the review relay in
      `.github/workflows/merge-rule-review.yml` also cancel in-progress runs per pull request
-     (#2577). All triggers stay unchanged.
+     (#2577). The run backlog (#4104: up to 30 runs queued on one head, 23 on main's tip) is cut
+     three ways. Admission cancels in progress for every run about one pull request or head (never a
+     sweep), so only the newest such run survives; the evaluator posts only
+     verdicts, so a cancelled run leaves the last verdict until the newer run of that key posts. CI
+     starting on main no longer sweeps (main's verdict is its newest completed evidence); finishing
+     still does. A status judges again on any failure, error or pending, but on a success only for
+     independent-review, independent-review-2, Copilot's and CodeQL's contexts; the accepted
+     residual is an unlisted status going pending to success, which waits for the next event or sweep:
+     a slower merge, never a wrong verdict.
      Every admitted writer still waits in the shared `merge-rule` job group with
      `cancel-in-progress: false` and `queue: max`, reading main only after taking that lock.
      A scoped event cannot displace a sweep or another
@@ -769,7 +777,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      not a quota guarantee: the Nov 10 repair sweep cost 58 points and 17 REST calls. Retaining
      formerly displaced sweeps adds their existing evaluation cost, with no new job, timer,
      token permission or idle runner minutes. A burst admits at most one writer per active head
-     plus one sweep; each head also retains one pending duplicate outside the writer lock.
+     plus one sweep (and one pending sweep), with no pending duplicate per head.
      GitHub's queue cap is 100 pending jobs: additional jobs are cancelled at that cap, not
      promised recovery. The observed 22 open PRs fit, but bursts spanning many obsolete heads
      can exceed that bound. The cron backstop remains best effort; a reliable fleet tick is a
