@@ -82,6 +82,8 @@ public sealed class LiteDeliver(
             if (resolved.Status == LaneStatus.Refused) { return Refused(LiteCodes.Busy); }
             lane = resolved.Scheduler;
         }
+        // A query is never a send: without a lane here (a Claude target stays on the legacy path) a replay is refused and nothing is typed.
+        if (query && lane is null) { return Refused(LiteReceiver.Replay); }
         // Through the composition, an accepted offer raises Offered, which wakes the pump; the switches ride every later fence.
         DeliveryOfferStatus Offer(Guid offered, string to, DeliverySender from, string text, Func<bool> current, Func<bool>? revoked = null) =>
             Lane is null && Composition is { } host ? host.Offer(offered, to, from, text, current, revoked) : lane!.Offer(offered, to, from, text, current, revoked);

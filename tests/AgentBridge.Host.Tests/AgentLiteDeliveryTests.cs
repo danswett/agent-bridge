@@ -166,6 +166,21 @@ public sealed class AgentLiteDeliveryTests
     }
 
     [Fact]
+    public async Task With_the_lane_flag_on_a_replay_query_to_a_Claude_target_types_nothing()
+    {
+        // A query is never a send: with the flag on a Claude target has no lane (it keeps the legacy typing path), so a replay is refused as main does.
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
+        using var lane = Composition(f);
+        var deliver = f.Build(composition: lane);
+        Assert.True((await deliver.DeliverAsync(Envelope("hi"), "hi", default)).Typed);
+        Assert.Single(f.Typed);
+        var replay = await ((ILiteReplayQuery)deliver).QueryAsync(Envelope("hi"), "hi", default);
+        Assert.Equal(LiteReceiver.Replay, replay.Code);
+        Assert.False(replay.Typed);
+        Assert.Single(f.Typed);
+    }
+
+    [Fact]
     public async Task With_the_lane_flag_on_and_the_journal_refused_a_send_is_refused_busy_and_never_typed_by_the_legacy_path()
     {
         var f = new Fixture(); f.Launch(LaunchProtocol.Ask);
