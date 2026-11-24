@@ -1,0 +1,71 @@
+name: ab-ci smoke
+
+# Proves an ab-ci runner's environment, as the runner itself (#4104): who runs the job, where dotnet, python, git, node,
+# gh and pwsh resolve, and that `dotnet tool restore`, a whole-solution `dotnet restore` and a Release build pass through
+# the runner's NuGet mirror with the config ci.yml's product uses (quality/nuget-mirror.ps1, New-AbCiNuGetConfig:
+# the pinned mirror only, nuget.org-signed packages only). Run it by hand on main with use_ab_ci ticked, once per VM's
+# pool, before AB_CI_SELF_HOSTED is set again. Without use_ab_ci it runs on a hosted runner, which proves nothing about
+# the pool. No secret is read.
+on:
+  workflow_dispatch:
+    inputs:
+      use_ab_ci:
+        description: Run on the ab-ci pool (main only), to prove a runner's environment
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    # The one alternative to the guard: a run by hand on main with use_ab_ci (quality/README.md routing guard).
+    runs-on: ${{ (vars.AB_CI_SELF_HOSTED == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.use_ab_ci) && fromJSON('["self-hosted","windows","x64","ab-ci"]') || 'windows-latest' }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: NuGet, .NET tools and MSBuild state for this job only, in a clean workspace
+        shell: pwsh
+        run: |
+          $t = $env:RUNNER_TEMP
+          "NUGET_PACKAGES=$t/nuget-packages", "NUGET_HTTP_CACHE_PATH=$t/nuget-http", "NUGET_PLUGINS_CACHE_PATH=$t/nuget-plugins", "DOTNET_CLI_HOME=$t/dotnet-home", "MSBUILDDISABLENODEREUSE=1" | Add-Content $env:GITHUB_ENV
+          git clean -ffdx
+      # The same config ci.yml's product writes on a self-hosted leg: the pinned mirror from the runner's .env only,
+      # no fallback folder, nuget.org's repository signature required. A missing or other mirror fails here.
+      - name: NuGet through the runner's mirror, nuget.org-signed packages only (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: |
+          . ./quality/nuget-mirror.ps1
+          $cfg = Join-Path $env:RUNNER_TEMP 'mirror.nuget.config'
+          try { New-AbCiNuGetConfig -Source "$env:AGENT_BRIDGE_NUGET_SOURCE" -Path $cfg } catch { Write-Host "::error::$($_.Exception.Message)"; exit 1 }
+          "RestoreConfigFile=$cfg", "NUGET_MIRROR_CONFIG=$cfg" | Add-Content $env:GITHUB_ENV
+      - name: Who runs this, and where the tools resolve
+        shell: pwsh
+        run: |
+          "runner: $env:RUNNER_NAME ($env:RUNNER_ENVIRONMENT), account: $([Environment]::UserName)"
+          foreach ($tool in 'dotnet', 'python', 'git', 'node', 'gh', 'pwsh') {
+            $c = Get-Command $tool -ErrorAction SilentlyContinue
+            "{0,-7} {1}" -f $tool, $(if ($c) { $c.Source } else { 'NOT FOUND' })
+          }
+          dotnet --version
+          python --version
+          $missing = @('dotnet', 'python', 'git', 'pwsh' | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+          if ($missing) { Write-Host "::error::not on this runner's PATH: $($missing -join ', ')"; exit 1 }
+      - name: dotnet tool restore (through the mirror on ab-ci)
+        shell: pwsh
+        run: dotnet tool restore @(if ($env:NUGET_MIRROR_CONFIG) { '--configfile', $env:NUGET_MIRROR_CONFIG })
+      - name: Restore the whole solution (through the mirror on ab-ci)
+        shell: pwsh
+        run: dotnet restore AgentBridge.slnx
+      - name: Build the whole solution, Release
+        shell: pwsh
+        run: dotnet build AgentBridge.slnx -c Release --no-restore --nologo
+      - name: Stop this job's build servers
+        if: always()
+        run: dotnet build-server shutdown
