@@ -14,7 +14,7 @@ const sid = (i, series = 8) => `00000000-0000-4000-${series}000-${pad(i, 12)}`; 
 
 // The records of "limits": built by the rule the file's "about" gives.
 function build({ rows, memberships, groups, tombstones }) {
-  const o = { d: ['0'.repeat(31) + '1'], h: ['h0', 'h1', 'h2'].slice(0, Math.min(3, Math.max(rows, 1))), v: 1, g: {}, m: {}, r: {}, x: { g: {}, m: {}, r: {} } };
+  const o = { d: ['0'.repeat(31) + '1'], h: ['h0', 'h1', 'h2'].slice(0, Math.min(3, Math.max(rows, memberships ? 3 : 1))), v: 1, g: {}, m: {}, r: {}, x: { g: {}, m: {}, r: {} } };
   for (let n = 0; n < groups; n += 1) { o.g[`00000000-0000-4000-8000-${pad(n, 12)}`] = [900 + n, 0, `Group ${n}`]; }
   for (let i = 0; i < rows; i += 1) { o.r[`${i % 3}${LF}${sid(i)}`] = [i + 1, 0, `k${i.toString(36).padStart(3, '0')}`, i % 20 === 0 ? 1 : 0]; }
   for (let j = 0; j < memberships; j += 1) { o.m[`${(4 * j) % 3}${LF}${sid(4 * j)}`] = [300 + j, 0, `00000000-0000-4000-8000-${pad(j % groups, 12)}`]; }
@@ -35,7 +35,7 @@ test('the compact form expands to the merge form of order-merge.js and back, exa
   for (const c of v.merge) {
     const merged = toMergeForm(parseOrder(c.text));
     assert.deepEqual(merged, c.mergeForm, c.name);
-    assert.equal(canonical(fromMergeForm(merged, { nowDay: 0 })), c.text, `${c.name}: back`);
+    assert.equal(canonical(fromMergeForm(c.mergeForm, { nowDay: 0 })), c.text, `${c.name}: back, whatever order the merge form lists its devices and hosts`);
     // The merge ports read it as they read their own state (a tombstone's day is not theirs to keep yet).
     const plain = structuredClone(merged);
     for (const map of Object.values(plain)) { for (const r of Object.values(map)) { delete r.day; } }
