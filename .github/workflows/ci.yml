@@ -1252,6 +1252,7 @@ jobs:
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
+    #  - stale-pwa-script: the stale-PWA alarm's decision on files, offline (quality/stale-pwa.ps1);
     #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
@@ -1304,6 +1305,11 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
+      - name: The stale-PWA alarm fails when the served build is over 24 hours behind main and fails closed on anything unreadable
+        # Fixed files: no request, no token, nothing reaches GitHub or the site.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'stale-pwa-script')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/test-stale-pwa.ps1
       - name: "The waiver covers exactly three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), with no switch and no expiry"
         # Fixed needs and jobs JSON: nothing reaches GitHub.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
