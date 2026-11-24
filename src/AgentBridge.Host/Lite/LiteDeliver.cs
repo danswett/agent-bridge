@@ -47,8 +47,15 @@ public sealed class LiteDeliver(
     {
         var body = envelope.Body;
         var target = body.Target.Session ?? "";
-        var outcome = await DecideAsync(envelope, text, target, ct);
         var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
+        LiteDelivery outcome;
+        // Every delivery writes its row, also when deciding it fails (a journal write at Offer): the exception still goes to the caller.
+        try { outcome = await DecideAsync(envelope, text, target, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: failed ({e.GetType().Name})");
+            throw;
+        }
         log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code ?? outcome.Outcome?.ToString().ToLowerInvariant())}");
         return outcome;
     }
