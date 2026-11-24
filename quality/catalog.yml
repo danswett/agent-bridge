@@ -614,6 +614,22 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: silent-revert-guard
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The silent-revert guard (#4465): a pull request whose diff deletes lines another merged pull request last changed,
+    # above all a test method, is flagged (a warning, never a failure), as #3968's merge of main deleted #4126's code and
+    # tests and CI stayed green. Offline, in a throwaway git repository.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/silent-revert-guard.ps1, quality/test-silent-revert-guard.ps1]
+    command: pwsh -NoProfile -File quality/test-silent-revert-guard.ps1
+    where: ci.yml light
+    # planned until the ci.yml part lands (branch sg-r8b-revert-guard-patch, applied by Quality: the guard in the plan job
+    # on every pull request, this test in light). Flip to exists with that patch.
+    status: planned
   - id: ci-speed-script
     validation_plan: native
     kind: unit
