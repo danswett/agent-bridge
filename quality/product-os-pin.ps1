@@ -10,7 +10,7 @@
   -OutVariable, splatting into a script command, dot-sourcing, redirection, a computed command or key) is refused,
   and so is every use of these variables the pin doesn't know. So is a function plan.ps1 doesn't own (its nine, each once,
   ConvertTo-JsonArray as written), a filter, an alias, a module or a type. Only plan.ps1's own commands, types and output-file reads are allowed (R4zzB858).
-  Its limit: it reads plan.ps1 alone, so the external programs plan.ps1 runs (dotnet, git) are outside it.
+  Its limit (Quality, #4306): a lint against accidents and plain-text edits, not deliberate obfuscation by an author who can edit the pin.
 #>
 using namespace System.Management.Automation.Language
 param([Parameter(Mandatory)] [string] $Plan)
@@ -66,16 +66,26 @@ foreach ($t in Find { param($n) $n -is [TypeExpressionAst] -or $n -is [ConvertEx
 foreach ($v in Find { param($n) $n -is [VariableExpressionAst] }) {
     if ((Name $v) -in 'executioncontext', 'pscmdlet') { Add-Problem $v "`$$((Name $v)) can reach any variable" }
     if ($v.VariablePath.UserPath -match '^(?i)(variable|function):') { Add-Problem $v 'a variable: or function: drive path' }
-    if ($v.VariablePath.UserPath -match '^(?i)env:' -and -not (In-Pinned $v)) { Add-Problem $v 'an environment read outside the pinned output statements' }
+    # A drive-qualified name (${alias:x}, ${c:/f}, ${/f}, env:) only as the pinned $env: reads; no default parameters, no host.
+    if (($v.VariablePath.UserPath -replace '^(?i)(script|global|local|private|using):', '') -match '[:/\\]' -and -not ($v.VariablePath.UserPath -match '^(?i)env:' -and (In-Pinned $v))) { Add-Problem $v 'a drive-qualified variable outside the pinned $env: reads' }
+    if ((Name $v) -in 'psdefaultparametervalues', 'host') { Add-Problem $v "`$$(Name $v) can redirect a command's output" }
 }
 foreach ($s in Find { param($n) $n -is [StringConstantExpressionAst] -or $n -is [ExpandableStringExpressionAst] }) {
     if ($s.Value -match '(?i)GITHUB_OUTPUT|set-output|save-state|variable:') { Add-Problem $s 'a string naming the output file, a workflow command or a variable drive' }
 }
 foreach ($m in Find { param($n) $n -is [InvokeMemberExpressionAst] }) {
     if ($m.Member -isnot [StringConstantExpressionAst]) { Add-Problem $m 'a method whose name is computed'; continue }
+    if ($m.Member.Value -in 'ForEach', 'Where' -and $m.Arguments -and $m.Arguments[0] -is [StringConstantExpressionAst]) { Add-Problem $m ".$($m.Member.Value)() by a member name" }
     if ($m.Member.Value -match '^(?i)(Invoke|InvokeReturnAsIs|SetValue|set_Item|Create|InvokeScript|NewScriptBlock)$') { Add-Problem $m ".$($m.Member.Value)() can run or write anything" }
 }
-# --- $runners: one constant [ordered] map. ---
+foreach ($m in Find { param($n) $n -is [MemberExpressionAst] }) { if ($m.Member -is [StringConstantExpressionAst] -and $m.Member.Value -in 'GetType', 'Assembly', 'GetMethod', 'GetMethods', 'CreateInstance', 'Module') { Add-Problem $m 'reflection' } }
+foreach ($e in Find { param($n) $n -is [CommandParameterAst] -and $n.ParameterName -eq 'MemberName' }) { Add-Problem $e '-MemberName calls a member by name' }
+# A bare expression whose value reaches the step's output (where ::set-output works) is refused; plan.ps1's own are $md.Add(...), which returns nothing.
+foreach ($b in Find { param($n) $n -is [PipelineAst] -and $n.PipelineElements.Count -eq 1 -and $n.PipelineElements[0] -is [CommandExpressionAst] -and $n.Parent -is [StatementBlockAst] -or ($n -is [PipelineAst] -and $n.Parent -is [NamedBlockAst] -and $n.PipelineElements[0] -is [CommandExpressionAst]) }) {
+    $p = $b.Parent; while ($p -and -not ($p -is [FunctionDefinitionAst] -or $p -is [ScriptBlockExpressionAst] -or $p -is [SubExpressionAst] -or $p -is [ArrayExpressionAst] -or $p -is [ParenExpressionAst] -or $p -is [AssignmentStatementAst])) { $p = $p.Parent }
+    $x = $b.PipelineElements[0].Expression
+    if (-not $p -and -not ($x -is [InvokeMemberExpressionAst] -and (Is-Var $x.Expression 'md') -and $x.Member.Value -eq 'Add')) { Add-Problem $b 'a bare expression whose value would reach the step output' }
+}# --- $runners: one constant [ordered] map. ---
 $runnerValues = @()
 $assignments = Find { param($n) $n -is [AssignmentStatementAst] }
 function Target([AssignmentStatementAst]$A) {
