@@ -1,6 +1,6 @@
-From 40fe7fbdf1195f38cb7bba1323a2dc15e6a04fff Mon Sep 17 00:00:00 2001
+From 365ebe0ef6b113882a3d9fa0155b5f092a0b276a Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:11:06 -0800
+Date: Mon, 23 Nov 2026 22:22:01 -0800
 Subject: [PATCH] s 6a2
 
 ---
@@ -10,10 +10,10 @@ Subject: [PATCH] s 6a2
  3 files changed, 89 insertions(+), 5 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index beced1c53..6a4b0b14f 100644
+index ce1863d7e..ca16cb8cc 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
-@@ -496,11 +496,65 @@ jobs:
+@@ -517,11 +517,65 @@ jobs:
            if-no-files-found: error
            retention-days: 30
  
@@ -36,7 +36,7 @@ index beced1c53..6a4b0b14f 100644
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
-+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          ref: ${{ needs.trigger.outputs.sha }}
 +          persist-credentials: false
 +      - uses: ./.github/actions/arm64-foreground
 +        if: matrix.runtime == 'win-arm64'
@@ -99,7 +99,7 @@ index 6e06c26d4..cce9db049 100644
      status: exists
    # ---------------------------------------------------------------- live, on disposable machines
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 13f989df3..82a120e09 100644
+index 408d84a53..a48142fdb 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -120,7 +120,7 @@ index 13f989df3..82a120e09 100644
              Assert.Equal("needs.trigger.outputs.ok == 'true'", Expression(Scalar(job, "if")));
          }
          foreach (var (id, job) in jobs.Children)
-@@ -216,4 +216,34 @@ public class FullWorkflowTests
+@@ -236,4 +236,34 @@ public class FullWorkflowTests
          Assert.DoesNotContain("github.run_number", AllText(job), StringComparison.Ordinal);
          Assert.Contains("-Commit $env:SHA -RunId '${{ github.run_id }}'", AllText(job), StringComparison.Ordinal);
      }
