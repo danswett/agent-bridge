@@ -14,8 +14,12 @@ namespace AgentBridge.App.Core;
 public static class LifecycleGuard
 {
     // Why this process may not stop, start or unregister the host, or null when it may.
-    public static string? Refusal() =>
-        AgentAncestry.Inside(Environment.GetEnvironmentVariable(AgentAncestry.SessionVariable), ProcessChain.Read(Environment.ProcessId), () => Running(new SystemProcessInspector()));
+    public static string? Refusal() => Refusal(Environment.GetEnvironmentVariable(AgentAncestry.SessionVariable));
+
+    // The same, with the session the host launched this process in named rather than read from the environment: what
+    // Refusal() decides, for a test that must not set a variable every test in its process shares (#4104, #4447).
+    public static string? Refusal(string? session) =>
+        AgentAncestry.Inside(session, ProcessChain.Read(Environment.ProcessId), () => Running(new SystemProcessInspector()));
 
     // Every agent CLI running now, whichever runtime it is in: what the host's KnownAgents.Running
     // gives its own command line.
