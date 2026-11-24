@@ -46,7 +46,7 @@ Evidence keys used below:
 
 | Tool schema in S | Implementation / host operation | Actual limitation |
 |---|---|---|
-| `list_agent_sessions` | T `listSessions` -> `sessions.list` | Local host; paginated, status/metadata by default, activity/question only with `include: "content"`. |
+| `list_agent_sessions` | T `listSessions` -> `sessions.list` | Local host; paginated. Default fields: `id, agent, title, repository, branch, model, status, statusSince, startedAt, updatedAt` (no working folder, no activity, no question). `include: "content"` adds `cwd`, `activity` and `question`. Owner decision Nov 23, 2026: hide the path by default, keep title, repository and branch. |
 | `read_agent_session` | T `readSession` -> `session.get` | Local snapshot or bounded polling, at most 600 seconds requested through S; question data is returned, not answered. |
 | `reply_to_agent_session` | T `replyToSession` -> `session.get`, `session.reply` | Schema/adapter present; needs principal and advertised `sessions.reply`. H does not advertise this to agent descendants and refuses their person reply path. |
 | `launch_agent_session` | T `launchSession` -> `session.launch` | Schema/adapter present; same capability/host refusal distinction for `sessions.launch`. A `permissions` argument is not authority. |

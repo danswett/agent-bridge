@@ -112,7 +112,8 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // from: without one StandaloneHooks.Preflight refuses, and the refusal still asked for a restart
     // (#705 Engineering review). Not shown at all where the host would refuse it, or where it can't
     // say whether there's one: no button that can't work.
-    public bool ShowRemove => !Blocked && Setup is HookSetup.Completed or HookSetup.Incomplete;
+    // Nor for hooks migration re-pointed: they have no owned record, so the host refuses (ui.md §6.11).
+    public bool ShowRemove => !Blocked && !agent.HookMigrated && Setup is HookSetup.Completed or HookSetup.Incomplete;
     public bool CanRemove => canManage && ShowRemove;
     // Opens the CLI's own sign-in; never evidence of access (#691).
     public bool ShowSignIn => Id is "copilot" or "claude" or "codex" && Installed && !Blocked;

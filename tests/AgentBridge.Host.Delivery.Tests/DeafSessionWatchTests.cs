@@ -66,6 +66,8 @@ public sealed class DeafSessionWatchTests
         {
             Idle() with { Activity = new Activity { CurrentTool = new ToolCall { Id = "t1", Name = "bash", Status = ToolStatus.Running, StartedAt = DateTimeOffset.UnixEpoch } } },
             Idle() with { Activity = new Activity { Background = Background.Of(1, 0) } },
+            // A shell aged out of the shown background (4 h, #1396): its command may still run, so it keeps the session alone.
+            Idle() with { Activity = new Activity(), BackgroundUnaged = Background.Of(0, 1) },
         })
         {
             var rig = new Rig(busy, EmptyBox);

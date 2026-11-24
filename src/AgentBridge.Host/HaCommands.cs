@@ -8,6 +8,7 @@ namespace AgentBridge.Host;
 //
 //   agent-bridge-host ha status          whether the connector would run, and why not
 //   agent-bridge-host ha inventory       HA credential/state file presence only
+//   agent-bridge-host ha off|on          audited connection change, effective after one restart
 //   agent-bridge-host ha token set       masked input, local format check and attempt consent
 //   agent-bridge-host ha token clear
 //   agent-bridge-host ha shadow          what the connector would publish beside what the broker
@@ -17,10 +18,10 @@ namespace AgentBridge.Host;
 // process list, and never printed.
 public static class HaCommands
 {
-    // Whether these arguments change the stored token, which decides whether and where the
-    // connector runs: for a person only (Program's Refused).
+    // Connection and credential changes are for a person only (Program's Refused).
     public static bool Writes(IReadOnlyList<string> args) =>
-        args.ElementAtOrDefault(1) == "token" && args.ElementAtOrDefault(2) is "set" or "clear";
+        args.ElementAtOrDefault(1) is "off" or "on"
+        || args.ElementAtOrDefault(1) == "token" && args.ElementAtOrDefault(2) is "set" or "clear";
 
     public static int? TryInventoryCommand(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error)
     {
@@ -43,6 +44,9 @@ public static class HaCommands
     {
         switch (args.ElementAtOrDefault(1), args.ElementAtOrDefault(2))
         {
+            case ("off" or "on", _):
+                if (args.Count != 2) { error.WriteLine("usage: agent-bridge-host ha off | ha on [--profile <name>]"); return 2; }
+                return Connection(folder, args[1] == "on", output, error, devBuild, agentHaBridge is not null);
             case ("status", _):
                 return Status(folder, output, devBuild, agentHaBridge);
             case ("inventory", null):
@@ -95,9 +99,45 @@ public static class HaCommands
                 output.WriteLine("Removed the Home Assistant token. Restart agent-bridge-host serve to stop using it.");
                 return 0;
             default:
-                error.WriteLine("usage: agent-bridge-host ha status | ha inventory | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]   [--profile <name>]");
+                error.WriteLine("usage: agent-bridge-host ha status | ha inventory | ha off | ha on | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]   [--profile <name>]");
                 return 2;
         }
+    }
+
+    static int Connection(string folder, bool enabled, TextWriter output, TextWriter error, bool devBuild, bool canCheckAgentHaBridge)
+    {
+        var audit = new AgentAuditLog(folder, log: error.WriteLine);
+        var state = enabled ? "on" : "off";
+        var entry = new AgentAuditEntry("local", Guid.NewGuid().ToString(), "person:local", [],
+            "host.homeAssistant", "profile", "requested", $"{state}; restart-required");
+        if (!audit.Append(entry))
+        {
+            error.WriteLine("Not changed: the Home Assistant control audit could not be written.");
+            return 1;
+        }
+        var result = 1;
+        string outcome;
+        var (settings, problem) = HostSettings.Load(folder);
+        if (problem is not null) { error.WriteLine(problem); outcome = "refused"; }
+        else if (enabled && HaGate.WhyNot(settings.HomeAssistant with { Enabled = true }, devBuild,
+            HaTokenStore.Exists(folder), canCheckAgentHaBridge) is { } why)
+        {
+            error.WriteLine($"Not changed: the Home Assistant connector would be {why}.");
+            outcome = "refused";
+        }
+        else
+        {
+            result = ConfigCommands.SetAuditedHaConnection(folder, enabled, output, error);
+            outcome = result == 0 ? $"configured-{state}" : "failed";
+        }
+        if (!audit.Append(entry with { Outcome = outcome, Reason = result == 0 ? entry.Reason : $"{state}; {outcome}" }))
+        {
+            error.WriteLine(result == 0
+                ? "The connection setting was saved, but its terminal audit is incomplete. It takes effect only after restarting the host."
+                : "The connection setting was not saved and its terminal audit is incomplete.");
+            return 1;
+        }
+        return result;
     }
 
     static int Inventory(string folder, TextWriter output, TextWriter error)

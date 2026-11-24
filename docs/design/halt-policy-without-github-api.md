@@ -20,7 +20,7 @@ on a person's discovery check (`pressed`), and on fallback. Rate-limit-only rela
 grace is bounded to 24 hours; it is not an independent freshness authority.
 
 `HaltPolicy.cs` separately asks
-`https://api.github.com/repos/danswett/agent-bridge/releases?per_page=100`.
+`https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10`: the first ten releases, because `halts.json` is on the newest and a hundred releases of a dozen assets each ran past the 4 MiB cap, so the read failed on every machine (seen on one machine running v0.1.7522, Nov 23).
 `GitHubHaltListSource`, in `ReleaseEligibility.cs`, selects the highest numeric
 canonical `v0.1.N` with `draft: false`, including pre-releases. It requires exactly
 one asset named `halts.json` in that release, its exact repository/tag
@@ -64,34 +64,82 @@ policy signatures. Its cache is per edge, with 300-second anonymous freshness
 bytes after refresh failure; `Age` is transport-controlled. A digest copied from
 that same unsigned response is not an independent trust root.
 
-## Interim: renew from the relay's list while GitHub refuses (owner-approved Nov 22)
+## Interim: renew from the relay's list while GitHub's policy read fails (owner-approved Nov 22 for refusals; widened Nov 23)
 
 The signed anchor below is slices 2 and 3 and is not built. Until it is, the policy read has a
-second source so a rate-limited machine does not age out of protection (VM2 logged "GitHub policy
+second source so a rate-limited machine does not age out of protection (a machine logged "GitHub policy
 unavailable; stored policy was not renewed" all day, and its release-list relay grace ends 24 hours
 after GitHub last answered).
 
 **Rule** (`ReleaseDiscovery.ReadHaltPolicyAsync`, `CdnPolicyList`): only when GitHub's policy read
-answers 403 or 429, and the release list's relay grace is open (the `RelayWindow` rule: GitHub
+fails (a 403 or 429 refusal, any other status such as a 5xx or 404, no answer at all, a body past 4 MiB, or a 200 that is not a release list), and the release list's relay grace is open (the `RelayWindow` rule: GitHub
 answered here within `GithubRelayAtMost`, 24 hours), the same list is read from the relay
-(`releases.slipgates.com`, `per_page=100`). The relay's answer must be its own 200 for that page,
+(`releases.slipgates.com`, `per_page=10`; the Worker defaults `page` to 1 and keys its cache on both). The relay's answer must be its own 200 for that page,
 say its `Age` (at most `CdnOldest`, one hour), and be no larger than a GitHub list. It then goes
 through the same verification as GitHub's: the highest canonical `v0.1.N` with `draft: false`, exactly
 one `halts.json` whose size and sha256 the list names, **downloaded from `github.com`**, and the
 strict body. **The relay path never clears a halt:** a relay policy that omits any halt already known is
 refused whole, and an older release than the one known is ignored; only GitHub's own answer can
 clear one (a reviewed edit). Any failure leaves the policy unrenewed. **The renewal is stamped
-`min(now - Age, graceEnd - GithubRevalidateEvery)`**, where `graceEnd` is `GithubRelayAtMost` after
-GitHub last answered here, so its six hours of freshness (also at action time, in the app and the host)
-never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
+`min(now - Age, graceEnd - GithubRevalidateEvery)`**, where `graceEnd` is `GithubRelayAtMost` after the later of
+GitHub having last answered here and the relay having last served a verified halt policy (below), so its six hours of freshness
+(also at action time, in the app and the host) never run past the grace. The relay is not asked while the shared backoff or the hour reservation holds
 the read. GitHub's own answer always wins, and it is asked first every hour.
 
-**Accepted risk** (owner, Nov 22; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
+**Widened Nov 23 (Engineering R8b, P0 on one machine, v0.1.7522): owner-approved (Nov 23, relayed by Engineering R8b; the Chief records it on #2225, and its link goes here once that comment exists).** The Nov 22 approval below
+names refusals (403 and 429). On that machine the policy read failed for another reason (its 100-release list was past the 4 MiB cap, a
+status-0 failure), so no refusal ever reached the relay and the policy aged out; the same would hold for a 5xx or a timeout. The
+relay is now tried on any failed GitHub policy read, with every bound above unchanged (open grace, `Age` at most an hour, the carrier
+downloaded from `github.com`, never clears a halt, stamped inside the grace), and the unrenewed line names what GitHub actually
+answered (an HTTP status, or that nothing came back). The relay window itself is unchanged: it opens from GitHub having answered the
+release list here, or from a rate-limit bootstrap, so a machine GitHub has never answered still gets no relay renewal.
+
+**Where it is stored, and the positive signal (so a fleet read can tell a renewing machine from a stale one).** The stored policy
+is in the shared state file `%LOCALAPPDATA%\AgentBridge\app\release-discovery.json` (the app folder under the product's data root,
+beside its lock file), under the key `haltPolicy`: `policy` (the verified release and its `halted` list), `at` (the time the policy
+counts from; fresh for six hours after it, never past the relay grace), `notBefore` (the next ask), `attemptedAt`, `attempt`,
+`verified` and `eTag`; `gitHubAnsweredAt` beside it is when GitHub last answered the release list here. Every successful renewal
+also logs ONE line: `update policy: renewed from GitHub, release 0.1.N, At=<ISO time>` (`GitHub (not modified)` for a 304, and
+`the relay's list, its copy <age> old; <what GitHub answered>` for the relay path). A read that does not renew logs the
+`GitHub policy unavailable (<what GitHub answered>); stored policy was not renewed` line instead. Either can appear on a healthy
+machine (one failed attempt during an outage, with the relay or the next hourly try renewing it), so read a machine by its renewal
+lines: a policy that is current has a renewal line within the last six hours, and one with only `not renewed` lines for longer than
+that is the stale case.
+
+**Grace extension (owner decision, Chief, Nov 23, recorded on #2225):** a halt policy the
+relay served that passes the whole verification here also extends the relay grace, as a GitHub answer does. "Verified" means the same
+checks as GitHub's answer (the carrier named by the list, downloaded from `github.com`, its size and sha256 matching what the list
+names, the strict body), the relay's own 200 with an `Age` of at most an hour, no halt already known omitted, and a release not older
+than the one known; this is a digest check, not a signature, as the signed anchor below is still not built. State: `relayVerifiedAt`
+in `release-discovery.json`; the grace counts from the later of `gitHubAnsweredAt` (or the rate-limit bootstrap) and it, and
+`gitHubAnsweredAt` stays GitHub's alone. An older list, one that omits a known halt, one over its `Age`, or one that fails
+verification moves nothing. It still never removes a known halt.
+
+**The 72-hour cap (owner decision, Chief, Nov 23):** the relay's verified lists extend the grace only until 72 hours after GitHub last
+answered here (`gitHubAnsweredAt`, GitHub's answer to the release list, which the update check makes). The grace therefore ends at the
+earlier of 24 hours after its anchor and 72 hours after `gitHubAnsweredAt` (`ReleaseDiscovery.GithubRelayExtendedAtMost`, `RelayGraceEnd`);
+when it ends, the relay is not asked and the policy goes stale, as before. A GitHub answer to the release list restarts both clocks and the
+extensions resume (the shared refusal backoff must lapse first). A GitHub answer to the *policy* read renews the policy itself but does not
+restart these 72 hours, so the cap is measured against the same `gitHubAnsweredAt` the update check's relay rules use.
+
+**What `Age` is, and is not (Quality B307).** `Age` is the relay's plain HTTP response header. It is not inside any digested payload, so
+against a compromised relay it is a staleness hint (it keeps an honest, merely lagging relay from renewing with an old copy), not a
+security bound: a compromised relay can send `Age: 0` with any list. The real bounds are the digest check of `halts.json` against
+what GitHub's own release says (the carrier is downloaded from `github.com`), a release not older than the one known, no known halt
+omitted, and the 72-hour cap above. Every mention of `Age` as a limit in this section is the hint, not a bound.
+
+**Residual, recorded (Nov 23):** the verification is a digest check, not a signature (the signed anchor below is not built). A
+compromised or stale relay that keeps serving an older but still verified list (the same release as the one known, its `Age` within the
+hour) keeps the grace open, and a NEWER halt stays hidden from this machine, but **for at most 72 hours since GitHub last answered the
+release list here**; after that the policy goes stale and the machine holds unasked installs (a GitHub answer to the release list ends that, as it restarts the clocks). It can never forge a halt or
+clear a known one. A follow-up issue for real signing is Quality's to file; the signed anchor below remains the real fix.
+
+**Accepted risk** (owner, Nov 22, for refusals; evidence: the owner's answer to Chief S16 at about 20:00 PT, recorded at [#2225](https://github.com/danswett/agent-bridge/issues/2225#issuecomment-7091142370)): the relay is unsigned transport, so a compromised or stale relay
 can serve an older list. Its older `halts.json` then renews the stored policy and a **new halt can stay
-hidden for up to the 24-hour grace**. It can never forge a halt or clear a known one: the carrier's bytes
+hidden for up to the grace, which the relay's own verified lists extend to at most 72 hours since GitHub last answered the release list (see the cap above)**. It can never forge a halt or clear a known one: the carrier's bytes
 come from `github.com` and must match the listed digest, and an older release never replaces a newer
 one. This is the same class of risk as the relay withholding an update. It relaxes this document's
-"a compromised CDN cannot renew freshness" rule only inside that grace, and only for refusals.
+"a compromised CDN cannot renew freshness" rule only inside that grace, and only when GitHub's own policy read fails.
 
 **The signed anchor** (slices 2 and 3 below) stays the real fix and removes this path.
 

@@ -330,6 +330,11 @@ public sealed class AutoUpdater
     // failure): never offered when pressing it could not install it.
     public string? Ready => installing || updater.InstalledVersion is null || seenSource != updater.Source || updater.Ready != Pending ? null : Pending;
 
+    // The release this app runs and the one its host reports, for the skew the banner says (#2869 G2,
+    // SkewNote): the banner only says it. Null for what is not known: not installed by the updater,
+    // or a host not connected now.
+    public (string? App, string? Host) Versions => (updater.InstalledVersion, host.State == LinkState.Connected ? host.Status?.Version : null);
+
     // What a restart now would interrupt on this machine, for the warning Restart to update gives
     // first; null when nothing here is waiting on the person.
     public string? WaitingOnYou => RestartWarning.For(host);
@@ -767,10 +772,104 @@ public sealed class AutoUpdater
                 await TickOnceAsync();
             }
             while (Volatile.Read(ref again) == 1);
+            await HealHostAsync();
         }
         finally { work.Release(); }
         // One that arrived between the last look and letting go.
         if (Volatile.Read(ref again) == 1) { await TickAsync(); }
+    }
+
+    // #2869 (owner, "Yes, at a quiet moment"): the app newer than its OWN host, whose files for the app's
+    // release are already installed beside it, restarts that host onto them once quiet. The old host
+    // outlived an update (four test machines ran app 0.1.7845 over hosts on 0.1.7684, and "Check for updates"
+    // said up to date). Not an install: no release is downloaded, nothing stops but the host's own
+    // restart (host.restart: it ends with code 75 once fully stopped, and the launcher starts the
+    // replacement from current\), and Restart to update is unchanged. Only this machine's host, over its
+    // own pipe, is ever restarted: never one reached through the relay. The decision is
+    // VersionSkewHeal.Decide with the installed files' release as the package it needs: a Heal, and the
+    // host the older, goes ahead once the usual quiet moment (no turn running, no question waiting, over
+    // a whole snapshot, settled for SettleFor) has come; once for a release, and a restart that fails
+    // backs off as Decide says (an hour at most), and one that answers is the one for that release.
+    // The halt policy still holds it, as it holds an install between turns: a stale policy, or the
+    // app's release halted; and "Download updates automatically" off, which is the person's word that nothing
+    // happens unasked. The host answered the restart but stays old: it is not asked again until the app restarts
+    // (what is remembered is this run's), since the files are then not what they were read as.
+    public static readonly TimeSpan HealConfirmWithin = TimeSpan.FromMinutes(2);
+
+    // Restarts that failed (the host did not answer, or refused) before it is left to the person for this release.
+    public const int HealAttemptsMax = 3;
+
+    // The release of the host files installed beside the app (current\), read at the call; null when
+    // they can't be read. A test says it.
+    public Func<string?>? InstalledHostVersion { get; init; }
+
+    string? HostFilesRelease()
+    {
+        try
+        {
+            if (InstalledHostVersion is { } read) { return read(); }
+            var exe = manager.Layout.HostExe;
+            return File.Exists(exe) && System.Diagnostics.FileVersionInfo.GetVersionInfo(exe) is var info ? info.ProductVersion ?? info.FileVersion : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException) { return null; }
+    }
+
+    string? healApp;
+    string? healSentFor;
+    DateTimeOffset? healSentAt, healLast;
+    int healFailures;
+    bool healSaid;
+
+    async Task HealHostAsync()
+    {
+        try
+        {
+            var now = time.GetUtcNow();
+            // A release waiting (an install in progress is one: Pending is cleared only after it ends), an install
+            // Settings began through the host manager, or one a press has claimed: those paths restart the host.
+            if (Pending is not null || manager.UpdateUnderWay || Volatile.Read(ref claimed) == 1) { return; }
+            // "Download updates automatically" off: nothing happens unasked, and this is unasked.
+            if (!prefs().AutoUpdate) { return; }
+            if (updater.InstalledVersion is not { } app || host.State != LinkState.Connected || host.Status?.Version is not { } running) { return; }
+            if (healApp != app) { (healApp, healSentFor, healSentAt, healLast, healFailures, healSaid) = (app, null, null, null, 0, false); }
+            var identity = UpdateVersions.Identity(app);
+            if (PolicyUnchecked || (identity is not null && updater.HaltPolicy?.Policy?.Halted?.Contains(identity, StringComparer.Ordinal) == true)) { return; }
+            var decision = VersionSkewHeal.Decide(app, running, HostFilesRelease(), healFailures, healLast, now);
+            if (decision.Kind == SkewHealKind.Converged) { (healSentFor, healSentAt, healLast, healFailures, healSaid) = (null, null, null, 0, false); return; }
+            // Only the host older than the app: a newer host is the app that is behind, which is not this.
+            // The files are the APP's release, exactly: newer files are a release nothing here chose to run.
+            if (decision.Kind != SkewHealKind.Heal || !string.Equals(decision.Target, identity, StringComparison.OrdinalIgnoreCase)
+                || UpdateVersions.Identity(running) is not { } hostRelease
+                || !ReleaseVersions.TryRun(hostRelease, out var hostRun) || identity is null || !ReleaseVersions.TryRun(identity, out var appRun) || hostRun >= appRun) { return; }
+            // Asked once for this release, and the host answered: that is the one restart. If it still runs the old
+            // release after HealConfirmWithin the files are not what they were read as, and asking again would
+            // only loop: said once, and left for the person (the banner still says it).
+            if (healSentFor == decision.Target && healSentAt is { } sent)
+            {
+                if (now - sent >= HealConfirmWithin && !healSaid)
+                {
+                    healSaid = true;
+                    log($"auto-update: the host still runs {running} after it was restarted onto {decision.Target}; not restarting it again for this release");
+                }
+                return;
+            }
+            if (healFailures >= HealAttemptsMax)
+            {
+                if (!healSaid) { healSaid = true; log($"auto-update: the host restart onto {app} failed {healFailures} times; giving up for this release (the banner still says it)"); }
+                return;
+            }
+            if (!IdleSince(now, SettleFor)) { return; }
+            log($"auto-update: this app runs {app} and its host {running}, whose files for {app} are installed: restarting the host onto them (no install)");
+            (healSentFor, healSentAt) = (decision.Target, now);
+            try { await host.CallAsync(HostOps.Restart, timeout: TimeSpan.FromSeconds(10)); }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                (healSentFor, healSentAt, healLast) = (null, null, now);
+                healFailures++;
+                log($"auto-update: the host did not restart onto {app} ({e.Message}); not trying again for a while");
+            }
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log($"auto-update: the host restart check failed: {e.Message}"); }
     }
 
     async Task TickOnceAsync()
@@ -828,7 +927,8 @@ public sealed class AutoUpdater
                 // CheckEvery more.
                 if (checkDue) { (checksHeldUntil, checksHeld, lastCheckAt, lastCheckFailed) = (null, null, null, null); }
             }
-            else { checkDue = checkedAt is null || now - checkedAt >= (hostFailed ? CheckAfterFailedHost : CheckEvery); }
+            // Or one put off while a download or an install was under way: a newer release is looked for as soon as it ends.
+            else { checkDue = checkedAt is null || now - checkedAt >= (hostFailed ? CheckAfterFailedHost : CheckEvery) || updater.CheckDeferred; }
             if (checkNow || checkDue)
             {
                 checkNow = false;
@@ -938,6 +1038,10 @@ public sealed class AutoUpdater
             if (installing || manager.UpdateUnderWay || Interlocked.Exchange(ref claimed, 1) == 1) { return; }
             try
             {
+                // From here no check or download replaces the package: a check under way finishes first, and if it
+                // did replace it the install is not begun, as before (Stale), then the newer one is offered.
+                using var applying = await updater.ApplyingAsync();
+                if (Stale()) { return; }
                 if (goNow is not null) { await DepartAsync(because); }
                 else { await InstallAsync(because, (go, false)); }
             }
@@ -1271,6 +1375,8 @@ public sealed class AutoUpdater
             await work.WaitAsync();
             held = true;
             if (installing || manager.UpdateUnderWay) { return "an update is already being installed"; }
+            // The release chosen below is the one applied: a newer one found meanwhile waits until this has ended.
+            using var applying = await updater.ApplyingAsync();
             SourceMoved();
             // Downloaded by Settings since the last tick: that is the one to install.
             if (updater.Ready is { } downloaded && downloaded != Pending)

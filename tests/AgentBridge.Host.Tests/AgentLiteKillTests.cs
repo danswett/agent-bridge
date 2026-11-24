@@ -354,8 +354,13 @@ public sealed class AgentLiteKillTests : IDisposable
         Assert.Contains("AgentLiteSender.ForHost(identity.Folder, liteKill, liteLink,", program);
         Assert.Contains("await liteKill.PushAsync(relay, hub, current.Token);", program);
         // The kill op is a host role's under trusted-peer enforcement, like agent.lite.send, and judged by the same channel rule.
-        Assert.Contains("Lite.LiteReceiver.Op, Lite.LiteKill.Op];", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs")));
+        Assert.Contains("Lite.LiteReceiver.Op, Lite.LiteKill.Op,",File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs")));
         Assert.Contains("LiteKill.HandleKill(Lite.LiteChannel.Of(secure), data)", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "SessionService.cs")));
+        // G9: fleet.launch is a host role's op only (never a person's or service's), served from a SecureChannel by the same channel rule.
+        var authorization = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "RemoteAuthorization.cs"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(authorization, @"FleetRemoteLaunch\.Op"));
+        Assert.Contains("FleetRemoteLaunch.Op];", authorization);
+        Assert.Contains("FleetRemoteLaunch.ReceiveAsync(Lite.LiteChannel.Of(secure), data)", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "SessionService.cs")));
     }
 
     [Fact]

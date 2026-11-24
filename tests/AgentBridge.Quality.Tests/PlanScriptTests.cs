@@ -110,7 +110,7 @@ public class PlanScriptTests
                     platforms: [linux-x64, win-x64, win-arm64]
                     runner: hosted
                     command: see ci.yml
-                    where: ci.yml product, ha-integration, spikes, spikes-linux, light, pwa-ui, pwa-e2e
+                    where: ci.yml product, ha-integration, light, pwa-ui, pwa-e2e
                     status: exists
                   - id: docs
                     validation_plan: native
@@ -240,7 +240,7 @@ public class PlanScriptTests
             var expected = packages ? "true" : "false";
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
-            foreach (var job in new[] { "product", "ha-integration", "spikes", "spikes-linux", "pwa-ui", "pwa-e2e" })
+            foreach (var job in new[] { "product", "ha-integration", "pwa-ui", "pwa-e2e" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
                     && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
                     : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);

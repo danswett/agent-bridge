@@ -8,12 +8,18 @@ public sealed class PhoneApprovalEvidenceTests
 {
     static readonly DateTimeOffset At = DateTimeOffset.Parse("2026-11-16T00:00:00Z");
 
-    // Synthetic rows: no production writer emits person:<device> relay session.answer rows yet (#2649), so the
-    // tests built on Row/Answered show how the recorder reads such rows, not that any phone has answered.
+    // Synthetic audit evidence, never a claim that a real phone was notified or answered.
     static PhoneApprovalEvidenceReport Check(IEnumerable<AuditCommands.Row> rows, bool complete, string[] expected,
-        bool adopted = false, bool coverage = false, long retainedThrough = 0) =>
-        PhoneApprovalEvidence.Project([.. rows.Select((r, i) => r with { Gate = r.Gate! with { Sequence = retainedThrough + i + 1 } })],
+        bool adopted = false, bool coverage = false, long retainedThrough = 0, bool includeDelivery = true)
+    {
+        var answers = rows.ToArray();
+        var notices = includeDelivery ? answers.Select(r => r.Principal).Distinct()
+            .Select(p => new AuditCommands.Row(At, p, "push", "delivered", Direction: "out", Request: "question",
+                Target: "session", Reason: "question")) : [];
+        return PhoneApprovalEvidence.Project([.. notices, .. answers.Select((r, i) =>
+            r with { Gate = r.Gate! with { Sequence = retainedThrough + i + 1 } })],
             complete, expected, adopted, coverage, retainedThrough);
+    }
 
     // Every row of one operation shares its run, target, incarnation and question, as the real writer's rows do.
     sealed record Op(Guid Id, Guid Run, Guid Incarnation, Guid Question, Guid Target)
@@ -41,7 +47,16 @@ public sealed class PhoneApprovalEvidenceTests
     }
 
     [Fact]
-    public void Given_synthetic_relay_rows_every_expected_phone_that_answered_passes_with_its_own_counts()
+    public void An_answer_without_notice_delivery_evidence_does_not_pass_the_phone_check()
+    {
+        var report = Check(Answered("phone-a"), true, ["phone-a"], includeDelivery: false);
+
+        Assert.False(report.Passed);
+        Assert.Equal(["phone-a"], report.Missing);
+    }
+
+    [Fact]
+    public void Given_synthetic_notice_and_relay_rows_every_expected_phone_passes_with_its_own_counts()
     {
         var report = Check([.. Answered("phone-a"), .. Answered("phone-a"), .. Answered("phone-b")], true, ["phone-a", "phone-b"]);
         Assert.Empty(report.Missing);

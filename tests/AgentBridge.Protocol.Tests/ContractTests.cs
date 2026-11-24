@@ -437,7 +437,8 @@ public class ContractTests
         var fit = SessionBudget.Fit(a);
 
         Assert.True(ProtocolJson.ByteCount(fit) <= SessionBudget.MaxSessionBytes);
-        Assert.Equal("t49", fit.History!.Last().Id);
+        Assert.NotNull(fit.History);
+        Assert.Equal("t49", fit.History.Last().Id);
         Assert.True(fit.History.Count < 50);
         Assert.Equal((a.Response, a.Reasoning), (fit.Response, fit.Reasoning));
     }

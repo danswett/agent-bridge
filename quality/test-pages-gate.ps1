@@ -155,7 +155,7 @@ if ((WorkflowGate $manual) -ne 'skip') { throw 'pending rollback did not hold th
 if ((WorkflowGate @() -Unreadable) -ne 'skip') { throw 'unreadable history cleared the rollback fence' }
 if ((WorkflowGate $manual -AncestryError) -ne 'skip') { throw 'failed ancestry lookup cleared the rollback fence' }
 if ((WorkflowGate @($resume) -TotalCount 101) -ne 'skip') { throw 'truncated history cleared the rollback fence' }
-if ((WorkflowGate @()) -ne 'skip') { throw 'expired history cleared the rollback fence' }
+if ((WorkflowGate @()) -ne 'deploy') { throw 'a history with no rollback in it held the deploy (no rollback was ever made, #4369)' }
 foreach ($trigger in @('schedule', 'workflow_run')) {
     if ((WorkflowGate $manual -Trigger $trigger) -ne 'skip') { throw "$trigger bypassed the rollback fence" }
     if ((WorkflowGate @() -Trigger $trigger -NoCandidate) -ne 'skip') { throw "$trigger deployed without an eligible candidate" }
@@ -169,5 +169,40 @@ foreach ($trigger in @('schedule', 'workflow_run')) {
     if ((WorkflowGate $manual 'ahead' ('c' * 40) -Trigger $trigger -AppAtRoot '') -ne 'deploy') { throw "$trigger did not read the /app live version" }
 }
 if ((WorkflowGate @() -Trigger workflow_dispatch -NoCandidate) -ne 'deploy') { throw 'manual dispatch must remain available without automatic CI evidence' }
+# The rollback fence itself (#4369): held only while a rollback has no later successful resume; an unreadable or truncated history holds, and says so loudly.
+$rollbackScript = Join-Path $PSScriptRoot 'pages-rollback.ps1'
+function Fence($runs, [int]$total = -1, [switch]$Unreadable) {
+    if ($Unreadable) { return (& $rollbackScript -Unreadable) }
+    & $rollbackScript -Runs @($runs) -TotalCount $(if ($total -ge 0) { $total } else { @($runs).Count })
+}
+function ExpectFence($name, $state, $held, $reason, $loud) {
+    if ($state.held -ne $held -or $state.reason -ne $reason -or $state.loud -ne $loud) { Write-Host "FAIL: $name -> held $($state.held), $($state.reason), loud $($state.loud)"; $script:failures++ }
+}
+$old = @{ head_sha = $head; display_title = 'Pages'; status = 'completed'; conclusion = 'success'; event = 'workflow_dispatch'; head_branch = 'main'; created_at = '2026-11-07T10:50:00Z' }
+$rollbackRun = @{ head_sha = $head; display_title = 'Pages rollback'; status = 'completed'; conclusion = 'success'; event = 'workflow_dispatch'; head_branch = 'main'; created_at = '2026-11-11T18:00:00Z' }
+$resumeRun = $rollbackRun.Clone(); $resumeRun.display_title = 'Pages resume'; $resumeRun.created_at = '2026-11-11T19:00:00Z'
+ExpectFence 'empty history' (Fence @()) $false 'no-rollback' $false
+ExpectFence 'only manual runs from before the rollback run names' (Fence @($old, $old)) $false 'no-rollback' $false
+ExpectFence 'a rollback without a resume' (Fence @($rollbackRun)) $true 'rollback-active' $false
+ExpectFence 'a rollback then a resume' (Fence @($rollbackRun, $resumeRun)) $false 'rollback-resumed' $false
+ExpectFence 'a resume then a newer rollback' (Fence @($resumeRun, ($rollbackRun.Clone() | ForEach-Object { $_.created_at = '2026-11-12T00:00:00Z'; $_ }))) $true 'rollback-active' $false
+ExpectFence 'unreadable history' (Fence @() -Unreadable) $true 'rollback-history-unavailable' $true
+ExpectFence 'truncated history with no rollback in what was read' (Fence @($old) 101) $true 'rollback-history-truncated' $true
+if ((Fence @($rollbackRun) 101).reason -ne 'rollback-active') { Write-Host 'FAIL: a rollback in a truncated history is still an active rollback'; $failures++ }
+$missingTotal = & $rollbackScript -Runs @()
+if (-not ($missingTotal.held -eq $true -and $missingTotal.loud -eq $true -and $missingTotal.reason -ceq 'rollback-history-unavailable')) { Write-Host "FAIL: a missing TotalCount must hold loudly -> held $($missingTotal.held), $($missingTotal.reason), loud $($missingTotal.loud)"; $failures++ }
+
+# An explicit TotalCount that is no count of runs holds loudly too (#4425): it used to coerce to 0 and open the fence.
+foreach ($bad in @($null, '', -1, 'abc', 1.5)) {
+    $state = try { & $rollbackScript -Runs @() -TotalCount $bad 3>$null } catch { @{ held = 'threw'; reason = $_.Exception.Message; loud = $null } }
+    ExpectFence "TotalCount $(if ($null -eq $bad) { 'null' } else { "'$bad'" })" $state $true 'rollback-history-unavailable' $true
+}
+ExpectFence 'a TotalCount read from JSON (a long)' (& $rollbackScript -Runs @() -TotalCount ([long]0) 3>$null) $false 'no-rollback' $false
+# No rollback is no warning on every 5-minute gate run, nor a line in the gate's summary (#4425): the gate prints the reason once.
+$summaryFile = New-TemporaryFile; $savedSummary = $env:GITHUB_STEP_SUMMARY; $env:GITHUB_STEP_SUMMARY = $summaryFile.FullName
+try { $streams = @(& $rollbackScript -Runs @() -TotalCount 0 3>&1) } finally { $env:GITHUB_STEP_SUMMARY = $savedSummary }
+$warned = @($streams | Where-Object { $_ -is [System.Management.Automation.WarningRecord] }); $noted = @(Get-Content $summaryFile.FullName); Remove-Item $summaryFile.FullName
+if ($warned.Count -or $noted.Count) { Write-Host "FAIL: no rollback must print nothing itself -> warnings $($warned.Count), summary '$($noted -join ' | ')'"; $failures++ }
+Write-Host $(if ($failures) { "pages gate: $failures failed" } else { 'pages gate: ok' })
+# Last, always (PagesGateScriptTests pins it): #4370's first head lost this tail, and the file then passed whatever it found.
 if ($failures) { exit 1 }
-Write-Host 'pages gate: ok'
