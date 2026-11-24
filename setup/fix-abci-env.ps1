@@ -58,7 +58,9 @@ if ($testMode) {
     Write-Warning '*** TEST SEAM ON (AGENT_BRIDGE_ABCI_TEST=1): fake runner root under the temp folder, no services touched. Never set this on a VM. ***'
     # The seam takes only a folder under this user's temp folder, reached through no reparse point.
     $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
-    if ($temp -match '^[\\/]{2}' -or -not $Root.StartsWith("$temp\", [StringComparison]::OrdinalIgnoreCase)) { throw "AGENT_BRIDGE_ABCI_TEST is set: -Root must be under the temp folder $temp." }
+    # A temp folder at a drive root (TEMP=C:\) would make every folder on the drive "under temp": refused.
+    if ($temp -match '^[\\/]{2}' -or "$temp\" -eq [IO.Path]::GetPathRoot("$temp\")) { throw "AGENT_BRIDGE_ABCI_TEST is set: the temp folder ($temp\) is a drive root or not a plain path, so no root is accepted." }
+    if (-not $Root.StartsWith("$temp\", [StringComparison]::OrdinalIgnoreCase)) { throw "AGENT_BRIDGE_ABCI_TEST is set: -Root must be under the temp folder $temp." }
     for ($p = $Root; $p.Length -gt $temp.Length; $p = Split-Path -Parent $p) {
         if ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "AGENT_BRIDGE_ABCI_TEST is set: -Root crosses a reparse point at $p." }
     }
@@ -165,6 +167,13 @@ $plans = foreach ($runner in $runners) {
     [pscustomobject]@{ Runner = $runner; File = $envFile; Keep = $keep.Count
         Lines = $keep + @("PATH=$($path -join ';')", "DOTNET_INSTALL_DIR=$($runner.InstallDir)", "AGENT_BRIDGE_NUGET_SOURCE=$Mirror", 'DOTNET_CLI_TELEMETRY_OPTOUT=1') }
 }
+# Left by an earlier run: a stale .env.new is removed (it is rewritten anyway); a stale .env.bak may be the only copy
+# of a .env an earlier run couldn't restore, so it refuses the run until someone looks at it.
+$staleBak = @($plans | ForEach-Object { "$($_.File).bak" } | Where-Object { Test-Path -LiteralPath $_ })
+if ($staleBak) { throw "Refusing, nothing changed: an earlier run left a backup; restore or remove it first:`n  $($staleBak -join "`n  ")" }
+foreach ($stale in @($plans | ForEach-Object { "$($_.File).new" } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })) {
+    if ($PSCmdlet.ShouldProcess($stale, 'remove a .env.new an earlier run left')) { Remove-Item -LiteralPath $stale -Force; Write-Host "Removed a stale $stale" }
+}
 $staged = @()
 function Remove-Staged([string[]]$Keep = @()) {
     foreach ($p in $staged) {
@@ -224,14 +233,25 @@ try {
 Remove-Staged
 foreach ($plan in $staged) { Write-Host "Wrote $($plan.File)" }
 
-$busy = @()
-# Under -WhatIf nothing was staged: show the restarts the plan would make.
-foreach ($plan in $(if ($WhatIfPreference) { $plans } else { $staged })) {
+# Each runner's restart on its own: a failure is caught, the rest still run, and a table says where each one stands.
+$written = @($staged | ForEach-Object { $_.Runner.Name })
+$rows = foreach ($plan in $plans) {
     $name = $plan.Runner.Service
-    $working = @(Get-CimInstance Win32_Process -Filter "Name = 'Runner.Worker.exe'" |
-            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$($plan.Runner.FullName)\", [StringComparison]::OrdinalIgnoreCase) })
-    if ($working.Count -gt 0) { $busy += $name; Write-Warning "$name is running a job: not restarted. Run this again once it is idle."; continue }
-    if ($testMode) { Write-Host "Restarted (test, no service touched): $name"; continue }
-    if ($PSCmdlet.ShouldProcess($name, 'restart, so the runner reads its .env')) { Restart-Service -Name $name }
+    $state = if ($plan.Runner.Name -notin $written -and -not $WhatIfPreference) { 'no (not written)' } else {
+        try {
+            $working = @(Get-CimInstance Win32_Process -Filter "Name = 'Runner.Worker.exe'" |
+                    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$($plan.Runner.FullName)\", [StringComparison]::OrdinalIgnoreCase) })
+            if ($working.Count -gt 0) { 'no (busy: run this again once it is idle)' }
+            elseif (-not $PSCmdlet.ShouldProcess($name, 'restart, so the runner reads its .env')) { 'no (-WhatIf)' }
+            elseif ($testMode) {
+                # The seam touches no service; it can fail one restart, so this path is tested.
+                if ($env:AGENT_BRIDGE_ABCI_TEST_FAIL_RESTART -eq $plan.Runner.Name) { throw "test: the restart of $name fails" }
+                'yes (test, no service touched)'
+            } else { Restart-Service -Name $name; 'yes' }
+        } catch { "FAILED: $(Get-Reason $_)" }
+    }
+    [pscustomobject]@{ Runner = $plan.Runner.Name; Service = $name; Written = $(if ($plan.Runner.Name -in $written) { 'yes' } else { 'no' }); Restarted = $state }
 }
-if ($busy) { Write-Host "Not restarted (busy): $($busy -join ', ')" } else { Write-Host "Done: $($runners.Count) runner(s) under $Root." }
+$rows | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+if (@($rows | Where-Object Restarted -like 'FAILED*').Count -gt 0) { Write-Host "Every .env was written, but a restart failed (see the table): restart that service by hand."; exit 1 }
+Write-Host "Done: $($runners.Count) runner(s) under $Root."

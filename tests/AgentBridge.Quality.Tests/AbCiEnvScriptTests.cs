@@ -201,8 +201,8 @@ public class AbCiEnvScriptTests
             Assert.True(exit == 0, output);
             var lines = output.Split('\n');
             var lastWrite = Array.FindLastIndex(lines, l => l.StartsWith("Wrote ", StringComparison.Ordinal));
-            var firstRestart = Array.FindIndex(lines, l => l.StartsWith("Restarted (test", StringComparison.Ordinal));
-            Assert.Equal(2, lines.Count(l => l.StartsWith("Restarted (test", StringComparison.Ordinal)));
+            var firstRestart = Array.FindIndex(lines, l => l.Contains("yes (test, no service touched)", StringComparison.Ordinal));
+            Assert.Equal(2, lines.Count(l => l.Contains("yes (test, no service touched)", StringComparison.Ordinal)));
             Assert.True(lastWrite >= 0 && lastWrite < firstRestart, output);
 
             foreach (var n in new[] { "1", "2" }) { File.Delete(Path.Combine(root, n, ".env")); }
@@ -284,6 +284,108 @@ public class AbCiEnvScriptTests
         }
     }
 
+    // R8b P2: a failed restart is caught per runner; the others still restart and a table says where each stands.
+    [Fact]
+    public void A_failed_restart_is_reported_in_the_table_and_the_others_still_restart()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 2);
+            var (exit, output) = Run(root, env: new() { ["AGENT_BRIDGE_ABCI_TEST_FAIL_RESTART"] = "1" });
+
+            Assert.Equal(1, exit);
+            var lines = output.Split('\n');
+            Assert.Contains(lines, l => l.TrimStart().StartsWith("1 ", StringComparison.Ordinal) && l.Contains("FAILED: test: the restart of test-runner-1 fails", StringComparison.Ordinal));
+            Assert.Contains(lines, l => l.TrimStart().StartsWith("2 ", StringComparison.Ordinal) && l.Contains("yes (test, no service touched)", StringComparison.Ordinal));
+            Assert.Contains("a restart failed (see the table)", output);
+            Assert.True(File.Exists(Path.Combine(root, "1", ".env")) && File.Exists(Path.Combine(root, "2", ".env")));
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // R8b P3: a read-only .env is refused, not overwritten.
+    [Fact]
+    public void A_read_only_env_is_refused_not_overwritten()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 2);
+            var two = Path.Combine(root, "2", ".env");
+            File.WriteAllText(two, "PATH=C:\\old\n");
+            File.SetAttributes(two, FileAttributes.ReadOnly);
+
+            var (exit, output) = Run(root);
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains("Refusing, nothing changed", output);
+            Assert.Contains(two, output);
+            Assert.Equal("PATH=C:\\old\n", File.ReadAllText(two));
+            Assert.True(File.GetAttributes(two).HasFlag(FileAttributes.ReadOnly));
+            Assert.False(File.Exists(Path.Combine(root, "1", ".env")));
+            File.SetAttributes(two, FileAttributes.Normal);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // R8b P3: TEMP at a drive root would make the whole drive "under temp".
+    [Fact]
+    public void A_temp_folder_at_a_drive_root_accepts_no_root()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 1);
+            var (exit, output) = Run(root, "-WhatIf", env: new() { ["TEMP"] = "C:\\", ["TMP"] = "C:\\" });
+            Assert.NotEqual(0, exit);
+            Assert.Contains("is a drive root or not a plain path, so no root is accepted", output);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // R8b P3: a stale .env.new is cleaned; a stale .env.bak (maybe the only copy of an unrestored .env) refuses the run.
+    [Fact]
+    public void A_stale_new_file_is_removed_and_a_stale_backup_refuses_the_run()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 1);
+            var env = Path.Combine(root, "1", ".env");
+            File.WriteAllText(env + ".new", "stale");
+            var (exit, output) = Run(root);
+            Assert.True(exit == 0, output);
+            Assert.Contains($"Removed a stale {env}.new", output);
+            Assert.False(File.Exists(env + ".new"));
+
+            var before = File.ReadAllBytes(env);
+            File.WriteAllText(env + ".bak", "LANG=C\n");
+            (exit, output) = Run(root);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("an earlier run left a backup", output);
+            Assert.Equal(before, File.ReadAllBytes(env));
+            Assert.Equal("LANG=C\n", File.ReadAllText(env + ".bak"));
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
     static string TempFolder() => Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "abci-env-test-" + Guid.NewGuid().ToString("N"))).FullName;
 
     // A junction needs no privilege (a symbolic link does).
@@ -319,7 +421,7 @@ public class AbCiEnvScriptTests
         dir.SetAccessControl(acl);
     }
 
-    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true, bool elevated = true, string failMove = "")
+    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true, bool elevated = true, string failMove = "", Dictionary<string, string>? env = null)
     {
         var script = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "setup", "fix-abci-env.ps1");
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
@@ -327,6 +429,7 @@ public class AbCiEnvScriptTests
         start.Environment["AGENT_BRIDGE_ABCI_TEST_ACCOUNT"] = Runner;
         start.Environment["AGENT_BRIDGE_ABCI_TEST_ELEVATED"] = elevated ? "1" : "0";
         start.Environment["AGENT_BRIDGE_ABCI_TEST_FAIL_MOVE"] = failMove;
+        foreach (var (k, v) in env ?? []) { start.Environment[k] = v; }
         start.Environment["AGENT_BRIDGE_ABCI_TEST_PATH"] = "C:\\Windows";
         start.Environment["NO_COLOR"] = "1";
         start.Environment["TERM"] = "dumb";
