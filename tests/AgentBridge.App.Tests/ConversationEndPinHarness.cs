@@ -63,28 +63,44 @@ namespace Microsoft.UI.Dispatching
         readonly Queue<Action> pending = [];
         public bool TryEnqueue(Action action) { pending.Enqueue(action); return true; }
         public bool TryEnqueue(DispatcherQueuePriority priority, Action action) => TryEnqueue(action);
-        public DispatcherQueueTimer CreateTimer() => new();
+        public List<DispatcherQueueTimer> Timers { get; } = [];
+        public DispatcherQueueTimer CreateTimer() { var timer = new DispatcherQueueTimer(); Timers.Add(timer); return timer; }
         public void Drain() { while (pending.TryDequeue(out var action)) { action(); } }
     }
 
     public sealed class DispatcherQueueTimer
     {
         public TimeSpan Interval { get; set; }
+        public bool IsRepeating { get; set; } = true;
         public bool IsRunning { get; private set; }
-        public event EventHandler<object> Tick { add { } remove { } }
+        public event EventHandler<object>? Tick;
         public void Start() => IsRunning = true;
         public void Stop() => IsRunning = false;
+        // Elapses once, as the dispatcher would after Interval: a one-shot timer stops first.
+        public void Elapse()
+        {
+            if (!IsRunning) { return; }
+            if (!IsRepeating) { IsRunning = false; }
+            Tick?.Invoke(this, new());
+        }
     }
+}
+
+namespace Microsoft.UI.Input
+{
+    public sealed class PointerPointProperties { public int MouseWheelDelta { get; init; } }
+    public sealed class PointerPoint { public PointerPointProperties Properties { get; init; } = new(); }
 }
 
 namespace Microsoft.UI.Xaml.Input
 {
     public sealed record Pointer(uint PointerId, bool IsInContact);
 
-    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source, uint pointer = 1, bool contact = false)
+    public sealed class PointerRoutedEventArgs(Xaml.DependencyObject source, uint pointer = 1, bool contact = false, int wheel = 0)
     {
         public object OriginalSource => source;
         public Pointer Pointer { get; } = new(pointer, contact);
+        public UI.Input.PointerPoint GetCurrentPoint(UIElement? relativeTo) => new() { Properties = new() { MouseWheelDelta = wheel } };
     }
 
     public delegate void PointerEventHandler(object sender, PointerRoutedEventArgs args);
@@ -111,15 +127,16 @@ namespace Microsoft.UI.Xaml.Controls
             handlers.Add((routedEvent, (Input.PointerEventHandler)handler, handledEventsToo));
 
         public void Press(DependencyObject source, uint pointer = 1) => Raise(PointerPressedEvent, source, pointer, true);
-        public void Wheel() => Raise(PointerWheelChangedEvent, this);
+        // Positive turns the wheel away from the person (up the conversation), as WinUI reports it.
+        public void Wheel(int delta = 120) => Raise(PointerWheelChangedEvent, this, wheel: delta);
         public void EndGesture(string end, uint pointer = 1, bool contact = false) =>
             Raise(end switch { "release" => PointerReleasedEvent, "cancel" => PointerCanceledEvent, _ => PointerCaptureLostEvent }, this, pointer, contact);
 
-        void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false)
+        void Raise(object routedEvent, DependencyObject source, uint pointer = 1, bool contact = false, int wheel = 0)
         {
             foreach (var hook in handlers.Where(h => h.Event == routedEvent && h.HandledToo))
             {
-                hook.Handler(this, new(source, pointer, contact));
+                hook.Handler(this, new(source, pointer, contact, wheel));
             }
         }
 
@@ -200,7 +217,7 @@ namespace AgentBridge.App
         public Core.ConversationFollow FollowState => follow;
         public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
-        public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); if (final) { anchoring = null; } }
+        public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller, final); if (final) { anchoring = null; } }
         public void LayoutForProbe(Action layout) => DuringConversationLayout(() => { layout(); return 0; });
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() { scrolling = false; CompleteNavigation(); }
@@ -211,9 +228,12 @@ namespace AgentBridge.App
         public void DrawEarlierForProbe() => DrawEarlier();
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
-        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; }
+        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; anchorHeld = false; }
         public void LaidOutForProbe() => KeepAnchoredBlock();
+        public double BlockTopForProbe { set => ConversationList.BlockTop = value; }
         public void DrainForProbe() => DispatcherQueue.Drain();
+        public Microsoft.UI.Dispatching.DispatcherQueueTimer DispatcherTimersForProbe => DispatcherQueue.Timers[^1];
+        public void LapseWheelForProbe() { foreach (var timer in DispatcherQueue.Timers.Where(t => t.Interval == WheelStart).ToList()) { timer.Elapse(); } }
         public void KeepPlaceForProbe() => KeepPlace(false, Scroller.VerticalOffset);
         public void ReplyForProbe() => KeepPlace(HistoryAtEnd(), Scroller.VerticalOffset);
         public void GestureForProbe(string gesture)
@@ -259,7 +279,8 @@ namespace AgentBridge.App
         {
             public object ItemsPanelRoot { get; } = new Microsoft.UI.Xaml.Controls.ItemsStackPanel();
             public bool Available = true;
-            public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = 40 } : null;
+            public double BlockTop { get; set; } = 40;
+            public object? ContainerFromIndex(int index) => Available ? new Microsoft.UI.Xaml.FrameworkElement { Top = BlockTop } : null;
             public void ScrollIntoView(object item) => Scrolled?.Invoke();
             public Action? Scrolled { get; set; }
         }

@@ -43,18 +43,21 @@ public sealed class FleetRemoteLaunch(AgentPipeLaunch launch, GrantStore grants,
         catch (InvalidDataException) { return Refuse("policy", input); }
         if (action.GrantId != input.Grant.ToString("D") || action.Request != input.Request
             || action.PayloadSha256 != FleetActionEnvelope.PayloadSha256(JsonSerializer.SerializeToUtf8Bytes(input, ProtocolJson.Options))
-            || !replays.TryAdd(action, now)) { return Refuse("policy", input); }
+            || !replays.TryAdd(action, now)) { return Refuse("policy", input, channel.PeerId); }
 
         var found = grants.TryGetUsable(input.Grant);
-        if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input); }
+        if (!found.Usable) { return Refuse(FleetGrantLaunch.StoreReason(found.Problem), input, channel.PeerId); }
         // The envelope's generation is diagnostic only. As for a local launch (G5), the generation is the one this host's own
         // store holds when the launch is prepared, and dispatch rechecks that same generation, so revoke or reissue refuses.
         var subject = found.Grant!.Subjects.FirstOrDefault(s => s.Account == action.Account && s.SourceHost == action.SourceDevice
             && FleetActionEnvelope.SubjectDigest(s.Account, s.SourceHost, s.Session, s.Credential, s.ProcessInstance.Pid,
                 s.ProcessInstance.StartedAt.UtcTicks) == action.Subject);
-        return subject is null ? Refuse("scope", input) : await launch.LaunchGrantedRemoteAsync(subject, input);
+        return subject is null ? Refuse("scope", input, channel.PeerId) : await launch.LaunchGrantedRemoteAsync(subject, input);
     }
 
-    static FleetLaunchReceipt Refuse(string reason, FleetLaunchInput? input = null) =>
-        FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, reason);
+    // Before the envelope verified the caller is not authenticated, so nothing is written for it (a peer cannot fill the audit by sending
+    // junk). From verification on it is the peer device, and every refusal is audited (fleet-grants.md, "Audit and threats"): pass its id.
+    FleetLaunchReceipt Refuse(string reason, FleetLaunchInput? input = null, string? verifiedPeer = null) =>
+        FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input,
+            verifiedPeer is not null && input is not null ? launch.AuditRemoteRefusal(verifiedPeer, input, reason) : reason);
 }

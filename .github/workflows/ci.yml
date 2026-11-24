@@ -9,14 +9,23 @@ on:
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
   # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
-  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
-  # writes no cache and runs every job (the whole ring).
+  # §4.7), or as Quality's critical-fix release of main's head (critical-release with a reason, on
+  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. Only the critical
+  # release is a release (APP_RELEASE); a run by hand writes no cache and runs every job (the whole ring).
   workflow_dispatch:
     inputs:
       force-apt-fallback:
         description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
         type: boolean
         default: false
+      critical-release:
+        description: Publish main's head as a critical fix inside the 15-minute release spacing (publish-prerelease.ps1 -SkipSpacing). Quality only, on an owner or Chief call; main only, with critical-reason
+        type: boolean
+        default: false
+      critical-reason:
+        description: Why this critical fix may not wait; required with critical-release, checked before the build and logged in the run and the release notes
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -46,12 +55,12 @@ env:
   # which also needs the app built here): only then is the host a release build, whose Home
   # Assistant connector may write to a real Home Assistant (design G6). Every pull request and
   # fork builds a dev host.
-  APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
+  APP_RELEASE: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
   # 'true' when this run's package is to be signed with Azure Artifact Signing (#734): the publish
   # path, once the owner has set the repository variable APP_SIGNING to 'true' (docs/app-windows.md,
   # Signing). Then a package that is not signed by the pinned publisher fails the run rather than
   # going out unsigned. Until then, and on every pull request and fork, packages are unsigned.
-  APP_SIGNING: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
+  APP_SIGNING: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
 
 jobs:
   plan:
@@ -99,16 +108,26 @@ jobs:
       # publishes), at a commit that is neither main's head nor any open pull request's. Anything
       # else fails here, before checkout, and every job after the plan is skipped. Push and pull
       # request runs skip this step, so they make no API call.
-      - name: A run by hand is a fallback proof on a commit of its own
+      - name: A run by hand is a fallback proof on a commit of its own, or a critical release of main
         if: github.event_name == 'workflow_dispatch'
         env:
           FORCE: ${{ inputs.force-apt-fallback }}
+          CRITICAL: ${{ inputs.critical-release }}
+          REASON: ${{ inputs.critical-reason }}
           REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+          fail() { echo "::error title=run by hand::$1"; exit 1; }
+          if [ "$CRITICAL" = true ]; then
+            # The critical-fix override (docs/app-windows.md, "Spacing"): main's head, past the release
+            # spacing only, with a reason, checked here before anything is built.
+            [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
+            [ "$FORCE" != true ] || fail "critical-release and force-apt-fallback are separate runs"
+            [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+            exit 0
+          fi
           [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
           if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
             fail "only on a branch other than main, not $REF"
@@ -981,12 +1000,11 @@ jobs:
     # version older than any published, the version being this run's number, and refuses a commit
     # that doesn't hold the latest release's commit, since neither a run number nor the order
     # waiting publishes start in says anything of commit order. So a run that publishes after a
-    # newer commit's release publishes nothing, and an older commit's run that gets there first
-    # publishes nothing when main's head has since changed the app (main's selector says so):
-    # main's later run builds the app with both changes and publishes it, whatever the two runs'
-    # numbers, where publishing the older first could leave the newer one refused as an older
-    # version. Had it to be main's head instead, an app change followed by a docs-only commit
-    # would never be released.
+    # newer commit's release publishes nothing; an older commit's run that gets there first still
+    # publishes while main's head follows its commit, and main's later run publishes its own higher
+    # version over it (#4104). Releases are 15 minutes apart: a run inside that is deferred, and
+    # publish-pending.yml re-runs its publish (docs/app-windows.md, "Spacing"). A critical-release
+    # dispatch on main, with a reason, is a publish path too.
     # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
     # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -995,7 +1013,7 @@ jobs:
     # if this need goes. !cancelled() replaces the default success(), so the result is checked here.
     needs: [quality-gate]
     if: >-
-      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      !cancelled() && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
       && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -1032,8 +1050,8 @@ jobs:
     # Only a signing run enters the `signing` environment, the one subject the signing identity's
     # federated credential trusts (repo:danswett/agent-bridge:environment:signing), deployable from
     # main only. Without it this job's OIDC token signs in nowhere.
-    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
-    runs-on: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
+    environment: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
+    runs-on: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
     permissions:
       contents: read
       id-token: write # azure/login's OIDC sign-in, used only when APP_SIGNING is 'true'
@@ -1165,10 +1183,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
-      # publish a commit main has since changed the app past (main's later run publishes that),
-      # read with main's own selector and catalog, as that run plans. A second clone, since the
-      # first one's origin/main is this run's commit.
+      # Main's head now, under the publish lock: publish-prerelease.ps1 publishes this commit only
+      # while main's head follows it (#4104). A second clone, since the first one's origin/main is
+      # this run's commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
@@ -1197,9 +1214,14 @@ jobs:
           # Repository variables: this job has no environment, and needs no Azure sign-in; it
           # checks the signatures the sign job made, before uploading and again in the draft.
           SIGNING_EKU: ${{ vars.APP_SIGNING_IDENTITY_EKU }}
+          # Through the environment, never spliced into the script.
+          CRITICAL_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.critical-release }}
+          CRITICAL_REASON: ${{ inputs.critical-reason }}
         run: |
           $sign = @{}
           if ($env:APP_SIGNING -eq 'true') { $sign = @{ RequireSignature = $true; SignerEku = $env:SIGNING_EKU } }
+          # The critical-fix override (docs/app-windows.md, "Spacing"): a dispatch on main, with its reason.
+          if ($env:CRITICAL_RELEASE -eq 'true') { $sign.SkipSpacing = $true; $sign.SkipSpacingReason = $env:CRITICAL_REASON }
           ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head @sign
       - name: Publish the static Beta download manifest
         if: steps.publish.outputs.manifest-tag != ''

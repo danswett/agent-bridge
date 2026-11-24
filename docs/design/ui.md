@@ -1812,9 +1812,18 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   first movement as well as during the drag; history arriving meanwhile cannot restore the pin,
   and the layout's top-block correction cannot move the view under it (#1756): a thumb drag's
   steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
+  A layout drawn while the person held the thumb or a pan is not undone on release, which may
+  raise no view change: the top-block anchor starts again from where they left it (#4243, trackpad release).
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
+  A wheel notch owns the view from its input, before its first view change arrives, so no correction
+  cancels it in flight; a wheel event that raises no view change lets go after 250 ms (#4243). A wheel
+  turned toward the edge the view is already at (down at the end) leaves the pin and the view alone, so a
+  reply streaming in is still followed (#4313).
+  The person's own scroll landing on the very end (wheel, arrow, key) re-engages the pin (#4243).
   End-following also waits while a finger is down or the pointer is over or pressed in the
-  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  conversation, then follows the latest measured end when the last hold ends, if still pinned;
+  under the pointer it still undoes a layout move back from the end while pinned, which would
+  otherwise land the view a viewport short and loop as the wheel spins (#4243).
   A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
   Opening another session still places its latest reply despite an inherited hold; subsequent
   scrolling or navigation cancels that queued placement. Unloading or replacing the session
@@ -1862,10 +1871,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     - empty: "No messages yet", centred;
     - the first page loading: "Loading conversation…", centred, with the reply box usable;
     - an earlier page failed: "Couldn't load earlier messages" and Try again, at the top, with
-      what is shown kept;
+      what is shown kept and the reader's place unmoved;
     - a host that sends no history: "Earlier messages aren't available from this machine",
       above the oldest message shown;
-    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above;
+    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above, shown
+      once the oldest held turn is drawn and without moving the reader's place;
     - a turn the host couldn't read: "A turn here couldn't be read", in its place, the turns
       around it kept;
     - a turn cut short (over the host's cap): its text as sent, ending "Cut short · see the

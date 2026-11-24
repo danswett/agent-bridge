@@ -1086,15 +1086,33 @@ connector's Install button on a machine the dashboard drives.
   or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
   higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
   merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
-  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. There is no
-  minimum spacing between releases and no release window: the owner decided "As often as green" (Nov 23, ~13:30 PT, relayed
-  by Chief S18). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. Releases are
+  spaced 15 minutes apart (**Spacing**, below). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
   start in is not promised, which is why the checks above keep the order. With signing on, the
   `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
   once `sign` has succeeded, so it never falls back to the unsigned packages.
+* **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
+  S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
+  its age read from the API's `published_at` under the publish lock (`build/release-spacing.ps1`). A run inside that, or
+  one that can't read a release's time or finds it in the future, publishes nothing, warns, and sets the step output
+  `deferred=true`; it leaves no release, draft or tag. Its changes are never dropped, even when main goes idle: every 5
+  minutes `publish-pending.yml` runs `build/publish-pending.ps1`, which takes main's newest finished CI run whose
+  `quality-gate` and `publish` jobs succeeded (a run red only by the waived Arm64 leg counts) and, once no newer run is
+  still going (a run going 3 hours is stuck and holds nothing), that run's version is above every release and untagged,
+  its commit follows the latest release's and the window is open, re-runs its `publish` job, at most 4 times. So a release
+  at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
+  A read that fails there re-runs nothing and is tried on the next tick. A run that does pass later publishes them first
+  (CI's release debt). Every publish, a re-run or a dispatch's too, is a `publish` job in the one `publish-prerelease`
+  group, so two never run at once. Only the spacing is held: every other check above runs first. **Critical fix:**
+  `-SkipSpacing -SkipSpacingReason <why>` publishes inside the 15 minutes, with a warning and a line in the release notes
+  naming the override, who ran it and why; no reason, no publish. CI passes them from a `workflow_dispatch` on `main`, its
+  `critical-release` box and `critical-reason` text, which only someone with write access can run (never a label or
+  anything a pull request sets); the plan job lets it through only on `main` with a reason, at once, before any build.
+  Only Quality runs it, on an owner or Chief call. (The workflow parts are Quality's to apply; until then there is no
+  override, and a deferred run waits for main's next run that passes.)
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag

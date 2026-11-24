@@ -1,0 +1,119 @@
+using System.Text.Json;
+using AgentBridge.App.Core;
+using AgentBridge.Protocol;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+
+namespace AgentBridge.App;
+
+// #4243: the owner wheels with the pointer over the transcript while older history is still drawing.
+// Identical notches must move the same distance, and spinning down to the end must never move back up.
+// Control-level notches (the wheel handler, then an animated ChangeView), not physical input: a measurement
+// of what the app does between and under notches, recorded per frame to <out>.wheel-notch.json.
+static partial class SelfTest
+{
+    static HistoryTurn MixedTurn(int n) => new()
+    {
+        Id = $"notch{n}",
+        At = StoredFrom.AddMinutes(n),
+        Prompt = new HistoryPrompt { Text = $"Notch prompt {n}" },
+        Parts = new[] { new HistoryPart { Id = $"notchp{n}", Kind = HistoryPartKind.Response, At = StoredFrom.AddMinutes(n),
+            Text = n % 3 == 0 ? $"Ran tool {n}:\n\n```\n{string.Join("\n", Enumerable.Range(1, 18).Select(l => $"line {l} of tool output {n}"))}\n```" : $"Reply {n}, short." } },
+    };
+
+    static async Task CheckWheelNotches(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
+    {
+        window.ShowPage("sessions");
+        Resize(window, 1000, 700);
+        const string id = "demo-wheel-notch";
+        var fixture = DemoHost.Heavy(DateTimeOffset.UtcNow).Single(s => s.Id == DemoHost.HeavyId) with { Id = id, Title = "Wheel notch distance", Subagents = null };
+        var trace = new List<object>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await demo.PutAsync(fixture);
+        SessionView? view = null;
+        try
+        {
+            if (!await Until(() => main.AllCards.Any(c => c.Id == id), TimeSpan.FromSeconds(10))
+                || main.AllCards.Single(c => c.Id == id).Stored is not { } stored)
+            { check(false, "wheel notch setup: receives an isolated demo history"); return; }
+            await stored.LoadNewestAsync();
+            for (var n = 1; n <= 300; n++) { stored.AddLive(MixedTurn(n)); }
+            view = await Choose(window, main, id, "Response");
+            if (view is null || ConversationScroller(view) is not { } scroll)
+            { check(false, "wheel notch setup: has the conversation scroller"); return; }
+            // The owner's pointer rests over the transcript as they wheel.
+            view.HoldConversationPointer(4243);
+            var moving = false;
+            var phase = "setup";
+            scroll.ViewChanged += (_, e) =>
+            {
+                moving = e.IsIntermediate;
+                trace.Add(new { ms = clock.ElapsedMilliseconds, phase, kind = "view", offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, e.IsIntermediate });
+            };
+            async Task<double> Frame()
+            {
+                var drawn = new TaskCompletionSource<bool>();
+                EventHandler<object> rendered = (_, _) => drawn.TrySetResult(true);
+                CompositionTarget.Rendering += rendered;
+                try { await drawn.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+                finally { CompositionTarget.Rendering -= rendered; }
+                trace.Add(new { ms = clock.ElapsedMilliseconds, phase, kind = "frame", offset = scroll.VerticalOffset, extent = scroll.ScrollableHeight, moving });
+                return scroll.VerticalOffset;
+            }
+            const double notch = 3 * ConversationKeyboard.Line;
+            // One notch: the wheel handler's custody, an animated move, then frames until it is still. Returns where it
+            // started, where it was sent, and the lowest offset any frame showed.
+            async Task<(double From, double To, double Low)> Notch(double direction)
+            {
+                var from = scroll.VerticalOffset;
+                var to = Math.Clamp(from + direction * notch, 0, scroll.ScrollableHeight);
+                view.WheelForSelfTest(direction < 0 ? 120 : -120);
+                scroll.ChangeView(null, to, null, disableAnimation: false);
+                trace.Add(new { ms = clock.ElapsedMilliseconds, phase, kind = "notch", from, to });
+                var low = from;
+                for (var (n, still) = (0, 0); n < 40 && still < 3; n++)
+                {
+                    low = Math.Min(low, await Frame());
+                    still = moving ? 0 : still + 1;
+                }
+                return (from, to, low);
+            }
+            for (var n = 0; n < 30; n++) { await Frame(); }
+            phase = "up";
+            // Measured from the end, as the person sees it: older turns drawn above during a notch raise the offset by
+            // their height while what is read stays put (CI 45303880104 read -660, -306, … as raw offset). Eight notches
+            // stay within the first viewport above the end, where every row below is already laid out.
+            var moved = new List<double>();
+            for (var n = 0; n < 8; n++)
+            {
+                var fromEnd = scroll.ScrollableHeight - scroll.VerticalOffset;
+                var (_, to, _) = await Notch(-1);
+                if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); }
+            }
+            check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
+                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)})");
+            phase = "down";
+            var (offsets, back) = (new List<double>(), 0.0);
+            var high = scroll.VerticalOffset;
+            for (var n = 0; n < 14; n++)
+            {
+                var (_, _, low) = await Notch(1);
+                back = Math.Max(back, high - Math.Min(low, scroll.VerticalOffset));
+                high = Math.Max(high, scroll.VerticalOffset);
+                offsets.Add(Math.Round(scroll.VerticalOffset, 1));
+            }
+            phase = "quiet";
+            var gap = 0.0;
+            for (var n = 0; n < 60; n++) { await Frame(); gap = Math.Max(gap, scroll.ScrollableHeight - scroll.VerticalOffset); }
+            check(back <= 1.5 && gap <= 1.5,
+                $"wheel down to the end: never moves back up and stays at the end (worst back {back:0.#}, quiet gap {gap:0.#}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+        }
+        finally
+        {
+            view?.ReleaseConversationPointer(4243);
+            await File.WriteAllTextAsync(Path.ChangeExtension(outFile, ".wheel-notch.json"), JsonSerializer.Serialize(trace));
+            Away(window, main);
+            await demo.RemoveSessionAsync(id);
+        }
+    }
+}
