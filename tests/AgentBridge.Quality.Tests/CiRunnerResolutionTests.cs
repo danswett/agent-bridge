@@ -140,34 +140,97 @@ public sealed partial class CiRunnerResolutionTests
         Assert.Equal(allowlist, MapValue().Matches(map.Groups[1].Value).Select(m => m.Groups[1].Value));
         // Every value product-os takes comes out of that map: no literal runner anywhere it is written, and the output
         // is exactly the variable (B421 P2-2).
-        Assert.Empty(ProductOsProblems(plan));
+        Assert.Empty(RunnerRouting.ProductOsProblems(plan));
     }
 
-    // Every write to $productOs, wherever it sits (an if, a +=), must take its values from $runners[$_] alone, and
-    // $outputs['product-os'] must be ConvertTo-JsonArray $productOs.
-    internal static List<string> ProductOsProblems(string plan)
+    // R8b P2 (#4104), before routing widens: the pin is structural and lives in RunnerRouting. Each shape below, put into
+    // the real plan.ps1, writes product-os or the map some way a line regex missed; each must be caught.
+    const string AfterWrites = "if ($productOs.Count -eq 0 -and $productIds.Count -gt 0)";
+    const string AfterOutput = "$outputs['product-os'] = ConvertTo-JsonArray $productOs";
+
+    [Theory]
+    [InlineData(AfterWrites, "$productOs += 'ab-ci'")]
+    [InlineData(AfterWrites, "$productOs.Add('ab-ci')")]
+    [InlineData(AfterWrites, "$productOs[0] = 'ab-ci'")]
+    [InlineData(AfterWrites, "$PRODUCTOS = @('ab-ci')")]
+    [InlineData(AfterWrites, "${productOs} = @('ab-ci')")]
+    [InlineData(AfterWrites, "$script:productOs = @('ab-ci')")]
+    [InlineData(AfterWrites, "$null = \"$($productOs = @(\"ab-ci\"))\"")]
+    [InlineData(AfterWrites, "Set-Variable -Name ('product' + 'Os') -Value @('ab-ci')")]
+    [InlineData(AfterWrites, "(Get-Variable productOs).Value = @('ab-ci')")]
+    [InlineData(AfterWrites, "Invoke-Expression ('$product' + 'Os = 1')")]
+    [InlineData(AfterWrites, "$runners['win-x64'] = 'ab-ci'")]
+    [InlineData(AfterWrites, "$runners.Add('x', 'ab-ci')")]
+    [InlineData(AfterOutput, "$outputs[\"product-os\"] = '[\"ab-ci\"]'")]
+    [InlineData(AfterOutput, "$outputs['Product-OS'] = '[\"ab-ci\"]'")]
+    [InlineData(AfterOutput, "$outputs.'product-os' = '[]'")]
+    [InlineData(AfterOutput, "$outputs[('product' + '-os')] = '[]'")]
+    [InlineData(AfterOutput, "$outputs.Remove('product-os')")]
+    public void A_product_os_write_in_any_shape_is_caught(string after, string shape)
     {
-        var problems = new List<string>();
-        var writes = ProductOsWrite().Matches(plan).Select(m => m.Value.Trim()).ToList();
-        if (writes.Count == 0) { problems.Add("no write to $productOs"); }
-        problems.AddRange(writes.Where(w => !w.Contains("$runners[$_]", StringComparison.Ordinal) || w.Contains('\'') || w.Contains('"') || w.Contains("+=", StringComparison.Ordinal)));
-        var outputs = ProductOsOutput().Matches(plan).Select(m => m.Groups[1].Value.Trim()).ToList();
-        if (outputs.Count != 1 || outputs[0] != "ConvertTo-JsonArray $productOs") { problems.Add($"$outputs['product-os'] is written {outputs.Count} time(s): {string.Join(" | ", outputs)}"); }
-        return problems;
+        var plan = Plan();
+        Assert.Empty(RunnerRouting.ProductOsProblems(plan));
+        var line = plan.Split('\n').Single(l => l.Contains(after, StringComparison.Ordinal));
+        Assert.NotEmpty(RunnerRouting.ProductOsProblems(plan.Replace(line, line + "\n" + shape, StringComparison.Ordinal)));
     }
 
     [Theory]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs += 'my-runner' }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\nif ($x) { $productOs = @('ab-ci') }\n$outputs['product-os'] = ConvertTo-JsonArray $productOs")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = '[\"ab-ci\"]'")]
-    [InlineData("$productOs = @($runners.Keys | ForEach-Object { $runners[$_] })\n$outputs['product-os'] = ConvertTo-JsonArray $productOs\n$outputs['product-os'] = '[]'")]
-    public void A_product_os_write_or_output_from_anything_but_the_map_is_caught(string plan) => Assert.NotEmpty(ProductOsProblems(plan.Replace("\\n", "\n")));
+    [InlineData("ForEach-Object { $runners[$_] })\n#", "ForEach-Object { $runners[$_]; 'ab-ci' })\n#")]
+    [InlineData("Where-Object { -not $platform", "Where-Object { $($productOs = 'ab-ci') -or -not $platform")]
+    [InlineData("'win-arm64' = 'windows-11-arm'", "'win-arm64' = 'ab-ci'")]
+    [InlineData("$outputs['product-os'] = ConvertTo-JsonArray $productOs", "$outputs['product-os'] = '[\"ab-ci\"]'")]
+    public void A_changed_write_map_or_output_is_caught(string from, string to)
+    {
+        var plan = Plan();
+        Assert.Contains(from, plan.Replace("\r\n", "\n"), StringComparison.Ordinal);
+        Assert.NotEmpty(RunnerRouting.ProductOsProblems(plan.Replace("\r\n", "\n").Replace(from, to, StringComparison.Ordinal)));
+    }
 
-    [GeneratedRegex(@"\$productOs\s*\+?=(?!=)[^\n]*")]
-    private static partial Regex ProductOsWrite();
-    [GeneratedRegex(@"\$outputs\[\s*'product-os'\s*\]\s*=([^\n]*)")]
-    private static partial Regex ProductOsOutput();
+    static string Plan()
+    {
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx"))) { root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output."); }
+        return File.ReadAllText(Path.Combine(root, "quality", "plan.ps1"));
+    }
 
+    // R8b P2: include in any other spelling, or a YAML merge key (<<) in a job, its matrix or a row, can carry an ab-ci row
+    // this check would otherwise not read: each fails closed.
+    [Theory]
+    [InlineData("{ os: [ubuntu-latest], Include: [{ os: ab-ci }] }")]
+    [InlineData("{ os: [ubuntu-latest], INCLUDE: [{ os: ab-ci }] }")]
+    [InlineData("{ os: [ubuntu-latest], include: [{ <<: *row }] }")]
+    [InlineData("{ os: [ubuntu-latest], <<: *rows }")]
+    public void Include_in_another_spelling_or_through_a_merge_key_fails_closed(string matrix) => Assert.NotEmpty(Check($$$"""
+        name: ci
+        on: [push]
+        jobs:
+          anchors:
+            runs-on: ubuntu-latest
+            strategy: { matrix: { a: [&row { os: ab-ci }], b: [&rows { include: [{ os: ab-ci }] }] } }
+            steps:
+              - run: echo hi
+          product:
+            strategy: { matrix: {{{matrix}}} }
+            runs-on: ${{ matrix.os }}
+            steps:
+              - run: echo hi
+        """));
+
+    [Fact]
+    public void A_job_that_takes_its_runner_through_a_merge_key_fails_closed() => Assert.NotEmpty(Check("""
+        name: ci
+        on: [push]
+        jobs:
+          anchors:
+            runs-on: ubuntu-latest
+            strategy: { matrix: { a: [&base { runs-on: ab-ci }] } }
+            steps:
+              - run: echo hi
+          product:
+            <<: *base
+            steps:
+              - run: echo hi
+        """));
     [GeneratedRegex(@"\$runners\s*=\s*\[ordered\]@\{([^}]*)\}")]
     private static partial Regex RunnersMap();
     [GeneratedRegex(@"=\s*'([^']*)'")]
