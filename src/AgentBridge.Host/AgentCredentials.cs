@@ -486,7 +486,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // path, an argument or a token; at most 12 processes.
     static string Chain(ProcessAncestry ancestry)
     {
-        static string Name(string? image) => image is null ? "?" : new string([.. Path.GetFileName(image).Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '+').Take(40)]) is { Length: > 0 } n ? n : "?";
+        // Cut at either separator by hand: Path.GetFileName only knows the running OS's, and an image path is whatever the peer's OS wrote.
+        static string File(string image) => image[(image.LastIndexOfAny(['\\', '/']) + 1)..];
+        static string Name(string? image) => image is null ? "?" : new string([.. File(image).Where(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '+').Take(40)]) is { Length: > 0 } n ? n : "?";
         return string.Join(" <- ", ancestry.Processes.Take(12).Select(p => $"{p.Id} {Name(p.Image)}")) + (ancestry.Processes.Count > 12 ? " <- ..." : "") + (ancestry.Complete ? "" : " (partial)");
     }
 
