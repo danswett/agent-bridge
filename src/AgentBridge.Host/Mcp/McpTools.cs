@@ -120,11 +120,11 @@ public static class McpTools
 
         public void Remember(string request, JsonObject result)
         {
-            results[request] = result;
+            results[request] = result.DeepClone().AsObject();  // a copy: a JSON node can have one parent, and the caller's goes into a reply
             if (results.Count > Remembered) { results.RemoveAt(0); }
         }
 
-        public JsonObject Read(string request) => results.TryGetValue(request, out var r) ? r
+        public JsonObject Read(string request) => results.TryGetValue(request, out var r) ? r.DeepClone().AsObject()
             : new JsonObject { ["status"] = "unknown", ["reason"] = "No launch with that request id was made through this server." };
     }
 

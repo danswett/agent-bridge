@@ -16,7 +16,7 @@ public sealed class McpToolException(string message, McpFailure kind = McpFailur
 // The MCP server's one connection to the host's local pipe, with the authority of the agent session that started it and nothing more:
 // it says hello and, with that session's own AGENT_BRIDGE_TOKEN, agent.hello. It never uses the app's or a person's authority; the host
 // classes it by ancestry as an agent, and refuses the app-only ops. It holds no relay credential and writes nothing to disk.
-public sealed class McpHost : IMcpCalls, IAsyncDisposable
+public sealed class McpHost : IMcpConnection, IAsyncDisposable
 {
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
@@ -37,6 +37,7 @@ public sealed class McpHost : IMcpCalls, IAsyncDisposable
     // The agent principal the host accepted, or null: an unattributed connection, for which the host decides what is allowed.
     public string? Principal { get; }
     public bool Has(string capability) => capabilities.Contains(capability);
+    public bool IsOpen => channel.IsOpen;
 
     public static string? TokenFrom(Func<string, string?> env) => env("AGENT_BRIDGE_TOKEN") is { } t && !string.IsNullOrWhiteSpace(t) ? t.Trim() : null;
 
