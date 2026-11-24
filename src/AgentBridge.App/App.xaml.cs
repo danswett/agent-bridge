@@ -209,6 +209,8 @@ public partial class App : Application
             }
             _ = options.LiveListReplay
                 ? SelfTest.RunLiveListAsync(window, main, demo!, options.SelfTest, finished)
+                : options.WheelNotch
+                ? SelfTest.RunWheelNotchAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollPreserve
                 ? SelfTest.RunHistoryScrollPreserveAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollBudget

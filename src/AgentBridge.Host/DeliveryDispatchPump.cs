@@ -52,7 +52,8 @@ internal sealed class DeliveryDispatchPump : IAsyncDisposable
     }
     public void Wake(string session)
     {
-        if (!Available() || !lane.Enabled() || !lane.HasPending(session)) { return; }
+        // Pending work first: Enabled() re-reads the settings file, so a session change with nothing to send never pays for it.
+        if (!lane.HasPending(session) || !Available() || !lane.Enabled()) { return; }
         lock (run.Sync)
         {
             if (stopping || run.Uncertain || run.Unconfirmed.Contains(session)) { return; }

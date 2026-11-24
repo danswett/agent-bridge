@@ -561,7 +561,7 @@ public class CiPlanTests
         var jobs = (YamlDotNet.RepresentationModel.YamlMappingNode)workflow["jobs"];
         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
-        Assert.Equal(new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+        Assert.Equal(new[] { "plan", "product", "ha-integration", "app",
             "app-installer", "light", "design-gen", "playwright-apt", "pwa-ui", "pwa-e2e" }.Order(), needs.Children.Select(n => n.ToString()).Order());
         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);

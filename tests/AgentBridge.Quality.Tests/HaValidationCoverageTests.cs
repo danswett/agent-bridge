@@ -87,7 +87,7 @@ public class HaValidationCoverageTests
         var jobs = CiJobs();
 
         Assert.Equal(
-            new[] { "plan", "product", "ha-integration", "spikes", "spikes-linux", "app",
+            new[] { "plan", "product", "ha-integration", "app",
                 "app-installer", "light", "design-gen", "playwright-apt", "pwa-ui", "pwa-e2e" },
             Needs(jobs, "quality-gate"));
         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));

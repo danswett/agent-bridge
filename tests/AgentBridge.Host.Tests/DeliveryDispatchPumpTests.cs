@@ -35,13 +35,13 @@ public sealed class DeliveryDispatchPumpTests
         public readonly LaneComposition Lane;
         public DeliveryDispatchPump Pump;
         public bool Idle = true, Flag = true, FailWrite;
-        public int Reads, Opens;
+        public int Reads, Opens, SettingsReads;
         public Func<Task> Reading = () => Task.CompletedTask;
         public Func<Task<ReplyResult>> Sending = () => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
         public Fake()
         {
             Gate = new(Clock);
-            Lane = new(() => new AgentMessagingSettings { LaneDelivery = Flag }, () => true, Gate, this,
+            Lane = new(() => { SettingsReads++; return new AgentMessagingSettings { LaneDelivery = Flag }; }, () => true, Gate, this,
                 new LaneScreens(async (_, _) => { Interlocked.Increment(ref Reads); await Reading(); return (Idle, true); }, Clock),
                 "unused", Logs.Add, Clock, () => { Opens++; return new(new byte[32],
                     _ => { if (FailWrite) { throw new IOException("fake disk"); } }, _ => { }); });
@@ -72,6 +72,19 @@ public sealed class DeliveryDispatchPumpTests
             return id;
         }
         public async ValueTask DisposeAsync() { await Pump.DisposeAsync(); Lane.Dispose(); }
+    }
+
+    [Fact]
+    public async Task A_session_change_with_nothing_pending_never_reads_the_settings()
+    {
+        // The flag-off cost: Enabled() re-reads config.json, so the pump asks what is pending first and reads it only when there is work.
+        await using var f = new Fake();
+        f.Sessions.Change("t"); f.Sessions.Change("other");
+        await f.Pump.WhenIdleAsync();
+        Assert.Equal(0, f.SettingsReads);
+        f.Offer();
+        await f.Pump.WhenIdleAsync();
+        Assert.True(f.SettingsReads > 0);
     }
 
     [Fact]
@@ -202,5 +215,55 @@ public sealed class DeliveryDispatchPumpTests
         Assert.Equal(reads, f.Reads);
         f.Idle = true; f.Sessions.Change(); await f.Pump.WhenIdleAsync();
         Assert.Single(f.Sent);
+    }
+
+    [Fact]
+    public async Task A_refused_stop_leaves_the_pump_draining()
+    {
+        await using var f = new Fake();
+        var delivery = f.Gate.TryEnterDelivery()!;
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromMilliseconds(50), _ => { }) { StopHeld = f.Pump.BeginStop };
+        Assert.Null(await stops.PrepareStopAsync());
+        delivery.Dispose();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+    }
+
+    [Fact]
+    public async Task A_held_stop_lets_what_is_drained_stay_delivered_then_stops_the_pump()
+    {
+        await using var f = new Fake();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = f.Pump.BeginStop };
+        var lease = await stops.PrepareStopAsync();
+        Assert.NotNull(lease);
+        // Released, as a stop the host then abandoned would be: the pump must not wake again.
+        lease.Dispose();
+        f.Offer(); await f.Pump.WhenIdleAsync();
+        Assert.Single(f.Sent);
+        await f.Pump.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task A_stop_hook_that_throws_never_refuses_the_stop()
+    {
+        await using var f = new Fake();
+        var logs = new List<string>();
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), logs.Add) { StopHeld = () => throw new InvalidOperationException("boom") };
+        using var lease = await stops.PrepareStopAsync();
+        Assert.NotNull(lease);
+        Assert.Contains(logs, line => line.Contains("lane pump"));
+    }
+
+    [Fact]
+    public async Task A_committed_restart_stops_the_pump_before_the_handover()
+    {
+        await using var f = new Fake();
+        var order = new List<string>();
+        var stops = new PlannedStops(f.Gate, TimeSpan.FromSeconds(30), _ => { }) { StopHeld = () => order.Add("pump") };
+        Assert.True(stops.TryCommitRestart(stops.RestartToken(), () => order.Add("handover")));
+        Assert.Equal(["pump", "handover"], order);
+        await Task.CompletedTask;
     }
 }

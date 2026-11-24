@@ -136,7 +136,24 @@ cat > "$work/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$SLEEP_LOG"
 EOF
-chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout"
+# curl serves files from CURL_FIXTURES/<host>/<path> and records each URL. CURL_DOWN_HOSTS time out (28), CURL_BAD_HOSTS serve other bytes,
+# and the first CURL_FAIL_FIRST requests for any one URL time out. Nothing here touches the network.
+cat > "$work/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+url=""; out=""; args=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; --max-time|--connect-timeout|--retry|--speed-limit|--speed-time) args+="$1=$2 "; shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac
+done
+seen=$(grep -cxF "$url" "$CURL_LOG" || true); echo "$url" >> "$CURL_LOG"; echo "$args" >> "$CURL_ARGS"
+host=${url#*://}; host=${host%%/*}; path=${url#*://"$host"}
+case " ${CURL_DOWN_HOSTS:-} " in *" $host "*) exit 28 ;; esac
+[ "$seen" -ge "${CURL_FAIL_FIRST:-0}" ] || exit 28
+file="$CURL_FIXTURES/$host$path"
+[ -f "$file" ] || exit 22
+case " ${CURL_BAD_HOSTS:-} " in *" $host "*) size=$(wc -c < "$file"); file=$CURL_FIXTURES/corrupt; head -c "$size" /dev/zero | tr '\0' X > "$file" ;; esac
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
+EOF
+chmod +x "$work/bin/npx" "$work/bin/sudo" "$work/bin/apt-get" "$work/bin/sleep" "$work/bin/getent" "$work/bin/timeout" "$work/bin/curl"
 export PATH="$work/bin:$PATH" NPX_LOG="$work/npx.log" APT_LOG="$work/apt.log" SLEEP_LOG="$work/sleep.log"
 export TIMEOUT_LOG="$work/timeout.log"
 export PLAYWRIGHT_APT_ETC="$work/apt" PLAYWRIGHT_APT_LIMIT=1s
@@ -144,6 +161,8 @@ export HOME="$work/cache-fixture/home" GITHUB_OUTPUT="$work/cache-fixture/output
 export PLAYWRIGHT_APT_LISTS="$work/cache-fixture/lists" PLAYWRIGHT_APT_ARCHIVES="$work/cache-fixture/archives"
 unset GITHUB_JOB
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+# The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
+export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_ARGS="$work/curl-args.log" CURL_FIXTURES="$work/curl-fixtures"
 
 azure=$'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1'
 canonical=$'https://archive.ubuntu.com/ubuntu/\tpriority:2'
@@ -170,6 +189,8 @@ reset() {
   unset DEBS_CACHE_HIT DEBS_CACHE_EXACT_HIT APT_CACHE_ERROR APT_CACHE_EXIT APT_TIMEOUT_EXIT PLAYWRIGHT_APT_UPDATE_BUDGET APT_EXPECT_INDEX APT_NEW_VERSION
   unset APT_VERIFY_ERROR APT_VERIFY_URI
   unset APT_CHAIN_SOURCE APT_TRUSTED_RELEASE APT_CHAIN_INSTALLED
+  unset CURL_DOWN_HOSTS CURL_BAD_HOSTS CURL_FAIL_FIRST PLAYWRIGHT_APT_PREFETCH_BUDGET PLAYWRIGHT_APT_FETCH_TRIES PLAYWRIGHT_APT_DEADLINE
+  export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false; rm -rf "$CURL_FIXTURES"; mkdir -p "$CURL_FIXTURES"; : > "$CURL_LOG"; : > "$CURL_ARGS"
 }
 # check <name> <expected exit> <expected apt-get calls, one per line> [expected mirror list lines...]
 # download.sh is given CHECK_BROWSERS, chromium and webkit unless set.
@@ -192,6 +213,149 @@ check() {
   fi
 }
 
+# A robust download (S2, #4104). On main's logs every failing job restored an exact-key archives cache that failed verification against the signed indexes,
+# then downloaded past the job's limit. So: the key carries the signed indexes' dates (a moved index is a MISS, not a failed verify), each package is fetched
+# with a short bounded retry and a mirror fallback and checked against the signed hash, and the final error says what failed.
+serve() { mkdir -p "$CURL_FIXTURES/$1$(dirname "$2")"; printf '%s' "$3" > "$CURL_FIXTURES/$1$2"; }
+index_fixtures() { local pocket; for pocket in noble noble-updates noble-security; do serve "$1" "/ubuntu/dists/$pocket/InRelease" "Origin: Ubuntu"$'\n'"Date: $2"$'\n'; done; }
+index_hash() {
+  local code=0; : > "$GITHUB_OUTPUT"
+  GITHUB_RUN_ID=77 bash "$here/download.sh" --cache-key chromium > "$work/out" 2>&1 || code=$?
+  [ "$code" -eq 0 ] || { echo "exit-$code"; return 0; }
+  sed -n 's/^index-hash=//p' "$GITHUB_OUTPUT"
+}
+# deb <file> <content>: the package on both mirrors; prints its plan line (the signed size and hash) in the shape real apt prints on the runner image, whose sources are
+# mirror+file:/etc/apt/apt-mirrors.txt: the UNRESOLVED mirror-list URI, never an http one (a fake that printed http URIs hid a prefetch that fetched nothing on a real runner).
+deb() {
+  local hash; hash=$(printf '%s' "$2" | sha256sum); hash=${hash%% *}
+  serve azure.archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"; serve archive.ubuntu.com "/ubuntu/pool/main/$1" "$2"
+  printf "'mirror+file:/etc/apt/apt-mirrors.txt/pool/main/%s' %s %s SHA256:%s" "$1" "$1" "${#2}" "$hash"
+}
+expect() { if eval "$2"; then echo "ok: $1"; else echo "FAIL: $1"; failures=$((failures + 1)); fi; }
+dl() { DL_CODE=0; bash "$here/download.sh" chromium webkit > "$work/out" 2>&1 || DL_CODE=$?; }
+curls() { grep -c -- "$1" "$CURL_LOG" || true; }
+index_cases() {
+  local first second third
+  reset "$azure" "$canonical"; index_fixtures azure.archive.ubuntu.com 'Mon, 24 Nov 2026 03:00:00 UTC'
+  first=$(index_hash); second=$(index_hash)
+  expect "the cache key carries a hash of the signed indexes' dates, the same for the same dates" '[ "$first" = "$second" ] && [[ "$first" =~ ^[0-9a-f]{64}$ ]]'
+  serve azure.archive.ubuntu.com /ubuntu/dists/noble-updates/InRelease $'Origin: Ubuntu\nDate: Tue, 25 Nov 2026 03:00:00 UTC\n'
+  third=$(index_hash)
+  expect "a moved index changes the key, so the old cache is a miss instead of a failed verification" '[ -n "$third" ] && [ "$third" != "$first" ]'
+  reset "$azure" "$canonical"; index_fixtures archive.ubuntu.com 'Mon, 24 Nov 2026 03:00:00 UTC'; export CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  expect "the key is the same whichever mirror answered, and a mirror that is down is skipped" '[ "$(index_hash)" = "$first" ]'
+  reset "$azure" "$canonical"; export CURL_DOWN_HOSTS='azure.archive.ubuntu.com archive.ubuntu.com'
+  expect "with no index readable the key is unique to the run, never a shared stale one" '[ "$(index_hash)" = unknown-77 ]'
+}
+prefetch_cases() {
+  local a b calls
+  reset "$azure" "$canonical"
+  a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  calls=$(printf 'update\n%s\n%s' "$verify" "$download")
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b"
+  check "every planned package is fetched and verified before apt's own download, which then finds them" 0 "$calls" "$azure" "$canonical"
+  expect "the verified packages are in apt's archives" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ] && [ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/libb_1_amd64.deb")" = "package b" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_FAIL_FIRST=2
+  check "a package that times out twice is fetched on the third try, each try bounded" 0 "$calls" "$azure" "$canonical"
+  expect "the retries were on the same mirror and backed off" '[ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/liba")" -eq 3 ] && [ "$(curls "//archive.ubuntu.com")" -eq 0 ] && [ -s "$SLEEP_LOG" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  check "a mirror that is down falls back to the next one, and the rest stay on the mirror that worked" 0 "$calls" "$azure" "$canonical"
+  expect "Azure was tried (three times) only for the first package; Canonical served both" '[ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/liba")" -eq 3 ] && [ "$(curls "azure.archive.ubuntu.com/ubuntu/pool/main/libb")" -eq 0 ] && [ "$(curls "//archive.ubuntu.com/ubuntu/pool/main/libb")" -eq 1 ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_BAD_HOSTS=azure.archive.ubuntu.com
+  check "a mirror serving the wrong bytes fails the signed hash and the next mirror is used" 0 "$calls" "$azure" "$canonical"
+  expect "only bytes that match the signed hash reach apt's archives" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" CURL_DOWN_HOSTS='azure.archive.ubuntu.com archive.ubuntu.com'
+  check "a package no mirror serves is left to apt's own bounded download, which still runs" 0 "$calls" "$azure" "$canonical"
+  expect "and the log names it" 'grep -q "left to apt.*liba_1_amd64.deb" "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_PREFETCH_BUDGET=0
+  check "a spent prefetch budget hands everything to apt without a single fetch" 0 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+  expect "no package was fetched and the log says why" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && grep -q budget "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_FORCE_FALLBACK=true
+  dl
+  expect "a forced fallback proof leaves downloading to apt, so its Get: lines stay the proof" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ]'
+}
+cause_cases() {
+  reset "$azure" "$canonical"; export APT_UPDATE_EXIT=100; dl
+  expect "an update apt rejected says so, not a network failure" '[ "$DL_CODE" -eq 100 ] && grep -q "^::error::apt update failed (exit 100): .*not a network failure" "$work/out"'
+  reset "$canonical"; export APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "a download that timed out names network or timeout as the cause" '[ "$DL_CODE" -eq 124 ] && grep -q "^::error::apt download failed (exit 124): network or timeout" "$work/out"'
+  reset "$canonical"; export APT_DOWNLOAD_EXIT=100; dl
+  expect "a download apt rejected names a package or signature problem, not the network" '[ "$DL_CODE" -eq 100 ] && grep -q "^::error::apt download failed (exit 100): .*not a network failure" "$work/out"'
+  reset "$canonical"; export DEBS_CACHE_HIT=true DEBS_CACHE_EXACT_HIT=true APT_VERIFY_ERROR='E: bad plan' APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "a timeout after a cache that failed verification says both, so the log reads as it happened" '[ "$DL_CODE" -eq 124 ] && grep -q "network or timeout" "$work/out" && grep -q "restored cache had failed verification" "$work/out"'
+}
+# The stall facts from main run 45351659153 (pwa-e2e): a cold download from a regional mirror that STALLED mid-download (no data), three attempts each waiting out
+# the full timeout (31 minutes), so the cache was never saved. So a stall is dead in seconds, attempts are short and many, and each attempt asks another mirror.
+stall_cases() {
+  local a b calls
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b"
+  check "a fetch gives up on a stalled connection quickly: no data for a while is dead, whatever the total limit" 0 "$(printf 'update\n%s\n%s' "$verify" "$download")" "$azure" "$canonical"
+  expect "every fetch carries a speed floor and a short stall window as well as the total limit" 'grep -q -- "--speed-limit=" "$CURL_ARGS" && grep -q -- "--speed-time=" "$CURL_ARGS" && grep -q -- "--max-time=" "$CURL_ARGS"'
+  expect "apt's own downloads give up on a silent connection too (a short Acquire timeout, not the attempt limit)" 'grep -q "Acquire::http::Timeout \"30\"" "$PLAYWRIGHT_APT_ETC/apt.conf.d/99playwright-stall" && grep -q "Acquire::https::Timeout \"30\"" "$PLAYWRIGHT_APT_ETC/apt.conf.d/99playwright-stall"'
+  reset "$canonical"; export PLAYWRIGHT_APT_ATTEMPTS=6 PLAYWRIGHT_APT_RETRY_DELAY=5 APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "six attempts, each backed off by at most 30 s, so a stalled mirror is not waited on for half an hour" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 6 ] && [ "$(wc -l < "$SLEEP_LOG")" -eq 5 ] && ! awk "\$1 > 30 { bad = 1 } END { exit !bad }" "$SLEEP_LOG"'
+  expect "the unset defaults are short attempts and more of them" 'grep -q "attempts=\${PLAYWRIGHT_APT_ATTEMPTS:-6}" "$here/download.sh" && ! grep -q "PLAYWRIGHT_APT_LIMIT:-600s" "$here/download.sh"'
+  reset "$canonical" $'http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:3'
+  export PLAYWRIGHT_APT_ROTATE=true PLAYWRIGHT_APT_ATTEMPTS=3 APT_DOWNLOAD_TIMEOUTS=1
+  check "a download attempt that timed out is retried on the NEXT mirror, not the same one again" 0 "$(printf 'update\n%s\n%s' "$download" "$download")" $'http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:3' "$canonical"
+}
+# plan_line <uri> <file> <content>: a plan line for a package whose URI is exactly <uri>.
+plan_line() { local hash; hash=$(printf '%s' "$3" | sha256sum); hash=${hash%% *}; printf "'%s' %s %s SHA256:%s" "$1" "$2" "${#3}" "$hash"; }
+uri_cases() {
+  local a calls
+  calls=$(printf 'update\n%s\n%s' "$verify" "$download")
+  reset "$azure" "$canonical"; serve archive.ubuntu.com /ubuntu/pool/main/libx_1_amd64.deb 'package x'
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$(plan_line 'cdrom:[Ubuntu]/pool/main/libx_1_amd64.deb' libx_1_amd64.deb 'package x')"$'\n'"$(plan_line 'file:/var/cache/libx_2_amd64.deb' libx_2_amd64.deb 'package x2')"$'\n'"$(plan_line 'mirror+copy:/x/libx_3_amd64.deb' libx_3_amd64.deb 'package x3')"
+  check "a plan URI with a scheme curl cannot fetch is left to apt at once, with no fetch, no retry and no sleep" 0 "$calls" "$azure" "$canonical"
+  expect "nothing was fetched, nothing slept, and the log names them" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && [ ! -s "$SLEEP_LOG" ] && grep -q "left to apt.*libx_1_amd64.deb.*libx_2_amd64.deb.*libx_3_amd64.deb" "$work/out"'
+  reset "$azure" "$canonical"; serve packages.microsoft.com /ubuntu/24.04/prod/pool/main/m/msx_1_amd64.deb 'package ms'
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$(plan_line 'https://packages.microsoft.com/ubuntu/24.04/prod/pool/main/m/msx_1_amd64.deb' msx_1_amd64.deb 'package ms')"
+  check "a package from a non-Ubuntu source is fetched from its own URI only, never from the Ubuntu mirrors" 0 "$calls" "$azure" "$canonical"
+  expect "only packages.microsoft.com was asked, and the package arrived" '[ "$(curls "packages.microsoft.com")" -eq 1 ] && [ "$(curls "ubuntu.com")" -eq 0 ] && [ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/msx_1_amd64.deb")" = "package ms" ]'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a" CURL_DOWN_HOSTS=azure.archive.ubuntu.com
+  check "a mirror+file URI is mapped onto the mirror list and rotates when a mirror is down, as a real runner needs" 0 "$calls" "$azure" "$canonical"
+  expect "it was fetched, from Canonical after Azure failed, and the summary counts it" '[ "$(cat "$PLAYWRIGHT_APT_ARCHIVES/liba_1_amd64.deb")" = "package a" ] && grep -q "fetched 1 of 1 planned packages" "$work/out"'
+}
+# The worst case of the whole step (review P2 on #4410). Every wait is bounded, but they ADD UP across update, prefetch and apt's retries, so the step has one deadline:
+# no new attempt starts after PLAYWRIGHT_APT_DEADLINE seconds, and the prefetch budget is at most half of what is left. The arithmetic, from the defaults themselves:
+#   the step ends by  deadline + the longest single attempt that may still start (apt: its limit + 30 s kill grace; a fetch: --max-time + 10 s connect) + the plan call (60)
+#   + the offline install (180), and that plus the time the job's own work needs (900: npm ci, browsers, tests) must fit the SMALLEST timeout-minutes of a job that calls the action.
+deadline_cases() {
+  local deadline limit fetch longest worst job_limit
+  deadline=$(sed -n 's/^deadline=\${PLAYWRIGHT_APT_DEADLINE:-\([0-9]*\)}.*/\1/p' "$here/download.sh")
+  limit=$(grep -o 'PLAYWRIGHT_APT_LIMIT:-[0-9]*s' "$here/download.sh" | grep -o '[0-9]*' | sort -n | tail -n 1)
+  fetch=$(sed -n 's/^fetch_timeout=\${PLAYWRIGHT_APT_FETCH_TIMEOUT:-\([0-9]*\)}.*/\1/p' "$here/download.sh")
+  job_limit=$(for f in ci.yml full.yml; do [ ! -f "$here/../../workflows/$f" ] || awk '
+    /^  [[:alnum:]_-]+:[[:space:]]*$/ { t = "" }
+    /^    timeout-minutes:/ { t = $2 }
+    /uses: \.\/\.github\/actions\/playwright-system-packages/ && t != "" { print t * 60 }' "$here/../../workflows/$f"; done | sort -n | head -n 1)
+  : "${job_limit:=2100}"
+  longest=$((limit + 30)); [ $((fetch + 10)) -le "$longest" ] || longest=$((fetch + 10))
+  worst=$((deadline + longest + 60 + 180))
+  expect "the step's defaults are readable (deadline ${deadline:-?} s, longest apt limit ${limit:-?} s, fetch ${fetch:-?} s)" '[ -n "$deadline" ] && [ -n "$limit" ] && [ -n "$fetch" ]'
+  expect "worst case $worst s (deadline $deadline + longest attempt $longest + plan 60 + install 180) plus 900 s for the job's own work fits its smallest cap ($job_limit s)" '[ "$((worst + 900))" -le "$job_limit" ]'
+  expect "the header shows the arithmetic" 'grep -q "worst case" "$here/download.sh"'
+  reset "$canonical"; export PLAYWRIGHT_APT_DEADLINE=0 PLAYWRIGHT_APT_ATTEMPTS=6 APT_DOWNLOAD_TIMEOUTS=99; dl
+  expect "no new attempt starts once the deadline is spent, and the error says so" '[ "$DL_CODE" -eq 124 ] && [ "$(grep -c -- "--download-only" "$APT_LOG")" -eq 1 ] && grep -q "^::error::apt download failed (exit 124): network or timeout.*deadline" "$work/out"'
+  reset "$azure" "$canonical"; a=$(deb liba_1_amd64.deb 'package a'); b=$(deb libb_1_amd64.deb 'package b')
+  export PLAYWRIGHT_APT_PREFETCH=true APT_VERIFY_URI="$a"$'\n'"$b" PLAYWRIGHT_APT_DEADLINE=0
+  dl
+  expect "the prefetch never outlasts the deadline: with none left it fetches nothing" '[ "$(wc -l < "$CURL_LOG")" -eq 0 ] && grep -q budget "$work/out"'
+}
+robust_cases() { index_cases; prefetch_cases; uri_cases; cause_cases; stall_cases; deadline_cases; }
+if [ "${1:-}" = --robust ]; then
+  robust_cases
+  [ "$failures" -eq 0 ] || { echo "::error::$failures of download.sh's robust checks failed"; exit 1; }
+  exit 0
+fi
 # Cached-list cases guard isolation only; archive, tampered-Packages and live-* cases are the sensors.
 cache_auth_cases() {
   local damage hash size calls want
@@ -386,7 +550,7 @@ check "a slow download is not retried: it leaves the Azure mirror after one try"
   0 "$(printf 'update\n%s\n%s' "$download" "$download")" "$canonical"
 export PLAYWRIGHT_APT_ATTEMPTS=1
 
-# Network downloads use the default three attempts and 5/20 second backoff; sleep is recorded,
+# Network downloads use the default three attempts on Azure (six on Canonical) and 5/20 second backoff; sleep is recorded,
 # not waited out. Errors must come from this download, not a previous attempt.
 reset "$azure" "$canonical"; unset PLAYWRIGHT_APT_ATTEMPTS PLAYWRIGHT_APT_RETRY_DELAY
 export APT_ERROR='E: Failed to fetch http://azure.archive.ubuntu.com/ubuntu/pool/pkg.deb Connection failed' APT_FAIL_COUNT=1
@@ -413,12 +577,12 @@ grep -q '^::warning.*fetching the rest from https://archive\.ubuntu\.com' "$work
   || { echo "FAIL: DNS fallback ran the forced proof"; failures=$((failures + 1)); }
 
 reset "$azure" "$canonical"; export APT_DNS_EXIT=1 APT_ERROR='E: Failed to fetch https://archive.ubuntu.com/ubuntu/pool/pkg.deb Connection timed out'
-check "Canonical connection failures exhaust three attempts then fail loudly" \
-  100 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
+check "Canonical connection failures exhaust six attempts then fail loudly" \
+  100 "$(printf 'update\n%s\n%s\n%s\n%s\n%s\n%s' "$download" "$download" "$download" "$download" "$download" "$download")" "$canonical"
 grep -q '^::error::' "$work/out" \
   || { echo "FAIL: exhausted downloads did not emit an error"; failures=$((failures + 1)); }
-for attempt in 1 2 3; do
-  grep -q "attempt $attempt of 3" "$work/out" \
+for attempt in 1 2 3 4 5 6; do
+  grep -q "attempt $attempt of 6" "$work/out" \
     || { echo "FAIL: missing download attempt $attempt log"; failures=$((failures + 1)); }
 done
 reset "$azure" "$canonical"; export APT_UPDATE_ERROR="W: Failed to fetch mirror+file:/etc/apt/apt-mirrors.txt/dists/noble/InRelease Temporary failure resolving 'azure.archive.ubuntu.com'" APT_UPDATE_EXIT=0
@@ -470,6 +634,7 @@ for transition in completed timeout completed-after-timeout timeout-with-diagnos
   if (
     source <(sed -n '/^network_error()/,/^leave_azure()/p' "$here/download.sh" | sed '$d')
     update_deadline=0; attempts=3; delay=0; left_azure=false; network_host=azure.archive.ubuntu.com
+    deadline=600; deadline_hit=false   # retry() reads the step's deadline; this subshell sources only its functions
     unset PLAYWRIGHT_APT_ATTEMPTS
     export PLAYWRIGHT_APT_RETRY_DELAY=0
     sleep() { :; }
@@ -544,23 +709,23 @@ check "Canonical update timeouts use four sixty-second attempts then fail loudly
   || { echo "FAIL: update timeout retries did not use 15/30/60 second backoff"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
 for hit in false true; do
-  reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2 APT_DOWNLOAD_SECONDS=300
+  reset "$canonical"; export DEBS_CACHE_HIT="$hit" APT_DOWNLOAD_TIMEOUTS=2 APT_DOWNLOAD_SECONDS=120
   [ "$hit" != true ] || rm "$HOME/.cache/playwright-apt-debs/cached.deb"
   unset PLAYWRIGHT_APT_LIMIT
-  check "an incomplete cache ($hit) finishes a five-minute cold download on Canonical after two timeouts" \
+  check "an incomplete cache ($hit) finishes a two-minute cold download on Canonical after two timeouts" \
     0 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
-  [ "$(grep -c -- '^--kill-after=30s 600s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
+  [ "$(grep -c -- '^--kill-after=30s 180s apt-get install .*--download-only' "$TIMEOUT_LOG")" = 3 ] &&
     [ "$(cat "$SLEEP_LOG")" = $'5\n20' ] \
     || { echo "FAIL: download retries inherited the update limit or lost bounded backoff"; failures=$((failures + 1)); }
   update_limit=60s
   grep -q " $update_limit apt-get update$" "$TIMEOUT_LOG" \
     || { echo "FAIL: the download limit changed the update's own bound"; failures=$((failures + 1)); }
 done
-reset "$canonical"; export DEBS_CACHE_HIT=true APT_DOWNLOAD_TIMEOUTS=3
+reset "$canonical"; export DEBS_CACHE_HIT=true APT_DOWNLOAD_TIMEOUTS=6
 rm "$HOME/.cache/playwright-apt-debs/cached.deb"
 unset PLAYWRIGHT_APT_LIMIT
-check "three download timeouts remain fatal on an incomplete cache without installing or saving" \
-  124 "$(printf 'update\n%s\n%s\n%s' "$download" "$download" "$download")" "$canonical"
+check "six download timeouts remain fatal on an incomplete cache without installing or saving" \
+  124 "$(printf 'update\n%s\n%s\n%s\n%s\n%s\n%s' "$download" "$download" "$download" "$download" "$download" "$download")" "$canonical"
 grep -q '^::error::apt download failed (exit 124)' "$work/out" && [ ! -s "$GITHUB_OUTPUT" ] \
   || { echo "FAIL: exhausted downloads did not fail loudly without authorizing a cache save"; failures=$((failures + 1)); }
 export PLAYWRIGHT_APT_LIMIT=1s
@@ -598,8 +763,8 @@ fi
 reset "$azure" "$canonical"; export APT_CACHE_EXIT=100 APT_CACHE_ERROR='E: Sub-process /usr/bin/dpkg returned an error code (1)'
 check "an offline install failure after downloading packages fails the step" \
   100 "$(printf 'update\n%s\n%s' "$download" "$cached")" "$azure" "$canonical"
-if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF "if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml"; then
-  echo "ok: successfully downloaded archives can be saved after a fatal install failure"
+if grep -qx 'cache-ready=true' "$GITHUB_OUTPUT" && grep -qF 'value: ${{ steps.packages.outputs.cache-ready }}' "$here/action.yml"; then
+  echo "ok: successfully downloaded archives are reported ready after a fatal install failure, for the save action"
 else echo "FAIL: a later install failure prevented saving downloaded archives"; failures=$((failures + 1)); fi
 if [ "${1:-}" != --cold-cache ]; then
 reset "$azure" "$canonical"; export APT_TIMEOUT_EXIT=124
@@ -611,18 +776,20 @@ check "a forced proof cannot use a cache hit to ignore update DNS failures" \
   100 "$(printf 'update\nupdate\nupdate\nupdate')" "$canonical"
 ! grep -q 'npx playwright install --with-deps' "$here/../../workflows/ci.yml" \
   || { echo "FAIL: a downstream browser install would run apt update again"; failures=$((failures + 1)); }
-[ "$(grep -c 'path: ~/.cache/playwright-apt-debs$' "$here/action.yml")" = 2 ] &&
+[ "$(cat "$here/action.yml" "$here/../playwright-system-packages-save/action.yml" | grep -c 'path: ~/.cache/playwright-apt-debs$')" = 2 ] &&
+  ! grep -q 'actions/cache/save' "$here/action.yml" &&
+  grep -q 'actions/cache/save' "$here/../playwright-system-packages-save/action.yml" &&
   ! grep -q 'playwright-apt-lists' "$here/action.yml" &&
   grep -q 'key:.*packages-hash.*ref-hash' "$here/action.yml" &&
   grep -q 'restore-keys:' "$here/action.yml" &&
-  grep -qF "    - if: always() && steps.packages.outputs.cache-ready == 'true'" "$here/action.yml" \
+  { ! grep -q 'playwright-system-packages-save' "$here/../../workflows/ci.yml" || grep -qF "if: always() && steps.system-packages.outputs.cache-ready == 'true'" "$here/../../workflows/ci.yml"; } \
   || { echo "FAIL: versioned archives-only caches must restore and save after successful cold runs"; failures=$((failures + 1)); }
 awk '
   /^  [[:alnum:]_-]+:/ { actions=0 }
-  /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
+  /uses: \.\/\.github\/actions\/playwright-system-packages$/ { actions++ }
   /npx playwright install / { if (actions-- <= 0) bad=1; installs++ }
   END { exit bad || installs != 4 }
-' "$here/../../workflows/ci.yml" \
+' "$here/../../workflows/ci.yml" "$here/../../workflows/full.yml" \
   || { echo "FAIL: each of the four browser installs must follow its system-package action"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
@@ -635,6 +802,8 @@ export APT_ERROR=$'E: Temporary failure resolving azure.archive.ubuntu.com\nE: H
 check "a corrupt package alongside a DNS failure still refuses retry and fallback" \
   100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
 export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+# The package prefetch and the signed-index date are off or fixed unless a case asks, and curl is always the stand-in.
+export PLAYWRIGHT_APT_PREFETCH=false PLAYWRIGHT_APT_ROTATE=false PLAYWRIGHT_APT_CODENAME=noble CURL_LOG="$work/curl.log" CURL_ARGS="$work/curl-args.log" CURL_FIXTURES="$work/curl-fixtures"
 
 # force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
 # before leaving the Azure mirror would time out and show up as a second call.
@@ -699,6 +868,7 @@ cache_auth_cases
 cache_ref_case
 cache_copy_cases
 followup_cases
+robust_cases
 fi
 if [ "$failures" -ne 0 ]; then
   echo "::error::$failures of download.sh's checks failed"; exit 1

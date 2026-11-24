@@ -6,6 +6,19 @@ using Xunit;
 public class MachineLoadTests
 {
     [Theory]
+    [InlineData(null)]
+    [InlineData(0d)]
+    [InlineData(8.5)]
+    public void Readers_preserve_the_optional_run_queue_without_inventing_a_missing_value(double? queue)
+    {
+        var json = JsonSerializer.SerializeToElement(new { state = "partial", runQueueAvg = queue });
+        var read = Received.Read<MachineLoad>(json);
+        var written = JsonSerializer.SerializeToElement(read, ProtocolJson.Options);
+        Assert.Equal(queue is not null, written.TryGetProperty("runQueueAvg", out var value));
+        if (queue is not null) { Assert.Equal(queue, value.GetDouble()); }
+    }
+
+    [Theory]
     [InlineData(MachineLoadState.Fresh)]
     [InlineData(MachineLoadState.Partial)]
     [InlineData(MachineLoadState.Stale)]

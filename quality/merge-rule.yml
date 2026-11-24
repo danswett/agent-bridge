@@ -98,8 +98,6 @@ main_green:
   jobs:
     - product
     - ha-integration
-    - spikes
-    - spikes-linux
     - light
     - design-gen
     - playwright-apt
@@ -127,7 +125,6 @@ main_green:
       - NuGet packages from main's cache
       - Save NuGet packages to main's cache
     ha-integration: *dotnet_infra
-    spikes: *dotnet_infra
     app: *dotnet_infra
     light:
       - Set up job
@@ -146,7 +143,6 @@ main_green:
       - Playwright's browsers from main's cache
       - Save Playwright's browsers to main's cache
     pwa-e2e: *browser_infra
-    spikes-linux: *browser_infra
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success
