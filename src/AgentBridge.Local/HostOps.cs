@@ -31,6 +31,10 @@ public static class HostOps
     public const string ScriptGrantFleet = "scripts.grant-fleet";
     public const string ScriptRevokeFleet = "scripts.revoke-fleet";
 
+    // The person approves a folder for launching from the app, no terminal (host.workspace.add). In hello only for the app.
+    public const string WorkspacesCapability = "host.workspaces";
+    public const string WorkspaceAdd = "host.workspace.add";
+
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
     public const string Subscribe = "host.subscribe";

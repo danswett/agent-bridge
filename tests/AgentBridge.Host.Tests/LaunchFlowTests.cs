@@ -149,7 +149,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
-        }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
+        }, log: Log, attachments: attachments, credentials: credentials, account: account);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -591,6 +591,20 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal("started", o.Outcome_);
         var (id, launched) = Assert.Single(told);
         Assert.Equal((o.Session, "copilot", "API", "ask"), (id, launched.Agent, launched.Workspace, launched.Permissions));
+    }
+
+    // Session watch S1b (#4262): the owner is the AUTHENTICATED principal of the launch call, told once per session, never a request field.
+    [Fact]
+    public async Task A_started_session_is_told_to_the_owner_record_with_the_principal_that_launched_it()
+    {
+        var launcher = Launcher(Config());
+        var owned = new List<(string Session, string Principal)>();
+        launcher.SessionOwned += (session, principal) => { lock (owned) { owned.Add((session, principal)); } };
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Equal((result.Session, "phone"), Assert.Single(owned));
     }
 
     // #780 Host B: a restore is a resume through the same path as one from Launch, with nothing typed
@@ -1594,6 +1608,41 @@ public abstract partial class LaunchFlowFixture
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
+    // The launch service's log, as the host's log would have it, and a wait for one of its lines (#4229). The wait is driven by the line being logged,
+    // not polled on the wall clock: the host logs it from the launch's follow, which a loaded machine can be slow to get round to, and a 10 s poll could
+    // run out before it did. The backstop only ends a wait that can never be answered, and the failure says what the host did log.
+    readonly List<(string Fragment, TaskCompletionSource Done)> logWaits = [];
+    static readonly TimeSpan LogBackstop = TimeSpan.FromSeconds(60);
+
+    private protected void Log(string line)
+    {
+        logged.Enqueue(line);
+        lock (logWaits)
+        {
+            foreach (var wait in logWaits.Where(w => line.Contains(w.Fragment, StringComparison.Ordinal)).ToList())
+            {
+                wait.Done.TrySetResult();
+                logWaits.Remove(wait);
+            }
+        }
+    }
+
+    private protected async Task WaitForLogAsync(string fragment, TimeSpan? backstop = null)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (logWaits)
+        {
+            // Checked and registered together with Log's look at the waiters, so a line logged in between is never missed.
+            if (logged.Any(l => l.Contains(fragment, StringComparison.Ordinal))) { return; }
+            logWaits.Add((fragment, done));
+        }
+        try { await done.Task.WaitAsync(backstop ?? LogBackstop); }
+        catch (TimeoutException)
+        {
+            lock (logWaits) { logWaits.RemoveAll(w => w.Done == done); }
+            Assert.Fail($"the host never logged \"{fragment}\"; it logged: {string.Join(" | ", logged)}");
+        }
+    }
     private protected static async Task WaitAsync(Func<Task<bool>> done)
     {
         var until = DateTime.UtcNow + Patience;
