@@ -248,9 +248,6 @@ public sealed partial class ReplyService : ISessionReplier
         public Action? Watch(Action? keysGoing) => keysGoing is null ? null : () => { KeysGoingFired = true; keysGoing(); };
     }
 
-    // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
-    sealed class KeyTrack { public bool MayHaveBeenSent; }
-
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
         var track = new KeyTrack();
