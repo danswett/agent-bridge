@@ -47,10 +47,10 @@ the vectors give the record key as an input.
 
 Canonical JSON, UTF-8: no insignificant whitespace, object keys in UTF-16 code unit order at every
 level, integers only (no fraction or exponent). It carries the merge state of §5 of the design
-(`pwa/js/order-merge.js`, `OrderMerge.cs`) in a compact form, because the merge form does not fit:
-a row with its register, device tag and key is about 230 bytes there, so 500 rows with 125 group
-memberships and 32 groups come to about 114 KB and only about 340 rows fit 64 KiB; the form below
-holds the same state in about 43 KB (measured, vector `limits`).
+(`pwa/js/order-merge.js`, `OrderMerge.cs`) in a compact form, because the merge form does not fit
+64 KiB at the design's 500 rows: the record of vector `limits` (500 rows, 125 group memberships, 32
+groups, 20 tombstones) is 43,616 bytes in the form below, 87 a row, and 97,610 bytes in the merge
+form (more with 32-hex host ids). The expansion is exact, so the merge ports are unchanged.
 
 ```jsonc
 { "v": 1,

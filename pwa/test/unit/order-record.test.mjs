@@ -10,14 +10,15 @@ import { mergeOrder } from '../../js/order-merge.js';
 const v = JSON.parse(readFileSync(new URL('../../../docs/protocol/vectors/order-records.json', import.meta.url), 'utf8')).order;
 const LF = String.fromCharCode(10);
 const pad = (n, w) => String(n).padStart(w, '0');
+const sid = (i, series = 8) => `00000000-0000-4000-${series}000-${pad(i, 12)}`; // a session id the size of a real one
 
 // The records of "limits": built by the rule the file's "about" gives.
 function build({ rows, memberships, groups, tombstones }) {
   const o = { d: ['0'.repeat(31) + '1'], h: ['h0', 'h1', 'h2'].slice(0, Math.min(3, Math.max(rows, 1))), v: 1, g: {}, m: {}, r: {}, x: { g: {}, m: {}, r: {} } };
   for (let n = 0; n < groups; n += 1) { o.g[`00000000-0000-4000-8000-${pad(n, 12)}`] = [900 + n, 0, `Group ${n}`]; }
-  for (let i = 0; i < rows; i += 1) { o.r[`${i % 3}${LF}s${pad(i, 4)}`] = [i + 1, 0, `k${i.toString(36).padStart(3, '0')}`, i % 20 === 0 ? 1 : 0]; }
-  for (let j = 0; j < memberships; j += 1) { o.m[`${(4 * j) % 3}${LF}s${pad(4 * j, 4)}`] = [300 + j, 0, `00000000-0000-4000-8000-${pad(j % groups, 12)}`]; }
-  for (let t = 0; t < tombstones; t += 1) { o.x.r[`0${LF}t${pad(t, 4)}`] = [2000 + t, 0, 20400]; }
+  for (let i = 0; i < rows; i += 1) { o.r[`${i % 3}${LF}${sid(i)}`] = [i + 1, 0, `k${i.toString(36).padStart(3, '0')}`, i % 20 === 0 ? 1 : 0]; }
+  for (let j = 0; j < memberships; j += 1) { o.m[`${(4 * j) % 3}${LF}${sid(4 * j)}`] = [300 + j, 0, `00000000-0000-4000-8000-${pad(j % groups, 12)}`]; }
+  for (let t = 0; t < tombstones; t += 1) { o.x.r[`0${LF}${sid(t, 9)}`] = [2000 + t, 0, 20400]; }
   return canonical(o);
 }
 const refuses = (text, code, name) => assert.throws(() => parseOrder(text), (e) => e instanceof OrderRecordError && e.code === code, name);
@@ -48,6 +49,8 @@ test('the limits: 500 rows, 500 memberships, 32 groups, and the size, measured i
     if (c.ok) {
       assert.doesNotThrow(() => parseOrder(text), c.name);
       assert.ok(Buffer.byteLength(text) < 46000, `${c.name}: ${Buffer.byteLength(text)} bytes`);
+      // The merge form of the same state would not fit: why the record is compact.
+      assert.ok(JSON.stringify(toMergeForm(parseOrder(text))).length > LIMITS.bytes, 'the merge form is over 64 KiB');
       assert.ok(Buffer.byteLength(text) + 106 <= LIMITS.bytes, 'and its sealed object fits 64 KiB');
     } else { refuses(text, c.code, c.name); }
   }
