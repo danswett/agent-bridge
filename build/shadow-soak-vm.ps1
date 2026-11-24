@@ -86,11 +86,8 @@ $ErrorActionPreference = 'Stop'
 $vmScript = Join-Path $PSScriptRoot 'rehearsal-azure-vmw.ps1'
 # Every mode, -Finish included, needs the sign-in: without it the rehearsal script refuses before it writes, and -Finish would
 # leave both VMs running and billing. Say so now, before anything is started or stopped.
-# The sign-in comes from the AGENT_BRIDGE_REHEARSAL_AZURE_USER user environment variable only: no parameter takes it, so no command line carries it.
-if (-not $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER) {
-    throw 'No expected az sign-in is set. Set the AGENT_BRIDGE_REHEARSAL_AZURE_USER user environment variable once (docs/parity-checklist.md, VM-W in Azure), then open a new terminal. Nothing was started or stopped.'
-}
-$who = @{ ExpectedAzureUser = $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER }
+# The sign-in defaults to the account az is already signed in as; AGENT_BRIDGE_REHEARSAL_AZURE_USER is an optional override. No parameter takes it, so no command line carries it.
+$who = @{ ExpectedAzureUser = (& (Join-Path $PSScriptRoot 'resolve-rehearsal-azure-user.ps1') -AzureConfigDir $AzureConfigDir) }
 $scratch = Join-Path $HOME '.agentbridge-rehearsal'
 $soak = 'C:\rehearsal\soak'
 $repoUrl = 'https://github.com/danswett/agent-bridge.git'

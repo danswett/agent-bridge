@@ -42,7 +42,7 @@ public class OwnerIdentityScanTests
     // The rehearsal script refuses without the sign-in it belongs to, and the owner runs it (#4273 review): the soak that calls it must pass it
     // on, or -Prepare, -Start and -Finish stop at the guard (-Finish would leave both VMs billing), and the owner's docs must say how to set it.
     [Fact]
-    public void The_soak_reads_the_azure_user_from_the_environment_passes_it_to_every_rehearsal_call_and_refuses_up_front_without_one()
+    public void The_soak_resolves_the_azure_user_passes_it_to_every_rehearsal_call_and_has_no_owner_step()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var soak = File.ReadAllLines(Path.Combine(root, "build", "shadow-soak-vm.ps1"));
@@ -50,9 +50,8 @@ public class OwnerIdentityScanTests
         Assert.NotEmpty(calls);
         Assert.All(calls, line => Assert.Contains("@who", line));
         // From the environment only (#4241): no soak parameter takes the address, so no command line has to carry it.
-        Assert.Contains(soak, line => line.Contains("$who = @{ ExpectedAzureUser = $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER", StringComparison.Ordinal));
+        Assert.Contains(soak, line => line.Contains("$who = @{ ExpectedAzureUser = (& (Join-Path $PSScriptRoot 'resolve-rehearsal-azure-user.ps1')", StringComparison.Ordinal));
         Assert.DoesNotContain(soak, line => line.Contains("[string] $ExpectedAzureUser", StringComparison.Ordinal));
-        Assert.Contains(soak, line => line.Contains("if (-not $env:AGENT_BRIDGE_REHEARSAL_AZURE_USER", StringComparison.Ordinal));
     }
 
     // The owner's plain, one-time step is in Windows settings; no doc asks the owner to type the address into a command (#4241).
