@@ -6157,6 +6157,71 @@
           }
         }
       ]
+    },
+    {
+      "name": "id-less-reply-ref",
+      "recording": "synthetic",
+      "events": [
+        {
+          "seq": 1,
+          "upsert": {
+            "id": "s1",
+            "activity": {
+              "turn": "Tn01aBcDeFgHiJkL",
+              "responseTurn": "Tn01aBcDeFgHiJkL",
+              "responseId": "Rc01aBcDeFgHiJkL.0",
+              "responseRef": "Rc01aBcDeFgHiJkL.0",
+              "response": "First reply"
+            }
+          }
+        },
+        {
+          "seq": 2,
+          "patch": {
+            "id": "s1",
+            "base": 1,
+            "revision": 2,
+            "set": {
+              "activity": {
+                "responseRef": "Rc02mNoPqRsTuVwX.0",
+                "response": "Second reply, no id",
+                "responseId": null
+              }
+            }
+          },
+          "session": {
+            "id": "s1",
+            "activity": {
+              "turn": "Tn01aBcDeFgHiJkL",
+              "responseTurn": "Tn01aBcDeFgHiJkL",
+              "responseRef": "Rc02mNoPqRsTuVwX.0",
+              "response": "Second reply, no id"
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "patch": {
+            "id": "s1",
+            "base": 2,
+            "revision": 3,
+            "append": {
+              "activity": {
+                "response": ", grown"
+              }
+            }
+          },
+          "session": {
+            "id": "s1",
+            "activity": {
+              "turn": "Tn01aBcDeFgHiJkL",
+              "responseTurn": "Tn01aBcDeFgHiJkL",
+              "responseRef": "Rc02mNoPqRsTuVwX.0",
+              "response": "Second reply, no id, grown"
+            }
+          }
+        }
+      ]
     }
   ]
 }
