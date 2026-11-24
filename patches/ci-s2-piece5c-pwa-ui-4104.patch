@@ -1,0 +1,703 @@
+From 2005565ecf39643f68e68974243a7251dd861ec0 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 17:47:07 -0800
+Subject: [PATCH] CI S2, piece 5c: pwa-ui moves to full.yml with the
+ apt-fallback proof; ci.yml has no workflow_dispatch left (Part of #4104)
+
+pwa-ui's six legs (Chromium and WebKit, a static matrix) move from ci.yml to full.yml with the commit under test checked out; full-gate
+needs it. Owner decision A, R8b: the pull-request-only 'repeat changed specs five times' step is dropped (flakes surface in FULL;
+tools/repeat-changed-specs.mjs stays). ci.yml's workflow_dispatch trigger, its force-apt-fallback input and the plan job's guard
+existed only for pwa-ui's apt-fallback proof, so they move to full.yml's dispatch: a run by hand is for a commit on main (the main
+ref) or a fallback proof on a branch's own new commit, never main's head or an open pull request's. The catalog marks both pwa-ui
+suites lane full (the WebKit post-merge tier is moot), merge-rule.yml's main_green drops the six legs and the browser infra_steps, and
+the merge-rule infra test targets light/ha-integration (the FAST jobs). Tests first.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../playwright-system-packages/download.sh    |   2 +-
+ .../playwright-system-packages/test.sh        |   2 +-
+ .github/workflows/ci.yml                      | 172 +-----------------
+ .github/workflows/full.yml                    | 160 +++++++++++++++-
+ quality/README.md                             |  12 +-
+ quality/catalog.yml                           |  10 +-
+ quality/merge-rule.yml                        |  15 --
+ .../AgentBridge.Quality.Tests/CiPlanTests.cs  |   2 +-
+ .../FullWorkflowTests.cs                      |  37 +++-
+ .../HaValidationCoverageTests.cs              |   2 +-
+ .../MergeRuleTests.cs                         |   8 +-
+ .../PlanScriptTests.cs                        |   4 +-
+ 12 files changed, 218 insertions(+), 208 deletions(-)
+
+diff --git a/.github/actions/playwright-system-packages/download.sh b/.github/actions/playwright-system-packages/download.sh
+index 86c98cc7c..2474d91ff 100644
+--- a/.github/actions/playwright-system-packages/download.sh
++++ b/.github/actions/playwright-system-packages/download.sh
+@@ -27,7 +27,7 @@
+ # the mirror list isn't the Azure-then-Canonical one this expects, or Azure is still named after the
+ # edit, it fails rather than go on waiting on the same mirror.
+ #
+-# PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback, which ci.yml sets only in
++# PLAYWRIGHT_APT_FORCE_FALLBACK=true (the action's force-apt-fallback, which full.yml sets only in
+ # pwa-ui on a run by hand that asks for it; quality/README.md §4.7) skips the first download and takes
+ # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
+ # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
+diff --git a/.github/actions/playwright-system-packages/test.sh b/.github/actions/playwright-system-packages/test.sh
+index a94d39fd2..6fb778c2e 100644
+--- a/.github/actions/playwright-system-packages/test.sh
++++ b/.github/actions/playwright-system-packages/test.sh
+@@ -636,7 +636,7 @@ check "a corrupt package alongside a DNS failure still refuses retry and fallbac
+   100 "$(printf 'update\n%s' "$download")" "$azure" "$canonical"
+ export PLAYWRIGHT_APT_ATTEMPTS=1 PLAYWRIGHT_APT_RETRY_DELAY=0
+ 
+-# force-apt-fallback (ci.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
++# force-apt-fallback (full.yml's pwa-ui on a run by hand): APT_SLOW stays set, so a download tried
+ # before leaving the Azure mirror would time out and show up as a second call.
+ from_canonical=$'Get:1 https://archive.ubuntu.com/ubuntu noble/main amd64 libgtk-4-1 amd64 4.14.2 [3170 kB]\nGet:2 https://archive.ubuntu.com/ubuntu noble/main amd64 xvfb amd64 2:21.1.12 [877 kB]'
+ from_azure='Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasound2t64 amd64 1.2.11 [390 kB]'
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 7e00b4d2f..f8c5a457b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -8,15 +8,6 @@ on:
+     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
+     # marking it ready must run the PR gate on the same head without waiting for another push.
+     types: [opened, synchronize, reopened, ready_for_review]
+-  # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
+-  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
+-  # writes no cache and runs every job (the whole ring).
+-  workflow_dispatch:
+-    inputs:
+-      force-apt-fallback:
+-        description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
+-        type: boolean
+-        default: false
+ 
+ permissions:
+   contents: read
+@@ -81,7 +72,6 @@ jobs:
+       app: ${{ steps.select.outputs.app }}
+       app-installer: ${{ steps.select.outputs.app-installer }}
+       light: ${{ steps.select.outputs.light }}
+-      pwa-ui: ${{ steps.select.outputs.pwa-ui }}
+       suites: ${{ steps.select.outputs.suites }}
+       test-projects: ${{ steps.select.outputs.test-projects }}
+       # The whole ring is the whole solution on all three runners, without asking the selector.
+@@ -89,35 +79,6 @@ jobs:
+       product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
+       test-filter: ${{ steps.select.outputs.test-filter }}
+     steps:
+-      # A run by hand exists only to prove pwa-ui's apt fallback (force-apt-fallback), and its
+-      # checks, quality-gate among them, land on the commit it runs: on an open pull request's
+-      # head they would stand in for that pull request's own run (the merge rule reads the latest
+-      # run per head). So it must ask for the fallback, on a branch other than main (which
+-      # publishes), at a commit that is neither main's head nor any open pull request's. Anything
+-      # else fails here, before checkout, and every job after the plan is skipped. Push and pull
+-      # request runs skip this step, so they make no API call.
+-      - name: A run by hand is a fallback proof on a commit of its own
+-        if: github.event_name == 'workflow_dispatch'
+-        env:
+-          FORCE: ${{ inputs.force-apt-fallback }}
+-          REF: ${{ github.ref }}
+-          SHA: ${{ github.sha }}
+-          REPO: ${{ github.repository }}
+-          GH_TOKEN: ${{ github.token }}
+-        run: |
+-          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+-          [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
+-          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
+-            fail "only on a branch other than main, not $REF"
+-          fi
+-          main=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha) || fail "couldn't read main's head"
+-          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read main's head"
+-          [ "$SHA" != "$main" ] || fail "$SHA is main's head; prove on a new commit of its own"
+-          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].head.sha' > "$RUNNER_TEMP/pr-heads" || fail "couldn't list the open pull requests"
+-          while read -r head; do
+-            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
+-            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
+-          done < "$RUNNER_TEMP/pr-heads"
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+         with:
+           persist-credentials: false
+@@ -235,7 +196,7 @@ jobs:
+           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
+           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
+           # quality-gate's needs disagree (quality/README.md §4.7).
+-          JOBS: product ha-integration app app-installer light pwa-ui
++          JOBS: product ha-integration app app-installer light
+         run: |
+           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
+           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+@@ -1351,7 +1312,7 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'epic-dashboard-unit')) }}
+         run: python3 -m unittest discover -s tools/epic-dashboard -v
+       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
+-      # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
++      # PWA's packages, as locked, without Playwright's browsers (only full.yml's pwa-ui and pwa-e2e jobs fetch those).
+       # Without install scripts, as pages.yml builds the published site (#650), so a build that
+       # needed one fails here first.
+       - name: The PWA's packages
+@@ -1484,133 +1445,6 @@ jobs:
+             echo "::warning title=docs-links::lychee found broken links or anchors (exit $rc); the job summary lists them."
+           fi
+ 
+-  pwa-ui:
+-    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
+-    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
+-    # the wall time of every PWA change. Both browsers now have three
+-    # shards. Playwright's --shard splits what --project selects, so together the six run every
+-    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
+-    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
+-    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
+-    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
+-    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
+-    name: pwa-ui (${{ matrix.name }})
+-    needs: plan
+-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-ui == 'true'
+-    strategy:
+-      fail-fast: false
+-      matrix:
+-        # WebKit is post-merge (quality/catalog.yml pwa-ui suite, #3209): only main runs it.
+-        include: >-
+-          ${{ fromJSON(format('[{0}{1}]',
+-          '{"name":"chromium 1/3","project":"chromium","shard":"1/3","renders":true},{"name":"chromium 2/3","project":"chromium","shard":"2/3"},{"name":"chromium 3/3","project":"chromium","shard":"3/3"}',
+-          github.event_name != 'pull_request' && ',{"name":"webkit 1/3","project":"webkit","shard":"1/3"},{"name":"webkit 2/3","project":"webkit","shard":"2/3"},{"name":"webkit 3/3","project":"webkit","shard":"3/3"}' || '')) }}
+-    runs-on: ubuntu-24.04
+-    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+-    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+-    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
+-    # come from the same mirror. 35 leaves room for bounded update and download retries,
+-    # Canonical fallback and the shard's tests. It bounds a
+-    # stuck job, not a test: a leg that passes takes as long as before.
+-    timeout-minutes: 35
+-    defaults:
+-      run:
+-        working-directory: pwa
+-    env:
+-      PWA_SKIP_E2E: '1'
+-      PROJECT: ${{ matrix.project }}
+-      SHARD: ${{ matrix.shard }}
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-        with:
+-          persist-credentials: false
+-          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+-        with:
+-          node-version: '22'
+-      - run: npm ci
+-      - name: Which Playwright
+-        id: playwright
+-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+-      # Playwright's browser from main's cache, as in full.yml's spikes-linux, keyed by browser so each leg
+-      # restores only the one it runs.
+-      - name: Playwright's browsers from main's cache
+-        id: browsers
+-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+-      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
+-      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
+-      # how). The install below then finds them all downloaded; it, and the packages, are as before.
+-      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the first
+-      # mirror's download and takes that fallback before any package is downloaded, to prove it once; the
+-      # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
+-      # false on every push and pull request run, which run the action exactly as before.
+-      - name: Download Playwright's system packages
+-        uses: ./.github/actions/playwright-system-packages
+-        with:
+-          browsers: ${{ matrix.project }}
+-          working-directory: pwa
+-          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
+-      - run: npx playwright install "$PROJECT"
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+-      - name: Select changed PWA specs
+-        if: github.event_name == 'pull_request'
+-        id: repeat-specs
+-        env:
+-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+-        run: node tools/repeat-changed-specs.mjs --select
+-      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+-      - name: Repeat changed PWA specs five times without retries
+-        if: github.event_name == 'pull_request' && steps.repeat-specs.outputs.specs != '[]'
+-        env:
+-          CHANGED_SPECS: ${{ steps.repeat-specs.outputs.specs }}
+-        run: node tools/repeat-changed-specs.mjs
+-      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
+-      # summary and as a warning, so a retry never hides a flake. Never fails the job.
+-      - name: Flaky report
+-        if: ${{ !cancelled() }}
+-        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
+-      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+-      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+-      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+-      # Chromium alone: the engine that emulates forced colours.
+-      - name: Renders of the demo
+-        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+-        continue-on-error: true
+-        run: npx playwright test --config playwright.renders.config.mjs
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: ${{ !cancelled() && matrix.renders }}
+-        with:
+-          name: pwa-renders
+-          path: pwa/renders/
+-          if-no-files-found: ignore
+-          retention-days: 14
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: failure()
+-        with:
+-          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
+-          path: pwa/test-results
+-          retention-days: 7
+-      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+-      # look at on every run, not only a failed one.
+-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+-        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+-        with:
+-          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
+-          path: |
+-            pwa/test-results/**/signin-*.png
+-            !pwa/test-results/**/attachments/**
+-          if-no-files-found: warn
+-          retention-days: 7
+-
+   quality-gate:
+     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
+     # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
+@@ -1626,7 +1460,7 @@ jobs:
+     # new gate's check only once every job it needs is done; under the same name, the draft's
+     # green gate would stand for the whole head until then, and a merge could go through on it.
+     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+-    needs: [plan, product, ha-integration, app, app-installer, light, pwa-ui]
++    needs: [plan, product, ha-integration, app, app-installer, light]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
+index be539ee51..269754f91 100644
+--- a/.github/workflows/full.yml
++++ b/.github/workflows/full.yml
+@@ -5,7 +5,7 @@ name: Full
+ # merge_group or push trigger (quality/catalog.yml `lane: full`, and the catalog check enforces it). It runs after a push to main
+ # whose FAST run finished green (a workflow_run of CI), or by hand for a commit (the release train dispatches it for one it wants
+ # to publish). Every job tests the commit the FAST run passed on, never the branch tip. A newer push cancels an older run: the
+-# latest wins. The spikes and pwa-e2e are here (pieces 4 and 5b); pwa-ui and the app's self-test, pack and installers follow (pieces 5c and 6).
++# latest wins. The spikes, pwa-e2e and pwa-ui are here (pieces 4, 5b and 5c); the app's self-test, pack and installers follow (piece 6).
+ on:
+   # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
+   # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
+@@ -16,9 +16,13 @@ on:
+   workflow_dispatch:
+     inputs:
+       sha:
+-        description: The main commit to test
++        description: The main commit to test (for a fallback proof, the commit of the branch it runs on)
+         type: string
+         required: true
++      force-apt-fallback:
++        description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a proof run, on a branch other than main only)
++        type: boolean
++        default: false
+ 
+ permissions:
+   contents: read
+@@ -36,6 +40,38 @@ jobs:
+     outputs:
+       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+     steps:
++      # A run by hand is one of two things, and anything else fails here before a job runs. Its checks land on the commit it runs
++      # (the merge rule reads the latest run per head), so: a normal run, for a commit on main (the release train, or a person), is on
++      # the main ref; a fallback proof (force-apt-fallback, the proof that pwa-ui's WebKit legs download from Canonical when the Azure
++      # mirror is slow, quality/README.md section 4.7) is on a branch other than main, at that branch's own commit, which is neither
++      # main's head nor any open pull request's. Push and workflow_run runs skip this step, so they make no API call.
++      - name: A run by hand is for a commit on main, or a fallback proof on a commit of its own
++        if: github.event_name == 'workflow_dispatch'
++        env:
++          FORCE: ${{ inputs.force-apt-fallback }}
++          REF: ${{ github.ref }}
++          SHA: ${{ github.sha }}
++          INPUT_SHA: ${{ inputs.sha }}
++          REPO: ${{ github.repository }}
++          GH_TOKEN: ${{ github.token }}
++        run: |
++          fail() { echo "::error title=full.yml by hand::$1"; exit 1; }
++          if [ "$FORCE" != true ]; then
++            [ "$REF" = refs/heads/main ] || fail "a run without force-apt-fallback is for a commit on main: run it on the main ref, not $REF"
++            exit 0
++          fi
++          if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
++            fail "force-apt-fallback only on a branch other than main, not $REF"
++          fi
++          [ "$INPUT_SHA" = "$SHA" ] || fail "force-apt-fallback tests the branch's own commit $SHA, not $INPUT_SHA"
++          main=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha) || fail "couldn't read main's head"
++          [[ "$main" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read main's head"
++          [ "$SHA" != "$main" ] || fail "$SHA is main's head; prove on a new commit of its own"
++          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].head.sha' > "$RUNNER_TEMP/pr-heads" || fail "couldn't list the open pull requests"
++          while read -r head; do
++            [[ "$head" =~ ^[0-9a-f]{40}$ ]] || fail "couldn't read the open pull requests' heads"
++            [ "$head" != "$SHA" ] || fail "$SHA is an open pull request's head; prove on a new commit of its own"
++          done < "$RUNNER_TEMP/pr-heads"
+       - name: The commit under test
+         env:
+           SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+@@ -262,11 +298,129 @@ jobs:
+           if-no-files-found: warn
+           retention-days: 7
+ 
++  pwa-ui:
++    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
++    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
++    # the wall time of every PWA change. Both browsers now have three
++    # shards. Playwright's --shard splits what --project selects, so together the six run every
++    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
++    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
++    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
++    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
++    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
++    name: pwa-ui (${{ matrix.name }})
++    needs: trigger
++    if: needs.trigger.outputs.ok == 'true'
++    strategy:
++      fail-fast: false
++      matrix:
++        # Every leg, as Pages waits for them (quality/pages-jobs.json): FULL runs both browsers, none of it for a pull request.
++        include:
++          - { name: "chromium 1/3", project: chromium, shard: "1/3", renders: true }
++          - { name: "chromium 2/3", project: chromium, shard: "2/3" }
++          - { name: "chromium 3/3", project: chromium, shard: "3/3" }
++          - { name: "webkit 1/3", project: webkit, shard: "1/3" }
++          - { name: "webkit 2/3", project: webkit, shard: "2/3" }
++          - { name: "webkit 3/3", project: webkit, shard: "3/3" }
++    runs-on: ubuntu-24.04
++    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
++    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
++    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
++    # come from the same mirror. 35 leaves room for bounded update and download retries,
++    # Canonical fallback and the shard's tests. It bounds a
++    # stuck job, not a test: a leg that passes takes as long as before.
++    timeout-minutes: 35
++    defaults:
++      run:
++        working-directory: pwa
++    env:
++      PWA_SKIP_E2E: '1'
++      PROJECT: ${{ matrix.project }}
++      SHARD: ${{ matrix.shard }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
++          persist-credentials: false
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: '22'
++      - run: npm ci
++      - name: Which Playwright
++        id: playwright
++        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
++      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
++      # restores only the one it runs.
++      - name: Playwright's browsers from main's cache
++        id: browsers
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
++      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
++      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
++      # how). The install below then finds them all downloaded; it, and the packages, are as before.
++      # force-apt-fallback (workflow_dispatch, a branch only; quality/README.md §4.7) skips the first
++      # mirror's download and takes that fallback before any package is downloaded, to prove it once; the
++      # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
++      # false on every push and pull request run, which run the action exactly as before.
++      - name: Download Playwright's system packages
++        uses: ./.github/actions/playwright-system-packages
++        with:
++          browsers: ${{ matrix.project }}
++          working-directory: pwa
++          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
++      - run: npx playwright install "$PROJECT"
++      - name: Save Playwright's browsers to main's cache
++        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
++        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/ms-playwright
++          key: ${{ steps.browsers.outputs.cache-primary-key }}
++      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
++      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
++      # summary and as a warning, so a retry never hides a flake. Never fails the job.
++      - name: Flaky report
++        if: ${{ !cancelled() }}
++        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
++      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
++      # never fail the job, and they are kept whatever the tests did. Design signs a state off
++      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
++      # Chromium alone: the engine that emulates forced colours.
++      - name: Renders of the demo
++        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
++        continue-on-error: true
++        run: npx playwright test --config playwright.renders.config.mjs
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: ${{ !cancelled() && matrix.renders }}
++        with:
++          name: pwa-renders
++          path: pwa/renders/
++          if-no-files-found: ignore
++          retention-days: 14
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: failure()
++        with:
++          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
++          path: pwa/test-results
++          retention-days: 7
++      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
++      # look at on every run, not only a failed one.
++      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        if: ${{ !cancelled() && matrix.project == 'chromium' }}
++        with:
++          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
++          path: |
++            pwa/test-results/**/signin-*.png
++            !pwa/test-results/**/attachments/**
++          if-no-files-found: warn
++          retention-days: 7
++
+   full-gate:
+     # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+     # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
+     # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
+-    needs: [trigger, spikes, spikes-linux, pwa-e2e]
++    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui]
+     if: always()
+     runs-on: ubuntu-latest
+     timeout-minutes: 5
+diff --git a/quality/README.md b/quality/README.md
+index dc91cb747..b39e00e38 100644
+--- a/quality/README.md
++++ b/quality/README.md
+@@ -471,14 +471,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
+      headroom. Local planning/offline dpkg install, browser downloads, setup and tests are
+      outside these network retry budgets; dpkg is deliberately not wrapped in the network
+      timeout. These fakes establish bounds/branches, not hosted cold-run success.
+-     To prove that fallback once without waiting for a slow mirror, once this
++     To prove that fallback once without waiting for a slow mirror, once `full.yml`'s
+      `workflow_dispatch` trigger is on `main` (until then a branch's run by hand may not
+      start): make a new commit of its own on a throwaway branch from `main` (an empty one,
+      `git commit --allow-empty`, with the usual trailers), push the branch, never open a pull
+      request at that commit, and run
+-     `gh workflow run ci.yml --ref <branch> -f force-apt-fallback=true`. The plan job fails any
+-     run by hand, before checkout, that doesn't ask for the fallback, runs on `main` or a tag,
+-     or runs `main`'s head or any open pull request's: its checks, `quality-gate` among them,
++     `gh workflow run full.yml --ref <branch> -f sha=<that commit> -f force-apt-fallback=true`
++     (`pwa-ui` moved to `full.yml` in S2 piece 5c, #4104). Its `trigger` job fails any
++     run by hand, before a job runs, that asks for the fallback on `main` or a tag, for a commit
++     other than the branch's own, or on `main`'s head or any open pull request's, and one that
++     does not ask for it unless it is on the `main` ref: its checks, `full-gate` among them,
+      land on the commit, and the merge rule reads the latest run per head, so on a pull
+      request's head they would stand in for its own run. One started there by mistake still
+      leaves a failed CI run on that head, and since the merge rule takes the newest run,
+@@ -884,7 +886,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
+   publish, which is safe but must be seen once), and the first train run is read by a person.
+ * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
+   (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
+-  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, with the apt-fallback proof moved to `full.yml`'s dispatch and the pull-request-only repeat-changed-specs step dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
++  `full.yml`, done (`full.yml` now exists: a `trigger` job, the two spikes jobs and `full-gate`; the spikes also left `main_green`); (5) `pwa-ui` and `pwa-e2e`, in three parts: 5a Pages waits for FULL, done (`pages-candidate.ps1` reads the PWA jobs from either lane); 5b `pwa-e2e` to `full.yml`, done (and `pages.yml` watches `Full` and passes the FULL lookup); 5c `pwa-ui`, done: its six legs are in `full.yml`, the apt-fallback proof and its guard moved to `full.yml`'s dispatch (`ci.yml` has no `workflow_dispatch` now), and the pull-request-only repeat-changed-specs step is dropped (owner decision A: flakes surface in FULL; `tools/repeat-changed-specs.mjs` stays); (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
+   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
+ **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
+ `cancel-in-progress: false`, so every merge gets its full run and a merge never cancels another's. (Today's single
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 4944108eb..50903dd0f 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -911,10 +911,9 @@ suites:
+     # CI splits it (#457, #1836): pwa-ui runs three Chromium and three WebKit shards, leaving
+     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+-    where: ci.yml pwa-ui
+-    # WebKit runs after merge (#3208); Chromium blocks.
+-    tier: post-merge
+-    tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
++    # The FULL lane's since S2 piece 5c (#4104): all six legs, Chromium and WebKit, run in full.yml after the merge, none on a pull request.
++    where: full.yml pwa-ui
++    lane: full
+     baseline: { files: 25 }
+     status: exists
+ 
+@@ -1440,7 +1439,8 @@ suites:
+     # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. A known issue is
+     # allowlisted by rule, selector and issue; none is today (#365, #366 and #371 are fixed).
+     command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
+-    where: ci.yml pwa-ui
++    where: full.yml pwa-ui
++    lane: full
+     baseline: { files: 3, tests: 58 }
+     status: exists
+ 
+diff --git a/quality/merge-rule.yml b/quality/merge-rule.yml
+index 541a55572..ccc54e939 100644
+--- a/quality/merge-rule.yml
++++ b/quality/merge-rule.yml
+@@ -99,12 +99,6 @@ main_green:
+     - product
+     - ha-integration
+     - light
+-    - pwa-ui (chromium 1/3)
+-    - pwa-ui (chromium 2/3)
+-    - pwa-ui (chromium 3/3)
+-    - pwa-ui (webkit 1/3)
+-    - pwa-ui (webkit 2/3)
+-    - pwa-ui (webkit 3/3)
+     - app (win-x64)
+     - app (win-arm64)
+   # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
+@@ -130,15 +124,6 @@ main_green:
+       - Post Run actions/checkout@*
+       - Run actions/setup-node@*
+       - .NET for the installer input quality harness
+-    pwa-ui: &browser_infra
+-      - Set up job
+-      - Complete job
+-      - Run actions/checkout@*
+-      - Post Run actions/checkout@*
+-      - Run actions/setup-node@*
+-      - Run actions/setup-dotnet@*
+-      - Playwright's browsers from main's cache
+-      - Save Playwright's browsers to main's cache
+ 
+ # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
+ # never block a merge; the independent-review receipts are the gate. A pull request needs a success
+diff --git a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+index a3e331bc6..df8fcb596 100644
+--- a/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
++++ b/tests/AgentBridge.Quality.Tests/CiPlanTests.cs
+@@ -562,7 +562,7 @@ public class CiPlanTests
+         var gate = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["quality-gate"];
+         var needs = (YamlDotNet.RepresentationModel.YamlSequenceNode)gate["needs"];
+         Assert.Equal(new[] { "plan", "product", "ha-integration", "app",
+-            "app-installer", "light", "pwa-ui" }.Order(), needs.Children.Select(n => n.ToString()).Order());
++            "app-installer", "light" }.Order(), needs.Children.Select(n => n.ToString()).Order());
+         var installer = (YamlDotNet.RepresentationModel.YamlMappingNode)jobs["app-installer"];
+         var installerNeeds = Assert.IsType<YamlDotNet.RepresentationModel.YamlSequenceNode>(installer["needs"]);
+         Assert.Equal(new[] { "plan", "app" },
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index 04d110e0f..3525f2296 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -28,8 +28,8 @@ public class FullWorkflowTests
+     [Fact]
+     public void Full_yml_has_the_trigger_job_the_spikes_pwa_e2e_and_the_gate_and_ci_yml_no_longer_has_them()
+     {
+-        Assert.Equal(["full-gate", "pwa-e2e", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
+-        Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString() == "pwa-e2e");
++        Assert.Equal(["full-gate", "pwa-e2e", "pwa-ui", "spikes", "spikes-linux", "trigger"], Jobs("full.yml").Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.DoesNotContain(Jobs("ci.yml").Children.Keys, k => k.ToString().StartsWith("spikes", StringComparison.Ordinal) || k.ToString().StartsWith("pwa-", StringComparison.Ordinal));
+     }
+ 
+     [Fact]
+@@ -112,4 +112,37 @@ public class FullWorkflowTests
+ 
+         Assert.Empty(missing);
+     }
++
++    [Fact]
++    public void Pwa_ui_runs_the_six_legs_whose_names_are_the_ones_Pages_waits_for_and_none_of_it_is_for_a_pull_request()
++    {
++        var job = (YamlMappingNode)Jobs("full.yml")["pwa-ui"];
++        var include = (YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)job["strategy"])["matrix"])["include"];
++        var legs = include.Children.Select(l => $"pwa-ui ({Scalar(l, "name")})").Order(StringComparer.Ordinal).ToArray();
++        var pages = System.Text.Json.JsonSerializer.Deserialize<string[]>(File.ReadAllText(Path.Combine(Root, "quality", "pages-jobs.json")))!
++            .Where(n => n.StartsWith("pwa-ui", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToArray();
++
++        Assert.Equal(pages, legs);
++        Assert.Equal(["chromium", "chromium", "chromium", "webkit", "webkit", "webkit"], include.Children.Select(l => Scalar(l, "project")).Order(StringComparer.Ordinal));
++        Assert.DoesNotContain("pull_request'", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "full.yml")).Replace("pull_request_target", "", StringComparison.Ordinal)
++            .Split('\n').Where(l => !l.TrimStart().StartsWith('#')).Aggregate("", (a, l) => a + l));
++    }
++
++    [Fact]
++    public void A_run_by_hand_is_for_a_commit_on_main_or_a_fallback_proof_on_a_commit_of_its_own_and_ci_yml_has_no_dispatch_left()
++    {
++        var on = (YamlMappingNode)Load(".github/workflows/full.yml")["on"];
++        var inputs = (YamlMappingNode)((YamlMappingNode)on["workflow_dispatch"])["inputs"];
++        var step = ((YamlSequenceNode)((YamlMappingNode)Jobs("full.yml")["trigger"])["steps"]).Children.OfType<YamlMappingNode>()
++            .Single(s => s.Children.ContainsKey("if") && Scalar(s, "if").Contains("workflow_dispatch", StringComparison.Ordinal));
++        var script = Scalar(step, "run");
++
++        Assert.Equal(["force-apt-fallback", "sha"], inputs.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["boolean", "false"], [Scalar(inputs["force-apt-fallback"], "type"), Scalar(inputs["force-apt-fallback"], "default")]);
++        foreach (var rule in new[] { "refs/heads/main", "main's head", "open pull request's head", "INPUT_SHA", "force-apt-fallback" })
++            Assert.Contains(rule, script, StringComparison.Ordinal);
++        var ci = Load(".github/workflows/ci.yml");
++        Assert.False(((YamlMappingNode)ci["on"]).Children.ContainsKey("workflow_dispatch"));
++        Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
++    }
+ }
+diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+index 66d50d1aa..838a8e1e2 100644
+--- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
++++ b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
+@@ -88,7 +88,7 @@ public class HaValidationCoverageTests
+ 
+         Assert.Equal(
+             new[] { "plan", "product", "ha-integration", "app",
+-                "app-installer", "light", "pwa-ui" },
++                "app-installer", "light" },
+             Needs(jobs, "quality-gate"));
+         Assert.Equal(new[] { "quality-gate" }, Needs(jobs, "publish-gate"));
+         Assert.Equal("${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}",
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index df5347a6d..ec174a994 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -2849,15 +2849,17 @@ public class MergeRuleTests
+     {
+         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
+-        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
++        // The jobs the merge waits on are the FAST lane's (S2, #4104): product, ha-integration, light and the app build. The browser jobs are
++        // the FULL lane's, so the node-setup family stands in for them here (light's infra_steps); a step of another family is the wrong job.
+         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
+-            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
++            : scenario == "wrong-job" ? "ha-integration" : "light";
+         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
+         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
+         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
+             : scenario == "npm-ci" ? "Run npm ci"
+             : scenario == "system-packages" ? "Download Playwright's system packages"
+-            : "Playwright's browsers from main's cache";
++            : scenario == "wrong-job" ? "Playwright's browsers from main's cache"
++            : "Run actions/setup-node@v6";
+         var steps = new List<object>
+         {
+             Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),
+diff --git a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+index 224bc2771..5174f2982 100644
+--- a/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
++++ b/tests/AgentBridge.Quality.Tests/PlanScriptTests.cs
+@@ -105,7 +105,7 @@ public class PlanScriptTests
+                     platforms: [linux-x64, win-x64, win-arm64]
+                     runner: hosted
+                     command: see ci.yml
+-                    where: ci.yml product, ha-integration, light, pwa-ui
++                    where: ci.yml product, ha-integration, light
+                     status: exists
+                   - id: docs
+                     validation_plan: native
+@@ -230,7 +230,7 @@ public class PlanScriptTests
+             var expected = packages ? "true" : "false";
+             Assert.Equal($"app={expected}\napp-installer={expected}",
+                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
+-            foreach (var job in new[] { "product", "ha-integration", "pwa-ui" })
++            foreach (var job in new[] { "product", "ha-integration" })
+                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
+                     && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
+                     : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
+-- 
+2.56.1.windows.1
+
