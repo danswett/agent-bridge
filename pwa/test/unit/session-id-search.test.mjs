@@ -21,3 +21,8 @@ test('fewer than 4 hex characters never match an id, and neither does a prefix t
 test('a missing or non-text id matches nothing', () => {
   for (const id of [undefined, null, 42, {}]) { assert.equal(matchesSessionId('0287fdf0', id), false); }
 });
+
+test('a query that is not hex never names an id, even when it is the start of an id that is not hex', () => {
+  assert.equal(matchesSessionId('plan', 'plan-9'), false);
+  assert.equal(matchesSessionId('plan-9', 'plan-9'), false);
+});

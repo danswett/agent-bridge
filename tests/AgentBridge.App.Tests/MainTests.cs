@@ -422,6 +422,7 @@ public sealed class MainTests : IAsyncLifetime
         }
         // Fewer than 4 characters, a prefix the id does not start with, and a query longer than an id match nothing by id.
         foreach (var query in new[] { "0", "02", "028", "8700", "fdf0", "0287fdf1", guid + "c", "0287 fdf0" }) { Assert.Empty(Find(query)); }
+        Assert.Empty(Find("askin"));                                       // not hex: never an id match, though "asking" starts with it
         // The name still matches as before, and a title match is not lost to the id rule.
         Assert.Equal([guid], Find("zebra").Select(h => h.SessionId));
         Assert.Equal([guid], Find("ZEBRA plan").Select(h => h.SessionId));
