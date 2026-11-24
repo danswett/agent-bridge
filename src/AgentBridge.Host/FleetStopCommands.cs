@@ -104,7 +104,7 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                     else
                     {
                         var (settings, problem) = HostSettings.Load(folder);
-                        if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { denied = "policy"; }
+                        if (problem is not null || settings.SectionProblems.Any() || caller.Credential is { } live && !credentials.IsLive(live)) { denied = "policy"; }
                         else if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled)
                         { denied = "kill-switch"; }
                     }
