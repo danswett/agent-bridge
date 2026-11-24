@@ -11,11 +11,12 @@ namespace AgentBridge.Host.Lite;
 // unless the host turns it on, and Program builds it only then. It judges the local agent credential afresh (the AP1 check the receiver
 // relies on), seals a fleet.end FleetActionEnvelope with the host key, sends once over the relay link, and reports a typed receipt.
 // It never retries, never queues for an offline peer and never falls back to HA. A lost reply is unconfirmed (exit 7).
-public sealed class FleetRemoteEndSender(IFleetLaunchLink link, AgentCredentials credentials,
-    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, Func<bool> enabled, TimeProvider? clock = null)
+public sealed class FleetRemoteEndSender(IFleetLaunchLink link, AgentCredentials credentials, ILiteMode mode,
+    Func<(IEnvelopeSigner Sign, byte[] Point)?> signer, TimeProvider? clock = null, AgentAuditLog? audit = null, TimeSpan? watchEvery = null)
 {
     public static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(60);
     readonly TimeProvider time = clock ?? TimeProvider.System;
+    readonly LocalApi.RefusalAudits refusals = new(clock ?? TimeProvider.System);
 
     // True when the request names a host other than this one (by device id or node id): the local stop gate never serves it.
     public bool IsRemote(string? target) =>
@@ -23,14 +24,27 @@ public sealed class FleetRemoteEndSender(IFleetLaunchLink link, AgentCredentials
 
     public async Task<FleetStopReceipt> SendAsync(AgentCredential caller, FleetStopInput input, CancellationToken ct)
     {
-        FleetStopReceipt Refuse(string reason) => new(input.Request, input.Grant, 0, "refused", reason);
-        if (!enabled()) { return Refuse("policy"); }
+        // A refusal before anything is sent is this host's own refused use: audited through the same row and hourly limiter as every other refused
+        // stop; if the row cannot be written, that is the refusal. ILiteMode.On is the kill switch (the agentMessaging.remote setting and any lite kill).
+        FleetStopReceipt Refuse(string reason)
+        {
+            if (audit is not null)
+            {
+                try { LocalApi.AuditRefusal(credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, JsonSerializer.SerializeToElement(input, ProtocolJson.Options), audit, reason, refusals); }
+                catch (InvalidOperationException) { return new(input.Request, input.Grant, 0, "refused", "audit-unavailable"); }
+            }
+            return new(input.Request, input.Grant, 0, "refused", reason);
+        }
+        if (!mode.On) { return Refuse("kill-switch"); }
         var account = link.Account;
         if (string.IsNullOrEmpty(account)) { return Refuse("target-offline"); }
         GrantSubject subject;
         try { subject = FleetGrantLaunch.Subject(credentials, account, link.Self, caller); }
         catch (FleetLaunchDenied) { return Refuse("policy"); }
-        if (signer() is not { } sign) { return Refuse("policy"); }
+        var signed = signer();
+        // Making the key can wait on its file lock: a kill that lands meanwhile signs and sends nothing.
+        if (!mode.On) { return Refuse("kill-switch"); }
+        if (signed is not { } sign) { return Refuse("policy"); }
         var device = Resolve(input.Target);
         if (device is null) { return Refuse("target-offline"); }
         if (device == link.Self) { return Refuse("policy"); }
@@ -50,15 +64,27 @@ public sealed class FleetRemoteEndSender(IFleetLaunchLink link, AgentCredentials
         catch (ArgumentException) { return Refuse("policy"); }
 
         // From here a request may have reached the peer: any failure is unconfirmed, never a resend with a fresh nonce.
+        using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var watching = new CancellationTokenSource();
+        var watcher = Task.Run(async () =>
+        {
+            try
+            {
+                using var tick = new PeriodicTimer(watchEvery ?? TimeSpan.FromMilliseconds(500));
+                while (await tick.WaitForNextTickAsync(watching.Token)) { if (!mode.On) { flight.Cancel(); return; } }
+            }
+            catch (OperationCanceledException) { }
+        });
         try
         {
-            var reply = await link.RequestAsync(device, account, FleetRemoteEnd.Op, request, ct);
+            var reply = await link.RequestAsync(device, account, FleetRemoteEnd.Op, request, flight.Token);
             var receipt = reply.ValueKind == JsonValueKind.Object ? reply.Deserialize<FleetStopReceipt>(ProtocolJson.Options) : null;
             return receipt is not null && receipt.Request == input.Request && receipt.Grant == input.Grant ? receipt : Unconfirmed();
         }
         catch (LitePeerNotTrustedException) { return Refuse("peer-not-trusted"); }
         catch (LitePeerOfflineException) { return Refuse("target-offline"); }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { return Unconfirmed(); }
+        finally { watching.Cancel(); await watcher; }
 
         FleetStopReceipt Unconfirmed() => new(input.Request, input.Grant, 0, "unconfirmed", null);
     }

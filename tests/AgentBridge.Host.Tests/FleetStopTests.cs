@@ -110,8 +110,11 @@ public sealed class FleetStopTests : IDisposable
         public Task<JsonElement> RequestAsync(string peerId, string account, string op, JsonElement request, CancellationToken ct)
         { Calls++; Assert.Equal(FleetRemoteEnd.Op, op); return serve(request); }
     }
+    sealed class EndMode(bool on) : ILiteMode
+    { public bool On { get; set; } = on; public long KillEpoch => 0; public void TurnOff(string why) { On = false; } public void RaiseEpoch(long epoch) { } }
+
     (FleetRemoteEndSender Sender, EndLink Link, GrantSubject Subject) OpenSender(bool on = true, bool present = true,
-        Func<JsonElement, Task<JsonElement>>? serve = null)
+        Func<JsonElement, Task<JsonElement>>? serve = null, EndMode? mode = null, bool audited = false, Action? whileSigning = null)
     {
         var subject = new GrantSubject("123", Peer, caller.Session, caller.Id, new(caller.RootPid, caller.RootStartUtc));
         grant = grant with { Id = Guid.NewGuid(), Subjects = [subject], StopTargets = [Target] };
@@ -120,7 +123,8 @@ public sealed class FleetStopTests : IDisposable
         var q = peerSign.ExportParameters(false).Q;
         var link = new EndLink(Peer, present ? [new(Device, "Target", "host", DateTimeOffset.UtcNow)] : [], serve
             ?? (async data => JsonSerializer.SerializeToElement(await receiver.ReceiveAsync(PeerChannel(), data), ProtocolJson.Options)));
-        return (new FleetRemoteEndSender(link, credentials, () => (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]), () => on), link, subject);
+        return (new FleetRemoteEndSender(link, credentials, mode ?? new EndMode(on), () => { whileSigning?.Invoke(); return (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]); },
+            audit: audited ? new AgentAuditLog(Folder) : null), link, subject);
     }
     FleetStopInput SenderInput() => new(1, Guid.NewGuid(), grant.Id, id, Device);
 
@@ -137,7 +141,35 @@ public sealed class FleetStopTests : IDisposable
     {
         var s = OpenSender(on: false);
         var receipt = await s.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
-        Assert.Equal(("refused", "policy", 0, 0), (receipt.Outcome, receipt.Reason, s.Link.Calls, injector.Calls));
+        Assert.Equal(("refused", "kill-switch", 0, 0), (receipt.Outcome, receipt.Reason, s.Link.Calls, injector.Calls));
+    }
+
+    [Fact]
+    public async Task A_lite_kill_that_lands_while_the_key_is_made_signs_and_sends_nothing()
+    {
+        var mode = new EndMode(true);
+        var s = OpenSender(mode: mode, whileSigning: () => mode.TurnOff("kill"));
+        var receipt = await s.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("refused", "kill-switch", 0, 0), (receipt.Outcome, receipt.Reason, s.Link.Calls, injector.Calls));
+    }
+
+    [Fact]
+    public async Task A_kill_while_waiting_for_the_reply_is_unconfirmed_never_a_resend()
+    {
+        var mode = new EndMode(true);
+        var s = OpenSender(mode: mode, serve: _ => { mode.TurnOff("kill"); return Task.FromException<JsonElement>(new OperationCanceledException()); });
+        var receipt = await s.Sender.SendAsync(caller, SenderInput(), CancellationToken.None);
+        Assert.Equal(("unconfirmed", 1), (receipt.Outcome, s.Link.Calls));
+    }
+
+    [Fact]
+    public async Task A_refused_remote_end_is_audited_on_the_source_host()
+    {
+        var s = OpenSender(on: false, audited: true);
+        var input = SenderInput();
+        Assert.Equal("kill-switch", (await s.Sender.SendAsync(caller, input, CancellationToken.None)).Reason);
+        Assert.Contains(Directory.GetFiles(Path.Combine(Folder, AgentAuditLog.FolderName), "*.jsonl").SelectMany(File.ReadAllLines),
+            line => line.Contains("\"session.stop\"") && line.Contains("\"refused\"") && line.Contains("kill-switch"));
     }
 
     [Theory]
@@ -164,9 +196,17 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(("unconfirmed", 1), (unconfirmed.Outcome, lost.Link.Calls));
     }
 
-    // G6b3 (#4027): the relay stop row carries generation, payloadDigest and caps like the local one. Enabled when #4027 is merged.
-    [Fact(Skip = "TODO until G6b3 (#4027) lands: the remote end receipt's generation, payloadDigest and caps match the local stop row")]
-    public Task The_remote_stop_row_carries_generation_payload_digest_and_caps_like_the_local_one() => Task.CompletedTask;
+    // G6b3 (#4027): the relay stop row carries generation, payloadDigest and caps like the local one.
+    [Fact]
+    public async Task The_remote_stop_row_carries_generation_payload_digest_and_caps_like_the_local_one()
+    {
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await Open().HandleRemoteAsync(GrantRemote(), EndData(request))).Outcome);
+        var rows = GateAuditProjection.Load(Folder).Rows.Where(r => r.Action == Ops.SessionStop && r.Request == request.ToString()).ToArray();
+        Assert.Equal(["intent", "terminal"], rows.Select(r => r.Gate!.Phase).ToArray());
+        Assert.All(rows, r => Assert.Equal((grant.Generation, Digest(request, grant.Id, id, Device), grant.Caps),
+            (r.Gate!.Generation, r.Gate.PayloadDigest, r.Gate.Caps)));
+    }
 
     [Fact]
     public async Task The_local_pipe_sends_only_a_remote_target_to_the_sender_and_only_when_the_sender_exists()
@@ -177,7 +217,7 @@ public sealed class FleetStopTests : IDisposable
             var sent = data.GetProperty("end").Deserialize<FleetStopInput>(ProtocolJson.Options)!;
             return Task.FromResult(JsonSerializer.SerializeToElement(new FleetStopReceipt(sent.Request, sent.Grant, 0, "refused", "grant-revoked"), ProtocolJson.Options));
         });
-        var sender = new FleetRemoteEndSender(link, credentials, () => (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]), () => true);
+        var sender = new FleetRemoteEndSender(link, credentials, new EndMode(true), () => (new EcdsaEnvelopeSigner(peerSign), [4, .. q.X!, .. q.Y!]));
         var channel = new Chan();
         credentials.Accept(channel, caller);
         JsonElement Call(string target) => JsonSerializer.SerializeToElement(new FleetStopInput(1, Guid.NewGuid(), grant.Id, id, target), ProtocolJson.Options);
@@ -521,9 +561,11 @@ public sealed class FleetStopTests : IDisposable
     }
     // A stop request id is remembered from the audit, so a host restart (a fresh StopService, an empty
     // memory) never dispatches it again (fleet-grants.md, stop replay and audit).
-    AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null) =>
-        new("local", request.ToString(), credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, session ?? id, outcome,
-            Gate: new(1, Guid.NewGuid(), Guid.Empty, 0, phase, "local", "agent",
+    // The intent and terminal rows of one operation share its Gate.Operation (the request id stands in for it).
+    AgentAuditEntry Row(Guid request, string phase, string outcome, Guid? grantId = null, string? session = null,
+        string? principal = null, Guid? operation = null) =>
+        new("local", request.ToString(), principal ?? credentials.PrincipalOf(caller), caller.Chain, Ops.SessionStop, session ?? id, outcome,
+            Gate: new(1, operation ?? request, Guid.Empty, 0, phase, "local", "agent",
                 StopAudit.Identity(Guid.Parse(id), 700, started), outcome == "attempted" ? "none" : outcome == "ended" ? "none" : "refused"))
         { Grant = (grantId ?? grant.Id).ToString() };
     [Fact]
@@ -559,6 +601,124 @@ public sealed class FleetStopTests : IDisposable
         Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
     }
     [Fact]
+    public async Task A_replay_is_refused_once_the_grant_is_revoked_or_the_kill_switch_is_on()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        File.WriteAllText(Path.Combine(Folder, HostSettings.FileName),
+            JsonSerializer.Serialize(new { agents = new { enabled = false }, launch = new { workspaces = new[] { new { label = "repo", path = f.Root, isolate = true } } } }));
+        var off = await End(request: request);
+        Assert.Equal(("refused", "kill-switch", calls), (off.Outcome, off.Reason, injector.Calls));
+        Settings();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        Assert.True(store.Revoke(grant.Id, 1).Usable);
+        var revoked = await End(request: request);
+        Assert.Equal(("refused", "grant-revoked", calls), (revoked.Outcome, revoked.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_replay_is_refused_once_the_grant_has_expired()
+    {
+        grant = grant with { Id = Guid.NewGuid(), ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(4) };
+        Assert.True(store.Issue(grant).Usable);
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        var expired = await End(request: request);
+        Assert.Equal(("refused", "grant-expired", calls), (expired.Outcome, expired.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_replay_is_refused_when_the_caller_is_no_longer_a_subject_of_the_grant()
+    {
+        Own();
+        var other = grant.Subjects[0] with { Session = Guid.NewGuid().ToString() };
+        var narrowed = grant with { Id = Guid.NewGuid(), Subjects = [other] };
+        Assert.True(store.Issue(narrowed).Usable);
+        var request = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(request, "intent", "attempted", grantId: narrowed.Id)));
+        Assert.True(audit.Append(Row(request, "terminal", "ended", grantId: narrowed.Id)));
+        var receipt = await Open().HandleAsync(caller, JsonSerializer.SerializeToElement(
+            new FleetStopInput(1, request, narrowed.Id, id), ProtocolJson.Options));
+        Assert.Equal(("refused", "scope", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_terminal_row_of_another_grant_caller_or_session_is_not_the_outcome()
+    {
+        Own();
+        var audit = new AgentAuditLog(Folder);
+        var cases = new (Guid Request, AgentAuditEntry Terminal)[]
+        {
+            (Guid.NewGuid(), default!), (Guid.NewGuid(), default!), (Guid.NewGuid(), default!),
+        };
+        cases[0].Terminal = Row(cases[0].Request, "terminal", "ended", principal: "someone-else");
+        cases[1].Terminal = Row(cases[1].Request, "terminal", "ended", grantId: Guid.NewGuid());
+        cases[2].Terminal = Row(cases[2].Request, "terminal", "ended", session: Guid.NewGuid().ToString());
+        foreach (var (request, terminal) in cases)
+        {
+            Assert.True(audit.Append(Row(request, "intent", "attempted")));
+            Assert.True(audit.Append(terminal));
+            var receipt = await End(request: request);
+            Assert.Equal(("unconfirmed", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
+    public async Task A_replay_naming_another_generation_is_refused()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var audit = new AgentAuditLog(Folder);
+        var rows = GateAuditProjection.Load(Folder).Rows.Where(r => r.Request == request.ToString() && r.Gate?.Generation is not null).ToArray();
+        Assert.NotEmpty(rows);
+        var stale = Guid.NewGuid();
+        var recorded = rows[0].Gate!;
+        Assert.True(audit.Append(Row(stale, "intent", "attempted") with { Gate = recorded with { Operation = stale, Generation = 9, PayloadDigest = Digest(stale, grant.Id, id, null) } }));
+        Assert.True(audit.Append(Row(stale, "terminal", "ended") with { Gate = recorded with { Operation = stale, Phase = "terminal", Generation = 9, PayloadDigest = Digest(stale, grant.Id, id, null) } }));
+        var receipt = await End(request: stale);
+        Assert.Equal(("refused", "duplicate-id"), (receipt.Outcome, receipt.Reason));
+    }
+    [Fact]
+    public async Task A_request_id_bound_to_another_caller_or_session_is_refused_without_dispatching()
+    {
+        Own();
+        var byCaller = Guid.NewGuid();
+        var bySession = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        foreach (var phase in new[] { ("intent", "attempted"), ("terminal", "ended") })
+        {
+            Assert.True(audit.Append(Row(byCaller, phase.Item1, phase.Item2, principal: "someone-else")));
+            Assert.True(audit.Append(Row(bySession, phase.Item1, phase.Item2, session: Guid.NewGuid().ToString())));
+        }
+        foreach (var request in new[] { byCaller, bySession })
+        {
+            var receipt = await End(request: request);
+            Assert.Equal(("refused", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
+    public async Task More_than_one_distinct_terminal_for_an_operation_is_unconfirmed_and_a_terminal_of_another_operation_is_not_trusted()
+    {
+        Own();
+        var conflicting = Guid.NewGuid();
+        var foreign = Guid.NewGuid();
+        var audit = new AgentAuditLog(Folder);
+        Assert.True(audit.Append(Row(conflicting, "intent", "attempted")));
+        Assert.True(audit.Append(Row(conflicting, "terminal", "ended")));
+        Assert.True(audit.Append(Row(conflicting, "terminal", "unconfirmed")));
+        Assert.True(audit.Append(Row(foreign, "intent", "attempted")));
+        Assert.True(audit.Append(Row(foreign, "terminal", "ended", operation: Guid.NewGuid())));
+        foreach (var request in new[] { conflicting, foreign })
+        {
+            var receipt = await End(request: request);
+            Assert.Equal(("unconfirmed", "duplicate-id", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        }
+    }
+    [Fact]
     public async Task A_request_refused_before_dispatch_may_be_sent_again_with_the_same_id()
     {
         Own();
@@ -566,6 +726,78 @@ public sealed class FleetStopTests : IDisposable
         Assert.True(new AgentAuditLog(Folder).Append(Row(request, "terminal", "refused")));
         Assert.Equal("ended", (await End(request: request)).Outcome);
         Assert.Equal(1, injector.Calls);
+    }
+    static string Digest(Guid request, Guid grantId, string session, string? target) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            $"fleet.end/1|{request}|{grantId}|{session}|{target}")));
+    [Fact]
+    public async Task Stop_audit_rows_record_the_grant_generation_payload_digest_and_caps()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var rows = GateAuditProjection.Load(Folder).Rows.Where(r => r.Action == Ops.SessionStop && r.Request == request.ToString()).ToArray();
+        Assert.Equal(["intent", "terminal"], rows.Select(r => r.Gate!.Phase).ToArray());
+        Assert.All(rows, r => Assert.Equal((grant.Generation, Digest(request, grant.Id, id, null), grant.Caps),
+            (r.Gate!.Generation, r.Gate.PayloadDigest, r.Gate.Caps)));
+    }
+    [Fact]
+    public async Task A_request_resent_with_a_changed_payload_is_refused_without_dispatching()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        var changed = await Open().HandleAsync(caller, JsonSerializer.SerializeToElement(
+            new FleetStopInput(1, request, grant.Id, id, Device), ProtocolJson.Options));
+        Assert.Equal(("refused", "duplicate-id", calls), (changed.Outcome, changed.Reason, injector.Calls));
+    }
+    [Fact]
+    public void Generation_digest_and_caps_are_valid_only_together_on_a_stop_row()
+    {
+        GateAuditMetadata Gate(long? generation, string? digest, GrantCaps? caps) =>
+            new(1, Guid.NewGuid(), Guid.NewGuid(), 1, "intent", "local", "agent", Guid.NewGuid(), "none",
+                Generation: generation, PayloadDigest: digest, Caps: caps);
+        var target = Guid.NewGuid().ToString();
+        var digest = new string('a', 64);
+        var caps = new GrantCaps(3, 3, 2);
+        Assert.True(Gate(1, digest, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.True(Gate(null, null, null).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, null, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(0, digest, caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, "not-hex", caps).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, digest, new GrantCaps(0, 3, 2)).Valid(Ops.SessionStop, target, "attempted"));
+        Assert.False(Gate(1, digest, caps).Valid("session.launch", target, "attempted"));
+    }
+    // The gate metadata as the previous version read it: no generation, digest or caps.
+    sealed record PreviousGate(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
+        string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null,
+        string? GrantBinding = null, ProcessInstance? LaunchProcess = null, string? ClientKind = null, string? ClientPlatform = null);
+    [Fact]
+    public void An_old_row_without_the_new_fields_is_unchanged_and_a_new_row_is_read_by_the_previous_shape()
+    {
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var oldRow = new GateAuditMetadata(1, Guid.NewGuid(), Guid.NewGuid(), 4, "intent", "local", "agent", Guid.NewGuid(), "none");
+        var text = JsonSerializer.Serialize(oldRow, web);
+        Assert.DoesNotContain("generation", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payloadDigest", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("caps", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(oldRow, JsonSerializer.Deserialize<GateAuditMetadata>(text, web));
+        Assert.True(oldRow.Valid(Ops.SessionStop, Guid.NewGuid().ToString(), "attempted"));
+        var current = oldRow with { Generation = 2, PayloadDigest = new string('b', 64), Caps = new GrantCaps(3, 3, 2) };
+        var previous = JsonSerializer.Deserialize<PreviousGate>(JsonSerializer.Serialize(current, web), web)!;
+        Assert.Equal((oldRow.Operation, oldRow.Sequence, oldRow.Phase, oldRow.ReasonCode), (previous.Operation, previous.Sequence, previous.Phase, previous.ReasonCode));
+    }
+    [Fact]
+    public async Task A_stop_that_really_ended_replays_ended_when_retried_and_never_dispatches_twice()
+    {
+        Own();
+        var request = Guid.NewGuid();
+        Assert.Equal("ended", (await End(request: request)).Outcome);
+        var calls = injector.Calls;
+        var again = await End(request: request);
+        Assert.Equal(("ended", null, calls), (again.Outcome, again.Reason, injector.Calls));
+        Assert.Contains(GateAuditProjection.Load(Folder).Rows, r => r.Action == "fleet.end.replay" && r.Request == request.ToString());
     }
     sealed class Chan : IProtocolChannel
     {

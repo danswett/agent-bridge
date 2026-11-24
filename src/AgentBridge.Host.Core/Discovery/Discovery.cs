@@ -33,7 +33,38 @@ internal sealed record Registration(
     string? Status,
     bool Ended,
     string Path,
-    ApprovalMarker? Approval);
+    ApprovalMarker? Approval,
+    AskMarker? Ask = null);
+
+// A Claude AskUserQuestion the transcript has not written yet (<id>.ask.json): the claude/ask hook records
+// the tool_use_id and tool_input when it fires, and the next Stop, prompt or SessionStart removes it (#3838).
+// Claude Code writes the question to its transcript only once it is answered when parallel tool calls
+// follow it, so this is how the host sees it meanwhile. The spool is not authenticated, so it is shown and
+// never typed into.
+internal sealed record AskMarker(string ToolUseId, DateTimeOffset? Created, string InputJson);
+
+internal static class AskMarkerRead
+{
+    public static string PathFor(string registrationPath, string sessionId) =>
+        Path.Combine(Path.GetDirectoryName(registrationPath)!, RegistrationDiscovery.SafeKey(sessionId) + ".ask.json");
+
+    // Absent, unreadable or anything but a marker for this session with an object input: no question. It is a hint
+    // that adds a card, so unlike an approval marker it never has to be treated as "something may be pending".
+    public static AskMarker? Read(string registrationPath, string sessionId)
+    {
+        try
+        {
+            using var stream = new FileStream(PathFor(registrationPath, sessionId), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > 1024 * 1024) { return null; }
+            using var doc = JsonDocument.Parse(stream);
+            var e = doc.RootElement;
+            if (e.ValueKind != JsonValueKind.Object || Json.Str(e, "SessionId") != sessionId || Json.Str(e, "ToolUseId") is not { Length: > 0 } id
+                || !e.TryGetProperty("Input", out var input) || input.ValueKind != JsonValueKind.Object) { return null; }
+            return new AskMarker(id, Json.Time(e, "Created"), input.GetRawText());
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return null; }
+    }
+}
 
 // A Codex command waiting for approval (<id>.approval.json): the hook writes it on
 // PermissionRequest and removes it on the next event that proves it was answered.
@@ -807,7 +838,7 @@ internal static class RegistrationDiscovery
         {
             var name = Path.GetFileName(file);
             // Codex keeps approval markers in the same folder; read with their session.
-            if (name.EndsWith(".approval.json", StringComparison.OrdinalIgnoreCase)) { continue; }
+            if (name.EndsWith(".approval.json", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".ask.json", StringComparison.OrdinalIgnoreCase)) { continue; }
             var registration = Parse(agent, file, out var why, afterRead);
             if (registration is not null) { yield return registration; }
             else if (why is not null) { problem(why); }
@@ -849,6 +880,7 @@ internal static class RegistrationDiscovery
         {
             approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted,             marker.Tool, marker.Command, marker.CommandCut, marker.Lossy);
         }
+        var ask = agent == AgentKind.Claude ? AskMarkerRead.Read(path, id) : null;
         return new Registration(
             id,
             pid,
@@ -861,7 +893,8 @@ internal static class RegistrationDiscovery
             Json.Str(e, "Status"),
             e.TryGetProperty("Ended", out var ended) && ended.ValueKind == JsonValueKind.True,
             path,
-            approval);
+            approval,
+            ask);
     }
 
     static readonly (long, long) Unreadable = (-1, -1);

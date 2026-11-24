@@ -807,7 +807,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public string Request = "";
     }
 
-    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "", bool warm = true)
+    sealed class Mode(bool on) : ILiteMode
+    { public bool On { get; set; } = on; public long KillEpoch => 0; public void TurnOff(string why) { On = false; } public void RaiseEpoch(long epoch) { } }
+
+    Remote OpenRemote(P256KeyPair key, bool trusted = true, string audience = "", bool warm = true, bool? on = null)
     {
         var statik = RandomNumberGenerator.GetBytes(32);
         var peer = Wire.DeviceId(statik);
@@ -815,8 +818,9 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var pipe = Open(grantKey: key, grantOnly: true);
         var store = new GrantStore(folder, key, new(folder), new([], [], [], [], [], [], [], []));
         var channel = new LiteChannel(peer, "host", statik, audience == "" ? new('a', 32) : audience, "123", trusted);
-        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null), channel, grant,
-            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store)) { Request = request };
+        var mode = on is { } o ? new Mode(o) : null;
+        return new(new FleetRemoteLaunch(pipe.Launch, store, startedAt: warm ? DateTimeOffset.UtcNow.AddMinutes(-10) : null, mode: mode), channel, grant,
+            subject, ECDsa.Create(ECCurve.NamedCurves.nistP256), () => new FleetRemoteLaunch(pipe.Launch, store, mode: mode)) { Request = request };
     }
 
     [Fact]
@@ -831,6 +835,17 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var replayed = await r.Receiver.ReceiveAsync(r.Channel, data);
         Assert.Equal((LaunchOutcome.Refused, "policy"), (replayed.Result.Outcome, replayed.Reason));
         Assert.Equal(1, launcher.Launches);
+    }
+
+    // G9c2 (Quality R4zzB536 P2): the lite kill switches remote launch off, before any parse or side effect.
+    [Fact]
+    public async Task A_receiver_whose_lite_kill_is_off_refuses_a_valid_signed_launch_before_any_side_effect()
+    {
+        using var key = P256KeyPair.Generate();
+        var r = OpenRemote(key, on: false);
+        var receipt = await r.Receiver.ReceiveAsync(r.Channel, r.Data());
+        Assert.Equal((LaunchOutcome.Refused, "kill-switch"), (receipt.Result.Outcome, receipt.Reason));
+        Assert.Equal(0, launcher.Launches);
     }
 
     [Fact]
@@ -952,12 +967,14 @@ public sealed class AgentPipeLaunchTests : IDisposable
         public string Self => self;
         public string Account => "123";
         public IReadOnlyList<PresenceEntry> Presence => presence;
+        public Func<JsonElement, CancellationToken, Task<JsonElement>>? ServeCt;
         public Task<JsonElement> RequestAsync(string peerId, string account, string op, JsonElement request, CancellationToken ct)
-        { Calls++; Assert.Equal(FleetRemoteLaunch.Op, op); return serve(request); }
+        { Calls++; Assert.Equal(FleetRemoteLaunch.Op, op); return ServeCt is { } s ? s(request, ct) : serve(request); }
     }
 
     (FleetRemoteLaunchSender Sender, Link Link, Pipe Pipe, GrantDocument Grant, AgentCredential Caller) OpenSender(P256KeyPair key,
-        Func<JsonElement, Task<JsonElement>>? serve = null, bool present = true)
+        Func<JsonElement, Task<JsonElement>>? serve = null, bool present = true, ILiteMode? mode = null, bool audited = false,
+        Action<AgentCredentials, AgentCredential>? duringSign = null, Func<JsonElement, CancellationToken, Task<JsonElement>>? serveCt = null)
     {
         var statik = RandomNumberGenerator.GetBytes(32);
         var self = Wire.DeviceId(statik);
@@ -976,7 +993,10 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var q = sign.ExportParameters(false).Q;
         var link = new Link(self, present ? [new(new('a', 32), "Target", "host", now)] : [], serve ?? (async data =>
             JsonSerializer.SerializeToElement(await receiver.ReceiveAsync(channel, data), ProtocolJson.Options)));
-        return (new FleetRemoteLaunchSender(link, pipe.Credentials, () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!])), link, pipe, grant, caller);
+        link.ServeCt = serveCt;
+        var sender = new FleetRemoteLaunchSender(link, pipe.Credentials, mode ?? new Mode(true), () => { duringSign?.Invoke(pipe.Credentials, caller); return (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]); },
+            audit: audited ? new AgentAuditLog(folder) { DeviceKey = key } : null, watchEvery: TimeSpan.FromMilliseconds(20));
+        return (sender, link, pipe, grant, caller);
     }
     FleetLaunchInput SenderInput(GrantDocument grant, string? target = null) => new(1, Guid.Parse(request), grant.Id, "SG Builder 266", "App",
         "claude", Target: target ?? new string('a', 32), Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello");
@@ -1009,7 +1029,7 @@ public sealed class AgentPipeLaunchTests : IDisposable
             return Task.FromResult(JsonSerializer.SerializeToElement(
                 FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), input, "scope"), ProtocolJson.Options));
         });
-        var sender = new FleetRemoteLaunchSender(link, credentials, () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]));
+        var sender = new FleetRemoteLaunchSender(link, credentials, new Mode(true), () => (new EcdsaEnvelopeSigner(sign), [4, .. q.X!, .. q.Y!]));
         var pipe = Open(session: Guid.NewGuid().ToString(), grantKey: key, grantOnly: true, credentials: credentials, remoteLaunch: sender);
         var body = JsonSerializer.SerializeToElement(new FleetLaunchInput(1, Guid.Parse(request), Guid.NewGuid(), "SG Builder 266", "App", "claude",
             Target: remote ? new string('b', 32) : null, Model: "small", Effort: "medium", Context: "default", Permissions: "ask", Prompt: "hello"), ProtocolJson.Options);
@@ -1060,6 +1080,82 @@ public sealed class AgentPipeLaunchTests : IDisposable
         var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
         Assert.Equal((LaunchOutcome.Refused, "target-offline"), (receipt.Result.Outcome, receipt.Reason));
         Assert.Equal(1, s.Link.Calls);
+    }
+
+    // G9c2 (R10 / Quality R4zzB559): the sender is gated like AgentLiteSender: the lite kill and the settings switch are checked before AND after signing,
+    // the credential is rechecked after the signer, a cancel after the send is unconfirmed, and the source host audits its own refusals.
+    [Fact]
+    public async Task A_sender_whose_lite_mode_is_off_signs_and_sends_nothing_and_audits_the_refusal()
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, mode: new Mode(false), audited: true);
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, "kill-switch", 0, 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls, launcher.Launches));
+        Assert.Contains(AuditRows(), row => row.Contains(request) && row.Contains("kill-switch"));
+    }
+
+    [Theory]
+    [InlineData("kill")]
+    [InlineData("credential")]
+    public async Task A_kill_or_a_lapsed_credential_during_signing_sends_nothing(string change)
+    {
+        using var key = P256KeyPair.Generate();
+        var mode = new Mode(true);
+        var s = OpenSender(key, mode: mode, audited: true, duringSign: (credentials, caller) =>
+        {
+            if (change == "kill") { mode.On = false; } else { credentials.Revoke(caller.Session, "test"); }
+        });
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, change == "credential" ? "policy" : "kill-switch", 0), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
+        Assert.Contains(AuditRows(), row => row.Contains(request));
+    }
+
+    [Fact]
+    public async Task A_cancel_or_a_kill_after_the_send_is_unconfirmed_never_an_exception_or_a_refusal()
+    {
+        using var key = P256KeyPair.Generate();
+        using var cancel = new CancellationTokenSource();
+        var s = OpenSender(key, serveCt: (_, ct) => { cancel.Cancel(); ct.ThrowIfCancellationRequested(); return Task.FromResult(default(JsonElement)); });
+        var cancelled = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), cancel.Token);
+        Assert.Equal((LaunchOutcome.Unconfirmed, 1), (cancelled.Result.Outcome, s.Link.Calls));
+
+        var mode = new Mode(true);
+        var killed = OpenSender(key, mode: mode, serveCt: async (_, ct) => { mode.On = false; await Task.Delay(Timeout.Infinite, ct); return default; });
+        var receipt = await killed.Sender.SendAsync(killed.Caller, SenderInput(killed.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Unconfirmed, 1), (receipt.Result.Outcome, killed.Link.Calls));
+    }
+
+    [Fact]
+    public async Task A_peer_receipt_is_normalized_to_fixed_codes_with_no_free_text_cwd_or_trust_passed_through()
+    {
+        using var key = P256KeyPair.Generate();
+        var session = Guid.NewGuid();
+        var s = OpenSender(key, serve: data =>
+        {
+            var sent = data.GetProperty("launch").Deserialize<FleetLaunchInput>(ProtocolJson.Options)!;
+            var peer = new FleetLaunchReceipt(sent.Request, sent.Grant, 1,
+                new(LaunchOutcome.Started, "free text from the peer") { Session = session.ToString("N"),
+                    Launched = new LaunchedWith { Agent = "claude", Cwd = @"C:\peer\secret", Permissions = "ask" } },
+                "ask", true, null, null, null);
+            return Task.FromResult(JsonSerializer.SerializeToElement(peer, ProtocolJson.Options));
+        });
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Started, true, "ask"), (receipt.Result.Outcome, receipt.Registered, receipt.Permissions));
+        Assert.Equal(session.ToString("D"), receipt.Result.Session);
+        Assert.Null(receipt.Result.Reason);
+        Assert.Null(receipt.Result.Launched);
+        Assert.Null(receipt.Result.Trust);
+        Assert.Null(receipt.Reason);
+    }
+
+    [Fact]
+    public async Task A_peer_reply_with_a_reason_outside_the_fixed_codes_is_a_refusal_with_one_generic_code()
+    {
+        using var key = P256KeyPair.Generate();
+        var s = OpenSender(key, serve: data => Task.FromResult(JsonSerializer.SerializeToElement(
+            FleetGrantLaunch.Receipt(null, new(LaunchOutcome.Refused), data.GetProperty("launch").Deserialize<FleetLaunchInput>(ProtocolJson.Options), "made-up-code"), ProtocolJson.Options)));
+        var receipt = await s.Sender.SendAsync(s.Caller, SenderInput(s.Grant), CancellationToken.None);
+        Assert.Equal((LaunchOutcome.Refused, "policy", 1), (receipt.Result.Outcome, receipt.Reason, s.Link.Calls));
     }
 
     // G9c2: a present host that is not a trusted own-account peer is peer-not-trusted (CLI doc refusal table), not target-offline.
