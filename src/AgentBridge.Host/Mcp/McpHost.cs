@@ -46,7 +46,7 @@ public sealed class McpHost : IAsyncDisposable
     {
         var wait = timeout ?? RequestTimeout;
         LocalChannel channel;
-        try { channel = await LocalClient.ConnectAsync(endpoint, wait < TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct); }
+        try { channel = await LocalClient.ConnectAsync(endpoint, wait < TimeSpan.FromSeconds(5) ? wait : TimeSpan.FromSeconds(5), ct, requireOwner: true); }
         catch (HostNotRunningException) { throw Unreachable(); }
         catch (LocalRefusedException e) { throw new McpToolException($"The {Product.HostName} refused this process: {e.Message}", McpFailure.Refused); }
         try

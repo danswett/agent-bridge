@@ -158,4 +158,144 @@ public sealed class McpHostTests : IDisposable
         }
         finally { hold.TrySetResult(); await server.DisposeAsync(); }
     }
+
+    // --- C3 PR6b: pipe client hardening (Q10's read of PR6) ---
+
+    // An explicit name is one pipe name in the local namespace, or a pipe path under \\.\pipe\ that reduces to one: never a path. On Windows
+    // "..\UNC\host\pipe\x" normalises to \\.\UNC\host\pipe\x, a pipe on ANOTHER machine.
+    [Theory]
+    [InlineData("..")]
+    [InlineData(@"..\UNC\host\pipe\x")]
+    [InlineData(@"a\b")]
+    [InlineData("a/b")]
+    [InlineData(@"\\host\pipe\x")]
+    [InlineData(@"\\.\pipe\..\x")]
+    [InlineData(@"\\.\pipe\a\b")]
+    [InlineData("name:stream")]
+    [InlineData("a..b")]
+    [InlineData(".")]
+    public void An_explicit_windows_pipe_name_that_could_leave_the_local_pipe_namespace_finds_no_host(string pipe) =>
+        Assert.Null(McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", pipe)), windows: true));
+
+    [Theory]
+    [InlineData("host.sock")]
+    [InlineData("/run/../etc/host.sock")]
+    [InlineData("/run/user/1/")]
+    public void An_explicit_unix_socket_must_be_an_absolute_path_without_dot_dot(string path) =>
+        Assert.Null(McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", path)), windows: false));
+
+    [Fact]
+    public void The_hosts_own_pipe_name_and_ordinary_names_are_still_accepted()
+    {
+        Assert.Equal("AgentBridge.Host.0123456789abcdef", McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", "AgentBridge.Host.0123456789abcdef")), windows: true)!.Address);
+        Assert.Equal("AgentBridge.Host.0123456789abcdef", McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", @"\\.\pipe\AgentBridge.Host.0123456789abcdef")), windows: true)!.Address);
+        Assert.Equal("My_pipe-1.v2", McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", "My_pipe-1.v2")), windows: true)!.Address);
+        Assert.Equal("/run/user/1/host.sock", McpEndpoint.Resolve(Env(("AGENT_BRIDGE_PIPE", "/run/user/1/host.sock")), windows: false)!.Address);
+    }
+
+    // The token goes in agent.hello and nowhere else: not in the hello, and not in anything the host is sent before agent.hello.
+    [Fact]
+    public async Task The_hello_carries_no_token_and_the_token_appears_only_in_agent_hello()
+    {
+        var sent = new List<(string Op, string Data)>();
+        await using var server = Serve((op, data) => { sent.Add((op, data.ValueKind == JsonValueKind.Undefined ? "" : data.GetRawText())); return Normal(op, data); });
+        await using var host = await McpHost.OpenAsync(server.Endpoint, "secret-token", TimeSpan.FromSeconds(5));
+        await host.CallAsync("sessions.list");
+        Assert.DoesNotContain(sent.Where(s => s.Op != "agent.hello"), s => s.Data.Contains("secret-token") || s.Data.Contains("token"));
+        Assert.Single(sent, s => s.Data.Contains("secret-token"));
+    }
+
+    // A call that timed out may have been delivered: it is reported unavailable and never sent again.
+    [Fact]
+    public async Task A_call_that_times_out_reaches_the_host_once_and_is_not_retried()
+    {
+        var slow = 0;
+        var hold = new TaskCompletionSource();
+        await using var server = LocalServer.Start(LocalEndpoint.For(root), async (ch, op, data) =>
+        {
+            if (op == "slow") { Interlocked.Increment(ref slow); await hold.Task; }
+            return Normal(op, data);
+        });
+        await using var host = await McpHost.OpenAsync(server.Endpoint, null, TimeSpan.FromSeconds(5));
+        await Assert.ThrowsAsync<McpToolException>(() => host.CallAsync("slow", timeout: TimeSpan.FromMilliseconds(150)));
+        await Task.Delay(700);
+        Assert.Equal(1, slow);
+        hold.SetResult();
+    }
+
+    // CurrentUserOnly makes the connection fail unless the pipe's owner is this user, so a pipe another user created under the name is never
+    // talked to. It cannot be exercised without a second user, so the client's options are the pinned thing.
+    [Fact]
+    public void The_pipe_client_opens_with_current_user_only()
+    {
+        Assert.True(LocalClient.ClientPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
+        Assert.True(LocalClient.ClientPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
+    }
+
+    [Fact]
+    public void A_unix_socket_is_trusted_only_when_its_peer_is_this_user()
+    {
+        Assert.True(LocalPeerOwner.IsCurrentUser(1000, 1000));
+        Assert.False(LocalPeerOwner.IsCurrentUser(0, 1000));
+        Assert.False(LocalPeerOwner.IsCurrentUser(1001, 1000));
+    }
+
+    [Fact]
+    public async Task On_linux_a_socket_this_user_serves_passes_the_owner_check()
+    {
+        if (!OperatingSystem.IsLinux()) { return; }
+        await using var server = Serve(Normal);
+        await using var host = await McpHost.OpenAsync(server.Endpoint, null, TimeSpan.FromSeconds(5));
+        Assert.True(host.Has("sessions.read"));
+    }
+
+    // A hostile host: a frame header claiming 100 MB is refused at once, before any buffer is made, rather than waited on or allocated.
+    [Fact]
+    public async Task A_frame_longer_than_the_limit_ends_the_open_at_once_as_a_host_failure()
+    {
+        await using var raw = RawHost.Start(root, async stream =>
+        {
+            var head = new byte[4];
+            await stream.ReadExactlyAsync(head);
+            await stream.ReadExactlyAsync(new byte[BitConverter.ToInt32(head)]);
+            await stream.WriteAsync(new byte[] { 0x00, 0x00, 0x40, 0x06 });
+            await stream.FlushAsync();
+            await Task.Delay(Timeout.Infinite);
+        });
+        var started = Environment.TickCount64;
+        var e = await Assert.ThrowsAnyAsync<McpToolException>(() => McpHost.OpenAsync(raw.Endpoint, null, TimeSpan.FromSeconds(10)));
+        Assert.True(Environment.TickCount64 - started < 4000, "the oversize header was waited on instead of refused");
+        Assert.NotEqual(McpFailure.Refused, e.Kind);
+    }
+
+    sealed class RawHost : IAsyncDisposable
+    {
+        readonly IAsyncDisposable listener;
+        readonly Task served;
+        public LocalEndpoint Endpoint { get; }
+
+        RawHost(LocalEndpoint endpoint, IAsyncDisposable listener, Task served) { Endpoint = endpoint; this.listener = listener; this.served = served; }
+
+        public static RawHost Start(string folder, Func<Stream, Task> script)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var name = "mcp-raw-" + Guid.NewGuid().ToString("N");
+                var pipe = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte,
+                    System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+                return new(new LocalEndpoint(folder, name), new Disposer(() => pipe.DisposeAsync()),
+                    Task.Run(async () => { await pipe.WaitForConnectionAsync(); await script(pipe); }));
+            }
+            var path = Path.Combine(folder, "raw.sock");
+            var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+            socket.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(path));
+            socket.Listen(1);
+            return new(new LocalEndpoint(folder, path), new Disposer(() => { socket.Dispose(); return ValueTask.CompletedTask; }),
+                Task.Run(async () => { using var peer = await socket.AcceptAsync(); await script(new System.Net.Sockets.NetworkStream(peer)); }));
+        }
+
+        public async ValueTask DisposeAsync() { await listener.DisposeAsync(); try { await served.WaitAsync(TimeSpan.FromMilliseconds(200)); } catch (Exception) { } }
+
+        sealed class Disposer(Func<ValueTask> dispose) : IAsyncDisposable { public ValueTask DisposeAsync() => dispose(); }
+    }
 }
