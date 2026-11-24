@@ -1871,10 +1871,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     - empty: "No messages yet", centred;
     - the first page loading: "Loading conversation…", centred, with the reply box usable;
     - an earlier page failed: "Couldn't load earlier messages" and Try again, at the top, with
-      what is shown kept;
+      what is shown kept and the reader's place unmoved;
     - a host that sends no history: "Earlier messages aren't available from this machine",
       above the oldest message shown;
-    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above;
+    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above, shown
+      once the oldest held turn is drawn and without moving the reader's place;
     - a turn the host couldn't read: "A turn here couldn't be read", in its place, the turns
       around it kept;
     - a turn cut short (over the host's cap): its text as sent, ending "Cut short · see the
