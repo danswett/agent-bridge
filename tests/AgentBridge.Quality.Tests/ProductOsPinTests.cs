@@ -62,6 +62,18 @@ public class ProductOsPinTests
     [InlineData(AfterWrites, "Add-Type -TypeDefinition 'public static class X { }'")]
     [InlineData(AfterWrites, "Update-TypeData -TypeName System.String -MemberType ScriptMethod -MemberName X -Value { 'ab-ci' }")]
     [InlineData(AfterWrites, ". ./x.ps1")]
+    // R4zzB858: an in-process write to the output file (any command, env read or type outside plan.ps1's own), and an
+    // error setting or trap that would silence the line-break throw; an owned function defined twice.
+    [InlineData(AfterOutput, "$p = 'GITHUB_' + 'OUTPUT'; $w = New-Object IO.StreamWriter((Get-Item \"env:$p\").Value, $true); $w.WriteLine('product-' + 'os=[\"ab-ci\"]'); $w.Close()")]
+    [InlineData(AfterOutput, "$p = 'GITHUB_' + 'OUTPUT'; Start-Transcript -Append -Path (Get-Item \"env:$p\").Value")]
+    [InlineData(AfterOutput, "Write-Host ('::set-' + 'output name=product' + '-os::[\"ab-ci\"]')")]
+    [InlineData(AfterOutput, "Write-Output ('::set-' + 'output name=product' + '-os::[\"ab-ci\"]')")]
+    [InlineData(AfterOutput, "$x = $env:HOME")]
+    [InlineData(AfterOutput, "$w = [System.Text.StringBuilder]::new()")]
+    [InlineData(AfterWrites, "$ErrorActionPreference = 'SilentlyContinue'")]
+    [InlineData(AfterWrites, "$global:ErrorActionPreference = 'Ignore'")]
+    [InlineData(AfterWrites, "trap { continue }")]
+    [InlineData(AfterWrites, "function Text($s) { $s }")]
     [InlineData(AfterWrites, ". $PSScriptRoot/x.ps1")]
     [InlineData(AfterOutput, "Add-Content $env:GITHUB_OUTPUT ('product' + '-os=[\"ab-ci\"]')")]
     [InlineData(AfterOutput, "$lines = @($lines) + ('product' + '-os=[\"ab-ci\"]')")]
@@ -126,6 +138,15 @@ public class ProductOsPinTests
         Assert.NotEqual(0, process.ExitCode);
         Assert.Contains("line break", await error);
         Assert.DoesNotContain("ab-ci", output);
+    }
+
+    // R4zzB858 P2-1: the output statements stay at the top level, where no try can swallow the line-break throw.
+    [Fact]
+    public void A_pinned_output_statement_inside_a_try_is_caught()
+    {
+        var plan = Plan().Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lines = plan.Split('\n').Single(l => l.StartsWith("$lines = ", StringComparison.Ordinal));
+        Assert.NotEmpty(Pin(plan.Replace(lines, "try { " + lines + " } catch { }", StringComparison.Ordinal)));
     }
 
     static string Root() => ChangedFiles.RepoRoot(AppContext.BaseDirectory);

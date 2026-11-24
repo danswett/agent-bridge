@@ -9,9 +9,10 @@
   in the pinned output statements. Writing a variable or file by name (*-Variable, Invoke-Expression, [ref],
   -OutVariable, splatting into a script command, dot-sourcing, redirection, a computed command or key) is refused,
   and so is every use of these variables the pin doesn't know. So is a function plan.ps1 doesn't own (its nine, each once,
-  ConvertTo-JsonArray as written), a filter, an alias, a module or a type. Its limit: it reads plan.ps1 alone, so another
-  process plan.ps1 starts (& ./x.ps1, pwsh -c, Start-Process) could write the output file; a write by name to it is refused.
-#>using namespace System.Management.Automation.Language
+  ConvertTo-JsonArray as written), a filter, an alias, a module or a type. Only plan.ps1's own commands, types and output-file reads are allowed (R4zzB858).
+  Its limit: it reads plan.ps1 alone, so the external programs plan.ps1 runs (dotnet, git) are outside it.
+#>
+using namespace System.Management.Automation.Language
 param([Parameter(Mandatory)] [string] $Plan)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -33,14 +34,18 @@ $pinnedText = @(
     '$lines = $outputs.GetEnumerator() | ForEach-Object { $line = "$($_.Key)=$($_.Value)"; if ($line -match ''[\r\n]'') { throw "plan output $($_.Key) holds a line break, which would write a second output line" }; $line }')
 $pinned = @(Find { param($n) $n -is [StatementAst] -and (Norm $n) -in $pinnedText })
 foreach ($text in $pinnedText) { if (@($pinned | Where-Object { (Norm $_) -eq $text }).Count -ne 1) { $problems.Add("plan.ps1 doesn't have exactly one: $text") } }
+# The line-break throw must stay live: one $ErrorActionPreference = 'Stop', no trap, and the output statements at the top level (no try).
+if (@(Find { param($n) $n -is [VariableExpressionAst] -and (Name $n) -eq 'erroractionpreference' } | Where-Object { $_.Parent -isnot [AssignmentStatementAst] -or (Norm $_.Parent) -ne "`$ErrorActionPreference = 'Stop'" -or $_.Parent.Parent -ne $ast.EndBlock }).Count -or @(Find { param($n) $n -is [TrapStatementAst] }).Count) { $problems.Add('plan.ps1 sets $ErrorActionPreference other than to Stop at the top level, or traps errors') }
+foreach ($p in $pinned) { if ($p.Parent -ne $ast.EndBlock) { Add-Problem $p 'a pinned output statement not at the top level' } }
 function In-Pinned([Ast]$Node) { foreach ($p in $pinned) { if (Inside $Node $p) { return $true } }; $false }
 # --- Anything that can write a variable by name, or reach the output file another way. ---
-$byName = '^(?i)(Set|New|Clear|Remove|Get)-Variable$|^(?i)(Set-Alias|New-Alias|sal|nal|Import-Module|ipmo|Add-Type|Update-TypeData|Update-FormatData|Start-Process|saps|start|Export-Clixml|sv|nv|clv|rv|gv|Invoke-Expression|iex|Invoke-Command|icm|Set-Item|si|New-Item|ni|Out-File|Set-Content|sc|Tee-Object|tee|Copy-Item|Move-Item)$'
+$owned = 'Select-Suites', 'ConvertTo-JsonArray', 'Test-WholeRing', 'Test-NotOwn', 'Test-OwnReason', 'Cell', 'Text', 'Code', 'Files'
+$commands = 'Add-Content', 'ConvertFrom-Json', 'ConvertTo-Json', 'dotnet', 'git', 'Group-Object', 'Join-Path', 'ForEach-Object', 'Select-Object', 'Sort-Object', 'Split-Path', 'Test-Path', 'Where-Object', 'Write-Output' # and plan.ps1's own functions ($owned)
 foreach ($c in Find { param($n) $n -is [CommandAst] }) {
     $name = $c.GetCommandName()
     if (-not $name) { Add-Problem $c 'a command whose name is computed'; continue }
-    if ($name -match $byName) { Add-Problem $c "$name can write a variable or a file by name" }
-    if ($name -match '^(?i)(Add-Content|ac)$' -and -not (In-Pinned $c)) { Add-Problem $c 'a file write outside the two pinned output statements' }
+    if ($name -notin $commands + $owned) { Add-Problem $c "$name isn't a command plan.ps1 uses" }
+    if ($name -in 'Add-Content', 'Write-Output' -and -not (In-Pinned $c)) { Add-Problem $c 'a file write outside the two pinned output statements' }
     if ($c.InvocationOperator -eq 'Dot' -or ($c.InvocationOperator -eq 'Ampersand' -and $c.CommandElements[0] -isnot [StringConstantExpressionAst])) { Add-Problem $c 'a dot-sourced or computed call' }
     foreach ($e in $c.CommandElements) {
         if ($e -is [CommandParameterAst] -and $e.ParameterName -match '^(?i)(OutVariable|ov|PipelineVariable|pv|ErrorVariable|ev|WarningVariable|wv|InformationVariable|iv)$') { Add-Problem $e "-$($e.ParameterName) writes a variable by name" }
@@ -49,7 +54,6 @@ foreach ($c in Find { param($n) $n -is [CommandAst] }) {
 }
 foreach ($r in Find { param($n) $n -is [FileRedirectionAst] }) { Add-Problem $r 'a file redirection' }
 # Only plan.ps1's own functions, each defined once; ConvertTo-JsonArray, which builds the output, exactly as written.
-$owned = 'Select-Suites', 'ConvertTo-JsonArray', 'Test-WholeRing', 'Test-NotOwn', 'Test-OwnReason', 'Cell', 'Text', 'Code', 'Files'
 $defined = @(Find { param($n) $n -is [FunctionDefinitionAst] })
 foreach ($d in $defined) { if ($d.IsFilter -or $d.IsWorkflow -or $d.Name -notin $owned) { Add-Problem $d "a function plan.ps1 doesn't own, which could replace a command" } }
 foreach ($o in $owned) { if (@($defined | Where-Object Name -eq $o).Count -ne 1) { $problems.Add("plan.ps1 must define $o exactly once") } }
@@ -57,12 +61,12 @@ if (@($defined | Where-Object { $_.Name -eq 'ConvertTo-JsonArray' -and (Norm $_)
 if ($ast.UsingStatements.Count -or $ast.ScriptRequirements.RequiredModules.Count) { $problems.Add('plan.ps1 imports a module (using or #Requires -Modules)') }
 foreach ($t in Find { param($n) $n -is [TypeExpressionAst] -or $n -is [ConvertExpressionAst] -or $n -is [TypeConstraintAst] }) {
     $type = if ($t -is [ConvertExpressionAst]) { $t.Type.TypeName.FullName } else { $t.TypeName.FullName }
-    if ($type -match '^(?i)(ref|System\.Management\.Automation\.PSReference|(System\.)?Environment|(System\.)?IO\.(File|FileInfo|StreamWriter|FileStream|Directory)|scriptblock|System\.Management\.Automation\.ScriptBlock|psvariable)$') { Add-Problem $t "[$type]" }
+    if ($type -notin 'int', 'ordered', 'string', 'string[]', 'StringComparison', 'switch', 'System.Collections.Generic.List[string]') { Add-Problem $t "[$type] isn't a type plan.ps1 uses" }
 }
 foreach ($v in Find { param($n) $n -is [VariableExpressionAst] }) {
     if ((Name $v) -in 'executioncontext', 'pscmdlet') { Add-Problem $v "`$$((Name $v)) can reach any variable" }
     if ($v.VariablePath.UserPath -match '^(?i)(variable|function):') { Add-Problem $v 'a variable: or function: drive path' }
-    if ($v.VariablePath.UserPath -match '^(?i)env:GITHUB_OUTPUT$' -and -not (In-Pinned $v)) { Add-Problem $v '$env:GITHUB_OUTPUT outside the pinned output statement' }
+    if ($v.VariablePath.UserPath -match '^(?i)env:' -and -not (In-Pinned $v)) { Add-Problem $v 'an environment read outside the pinned output statements' }
 }
 foreach ($s in Find { param($n) $n -is [StringConstantExpressionAst] -or $n -is [ExpandableStringExpressionAst] }) {
     if ($s.Value -match '(?i)GITHUB_OUTPUT|set-output|save-state|variable:') { Add-Problem $s 'a string naming the output file, a workflow command or a variable drive' }
@@ -141,6 +145,7 @@ foreach ($a in $assignments) {
                 $loop = $a.Parent
                 while ($loop -and $loop -isnot [ForEachStatementAst]) { $loop = $loop.Parent }
                 if (-not $loop -or -not (Is-Var $loop.Variable 'job') -or -not (Is-Var $loop.Condition.PipelineElements[0].Expression 'Jobs')) { Add-Problem $a '$outputs[$job] outside foreach ($job in $Jobs)'; continue }
+                # Both rules hold: the loop check bounds $job to $Jobs; the order check below stops a job named product-os overwriting it.
                 $a | Add-Member -NotePropertyName ByJob -NotePropertyValue $true -Force
             } else { Add-Problem $a 'a computed or product-os-like key into $outputs'; continue }
             [void]$allowedWrites.Add($a)

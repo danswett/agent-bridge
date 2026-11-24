@@ -170,6 +170,15 @@ public sealed partial class CiRunnerResolutionTests
     [InlineData("name: ci\non: [push]\njobs:\n  <<: *base\n  product:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n")]
     public void A_merge_key_at_the_root_or_under_jobs_fails_closed(string rest)
         => Assert.NotEmpty(Check("x-base: &base { ab: { runs-on: ab-ci, steps: [{ run: echo hi }] } }\n" + rest.Replace("\\n", "\n")));
+    // R4zzB858 P3: an include row's own merge-key check, apart from the job's: the matrix itself is not hosted.
+    [Fact]
+    public void An_include_row_with_a_merge_key_makes_the_matrix_not_hosted() => Assert.Contains(Check($$$"""
+        name: ci
+        on: [push]
+        jobs:
+          anchors: { runs-on: ubuntu-latest, strategy: { matrix: { a: [&row { os: windows-latest }] } }, steps: [{ run: echo hi }] }
+          product: { strategy: { matrix: { os: [ubuntu-latest], include: [{ <<: *row }] } }, runs-on: "${{ matrix.os }}", steps: [{ run: echo hi }] }
+        """), p => p.Contains("matrix.os is reached without it", StringComparison.Ordinal));
     [Fact]
     public void A_job_that_takes_its_runner_through_a_merge_key_fails_closed() => Assert.NotEmpty(Check("""
         name: ci
