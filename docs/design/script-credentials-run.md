@@ -1,6 +1,8 @@
 # Script credentials: how a scheduled task gets its token (`scripts run`) (#3305 slice 3b, design only)
 
-Status: DESIGN ONLY, no code. **Needs Quality's sensitive read. Q-run-2, Q-run-3 and Q-run-4 below are OPEN FOR THE OWNER; nothing is built on a guess at any of them. Each carries a recommended default so the owner can answer with one word.**
+Status: DESIGN ONLY, no code. **Needs Quality's sensitive read.**
+
+**Owner decision, 08:15 PT, 2026-11-24, answer "Accept all three (Recommended)":** Q-run-2 logged-on-only scheduled tasks (no stored password); Q-run-3 a Windows "allow changes?" prompt ONLY when the person presses a button in the app; Q-run-4 the app creates or edits the task through that button after showing exactly what will run. (Relayed by the Engineering Lead; the owner's own words are the option text quoted here, with no owner comment link.) Section 4 and section 8 record each answer where its question was; nothing in this note is open for the owner any more.
 Part of #3305 (parent #1421); answers the OPEN item in [script-credentials.md](script-credentials.md) section 7, "How a script gets it".
 The credential format, the stored hash, the scope rules (`read+reply`, the allow-list) and the person-pressed mint, rotate and revoke are **unchanged**.
 
@@ -57,9 +59,9 @@ every accept). The host ships in `%LOCALAPPDATA%\AgentBridgeApp\current\`, a fol
   version only in a release that tells the person in the app that a re-pin is needed first. A host (Velopack) update does **not**
   change the launcher, so a host update never invalidates a bound credential.
 - Installing the launcher needs elevation once per machine. That is the same elevation the base doc leaves open for the task binding ("how that service is
-  elevated is #1414's design to settle"): **Q-run-3 (owner; recommended: yes):** is a Windows consent prompt on a person's press in the app the acceptable way to install
-  and re-pin it (no terminal, no PowerShell)? **Only S2 (the install and the mint press) waits for the answer; S3 (the reader) and S1 (the launcher and `scripts.admit`)
-  need no owner answer and can start.**
+  elevated is #1414's design to settle"): **Q-run-3, answered by the owner (08:15 PT, 2026-11-24, "Accept all three (Recommended)"): yes.** The install and the re-pin run behind a Windows
+  "allow changes?" prompt, shown ONLY when the person presses a button in the app (no terminal, no PowerShell, never from a background path). No slice waits for an
+  owner answer now: S3 (the reader), S1 (the launcher and `scripts.admit`) and S2 (the install and the mint press) can all be built, in the order of section 9.
 
 ## 5. The token's exposure, stated honestly
 
@@ -125,10 +127,12 @@ The file is wrapped with Windows **CurrentUser** DPAPI. Only the user who minted
 Windows user that runs the host**; `SYSTEM` or another account fails closed (`refused`).
 - **Q-run-1 (design):** keep CurrentUser DPAPI (no format change; assumed here), or machine-scope so a `SYSTEM` task can read it? Machine scope lets every local
   account decrypt it and is a **format change**, so out of scope unless the owner asks.
-- **Q-run-2 (owner; recommended: "run only when the user is logged on", no stored password):** how the task's user is registered. "Run only when the user is logged on" needs no stored password; "whether logged on or not" needs the user's
-  password stored by the scheduler, which is the owner's decision and which no agent sets.
-- **Q-run-4 (owner; recommended: the app's mint press does it, as below):** who registers and edits the admin-locked task with no terminal step. Default proposed: the app's task-bound mint press creates it
-  through the elevated step of Q-run-3, from what the person names in the press (task name, script, user), and shows them exactly what will run.
+- **Q-run-2, answered by the owner (08:15 PT, 2026-11-24, "Accept all three (Recommended)"): logged-on-only scheduled tasks, no stored password.** The task is
+  registered "run only when the user is logged on", so the scheduler stores no password and no agent sets one. A dispatcher run therefore needs that user's session; a
+  task registered with a stored password is refused at the mint.
+- **Q-run-4, answered by the owner (08:15 PT, 2026-11-24, "Accept all three (Recommended)"): the app creates or edits the task through that button, after showing exactly what will run.**
+  The app's task-bound mint press creates or edits the task through the elevated step of Q-run-3, from what the person names in the press (task name, script, user), and
+  shows them the exact program, arguments, files and user before the Windows prompt. No terminal and no agent is involved.
 
 ## 9. Slices, order and acceptance (each its own sensitive PR, each under the 400-line cap)
 
@@ -138,7 +142,7 @@ Windows user that runs the host**; `SYSTEM` or another account fails closed (`re
 |---|---|---|---|---|
 | 1 | S3 | The Windows `IScriptTaskReader` (engine reads, task definition, ACL and file hashes) | 300 | Fakes plus real-Windows vectors: the engine is the `script-run` process; an intermediate engine is refused; an unlocked file is refused; `ActionFiles` always returns the executable and the `-File` script, and a user-writable one refuses the mint |
 | 2 | S1 | `script-run` launcher and `scripts.admit` | 300 | An unbound credential is never admitted; a non-descendant is refused; a refused or unwritable audit stops it; an unknown `scripts.admit` version is refused and an older launcher is still admitted; `scripts.finished` is accepted once, only from the admitted caller (pid and start), as a second row, and is best effort; the launcher loads no DLL from a redirectable place; a relative command, PowerShell without `-NoProfile`, and PATH lookup refused; `125` mapping; host-down fails closed; the token is in no argument, log or audit row |
-| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (blocked until the owner answers Q-run-2, Q-run-3 and Q-run-4) | 350 | The press shows the person the task, user, program and files; a re-pin is a rotation and the installer refuses an older launcher; a host update does not invalidate it; an unlocked program is refused at mint |
+| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (the owner answered Q-run-2, Q-run-3 and Q-run-4 on 2026-11-24: not blocked) | 350 | The press shows the person the task, user, program and files; a re-pin is a rotation and the installer refuses an older launcher; a host update does not invalidate it; an unlocked program is refused at mint |
 | 4 | S4 | The canary test (profile, logs, audit, task output, a forced-crash dump folder); doc updates (section 7 and the list of host operations in script-credentials.md, host-config.md and local-pipe.md, each naming `scripts.admit` and `scripts.finished`; the fleet README); a review of the dispatcher scripts for what they hand on | 200 | The planted token is found nowhere; a script that passes its environment to an untrusted child fails the review |
 
 S1 grew (versioning, `scripts.finished`, the no-DLL test, the native launcher) at the same 300 lines; if it passes the cap it splits into the launcher and `scripts.admit` / `scripts.finished`.
@@ -148,5 +152,5 @@ may press mint, rotate and revoke.
 
 ## 10. Not in this note
 
-Machine-scope DPAPI (Q-run-1), storing a task password (Q-run-2), automatic renewal (a person approves every rotation), a remote mint, any change to the
+Machine-scope DPAPI (Q-run-1), storing a task password (decided against, Q-run-2), automatic renewal (a person approves every rotation), a remote mint, any change to the
 `launch:fleet` tick, and any non-Windows host.
