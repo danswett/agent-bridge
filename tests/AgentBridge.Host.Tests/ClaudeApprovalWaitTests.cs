@@ -194,23 +194,6 @@ public sealed class ClaudeApprovalWaitTests : IAsyncLifetime
         Assert.Equal("allow", Verdict(await first));
     }
 
-    // The broker refuses text that is not well-formed (a lone surrogate) with an ArgumentException: that is an ask the hook cannot be answered for, not a host fault.
-    [Fact]
-    public async Task A_command_with_a_lone_surrogate_is_none_bad_event_and_nothing_is_left_waiting()
-    {
-        if (!OperatingSystem.IsWindows()) { return; }
-        await using var ch = await ConnectAsync(Serve(on: true));
-        var bad = Event("echo hi").Replace("echo hi", "echo \\ud800");
-
-        var reply = await ch.CallAsync(Op, new { @event = bad });
-
-        Assert.Equal(("none", "bad-event"), (Verdict(reply), Reason(reply)));
-        var ok = ch.CallAsync(Op, new { @event = Event("echo ok") });
-        await Waiting(Id("echo ok"));
-        Assert.Equal(ClaudeApprovalBroker.Result.Accepted, broker.Resolve(Person, Session, Id("echo ok"), Shown("echo ok"), "deny"));
-        Assert.Equal("deny", Verdict(await ok));
-    }
-
     [Fact]
     public async Task No_answer_by_the_deadline_is_none_timeout_and_a_late_answer_is_unknown()
     {

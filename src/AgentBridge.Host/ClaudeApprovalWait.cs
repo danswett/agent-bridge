@@ -36,24 +36,15 @@ public sealed class ClaudeApprovalWait
             throw new InvalidOperationException("refused: approval.wait is for the agent session's own hook");
         }
         // Only the event is read: a session, a principal or an id in the body is ignored.
-        // Text that is not well-formed (a lone surrogate) cannot be read as a string or hashed: it is a bad event, never a host fault.
-        string? json;
-        try
-        {
-            json = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("event", out var text) && text.ValueKind == JsonValueKind.String ? text.GetString() : null;
-        }
-        catch (InvalidOperationException) { json = null; }
-        var parts = json is { Length: > 0 and <= MaxEvent } ? Read(json) : null;
+        var parts = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("event", out var text) && text.ValueKind == JsonValueKind.String
+            && text.GetString() is { Length: > 0 and <= MaxEvent } json ? Read(json) : null;
         if (parts is not { } p) { return None("bad-event"); }
         var (session, tool, input, command) = p;
         if (!string.Equals(session, caller.Session, StringComparison.OrdinalIgnoreCase)) { return None("caller"); }
         var shown = ShownText.Reveal($"{tool}: {command ?? input}".Replace("\r\n", "\n"), rightToLeft: true);
         // Cut when shown, so it can never be answered: no wait for an answer that cannot come.
         if (shown.Length > ClaudeApprovalBroker.PreviewMax) { return None("truncated"); }
-        Task<string?>? verdict;
-        try { verdict = broker.Register(caller.Session, RequestId(session, tool, input), shown); }
-        catch (ArgumentException) { return None("bad-event"); }
-        // Null: a prompt for this request is already waiting, or too many are held.
+        var verdict = broker.Register(caller.Session, RequestId(session, tool, input), shown);
         if (verdict is null) { return None("busy"); }
         // The hook going away ends its wait with no verdict, so nobody answers a prompt nobody is waiting for.
         if (await Task.WhenAny(verdict, channel.Closed) != verdict)
@@ -79,8 +70,7 @@ public sealed class ClaudeApprovalWait
                 && t.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
             return (session, tool, input, command);
         }
-        // GetString throws InvalidOperationException on a lone surrogate escape.
-        catch (Exception e) when (e is JsonException or InvalidOperationException) { return null; }
+        catch (JsonException) { return null; }
     }
 
     // 16 hex digits of a hash over the session, tool and input: the hook's own formula (ClaudeApproval.RequestId), so a prompt is named alike on both sides.
