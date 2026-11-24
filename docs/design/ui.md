@@ -1809,7 +1809,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   even before navigation first moves.
   An unrelated final scroll event cannot end that custody before the requested target is reached.
   A held scrollbar owns the view from its press until release or cancellation, before its
-  first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
+  first movement as well as during the drag; history arriving meanwhile cannot restore the pin,
+  and the layout's top-block correction cannot move the view under it (#1756): a thumb drag's
+  steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
   End-following also waits while a finger is down or the pointer is over or pressed in the
   conversation, then follows the latest measured end when the last hold ends, if still pinned.

@@ -6,7 +6,7 @@ namespace AgentBridge.Host.Delivery.AgentReplies;
 // A prompt from the person that an agent recorded, by the offset of the line recording it,
 // which is what identifies it: two replies of the same words are two prompts. Files are the
 // paths the agent took in as attachments of it. At is the line's own timestamp, for timings only.
-public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files, DateTimeOffset? At = null);
+public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files, DateTimeOffset? At = null, bool Queued = false);
 
 public sealed record AgentPromptsSince(bool Readable, IReadOnlyList<AgentPrompt> Prompts, long ScannedTo);
 
@@ -58,7 +58,7 @@ public static class ClaudePrompts
                     case "queue-operation" when Str(e, "operation") == "enqueue" && Str(e, "content") is { } content:
                         var mine = new List<string>();
                         queued.Add((InjectableText.Flatten(content), mine));
-                        prompts.Add(new AgentPrompt(start, content, mine, Jsonl.Timestamp(e)));
+                        prompts.Add(new AgentPrompt(start, content, mine, Jsonl.Timestamp(e), Queued: true));
                         // Claude is still on the prompt before: its Reads and their results keep
                         // arriving after an enqueue, so its files stay current until the queued
                         // prompt is taken.

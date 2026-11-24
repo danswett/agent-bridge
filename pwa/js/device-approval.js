@@ -1,0 +1,46 @@
+// Device approval, the PWA's side (#55, docs/design/device-approval.md section 4; D4, mirroring the Windows app's D3a view models).
+// View models only: the exchange, its codes and its lockouts belong to the roster library and arrive as an object with its methods, so
+// nothing here has crypto of its own, reaches a relay, or signs.
+
+// The account's roster mode as the relay's roster snapshot says it. Anything else, including no answer, is off: no join or approve entry
+// exists and nothing behind it is built.
+export const rosterModeVisible = (mode) => mode === 'observe' || mode === 'enforce';
+
+export const openDeviceApproval = (source, make) => (rosterModeVisible(source?.mode) ? make() : null);
+
+// What proves a person is present at this device (section 4.6): kind is 'key', 'webauthn' or 'none'. The PWA has none yet (the passkey
+// proof is a later, owner-approved slice), so approving from it is not possible until then.
+export class NoPresence {
+  kind = 'none';
+  trySign() { return null; }
+}
+
+// The fixed words the screens use. No text from a peer, the relay or an exception is ever shown.
+const REFUSALS = new Map([
+  ['wrong-code', 'That code is not right. Try again.'],
+  ['expired', 'This attempt ran out of time. Start again.'],
+  ['already-approved', 'This device is already approved.'],
+  ['removed', 'This device was removed; sign out and in again to make a new key.'],
+  ['unknown-kind', 'This kind of device cannot join.'],
+  ['roster-limit', 'The account has reached its device limit.'],
+  ['approver-probation', 'The approving device is still on probation.'],
+  ['no-presence', 'The approving device cannot prove a person is present.'],
+]);
+
+export const EnrollmentTexts = {
+  WRONG: 'That code is not right. Try again.',
+  ENDED: 'This attempt has ended. Start again.',
+  LOCKED: 'Joining is locked for 15 minutes.',
+  GENERIC: 'This device could not be added.',
+
+  // A closed code to its words; anything else, or nothing, is the generic line. The refusal codes are placeholders until the relay fixes
+  // them, so a renamed code degrades to the generic line.
+  forRefusal: (code) => (typeof code === 'string' && REFUSALS.has(code) ? REFUSALS.get(code) : EnrollmentTexts.GENERIC),
+
+  // A code result of the exchange ('match', 'wrong', 'locked', 'ended') to words.
+  forResult: (result) => (result === 'wrong' ? EnrollmentTexts.WRONG : result === 'locked' ? EnrollmentTexts.LOCKED : result === 'ended' ? EnrollmentTexts.ENDED : ''),
+
+  // Hex in groups of four: the first 64 bits of a hash, or an id's first sixteen characters.
+  groups: (hex) => hex.match(/.{4}/g)?.join(' ') ?? '',
+  fingerprint: (genesisHash) => EnrollmentTexts.groups([...genesisHash.subarray(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('')),
+};

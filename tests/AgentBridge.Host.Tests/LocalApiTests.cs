@@ -843,6 +843,34 @@ public sealed class LocalApiTests : IAsyncLifetime
         await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
     }
 
+    // #4134: the action a client asked for and the host accepted does not depend on the client hearing the answer. The client hangs up while the
+    // host is still preparing its stop, so the answer cannot be sent; the host stops all the same.
+    [Fact]
+    public async Task A_stop_the_host_accepted_stops_it_though_the_client_hung_up_before_the_answer()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        prepareStop = async () => { entered.TrySetResult(); await release.Task; return new CancellationTokenSource(); };
+        var ch = await ConnectAsync();
+
+        var asked = ch.RequestAsync(HostOps.Stop);
+        await entered.Task.WaitAsync(Patience);
+        await ch.DisposeAsync();
+        release.SetResult();
+        try { await asked; } catch (IOException) { }
+
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop the client never heard the answer to", Patience);
+    }
+
+    [Fact]
+    public async Task A_restart_and_a_stop_are_actions_that_run_even_if_their_answer_is_not_sent()
+    {
+        var ch = await ConnectAsync();
+
+        Assert.True(Assert.IsType<ChannelReply>(await control.HandleAsync(ch, HostOps.Restart, default)).RunsIfUnsent);
+        Assert.True(Assert.IsType<ChannelReply>(await control.HandleAsync(ch, HostOps.Stop, default)).RunsIfUnsent);
+    }
+
     [Fact]
     public async Task Management_ops_never_reach_a_channel_through_the_relay()
     {
