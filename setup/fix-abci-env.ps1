@@ -18,7 +18,9 @@
   (a Runner.Worker process under that folder): that runner is reported and left for a later run of this script.
 
   Every runner is checked before any file is written: a PATH folder the runner account could write, or a .NET
-  folder outside its work folder or one it can't write (setup/abci-install-dir.ps1), refuses the whole run.
+  folder that isn't inside its work folder (one plain name in the runner folder), that crosses a reparse point,
+  that anyone but an admin or that runner's own account could write (up to -Root), or that the runner account can't
+  write (setup/abci-install-dir.ps1), refuses the whole run.
 
   Run elevated (the .env files and services belong to the runner account). -WhatIf shows every change and writes
   nothing; it also runs without elevation, then saying where a file can't be read. Changes nothing else on the machine.
@@ -88,13 +90,14 @@ foreach ($runner in $runners) {
     $account = $runner.Account -replace '^\.\\', "$env:COMPUTERNAME\"
     $sid = if ($account -eq 'LocalSystem') { 'S-1-5-18' } else { (New-Object Security.Principal.NTAccount($account)).Translate([Security.Principal.SecurityIdentifier]).Value }
     try {
-        $work = Get-AbCiWorkFolder $runner.FullName
-        $runner | Add-Member InstallDir (Get-AbCiInstallDir $work)
-        foreach ($why in @(Get-AbCiInstallDirProblems $work $runner.InstallDir $sid)) { $refused += "$($runner.InstallDir) $why" }
+        $runner | Add-Member InstallDir (Get-AbCiInstallDir (Get-AbCiWorkFolder $runner.FullName))
+        foreach ($why in @(Get-AbCiInstallDirProblems $runner.FullName $runner.InstallDir $sid)) { $refused += "$($runner.InstallDir) $why" }
     } catch [UnauthorizedAccessException] {
         if (-not $WhatIfPreference) { throw }
         $runner | Add-Member InstallDir -Force (Join-Path $runner.FullName '_work\_tool\dotnet')
         Write-Host "$($runner.FullName)'s work folder can't be checked without elevation; assuming $($runner.InstallDir)."
+    } catch {
+        $refused += "$($runner.FullName): $($_.Exception.Message)"
     }
 }
 if ($refused) { throw "Refusing, nothing changed: .NET folders the runner account couldn't install to:`n  $($refused -join "`n  ")" }

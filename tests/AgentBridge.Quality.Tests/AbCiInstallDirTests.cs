@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace AgentBridge.Quality.Tests;
 
@@ -8,25 +9,36 @@ namespace AgentBridge.Quality.Tests;
 [Trait("Category", "Process")]
 public class AbCiInstallDirTests
 {
-    // Guests and Power Users: well-known SIDs this test grants (or doesn't) on its own scratch folder only.
+    // Guests and Power Users: well-known SIDs this test grants (or doesn't) on its own scratch folders only.
     const string Runner = "S-1-5-32-546";
     const string Other = "S-1-5-32-547";
 
     [Theory]
-    [InlineData(".dotnet")]
-    [InlineData("_work/../.dotnet")]
-    [InlineData("_work-other/_tool/dotnet")]
-    [InlineData("_work")]
-    public void An_install_dir_outside_the_runners_work_folder_is_refused(string relative)
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData("a\\b")]
+    [InlineData("a/b")]
+    [InlineData("C:\\work")]
+    [InlineData("C:work")]
+    [InlineData("\\\\server\\share")]
+    [InlineData("\\\\?\\C:\\work")]
+    [InlineData("_work.")]
+    [InlineData("_work ")]
+    [InlineData(" _work")]
+    [InlineData("NUL")]
+    [InlineData("com1.txt")]
+    [InlineData("CONIN$")]
+    [InlineData("_work:stream")]
+    public void A_work_folder_that_isnt_one_plain_name_in_the_runner_folder_is_refused(string workFolder)
     {
         var folder = Fixture.ScratchFolder();
         try
         {
-            Directory.CreateDirectory(Path.Combine(folder, "_work"));
-            var (exit, output) = Run(folder, $"Get-AbCiInstallDirProblems (Join-Path $env:T '_work') (Join-Path $env:T '{relative}') '{Runner}'");
+            File.WriteAllText(Path.Combine(folder, ".runner"), JsonSerializer.Serialize(new { agentName = "x", workFolder }));
+            var (exit, output) = Run(folder, "Get-AbCiWorkFolder $env:T");
 
-            Assert.True(exit == 0, output);
-            Assert.Contains("is outside the runner's work folder", output);
+            Assert.NotEqual(0, exit);
+            Assert.Contains("isn't one plain folder name in the runner folder", output);
         }
         finally
         {
@@ -42,12 +54,15 @@ public class AbCiInstallDirTests
         {
             var (exit, output) = Run(folder, "Get-AbCiInstallDir (Get-AbCiWorkFolder $env:T)");
             Assert.True(exit == 0, output);
-            Assert.Equal(Path.Combine(folder, "_work", "_tool", "dotnet").Replace('/', '\\'), output.Trim().Replace('/', '\\'));
+            Assert.Equal(Path.Combine(folder, "_work", "_tool", "dotnet"), output.Trim());
 
-            File.WriteAllText(Path.Combine(folder, ".runner"), """{ "agentName": "x", "workFolder": "w2" }""");
-            (exit, output) = Run(folder, "Get-AbCiWorkFolder $env:T");
-            Assert.True(exit == 0, output);
-            Assert.Equal(Path.Combine(folder, "w2"), output.Trim());
+            foreach (var (written, expected) in new[] { ("w2", "w2"), ("", "_work"), ("_work.2", "_work.2") })
+            {
+                File.WriteAllText(Path.Combine(folder, ".runner"), JsonSerializer.Serialize(new { agentName = "x", workFolder = written }));
+                (exit, output) = Run(folder, "Get-AbCiWorkFolder $env:T");
+                Assert.True(exit == 0, output);
+                Assert.Equal(Path.Combine(folder, expected), output.Trim());
+            }
         }
         finally
         {
@@ -55,22 +70,65 @@ public class AbCiInstallDirTests
         }
     }
 
-    // Windows ACLs: the runner account itself must be granted write on the work folder, inherited by new folders.
     [Theory]
-    [InlineData("ContainerInherit, ObjectInherit", Runner, "")]
-    [InlineData("ContainerInherit, ObjectInherit", Other, "can't be written by the runner account")]
-    [InlineData("None", Runner, "can't be written by the runner account")]
-    public void Inside_the_work_folder_the_runner_account_must_be_able_to_write_it(string inheritance, string granted, string problem)
+    [InlineData(".dotnet")]
+    [InlineData("_work/../.dotnet")]
+    [InlineData("_work-other/_tool/dotnet")]
+    [InlineData("_work")]
+    [InlineData("../2/_work/_tool/dotnet")]
+    public void An_install_dir_outside_the_runners_work_folder_is_refused(string relative)
+    {
+        var folder = Fixture.ScratchFolder();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "_work"));
+            var (exit, output) = Run(folder, $"Get-AbCiInstallDirProblems $env:T (Join-Path $env:T '{relative}') '{Runner}'");
+
+            Assert.True(exit == 0, output);
+            Assert.Contains("is outside the runner's work folder", output);
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // Windows ACLs, on <scratch>\root\1\_work: root's inherited rules are removed and only the test's own account (standing
+    // in for an admin) is granted; each case then adds what it names. $runner and $other are the SIDs above.
+    [Theory]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'", "")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; New-Item -ItemType Directory (Join-Path $w '_tool') | Out-Null", "")]
+    [InlineData("", "can't be written by the runner account")]
+    [InlineData("Grant $w $other 'ContainerInherit, ObjectInherit'", "can't be written by the runner account")]
+    [InlineData("Grant $w $runner 'None'", "can't be written by the runner account")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; $t = New-Item -ItemType Directory (Join-Path $w '_tool'); Grant $t $other 'None'", "_tool writable by S-1-5-32-547")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; Grant $w $other 'None'", "_work writable by S-1-5-32-547")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; Grant $r $other 'None'", "1 writable by S-1-5-32-547")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; Grant $root $other 'None'", "root writable by S-1-5-32-547")]
+    [InlineData("Grant $w $runner 'ContainerInherit, ObjectInherit'; New-Item -ItemType Junction (Join-Path $w '_tool') -Target (New-Item -ItemType Directory (Join-Path $env:T 'elsewhere')).FullName | Out-Null", "has a reparse point at")]
+    public void Up_to_the_runner_root_only_an_admin_and_the_runners_own_account_may_write(string setup, string problem)
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var folder = Fixture.ScratchFolder();
         try
         {
             var (exit, output) = Run(folder,
-                "$w = (New-Item -ItemType Directory (Join-Path $env:T '_work')).FullName; $acl = Get-Acl -LiteralPath $w; " +
-                $"$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]'{granted}', 'Modify', '{inheritance}', 'None', 'Allow')); " +
-                "Set-Acl -LiteralPath $w -AclObject $acl; " +
-                $"$p = @(Get-AbCiInstallDirProblems $w (Get-AbCiInstallDir $w) '{Runner}'); 'problems=' + $p.Count; $p");
+                "$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; " +
+                $"$runner = '{Runner}'; $other = '{Other}'; " +
+                "function Get-Access($Path) { [IO.FileSystemAclExtensions]::GetAccessControl([IO.DirectoryInfo]$Path, 'Access') }; " +
+                "function Set-Access($Path, $Acl) { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]$Path, $Acl) }; " +
+                "function Grant($Path, $Sid, $Inherit) { $a = Get-Access $Path; " +
+                "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]$Sid, 'Modify', $Inherit, 'None', 'Allow')); " +
+                "Set-Access $Path $a }; " +
+                "$root = (New-Item -ItemType Directory (Join-Path $env:T 'root')).FullName; " +
+                "$a = Get-Access $root; $a.SetAccessRuleProtection($true, $false); " +
+                "$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]$me, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')); " +
+                "Set-Access $root $a; " +
+                "$r = (New-Item -ItemType Directory (Join-Path $root '1')).FullName; $w = (New-Item -ItemType Directory (Join-Path $r '_work')).FullName; " +
+                setup + "; " +
+                "$p = @(Get-AbCiInstallDirProblems $r (Get-AbCiInstallDir (Get-AbCiWorkFolder $r)) $runner @($me)); 'problems=' + $p.Count; $p; " +
+                // A junction is removed as a link (not followed), so the scratch folder can be deleted.
+                "Get-ChildItem -LiteralPath $env:T -Recurse -Directory -Attributes ReparsePoint | ForEach-Object { [IO.Directory]::Delete($_.FullName) }");
 
             Assert.True(exit == 0, output);
             if (problem.Length == 0) { Assert.Contains("problems=0", output); }
