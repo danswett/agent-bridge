@@ -9489,7 +9489,7 @@
           }
         },
         {
-          "name": "an-escaped-cut-shell-box",
+          "name": "an-escaped-shell-box",
           "json": {
             "text": "rerun the build\\u202E gol",
             "marks": [
@@ -9498,7 +9498,7 @@
                 6
               ]
             ],
-            "truncated": true,
+            "truncated": false,
             "mode": "shell",
             "digest": "61437607c79d7887e74e3263ca3e88c8d68849233f8aeeb430cc0a5edfca1579",
             "clearable": false

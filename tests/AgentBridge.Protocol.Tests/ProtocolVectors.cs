@@ -653,7 +653,7 @@ public static class ProtocolVectors
         var shownBox = new ReplyInput(boxed.Shown, [.. boxed.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])], false, "text", EscapedApproval.Shown(boxed.Shown), false);
         f.Record<ReplyInput>(Host)
             .Valid("a-draft", new ReplyInput("rerun the tests", [], false, "text", EscapedApproval.Shown("rerun the tests"), false))
-            .Valid("an-escaped-cut-shell-box", shownBox with { Mode = "shell", Truncated = true });
+            .Valid("an-escaped-shell-box", shownBox with { Mode = "shell" });
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })

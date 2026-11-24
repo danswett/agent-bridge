@@ -1075,6 +1075,8 @@ public sealed partial class ReplyService : ISessionReplier
         if (request.Intent != ReplyIntent.Steer || box is not { Main: true, Complete: true } || box.Vim == CopilotVimMode.Normal || !box.Shell && box.Content.Length == 0) { return null; }
         var (shown, marks) = ShownText.RevealMarked(box.Content, rightToLeft: true);
         var cut = shown.Length <= CopilotInputBoxReader.ShownLength ? shown.Length : char.IsHighSurrogate(shown[CopilotInputBoxReader.ShownLength - 1]) ? CopilotInputBoxReader.ShownLength - 1 : CopilotInputBoxReader.ShownLength;
+        // A cut inside an escape the host wrote would leave half of it looking like the person's own text: stop before it.
+        foreach (var m in marks) { if (m.Start < cut && m.Start + m.Length > cut) { cut = m.Start; } }
         return new ReplyInput(shown[..cut], [.. marks.Where(m => m.Start + m.Length <= cut).Select(m => (IReadOnlyList<int>)[m.Start, m.Length])],
             cut < shown.Length, box.Shell ? "shell" : "text", EscapedApproval.Shown(shown), false);
     }

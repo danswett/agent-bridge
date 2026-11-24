@@ -319,6 +319,15 @@ public sealed class ReplyClearTests
         Assert.Equal((500, true, EscapedApproval.Shown(h.Draft)), (input.Text.Length, input.Truncated, input.Digest));
     }
 
+    // Review: a cut inside an escape the host wrote must not leave half of it, shown as the person's own text.
+    [Fact]
+    public async Task A_cut_that_would_land_inside_a_host_escape_stops_before_it()
+    {
+        await using var h = await Harness.Create(); h.Draft = new string('x', 497) + "‮";
+        var input = Assert.IsType<ReplyInput>((await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null })).Input);
+        Assert.Equal((new string('x', 497), true, 0), (input.Text, input.Truncated, input.Marks.Count));
+    }
+
     [Theory]
     [InlineData(false, ReplyIntent.Unknown)]
     [InlineData(false, ReplyIntent.Queueable)]
