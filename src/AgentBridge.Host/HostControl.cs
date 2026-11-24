@@ -100,6 +100,16 @@ public sealed class HostControl
         lock (settingsGate) { return WorkspaceAddOp.Handle(options.Folder, data, log); }
     }
 
+    internal object WorkspaceList()
+    {
+        lock (settingsGate) { return WorkspaceRemoveOp.List(options.Folder, log); }
+    }
+
+    internal object WorkspaceRemove(JsonElement data)
+    {
+        lock (settingsGate) { return WorkspaceRemoveOp.Handle(options.Folder, data, log); }
+    }
+
     readonly Action<string> log;
     readonly object gate = new();
     readonly DateTimeOffset startedAt;

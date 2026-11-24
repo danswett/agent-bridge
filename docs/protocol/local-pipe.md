@@ -127,6 +127,16 @@ It is a person's act: a freshly classified local app without an agent credential
 process (the host CLI included), a script credential or a remote channel is refused with
 `person-only`. Every outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
 
+`host.workspace.list` and `host.workspace.remove` (#2694, the host half of the Settings launch-folder editor) let the person see the approved
+folders and remove one. `host.workspace.list` takes no data and answers `{ "result": "listed", "workspaces": [{ "path", "label", "isolate" }], "baseline" }`:
+the folders as `config.json` holds them (one that has gone away is still listed) and a `baseline`, a hash of that whole list, so any added, removed
+or changed entry changes it. `host.workspace.remove` takes exactly `{ "path": "<absolute path>", "baseline": "<the baseline the person saw>" }`: the
+exact folder only, never one below it. The result is `{ "result": "removed", "label", "path", "baseline": "<the new one>", "restartRequired": true }` or
+`{ "result": "refused", "code" }`, the code one of `stale` (the list changed since the person looked: nothing is written, and the person's draft is kept
+for them to review), `not-approved` (the folder is not on the list), `not-a-path`, `unwritable`, `busy`, `invalid-request` or `config-unreadable`. A
+removal keeps every other setting and folder as written. Nothing is approved, trusted, restarted or launched; a removal applies after a restart. Both are
+a person's act, refused with `person-only` as `host.workspace.add` is, and every `remove` outcome writes one host-log audit line. Capability `host.workspaces`, in hello for the app only.
+
 `host.roster.pin` (#3450, same-PC trust) takes exactly `{ "account", "generation",
 "genesis", "heads", "device" }` from the signed-in app's own verified roster and answers
 `{ "state": "pinned" }` or a closed refusal code (`pin-exists`, `account-mismatch`,
