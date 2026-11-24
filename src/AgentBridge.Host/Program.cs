@@ -931,7 +931,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Dev = IsDevBuild(),
         Elevated = PeerPolicy.SelfElevated(),
         Machine = machine,
-        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder)),
+        Running = HostControl.Settings(settings, HostConfigFile.ReadName(identity.Folder), identity.Folder),
         LocalOnly = localOnly,
         Log = HostLog.FilePath,
         ApplyRemoteFolderTrust = on =>
