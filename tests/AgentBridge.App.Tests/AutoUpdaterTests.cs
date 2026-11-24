@@ -650,12 +650,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var holds = 0;
         var holdsAtStop = -1;
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref holds) < 3, "finishing"));
-        host.On(HostOps.Stop, data =>
-        {
-            holdsAtStop = Volatile.Read(ref holds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => holdsAtStop = Volatile.Read(ref holds));
 
         await manager.StopAsync();
 
@@ -734,12 +729,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var otherHoldsAtStop = -1;
         other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref otherHolds) < 3, "finishing"));
         elsewhere.Status = FakeHost.StatusOf() with { ProcessId = 5151 };
-        host.On(HostOps.Stop, data =>
-        {
-            otherHoldsAtStop = Volatile.Read(ref otherHolds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => otherHoldsAtStop = Volatile.Read(ref otherHolds));
         other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
         var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], package: [4242, 6161]);
         var applied = false;
@@ -800,11 +790,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return new ProbeHoldResult(n < 4, "finishing");
         });
         late.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         var updating = Manager(others: [busy.Folder, late.Folder], packageNow: () => Volatile.Read(ref started) ? [4242, 6161, 7171] : [4242, 6161]);
         var applied = false;
 
@@ -847,11 +833,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             }
             return new ProbeHoldResult(false);
         });
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171], startsKnown: false);
         var applied = false;
 
@@ -926,11 +908,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             waiting.TrySetResult();
             return new ProbeHoldResult(true, "finishing");
         });
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         // Waits as long as a real update would for that probe.
         var updating = Manager(others: [other.Folder], package: [4242, 6161], probeWait: TimeSpan.FromMinutes(11));
         var applied = false;
@@ -4228,12 +4206,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var taken = false;
         preflight = () => Volatile.Read(ref taken) ? "an outside fixture (pid 42)" : null;
         host.On(HostOps.UpdateDepart, _ => Committed);
-        host.On(HostOps.Stop, data =>
-        {
-            Volatile.Write(ref taken, true);
-            _ = Task.Run(() => host.StopAsync());
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => Volatile.Write(ref taken, true));
 
         if (departing) { await NowAsync(); }
         else { await auto.RestartToUpdateAsync(_ => Task.FromResult(true)); }
