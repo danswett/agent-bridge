@@ -34,6 +34,18 @@ public sealed class FleetActionEnvelopeTests : IDisposable
         Assert.Equal(body, Verify(Seal(body)));
     }
 
+    // G10: the receiver names the one action it serves; an envelope for the other action never verifies as it.
+    [Fact]
+    public void An_end_envelope_verifies_only_as_an_end_and_a_launch_envelope_only_as_a_launch()
+    {
+        var launch = Seal(Body());
+        var end = Seal(Body() with { Action = FleetActionEnvelope.EndAction });
+        Assert.Equal(FleetActionEnvelope.EndAction, FleetActionEnvelope.Verify(end, Point, "account", Source, Audience, Now, FleetActionEnvelope.EndAction).Action);
+        Assert.Throws<InvalidDataException>(() => Verify(end));
+        Assert.Throws<InvalidDataException>(() => FleetActionEnvelope.Verify(launch, Point, "account", Source, Audience, Now, FleetActionEnvelope.EndAction));
+        Assert.Throws<InvalidDataException>(() => FleetActionEnvelope.Verify(launch, Point, "account", Source, Audience, Now, "fleet.other"));
+    }
+
     [Fact]
     public void Wrong_audience_account_or_signer_refuses()
     {

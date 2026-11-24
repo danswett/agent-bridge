@@ -27,7 +27,7 @@ test('other text is accepted only where the field allows it and must say somethi
   const q = form(choice('answer', { other: true }));
   assert.equal(checkAnswer(q, fields({ answer: { other: 'neither, use c' } })), null);
   assert.match(checkAnswer(q, fields({ answer: { other: '  ' } })), /empty/);
-  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 4 KiB/);
+  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 16 KiB/);
   assert.match(checkAnswer(q, fields({ answer: { other: 'c', also: 1 } })), /unexpected properties beside other/);
   assert.match(checkAnswer(q, fields({ answer: 3 })), /expected a choice/);
 });
@@ -85,7 +85,7 @@ test('a question without fields takes non-empty text, and one with fields takes 
   assert.match(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: ' ' }), /empty/);
   assert.match(checkAnswer(plain, fields({ answer: 'a' })), /not fields/);
   assert.match(checkAnswer(form(choice('answer')), { text: 'a' }), /not a text answer/);
-  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 4 KiB/);
+  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 16 KiB/);
 });
 
 test('a truncated question is never answered remotely', () => {
@@ -185,36 +185,37 @@ test('a stale answer can be given again only when the host cancelled its form, a
   assert.equal(answeredWords(form(), { text: 'wait' }), 'wait');
 });
 
-test('the 4 KiB limit counts UTF-8 bytes, not characters', () => {
+test('the 16 KiB limit counts UTF-8 bytes, not characters', () => {
   const q = form({ name: 't', type: 'text' });
-  // 1,025 emoji are 2,050 UTF-16 code units and 4,100 bytes: over, though far fewer characters.
-  const emoji = '😀'.repeat(1025);
-  assert.equal(utf8Bytes(emoji), 4100);
-  assert.match(checkAnswer(q, fields({ t: emoji })), /longer than 4 KiB/);
+  // 4,097 emoji are 8,194 UTF-16 code units and 16,388 bytes: over, though far fewer characters (an emoji is 12 bytes of the host's JSON,
+  // so the request budget would refuse them first; the byte count is what the limit is made of).
+  assert.equal(utf8Bytes('😀'.repeat(4097)), 16388);
   assert.equal(checkAnswer(q, fields({ t: '😀'.repeat(1024) })), null);
   assert.equal(checkAnswer(q, fields({ t: 'x'.repeat(Limits.text) })), null);
-  assert.match(checkAnswer(q, fields({ t: '€'.repeat(1366) })), /longer than 4 KiB/);
+  assert.equal(checkAnswer(q, fields({ t: 'é'.repeat(8192) })), null);
+  assert.match(checkAnswer(q, fields({ t: 'é'.repeat(8193) })), /longer than 16 KiB/);
+  assert.match(checkAnswer(q, fields({ t: '€'.repeat(5462) })), /longer than 16 KiB/);
 });
 
-test('a request over 16 KiB is refused even when each text is within its own limit', () => {
+test('a request over 17 KiB is refused even when each text is within its own limit', () => {
   const names = ['t0', 't1', 't2', 't3', 't4'];
-  const text = 'x'.repeat(Limits.text);
+  const text = 'x'.repeat(Limits.request / 4);
   const all = (n) => fields(Object.fromEntries(names.slice(0, n).map((k) => [k, text])));
   const q = (n) => form(...names.slice(0, n).map((name) => ({ name, type: 'text' })));
-  assert.match(checkAnswer(q(5), all(5)), /larger than 16 KiB/);
+  assert.match(checkAnswer(q(5), all(5)), /larger than 17 KiB/);
   assert.equal(checkAnswer(q(3), all(3)), null);
   // Checked before anything else about the fields, as the host checks it.
-  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 16 KiB/);
+  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 17 KiB/);
 });
 
 test('the request is measured as the host serializes it: an emoji is a 12-byte surrogate pair', () => {
   // 1,024 emoji are 4 KiB of UTF-8, within the per-text limit, but 12 KiB of the host's
-  // JSON. One fits; two are over 16 KiB, though JSON.stringify makes them 8 KiB.
+  // JSON. One fits; two are over 17 KiB, though JSON.stringify makes them 8 KiB.
   const emoji = '😀'.repeat(1024);
   const q = form(...['a', 'b'].map((name) => ({ name, type: 'text' })));
   const two = fields({ a: emoji, b: emoji });
   assert.ok(utf8Bytes(JSON.stringify(two)) < Limits.request);
-  assert.match(checkAnswer(q, two), /larger than 16 KiB/);
+  assert.match(checkAnswer(q, two), /larger than 17 KiB/);
   assert.equal(checkAnswer(q, fields({ a: emoji })), null);
 });
 

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
@@ -6,7 +7,7 @@ namespace AgentBridge.App.Core;
 // #784 and #705: 6673094602, 6674345563). Never an exception's, a command's or an installer's own
 // text: that named paths and read as a crash ("Hook ownership could not be checked: Access to the
 // path '…' is denied."), so it goes only to the app's log (SettingsViewModel.Log, AgentReadinessRow.Raw).
-public static class AgentWords
+public static partial class AgentWords
 {
     public const string NotInstalled = "Not installed";
     public const string InstallHere = "Not installed · install it on this machine";
@@ -86,7 +87,7 @@ public static class AgentWords
     // What a setup, repair or removal left, said on its row.
     public static string SetupResult(bool remove, string? verb, AgentSetupResult result) => result.Completed
         ? remove ? "Removed · sessions already running keep their hooks until they end"
-            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the bridge, then start a new session to check it" : "start a new session to check it")}"
+            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the bridge, then start a new session to check it" : "start a new session to check it")}" + RetiredNote(result.Detail)
         : SetupFailed(remove, verb, result.Detail);
 
     // A press the app refused because this bridge predates agent setup.
@@ -102,7 +103,8 @@ public static class AgentWords
     public static string SetupFailed(bool remove, string? verb, string raw) =>
         $"{(remove ? "Removal" : verb == "Repair" ? "Repair" : "Setup")} failed · " + (
             // A legacy file's path can itself name agent-ha-bridge, so what's wrong with it comes first.
-            Has(raw, "legacy registration") ? "an older bridge's hooks are there; migrate them first"
+            LegacyFolder(remove, verb, raw) is { } folder ? folder
+            : Has(raw, "legacy registration") ? "an older bridge's hooks are there; migrate them first"
             : Has(raw, "agent-ha-bridge") ? OlderBridge
             : Has(raw, "belongs to another installation") || Has(raw, "Another bridge profile") ? "another bridge profile owns its hooks"
             : Has(raw, "no hook registration owned by this profile") ? "this profile set up nothing to remove"
@@ -112,6 +114,31 @@ public static class AgentWords
             : Has(raw, "denied") ? "access denied"
             : Has(raw, "used by another process") ? "file in use"
             : "the machine couldn't finish it");
+
+    // StandaloneHooks' refusals for a leftover agent-ha-bridge folder (LegacyVerdict.Refusal), said with
+    // the folder's path and the one step for it: the owner asked for both (#3644). The path is the
+    // person's own folder, which the other refusals still leave out.
+    static string? LegacyFolder(bool remove, string? verb, string raw)
+    {
+        var found = LegacyRefusal().Match(raw);
+        if (!found.Success) { return null; }
+        var path = found.Groups["path"].Value;
+        return found.Groups["why"].Success
+            ? $"{path} may still be in use ({found.Groups["why"].Value}). Nothing was changed. Close what uses it, then {(remove ? "try the removal" : $"press {verb ?? "Set up"}")} again"
+            : $"an older bridge is installed at {path}. Setup won't touch it. In a terminal of your own run agent-bridge-host migrate --dry-run, then agent-bridge-host migrate";
+    }
+
+    [GeneratedRegex(@"agent-ha-bridge folder at (?<path>.+?): (?:full installation|may still be in use \((?<why>.+)\))")]
+    private static partial Regex LegacyRefusal();
+
+    // What Set up did to a leftover folder, from the host's own line (StandaloneHooks.InstallAsync).
+    static string RetiredNote(string detail) =>
+        RetiredFolder().Match(detail) is { Success: true } moved
+            ? $" · the unused older bridge folder was renamed to {moved.Groups["to"].Value[(moved.Groups["to"].Value.LastIndexOfAny(['\\', '/']) + 1)..]} (rename it back to undo)"
+            : "";
+
+    [GeneratedRegex(@"Retired the unused older bridge folder: renamed '[^']*' to '(?<to>[^']+)'")]
+    private static partial Regex RetiredFolder();
 
     static bool Has(string text, string part) => text.Contains(part, StringComparison.OrdinalIgnoreCase);
 }

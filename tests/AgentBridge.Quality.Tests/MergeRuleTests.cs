@@ -558,6 +558,17 @@ public class MergeRuleTests
         Assert.Equal(state, verdict.State);
     }
 
+    // #4558: a failed checkout or setup in a job split out of light is excused after one rerun, as light's is; a step that runs the checks never is.
+    [Theory]
+    [InlineData("design-gen", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*", "Run actions/setup-node@*" })]
+    [InlineData("playwright-apt", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*" })]
+    public void The_jobs_split_out_of_light_excuse_only_their_setup_and_teardown_steps(string job, string[] steps)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        Assert.Equal(steps, config.MainGreen.InfraSteps[job]);
+    }
+
     [Fact]
     public void Sensitive_paths_match_whatever_the_case() =>
         Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);
@@ -1065,11 +1076,12 @@ public class MergeRuleTests
     //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
     //                               branch's tip, never a pull request's head, and it cannot be dispatched.
     //   Re-run known flakes         the same trigger, the same reason.
+    //   Full red                    workflow_run, completed Full on main only (Full is itself a workflow_run of CI on main), the same reason.
     //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
     //                               on a pull request's branch ends skipped, which the judge counts as passing.
     // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
     // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
-    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+    static readonly string[] CannotReachAPullRequestHead = ["Full red", "Main red", "Re-run known flakes", "Upload release halt policy"];
 
     // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
     // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
@@ -1082,13 +1094,15 @@ public class MergeRuleTests
     //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
     //   verdict and a finished one needn't re-judge anything, #2454),
     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   Full (S2, #4104: workflow_run of CI on main and dispatch; the FULL lane never gates a merge, so a finished run needn't re-judge anything).
     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+    //   Stale PWA alarm (schedule every 4 h and dispatch, on main: reads the served site and main's history, judges no pull request, #4369).
     //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
     //   request; docs/app-windows.md, "Spacing").
     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
     [
         "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
-        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
+        "Full", "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Stale PWA alarm", "Update gap",
     ];
 
     static YamlMappingNode LoadWorkflow(string file)
@@ -2969,15 +2983,17 @@ public class MergeRuleTests
     {
         var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
-        // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
+        // The jobs the merge waits on are the FAST lane's (S2, #4104): product, ha-integration, light and the app build. The browser jobs are
+        // the FULL lane's, so the node-setup family stands in for them here (light's infra_steps); a step of another family is the wrong job.
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
-            : scenario == "wrong-job" ? "light" : "pwa-ui (chromium 3/3)";
+            : scenario == "wrong-job" ? "ha-integration" : "light";
         var attempt = scenario is "rerun-used" or "prior-test-failure" or "infra-then-infra" or "skipped-after-failure" ? 2 : 1;
         object Step(string name, string conclusion) => new { name, status = "completed", conclusion };
         var setup = target.StartsWith("product", StringComparison.Ordinal) ? "Run actions/setup-dotnet@v6"
             : scenario == "npm-ci" ? "Run npm ci"
             : scenario == "system-packages" ? "Download Playwright's system packages"
-            : "Playwright's browsers from main's cache";
+            : scenario == "wrong-job" ? "Playwright's browsers from main's cache"
+            : "Run actions/setup-node@v6";
         var steps = new List<object>
         {
             Step(scenario == "unknown" ? "Unknown step" : setup, "failure"),

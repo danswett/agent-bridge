@@ -690,8 +690,8 @@ A field's value, by type:
 | `text` | A string |
 | `number` | A number |
 
-Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
-16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text, in `text` or `other`, is at most 16 KiB of UTF-8 (`Limits.AnswerText`, the same as a reply's); the whole request is at most
+17 KiB (`Limits.AnswerRequest`: that text plus `Limits.AnswerEnvelope`, 1 KiB, for the ids and flags around it). A host from before this (4 KiB) refuses a longer answer as "longer than 4 KiB" and never truncates it. A host collapses control characters and line breaks to spaces before typing.
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
@@ -2484,15 +2484,15 @@ that default is the only answer it can be given from another device, a client le
 out of an answer, and a required field's is refused as blank. A default with something visible
 in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
 whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
-a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (16 KiB), a
 `number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
-number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+number; a form whose smallest answer exceeds 17 KiB in the largest envelope a host takes (a
 256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
 default (a number as the number it holds, written the longer of the ways JavaScript and .NET
 write it), and every other default and every required field
 at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
 `multipleOf` and `integer` allow, past an exclusive bound; a required `text`
-at its `minLength`, which past 4 KiB no answer can meet); and a form with
+at its `minLength`, which past 16 KiB no answer can meet); and a form with
 half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
 must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
 does not solve a pattern for its shortest match, so such a form may be offered and its answer
@@ -2546,7 +2546,7 @@ session is at most 40 KiB.
 |---|---|---|---|
 | Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change`, and `session.error` for [`attention`](#attention) | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
-| Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `#`, and a digest of what it shows (#958), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
+| Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. A Codex helper program holding it (Codex 0.172's `codex-code-mode-host.exe` or `codex-windows-sandbox-setup.exe`, found by its image name; #3644) counts as the nearest listed Codex above it, whose parents are read only as far as each started no later than the one below: a helper of a terminal is that terminal, of the daemon is the daemon, and one with no listed Codex above it is no holder. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `#`, and a digest of what it shows (#958), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
 Copilot, Claude Code and Codex report `background` and `subagents`, each from what its own
 transcript says (below, and [design/subagents.md](../design/subagents.md) §3). A host

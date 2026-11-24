@@ -1,0 +1,403 @@
+name: Full
+
+# The FULL lane (quality/README.md section 4.7; S2, #4104): the checks the merge gate no longer waits for. ci.yml is the FAST lane
+# and the only one the merge rule, main-red and the ruleset read; this workflow never gates a merge, so it has no pull_request,
+# merge_group or push trigger (quality/catalog.yml `lane: full`, and the catalog check enforces it). It runs after a push to main
+# whose FAST run finished green (a workflow_run of CI), or by hand for a commit (the release train dispatches it for one it wants
+# to publish). Every job tests the commit the FAST run passed on, never the branch tip. A newer push cancels an older run: the
+# latest wins. The spikes, pwa-e2e and pwa-ui are here (pieces 4, 5b and 5c); the app's self-test, pack and installers follow (piece 6).
+on:
+  # Unlike main-red, this checks out the triggering run's commit: only main's own pushed commit, since the trigger job passes only for
+  # a green push run on main (branches: [main] and the event and branch tests below), never a pull request's or a fork's code.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # By hand, with no commit input: it re-runs FULL on the tip of the ref it is dispatched on (a person dispatches it on main), so nothing a person types can reach a checkout. CodeQL
+  # followed the old sha input through the trigger job into every checkout and raised cache-poisoning alerts on this workflow, and a static analyser cannot see an on-main check.
+  workflow_dispatch:
+
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_run' && 'full-main' || format('full-{0}', github.sha) }}
+  cancel-in-progress: true
+
+jobs:
+  trigger:
+    # Whether there is anything to test: a run by hand, or a CI run that was a green push to main. Every other job needs this and
+    # runs only when it says so, and full-gate says why when it didn't.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tested: ${{ steps.commit.outputs.tested }}
+      ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    steps:
+      # The commit every other job checks out, and the only place a commit is decided. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
+      # the event's text, and only for a push to main; a run by hand tests the tip of the ref it was dispatched on (github.sha), because no input names a commit. Either is refused
+      # unless it is 40 lowercase hex: no job reads the event's commit or an input, they all read this output.
+      - name: The commit under test
+        id: commit
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REF_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error title=full.yml::$1"; exit 1; }
+          if [ "$EVENT" = workflow_run ]; then
+            [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail "the CI run has no number"
+            run=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '[.head_sha, .head_branch, .event] | @tsv') || fail "couldn't read the CI run"
+            IFS=$'\t' read -r sha branch event <<< "$run"
+            [ "$branch" = main ] && [ "$event" = push ] || fail "the CI run is not a push to main"
+          else
+            sha=$REF_SHA
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "the commit under test is not 40 lowercase hex characters"
+          echo "tested=$sha" >> "$GITHUB_OUTPUT"
+          echo "FULL lane for commit $sha" >> "$GITHUB_STEP_SUMMARY"
+
+  spikes:
+    needs: trigger
+    if: needs.trigger.outputs.ok == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.tested }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: NuGet packages from main's cache
+        id: nuget
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+      - name: Build spike projects
+        shell: pwsh
+        run: |
+          $projects = Get-ChildItem spikes -Recurse -Filter *.csproj
+          foreach ($p in $projects) {
+            dotnet build $p.FullName -c Release --nologo
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - name: Parse spike scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem spikes -Recurse -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
+          }
+          exit $bad
+      - name: S3 publish carries the compiled XAML
+        # The build output runs either way; only a published copy fails at startup when
+        # the app's .pri is missing, so check the publish folder itself.
+        shell: pwsh
+        run: |
+          dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
+      - name: S6 device keys
+        # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
+        shell: pwsh
+        run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
+
+  spikes-linux:
+    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
+    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
+    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
+    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
+    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
+    #    Chromium and WebKit through the same relay, then the container build.
+    needs: trigger
+    if: needs.trigger.outputs.ok == 'true'
+    runs-on: ubuntu-24.04
+    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
+    # minutes the download step gives a slow apt mirror and a full download from Canonical's
+    # archive, on top of the checks.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.tested }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: S2 builds and checks its vectors
+        working-directory: spikes/s2-noise-interop
+        run: |
+          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
+      - name: S2 fresh vectors from .NET, replayed in Node
+        working-directory: spikes/s2-noise-interop
+        run: |
+          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
+          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
+          node js/test-node.mjs
+      - name: S4 builds and checks the relay against a fake GitHub
+        working-directory: spikes/s4-relay
+        run: |
+          dotnet build src/S4.DevStack -c Release --nologo
+          dotnet build src/S4.Host -c Release --nologo
+          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+          node js/test-sw.mjs
+      - name: npm ci, for both
+        run: |
+          npm ci --prefix spikes/s2-noise-interop
+          npm ci --prefix spikes/s4-relay
+      - name: Which Playwright
+        id: playwright
+        working-directory: spikes/s4-relay
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      # Playwright's browsers come from a cache only ci.yml's runs on main write, keyed by the Playwright version
+      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
+      # on a miss and installs their system packages either way.
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
+      # download.sh says why). The second spike's finds them downloaded while the two agree.
+      - name: Download Playwright's system packages, S2
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: spikes/s2-noise-interop
+      - name: Download Playwright's system packages, S4
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: spikes/s4-relay
+      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
+      # the second is quick while they agree.
+      - name: Playwright's browsers, for both
+        run: |
+          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
+          (cd spikes/s4-relay && npx playwright install chromium webkit)
+      - name: S2 in Chromium and WebKit
+        working-directory: spikes/s2-noise-interop
+        run: node js/test-browsers.mjs
+      - name: S4 the PWA through the relay
+        working-directory: spikes/s4-relay
+        run: node js/test-pwa.mjs
+      - name: S4 container builds
+        working-directory: spikes
+        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
+
+  pwa-e2e:
+    # The PWA end to end through the spike dev stack's relay, in Chromium and WebKit
+    # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
+    # it (#457): built once, here, rather than in every shard or passed round as an artifact.
+    needs: trigger
+    if: needs.trigger.outputs.ok == 'true'
+    runs-on: ubuntu-24.04
+    # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
+    # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
+    # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
+    # step's bounded retries on that mirror and a full download from Canonical's archive.
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: pwa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.tested }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Build the dev stack
+        # The specs skip themselves without it, and pass, so its absence must fail here instead.
+        run: |
+          dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
+          test -f ../spikes/s4-relay/src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll || { echo "::error::the dev stack built no s4-devstack.dll, so the e2e specs would skip"; exit 1; }
+      - run: npm ci
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
+      - name: Download Playwright's system packages
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: chromium webkit
+          working-directory: pwa
+      - run: npx playwright install chromium webkit
+      - run: npx playwright test test/e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: pwa-test-results-e2e
+          path: pwa/test-results
+          retention-days: 7
+      # The sign-in link's capture (test/e2e/e2e.spec.mjs, #969), for Creative on every run.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: pwa-captures-e2e
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  pwa-ui:
+    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
+    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
+    # the wall time of every PWA change. Both browsers now have three
+    # shards. Playwright's --shard splits what --project selects, so together the six run every
+    # spec in both browsers. Chromium is split by test with --fully-parallel like WebKit.
+    # By file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
+    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
+    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
+    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
+    name: pwa-ui (${{ matrix.name }})
+    needs: trigger
+    if: needs.trigger.outputs.ok == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every leg, as Pages waits for them (quality/pages-jobs.json): FULL runs both browsers, none of it for a pull request.
+        include:
+          - { name: "chromium 1/3", project: chromium, shard: "1/3", renders: true }
+          - { name: "chromium 2/3", project: chromium, shard: "2/3" }
+          - { name: "chromium 3/3", project: chromium, shard: "3/3" }
+          - { name: "webkit 1/3", project: webkit, shard: "1/3" }
+          - { name: "webkit 2/3", project: webkit, shard: "2/3" }
+          - { name: "webkit 3/3", project: webkit, shard: "3/3" }
+    runs-on: ubuntu-24.04
+    # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
+    # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
+    # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
+    # come from the same mirror. 35 leaves room for bounded update and download retries,
+    # Canonical fallback and the shard's tests. It bounds a
+    # stuck job, not a test: a leg that passes takes as long as before.
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: pwa
+    env:
+      PWA_SKIP_E2E: '1'
+      PROJECT: ${{ matrix.project }}
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.trigger.outputs.tested }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
+      # restores only the one it runs.
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+      # Playwright's system packages, downloaded before its install so a slow apt mirror can be
+      # left after a bounded attempt for Canonical's HTTPS archive (#799; the action's download.sh says
+      # how). The install below then finds them all downloaded; it, and the packages, are as before.
+      # The action's force-apt-fallback (the by-hand proof of quality/README.md §4.7) is not passed here: a run of this workflow by hand takes no input (#4254's CodeQL fix), so the
+      # proof has no trigger in FULL until one is chosen (see the pull request). Every run uses the action exactly as before.
+      - name: Download Playwright's system packages
+        uses: ./.github/actions/playwright-system-packages
+        with:
+          browsers: ${{ matrix.project }}
+          working-directory: pwa
+      - run: npx playwright install "$PROJECT"
+      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
+      # summary and as a warning, so a retry never hides a flake. Never fails the job.
+      - name: Flaky report
+        if: ${{ !cancelled() }}
+        run: node tools/flaky-report.mjs playwright-report/report.json --summary "$GITHUB_STEP_SUMMARY"
+      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+      # Chromium alone: the engine that emulates forced colours.
+      - name: Renders of the demo
+        if: ${{ !cancelled() && matrix.renders && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+        continue-on-error: true
+        run: npx playwright test --config playwright.renders.config.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && matrix.renders }}
+        with:
+          name: pwa-renders
+          path: pwa/renders/
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
+          path: pwa/test-results
+          retention-days: 7
+      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+      # look at on every run, not only a failed one.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-captures-${{ matrix.project }}-${{ strategy.job-index }}
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  full-gate:
+    # The one result for this workflow, as quality-gate is for ci.yml (the catalog check requires this shape): it needs every other
+    # job, runs whatever they did, and fails when any ended other than success, a skipped one included, so a FULL run whose lane
+    # did not run is no pass. It passes only when the FAST run was not a green push to main, and then says there was nothing to test.
+    needs: [trigger, spikes, spikes-linux, pwa-e2e, pwa-ui]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every FULL job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          if [ "$(echo "$NEEDS" | jq -r '.trigger.result')" != success ]; then
+            echo "::error::the trigger job did not succeed"
+            exit 1
+          fi
+          if [ "$(echo "$NEEDS" | jq -r '.trigger.outputs.ok')" != true ]; then
+            echo "The FAST run was not a green push to main, so there was nothing to test." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          bad=$(echo "$NEEDS" | jq -r 'to_entries[] | select(.key != "trigger" and .value.result != "success") | "\(.key): \(.value.result)"')
+          if [ -n "$bad" ]; then
+            echo "::error::FULL jobs that did not pass: $bad"
+            exit 1
+          fi

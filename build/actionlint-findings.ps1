@@ -1,7 +1,7 @@
 # Judges actionlint's findings for workflow-lint.yml's actionlint step: every finding fails it but
 # the exact locations set below, with the message next to workflow-lint.yml's actionlint pin. It is actionlint 1.7.12's
 # error for concurrency's queue key, which GitHub supports and actionlint doesn't yet (#951), and
-# only where ci.yml's publish or merge-rule.yml's evaluate sets queue: max. The same error elsewhere, another error
+# only where ci.yml's publish, merge-rule.yml's evaluate or full-red.yml's report sets queue: max. The same error elsewhere, another error
 # there, or an exit code or output this can't read fails the step; so does the exception once
 # actionlint no longer reports it, so that it is removed.
 #
@@ -20,7 +20,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$targets = @{ '.github/workflows/ci.yml' = 'publish'; '.github/workflows/merge-rule.yml' = 'evaluate' }
+$targets = @{ '.github/workflows/ci.yml' = 'publish'; '.github/workflows/merge-rule.yml' = 'evaluate'; '.github/workflows/full-red.yml' = 'report' }
 
 # As workflow commands require, so a message quoting a workflow can't end the annotation.
 function Format-Property([string]$value) { $value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C') }
