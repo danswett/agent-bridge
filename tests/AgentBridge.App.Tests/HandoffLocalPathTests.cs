@@ -1,5 +1,8 @@
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using AgentBridge.App.Core;
+using AgentBridge.Host.Delivery.Staging;
 using Xunit;
 
 // The handoff layout is local (O158 follow-up, Quality's re-read of #4294): a loopback share of the install tree and a
@@ -140,6 +143,36 @@ public sealed class HandoffLocalPathTests : IDisposable
             Assert.Empty(Directory.GetFileSystemEntries(real));
         }
         finally { Directory.Delete(link); } // the junction alone, never its target (a recursive delete of home refuses it)
+    }
+
+    [Fact]
+    public void The_stage_folders_and_files_are_private_to_this_user()
+    {
+        using var held = new CoordinatorHandoff(Path.Combine(home, "private-handoff"), HostwBundleTests.Target, _ => Supported)
+            .Prepare(Request(Root), Helper);
+
+        foreach (var folder in new[] { Path.GetDirectoryName(held.Directory)!, held.Directory, held.ExtractionDirectory })
+            Assert.True(PrivateFolder.IsPrivate(folder), folder);
+        if (OperatingSystem.IsWindows()) { AssertOnlyThisUserCanAccess(held); }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    static void AssertOnlyThisUserCanAccess(CoordinatorHandoff.Copy held)
+    {
+        var me = WindowsIdentity.GetCurrent().User!;
+        var security = new FileSystemSecurity[]
+        {
+            new DirectoryInfo(held.Directory).GetAccessControl(),
+            new FileInfo(held.ImagePath).GetAccessControl(),
+            new FileInfo(held.ManifestPath).GetAccessControl(),
+        };
+        foreach (var one in security)
+        {
+            var rules = one.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList();
+            Assert.NotEmpty(rules);
+            Assert.All(rules, rule => Assert.Equal(me, rule.IdentityReference));
+        }
+        Assert.True(security[0].AreAccessRulesProtected);
     }
 
     [Fact]
