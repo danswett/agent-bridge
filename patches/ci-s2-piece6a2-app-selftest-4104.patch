@@ -1,7 +1,7 @@
-From eebb658c3e446efb1cedaa6bb63ae54d41b07616 Mon Sep 17 00:00:00 2001
+From 70b394e744fb869485307409a365280541a19f73 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:33:12 -0800
-Subject: [PATCH] scratch 6a2
+Date: Mon, 23 Nov 2026 21:37:27 -0800
+Subject: [PATCH] scratch p6a2-new
 
 ---
  .github/workflows/full.yml                    | 56 ++++++++++++++++++-
@@ -81,10 +81,10 @@ index 3f61e9c13..cf77b8556 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 075cca234..aef468381 100644
+index 6e06c26d4..cce9db049 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1230,11 +1230,11 @@ suites:
+@@ -1258,11 +1258,11 @@ suites:
      ring: 2
      select: always
      # The release train's packages (S2, #4104, piece 6a): FULL publishes, packs (Velopack) and records the installer input and SBOM of the Windows app on both
