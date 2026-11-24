@@ -78,7 +78,8 @@ public sealed partial class SessionView
             ReleasePin();
             navigationPending = Pending;
         };
-        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => WheelInput()), true);
+        scroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, e) =>
+            WheelTurned(scroll, e.GetCurrentPoint(scroll).Properties.MouseWheelDelta)), true);
         // Scrollbar parts handle their presses; release before their first ViewChanged or layout.
         scroll.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
@@ -112,7 +113,15 @@ public sealed partial class SessionView
     bool ReaderScrolling => scrolling || wheelStarting;
 
     // The self-test's control-level notch takes the same path as the wheel handler (SelfTest.WheelNotch).
-    internal void WheelForSelfTest() => WheelInput();
+    internal void WheelForSelfTest(int delta) { if (ConversationScroll is { } scroll) { WheelTurned(scroll, delta); } }
+
+    // Turned toward the edge the view is already at, the wheel moves nothing: the pin and the view stay as they are,
+    // so a reply streaming in at the end is still followed (#4313). Positive is away from the person (up).
+    void WheelTurned(ScrollViewer scroll, int delta)
+    {
+        if (delta < 0 && scroll.VerticalOffset >= scroll.ScrollableHeight - 0.5 || delta > 0 && scroll.VerticalOffset <= 0.5) { return; }
+        WheelInput();
+    }
 
     void WheelInput()
     {
