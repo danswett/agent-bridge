@@ -74,6 +74,14 @@ public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvi
 
         VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, signPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
+        // When the sender first asked to send (#4435): additive, optional and unsigned, so it only orders and prints, never authorizes, expires or
+        // dedupes. Believed within two minutes after and a day before the envelope's own issuedAt, else ignored and said so.
+        if (data.TryGetProperty("sentAt", out var sa) && sa.ValueKind != JsonValueKind.Null)
+        {
+            var issued = verified.Body.IssuedAt;
+            verified = sa.ValueKind == JsonValueKind.Number && sa.TryGetInt64(out var sentAt) && sentAt <= issued + LiteAgentSend.SentAtSkew && sentAt >= issued - LiteAgentSend.MaxSentAge
+                ? verified with { SentAt = Math.Min(sentAt, issued) } : verified with { SentAtIgnored = true };
+        }
 
         var body = verified.Body; // trusted now: must name this channel's peer and this machine
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
