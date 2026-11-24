@@ -299,3 +299,18 @@ test('the memo of drawn icons stays in its process', () => {
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout.trim(), '0', 'a new process started with icons already drawn');
 });
+
+// The memo's key is the whole spec: the icons drawn for one spec are never handed to another that differs in a container or in a mark, though its colours are the same (#4345 review).
+// The pixels of pwa/icons/icon-192.png (the Windows tile at 192) are compared, since a key that left the containers or the marks out would still draw the first spec's.
+test('an icon is drawn again when only a container or only a mark changed, the colours being the same', () => {
+  const root = copy('memo-key');
+  const drawn = () => rasterize(appIconSpec(path.join(root, 'design')), 'windows', 192).pixels.toString('hex');
+  const before = drawn();
+  setTokens(root, (t) => { t.appIcon.container.windows.mark = Math.round(t.appIcon.container.windows.mark * 0.9 * 1000) / 1000; });
+  const smaller = drawn();
+  assert.notEqual(smaller, before, 'a changed container drew the first spec\'s icon');
+  const mark = path.join(root, 'design', 'icons', 'mark.svg');
+  const original = readFileSync(mark, 'utf8');
+  writeFileSync(mark, original.replace('M42.872 8.625', 'M30.872 8.625'));
+  assert.notEqual(drawn(), smaller, 'a changed mark drew the earlier spec\'s icon');
+});
