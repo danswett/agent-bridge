@@ -51,8 +51,20 @@ same-directory temporary file before atomically replacing the old marker; failed
 preserve the old marker and remove the temporary file. Only an actual exit,
 not hiding to the tray, calls `Complete()`, including tray Quit and a successful update
 handoff immediately before exit. Crash evidence survives closing; a teardown
-crash restores the marker. Self-tests leave markers alone. `RecordHang` is the seam for
-the separate watchdog slice; recovery UI and the existing feedback submission remain separate work.
+crash restores the marker. Self-tests leave markers alone.
+
+**A hung UI thread leaves a minidump (the hang watchdog, #2869).** In the real app (not a self-test or the demo) `UiHangWatchdog` runs a
+background thread that posts a no-op to the UI dispatcher every 3 seconds. A no-op unanswered for more than 15 seconds means the UI thread is
+blocked (the owner's app once froze with its list still scrolling and left nothing behind), and `WindowsMiniDump` writes ONE minidump for that
+freeze, from the watchdog's own thread, which the blocked one cannot do: `MiniDumpNormal`, thread stacks and the module list only, no heap, so far
+less of what the app was handling than a full dump (a stack can still hold the value of a local). The UI thread answering again ends the freeze,
+says so in `app.log` and re-arms the watchdog: the next freeze is dumped too, and a freeze that goes on is dumped once. Everything the watchdog does, the beats
+and the dump, runs on its own background thread: the UI thread only ever runs the no-op. A pause of more than 9 seconds between beats, and Windows' own resume
+notice (`ResumeNotifier`, a system callback with no window, so it works while the UI thread is blocked), discard the ping in flight and give the UI a full window
+again, and a debugger attached never dumps. A disk with less than 1 GB free gets no dump, and `app.log` says why. Dumps are `%LOCALAPPDATA%\AgentBridge\dumps\AgentBridge-hang-yyyyMMdd-HHmmss-<pid>.dmp`,
+the newest three kept, and `app.log` names the path or says plainly that the dump was not written. A dump stays on the machine: nothing uploads it, and
+the watchdog never touches the host. `RecordHang` (the run marker's own hang evidence: a thread id and a redacted log tail) is not called by this
+slice; recovery UI and the existing feedback submission remain separate work.
 
 ## Decisions
 
@@ -406,6 +418,16 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
+  On the host's end (#4134), the action a client asked for and the host accepted (Stop, Restart, a remote restart's Leave: a `ChannelReply` marked
+  `RunsIfUnsent`) runs once the request is accepted, whether or not the answer reached the client: a client that reads the answer and hangs up
+  at once, or is gone before it is sent, no longer leaves a host that said "stopping" running. The send failure is logged
+  (`local pipe: the reply to host.stop could not be sent ... its action runs anyway`); a follow-up that is not such an action (a subscribe's
+  snapshot) still needs its answer on the wire first. Stop's lease on deliveries is therefore not given back when its answer fails.
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -439,7 +461,11 @@ without copying exception messages or inventing holder PID/path evidence.
 
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they never skew.
+into one folder with one version. An app update is a host update, so they skew mostly when an
+update did not finish: the app restarted onto the new release while the host kept running the old one (or
+the reverse). The app restarts its own host onto files already installed once the machine is quiet
+(the host restart, below); any other skew is said, not repaired by itself (the version-skew banner,
+under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -557,6 +583,15 @@ controls consume that same contract; this extraction does not disable or remove 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
+  **An old relay copy may offer a newer release but never says "up to date"** (`ReleaseDiscovery.CdnFreshFor`, 10 minutes, the check
+  interval). A copy up to an hour old (`CdnOldest`) is still used, but once it is older than `CdnFreshFor` it counts only if it names a
+  release newer than the one installed: an offer meets the halt and digest checks as any does. A copy that shows nothing newer is "unknown",
+  because it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed): it is refused like an over-age
+  copy, so the check fails with words, GitHub is asked or its backoff says when, and the next check tries again. The copy kept here is judged
+  the same way by its true age on every check, and the log says why (`its copy was N minutes old and names nothing newer ...`). The halt
+  rules, `CdnOldest` and the 72 hour cap are unchanged. The log's fallback line says GitHub is asked first and the relay is the fallback
+  if GitHub refuses, which is what happens.
+
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
@@ -627,6 +662,29 @@ controls consume that same contract; this extraction does not disable or remove 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
+    moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
+    release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
+    0.1.7684, and "Check for updates" said up to date). When the host is older than the app, the host files
+    for the app's release are already installed beside it (the version of `current\agent-bridge-host.exe`,
+    read at the time, and exactly the app's own release: files newer than the app are not restarted onto), no
+    release is waiting to install, the halt policy allows it (a stale policy, or the app's release halted,
+    holds it), "Download updates automatically" is on (off, nothing happens unasked), and the machine is
+    quiet (no turn running and no question or approval waiting, over a whole snapshot settled for
+    `SettleFor`, 5 seconds, as for Install between turns), the app asks the
+    host to restart (`host.restart`: it ends with code 75 once fully stopped, and the launcher starts the
+    replacement from `current\`). **Not an install,** and in either mode: nothing is downloaded, and
+    Restart to update is unchanged. Only this machine's own host, over its own pipe, is ever restarted,
+    never a remote one. `VersionSkewHeal.Decide` decides (the installed files as the release it needs),
+    once for a release: a restart that fails backs off (an hour at most) and is given up on after three; one
+    the host answers that leaves it old is not asked again until the app restarts (what is remembered is
+    the run's). A skew it does not heal (the files missing or not the app's release, the host newer) is only
+    said, in the banner. **Quiet is decided at the moment of the ask,** as for Stop and an install between
+    turns: the host then settles its usage probes and holds its delivery gate (up to 15 seconds) before it
+    exits, so a delivery or typing in progress is waited for, but a turn or question that begins in that
+    window is not looked for again. That is acceptable for the same reason it is for those: the agents'
+    consoles are separate processes and keep running, and what the host was carrying (a question or
+    approval) is the cost the restart warning already names.
   * **Update now, from another device** (#1159; design in
     [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
     the clients' buttons not yet): the
@@ -684,6 +742,20 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only, but for the one case in the bullet above): the app and
+    its host on different releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+    (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
+    the person's press for this too. With no release ready it is words only, no button: "The bridge host
+    is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
+    older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
+    card keeps its own Restart advice. **The banner only shows it:** nothing is installed because of a skew, in
+    either mode, and the one thing done unasked is the host restart in the bullet above (the host's files
+    for the app's release installed, the machine quiet); every other skew is only shown, and the person's
+    press is the only action, Restart to update when a release is ready, or Settings' host Restart.
+    What counts as skew is `VersionSkewHeal.Decide` (a version that
+    is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
+    screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
+    installed release and the connected host's.
   * **Every package is checked against its release** (`DownloadMark`, Engineering's
     second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
     folder under the release's file name for the release without checking its bytes, so one
@@ -897,6 +969,21 @@ controls consume that same contract; this extraction does not disable or remove 
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
+  * **A download or an install under way finishes, whatever newer release appears** (owner, Nov 23:
+    an install on one machine failed 8040 to 8050 when 8051 landed minutes later; `ObservedUpdater`, `AutoUpdaterTests`).
+    VelopackUpdater's check drops the package it holds when it finds a newer release, so a check
+    from Settings or a tick while a download ran, or while the host stopped for an install, left
+    nothing to apply and the install aborted. From the start of a download, and from the moment an
+    install is claimed (Restart to update, a device's Install, or the tick's) to its end,
+    `ObservedUpdater` answers a check with what was last found and puts it off
+    (`CheckDeferred`), and fetches nothing else. A check already running finishes first, and an
+    install begins only if the release it chose is still the one ready (nothing is stopped
+    otherwise, as above). When the download or install has ended (an applied one exits the app,
+    and the new version checks at its start; a failed one leaves the old release running), the
+    next tick checks at once, not after the 30 minutes, and the newer release is downloaded and
+    offered. A release downloaded and waiting, with no install claimed, is still replaced by the
+    next check's newer one, as before. The host restart onto its installed files (#4107) and the
+    bounded apply retry (#4093) are unchanged.
   * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: a second
     Restart to update, or a device's Install, while one installs is refused): an install that
     fails starts it again and waits for the next check; quitting the app while the host is
@@ -995,16 +1082,37 @@ connector's Install button on a machine the dashboard drives.
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
   doesn't rest on the order main's CI runs go in (each push has a group of its
-  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, unless main's head has since
-  changed the app (main's own selector, under the lock, says so; main's later run publishes
-  both, where publishing this first could leave that one's lower version refused), and
-  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, app changes
+  or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
+  higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
+  merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. Releases are
+  spaced 15 minutes apart (**Spacing**, below). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
   start in is not promised, which is why the checks above keep the order. With signing on, the
   `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
   once `sign` has succeeded, so it never falls back to the unsigned packages.
+* **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
+  S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
+  its age read from the API's `published_at` under the publish lock (`build/release-spacing.ps1`). A run inside that, or
+  one that can't read a release's time or finds it in the future, publishes nothing, warns, and sets the step output
+  `deferred=true`; it leaves no release, draft or tag. Its changes are never dropped, even when main goes idle: every 5
+  minutes `publish-pending.yml` runs `build/publish-pending.ps1`, which takes main's newest finished CI run whose
+  `quality-gate` and `publish` jobs succeeded (a run red only by the waived Arm64 leg counts) and, once no newer run is
+  still going (a run going 3 hours is stuck and holds nothing), that run's version is above every release and untagged,
+  its commit follows the latest release's and the window is open, re-runs its `publish` job, at most 4 times. So a release
+  at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
+  A read that fails there re-runs nothing and is tried on the next tick. A run that does pass later publishes them first
+  (CI's release debt). Every publish, a re-run or a dispatch's too, is a `publish` job in the one `publish-prerelease`
+  group, so two never run at once. Only the spacing is held: every other check above runs first. **Critical fix:**
+  `-SkipSpacing -SkipSpacingReason <why>` publishes inside the 15 minutes, with a warning and a line in the release notes
+  naming the override, who ran it and why; no reason, no publish. CI passes them from a `workflow_dispatch` on `main`, its
+  `critical-release` box and `critical-reason` text, which only someone with write access can run (never a label or
+  anything a pull request sets); the plan job lets it through only on `main` with a reason, at once, before any build.
+  Only Quality runs it, on an owner or Chief call. (The workflow parts are Quality's to apply; until then there is no
+  override, and a deferred run waits for main's next run that passes.)
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -1134,49 +1242,59 @@ pre-releases" in Settings stops it finding them until there are full releases.
 
 ### The release train (#2225)
 
-A second way to publish, apart from merging: `.github/workflows/release-train.yml` runs hourly
-(and by hand, `workflow_dispatch`) and publishes the newest `main` commit whose CI passed whole.
-Merging never waits for it and it never blocks a merge.
+**Design, not yet built here:** `.github/workflows/release-train.yml` has never existed on `main`; what exists is the commit selector,
+`build/select-release-commit.ps1`, and its fixtures. The train is to be a second way to publish, apart from merging: it is to run hourly
+(and by hand, `workflow_dispatch`) and publish the newest `main` commit whose FAST lane and FULL lane both passed (below).
+Merging is never to wait for it, and it is never to block a merge. Everything below is that design unless it says the selector does it.
 
 **Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
-superseded run that went green still publishes nothing when `main`'s head has since changed the
-app. While merges arrive faster than the app's CI finishes, nothing is released: none was from
-15:36 PT on Nov 22. The train publishes what was verified, whatever has merged since. **Per-commit groups
-(`ci-main-<sha>`, above) stop the cancelling but do not fix this by themselves:** until the train publishes,
-`ci.yml`'s `publish` still refuses a run whose commit main's head has since changed the app past, so the
-starvation lasts until the train lands.
+superseded run that went green published nothing when `main`'s head had since changed the
+app. While merges arrive faster than the app's CI finishes, nothing was released: none was from
+15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. Per-commit groups
+(`ci-main-<sha>`, above) stopped the cancelling, and since #4104 `ci.yml`'s `publish` no longer stands aside
+for a later app change either, so a green run publishes its own commit without waiting for the train.
 
 * **Which commit** (`build/select-release-commit.ps1`, fixtures in
   `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
   attempt (a successful re-run counts). The first that has all of these:
-  - `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
-    both did. **Arm64 does not gate** (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its jobs (`app` win-arm64, `app-installer`, and
-    `product` on Windows on Arm) still run and report, but a run that is red only for Arm64 is
-    publishable, but **no other job may have failed or timed out** (nor, in a failed run, been
+  - **FAST:** `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **And FULL**, once `full.yml` exists (S2, #4104; not built yet, see quality/README.md; the selector already requires it): the
+    same commit's FULL run, found by its `head_sha`, finished with `full-gate` (the aggregate, which fails when a lane it selected was skipped),
+    the x64 self-test, pack and installer, and the **Arm64 pack** succeeded, and no other job red. **What runs the app on Arm64 is waived**: its
+    self-test and tests, and its installer (it installs and starts the app: the Arm64 self-test, #4159), **recorded, never silent**: the publish summary lists
+    each waived Arm64 result, and a red one also opens the full-red alert (to be written) while publish continues. **x64 is strict**: its self-test, pack, installer and
+    SBOM are all required, and an absent or skipped x64 job is no pass. The Arm64 package is never optional, and its SBOM must be there. A commit with no FULL run yet is not publishable; the train
+    is to dispatch one, and a later hourly run picks it up. **Arm64 does not gate** the self-test (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its self-test, tests and installer (the Arm64 `app` self-test, the
+    Arm64 `app-installer`, and `product` on Windows on Arm) still run and report, but a run that is red only for those is
+    publishable (its Arm64 pack must still have succeeded), but **no other job may have failed or timed out** (nor, in a failed run, been
     cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
     reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the package artifacts of both architectures are unexpired (`ci.yml` keeps them 30 days); the version is read from their names.
+  - the **packages and the SBOMs** of both architectures (x64 and Arm64) are all there, unexpired (that commit's FULL run builds them and keeps them 30 days), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is
   a no-op.
 
   **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
-* **How.** The train downloads that run's packages (the bytes CI built and checked, never a
+* **How (design).** The train is to download that commit's FULL run's packages (the bytes CI built and checked, never a
   rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
-  commit. It shares `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  commit. It is to share `ci.yml`'s `publish-prerelease` concurrency group, and the script still
   refuses a version already out, an older one, or a commit behind the latest release, so the
-  train and `ci.yml`'s `publish` job can run side by side without publishing twice. With
-  `-MainHead` the chosen commit itself the script skips the stand-aside for a later app change
-  (`ci.yml`'s `publish` keeps it): the train publishes the newest verified commit, and a later
-  change is the next verified commit's to publish.
-* **Signing.** The train has no sign step. While `APP_SIGNING` is unset it publishes unsigned,
-  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it refuses and fails the run, never publishing
-  unsigned, until it gains the sign step.
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
+  stands aside for a later app change any more (#4104): the train is to publish the newest verified
+  commit, and a later change is the next verified commit's to publish.
+* **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+  unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
 * **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
-  so a train release carries neither until they are added.
+  so a train release is to carry neither until they are added.
 
 ### Signing
 

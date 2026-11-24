@@ -68,10 +68,11 @@ public sealed class LiteDeliver(
         var id = target;
         Session? session = null;
         var byNode = false;
+        var sawHold = false;
         void Resolve()
         {
             session = source.Get(target);
-            if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+            if (session is null && FromNodeId(target, out sawHold) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         }
         if (Lane is null) { Resolve(); }
         var sender = new DeliverySender(body.Principal.Kind == "script" ? body.Principal.SenderId :
@@ -93,7 +94,7 @@ public sealed class LiteDeliver(
             if (query) { return FromLane(prior); }
         }
         if (Lane is not null) { Resolve(); }
-        if (session is null) { return Refused(UnresolvedCode(target)); }
+        if (session is null) { return Refused(UnresolvedCode(target, sawHold)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
         // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
@@ -154,7 +155,10 @@ public sealed class LiteDeliver(
         if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
-        var framed = Frame(body.Principal, body.Request, safe);
+        // An older order that comes after a newer one from the same sender is still typed, and says so (#4435). The time is when the sender
+        // first asked to send, which a busy retry keeps, never when this envelope was sealed.
+        var sent = envelope.SentAt ?? body.IssuedAt;
+        var framed = Frame(body.Principal, body.Request, safe, IsStale(peer, id, sent) ? sent : null, envelope.SentAtIgnored);
         // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
         // about to go, with the exact words and a label from the verified principal, never from the body,
         // so userMessageFrom=agent is set by the host alone. A delivery that typed nothing (refused,
@@ -210,6 +214,7 @@ public sealed class LiteDeliver(
         // A send whose keys went may still be queued, so with the status store its arm stays (D2b-2c): the framed words carry a unique request id, so no
         // prompt of the person's can match them, and a prompt Claude takes later still shows as the agent's. The keeper keeps it from lapsing.
         if (result.Outcome != AnswerOutcome.Delivered && !(store is not null && keysWent)) { Unarm(); }
+        else if (result.Outcome == AnswerOutcome.Delivered) { Delivered(peer, id, sent); }
         Record(result);
         return result.Outcome switch
         {
@@ -260,27 +265,42 @@ public sealed class LiteDeliver(
     // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
     // A node id that did not resolve while discovery is held may name a live session the pass did not list, so the
     // sender is told to retry, not that the session does not exist (#1396).
-    string UnresolvedCode(string target) =>
-        IsNodeId(target) && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
+    string UnresolvedCode(string target, bool sawHold) =>
+        IsNodeId(target) && (sawHold || source.Held is not null) ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
 
     static bool IsNodeId(string target) =>
         target.Length == "agent_bridge_".Length + 16 && target.StartsWith("agent_bridge_", StringComparison.Ordinal)
         && !target.AsSpan("agent_bridge_".Length).ContainsAnyExcept("0123456789abcdef");
 
-    string? FromNodeId(string target)
+    static bool SameHold(DiscoveryHeld? a, DiscoveryHeld? b) =>
+        a is null ? b is null : b is not null && string.Equals(a.Reason, b.Reason, StringComparison.Ordinal)
+            && a.Agents.OrderBy(x => x).SequenceEqual(b.Agents.OrderBy(x => x));
+
+    string? FromNodeId(string target) => FromNodeId(target, out _);
+
+    // sawHold: discovery was held at either read, so a refusal is "retry", even if the hold has ended since.
+    string? FromNodeId(string target, out bool sawHold)
     {
+        sawHold = false;
         const string prefix = "agent_bridge_";
         if (target.Length != prefix.Length + 16 || !target.StartsWith(prefix, StringComparison.Ordinal)
             || target.AsSpan(prefix.Length).ContainsAnyExcept("0123456789abcdef")) { return null; }
-        if (source.Held is not null) { return null; }
-        string? found = null;
+        // While discovery is held for some agents, a node id may still name a session of another agent (#3933 option b, owner
+        // decision Nov 23): only when exactly one listed session has it, its agent is not held, and the hold is the same
+        // before and after the scan. A held agent's unlisted session could share the id, so a held agent's never resolves.
+        var before = source.Held;
+        sawHold = before is not null;
+        Session? found = null;
         foreach (var s in source.Snapshot())
         {
             if (!string.Equals(HaContract.NodeId(s.Id), target, StringComparison.Ordinal)) { continue; }
-            if (found is not null && !string.Equals(found, s.Id, StringComparison.Ordinal)) { return null; }
-            found = s.Id;
+            if (found is not null && !string.Equals(found.Id, s.Id, StringComparison.Ordinal)) { return null; }
+            found = s;
         }
-        return source.Held is null ? found : null;
+        var after = source.Held;
+        sawHold |= after is not null;
+        if (!SameHold(before, after) || found is null) { return null; }
+        return before is not null && before.Agents.Contains(found.Agent) ? null : found.Id;
     }
 
     // Claude restarted since a held send: its in-memory queue is gone (assumed, UNPROVEN until a real transcript proves it), so the old record is
@@ -347,11 +367,37 @@ public sealed class LiteDeliver(
     static string? SenderLabel(AgentPrincipal from) => Limits.KeepStart(
         from.Kind == "script" ? $"script {Clean(from.SenderId)}" : $"{Clean(from.Session)} on {Clean(from.Machine)}", Limits.UserMessageLabel);
 
-    // The provenance line: who sent it, from where, and that the user did not type it.
-    static string Frame(AgentPrincipal from, string request, string escaped) =>
-        from.Kind == "script"
-            ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)} · not typed by your user] {escaped}"
-            : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)} · not typed by your user] {escaped}";
+    // The newest sent time typed to each session by each sender, in memory for this host run (a restart forgets it, which marks fewer
+    // messages, never more). Equal times are not stale. Past the cap it starts again rather than grow.
+    readonly Dictionary<(string Sender, string Session), long> newest = [];
+    const int MaxNewest = 4096;
+
+    bool IsStale(string sender, string session, long sent)
+    {
+        lock (newest) { return newest.TryGetValue((sender, session), out var seen) && sent < seen; }
+    }
+
+    void Delivered(string sender, string session, long sent)
+    {
+        lock (newest)
+        {
+            if (newest.Count >= MaxNewest && !newest.ContainsKey((sender, session))) { newest.Clear(); }
+            newest[(sender, session)] = newest.TryGetValue((sender, session), out var seen) ? Math.Max(seen, sent) : sent;
+        }
+    }
+
+    static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+
+    // The provenance line: who sent it, from where, and that the user did not type it. A stale one also says when it was sent.
+    static string Frame(AgentPrincipal from, string request, string escaped, long? staleSent = null, bool sendTimeIgnored = false)
+    {
+        var stale = staleSent is { } at
+            ? $" · STALE: sent {TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(at), Pacific):HH:mm} PT, a newer message from this sender was delivered first" : "";
+        if (sendTimeIgnored) { stale += " · send time not given"; }
+        return from.Kind == "script"
+            ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)}{stale} · not typed by your user] {escaped}"
+            : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)}{stale} · not typed by your user] {escaped}";
+    }
 
     // Nothing in the body may pass as part of the header or as a key or an attachment.
     static string Escape(string text)

@@ -26,6 +26,10 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     (string? Release, DateTimeOffset At, int Times)? failed;
     int checks;
     int downloads;
+    // Installs claimed, from the choice of a release to the end of its install (Applying).
+    int applying;
+    // A check was put off because a download or an install was under way (Busy): asked again once it has ended.
+    volatile bool deferred;
 
     // The wait after a release's first failed download, doubled after each further one in a row
     // up to DownloadAgainAtMost (#516): a download that keeps failing (a feed out of reach, a disk
@@ -38,6 +42,15 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         var hold = DownloadAgainAfter * Math.Pow(2, Math.Clamp(times - 1, 0, 16));
         return hold < DownloadAgainAtMost ? hold : DownloadAgainAtMost;
     }
+
+    // A download or an install under way completes: a check made meanwhile (Settings', or a tick's) would find a
+    // newer release and drop the package being fetched or applied, as VelopackUpdater's check does, and the install
+    // would abort. It answers with what was found, is asked again afterwards (CheckDeferred), and the newer release
+    // is picked up then.
+    bool Busy => Volatile.Read(ref downloads) > 0 || Volatile.Read(ref applying) > 0;
+
+    // Whether a check was put off for that, and not asked again since.
+    public bool CheckDeferred => deferred;
 
     // When the release the last check found may be downloaded again after its download failed;
     // null when it has not failed (or another release has been found since).
@@ -86,6 +99,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         await checking.WaitAsync();
         try
         {
+            if (Busy) { deferred = true; return Offered(this.found); }
+            // Attempted, whatever comes of it: a feed that fails is asked at the next check, not at every tick.
+            deferred = false;
             var from = Bound();
             var found = await inner.CheckAsync();
             // A check that finished after its source changed answers for the old one.
@@ -115,6 +131,12 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         {
             await downloading.WaitAsync();
             held = true;
+            // An install under way applies the release ready: nothing else is fetched meanwhile.
+            if (Volatile.Read(ref applying) > 0) { return; }
+            // A check under way finishes first, and none starts after this (Busy): what it found is what is fetched,
+            // and nothing replaces it while it downloads.
+            await checking.WaitAsync();
+            checking.Release();
             // Read after the queue wait: a halt may have arrived since the check.
             RefuseHalted(found);
             RefuseHalted(inner.Ready);
@@ -166,6 +188,38 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     {
         RefuseHalted(version);
         inner.ApplyAndRestart(version, handedOver);
+    }
+
+    // An install claimed, from the choice of its release to its end: no check or other download replaces the package
+    // meanwhile (Busy). A check already under way finishes first, so what it replaced is settled before the apply.
+    // Disposed when the install has ended, applied or not; an applied one exits the app.
+    public async Task<IDisposable> ApplyingAsync()
+    {
+        Interlocked.Increment(ref applying);
+        try
+        {
+            Raise();
+            await checking.WaitAsync();
+            checking.Release();
+        }
+        catch
+        {
+            // A Changed handler that throws, or a wait cut off, must not leave the hold counted for good.
+            Interlocked.Decrement(ref applying);
+            throw;
+        }
+        return new ApplyHold(this);
+    }
+
+    sealed class ApplyHold(ObservedUpdater owner) : IDisposable
+    {
+        int ended;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref ended, 1) != 0) { return; }
+            Interlocked.Decrement(ref owner.applying);
+            owner.Raise();
+        }
     }
 
     // Something the state reads besides the updater changed: Settings' install failing.

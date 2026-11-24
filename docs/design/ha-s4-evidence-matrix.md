@@ -57,6 +57,31 @@ not shipped runtime; its S8 implementation is not a new prerequisite for HA reti
 Legacy connector evidence is kept separate from that proposed component.
 The Mac/iOS work in #2391/#2392/#2398/#2399 remains required future parity but is parked last under [#1882](https://github.com/danswett/agent-bridge/issues/1882), per Engineering's supplied complete issue text on November 12, 2026, and does not block the HA-off gate until Product reopens #1882 or rules otherwise; fleet inventory row 13 says "Two Apple machines on HA; out for now (Mac and iOS clients are in scope under 1a)", a disagreement whose gate wording Product or the Chief must confirm.
 
+## At a glance, in the parity legend words
+
+This grid is read off the per-row tables below and uses the status words of the [parity legend](../parity.md) exactly. The tables govern if the two ever disagree. It adds no evidence and no new claim: no cell is `Verified`, because no cell has a current recorded live run.
+
+* `Implemented, untested live`: the grid's "Built" with no client-specific live receipt (tests and fixture runs are not a live run; live runs are tracked by [#39](https://github.com/danswett/agent-bridge/issues/39)).
+* `Verified (historical)`: where the live column cites an earlier observation of the behavior the row is named for, on that client. A note that the full, current or all-platform run is still untested does not demote it, because the legend's word already says it is not current proof. An observation of something narrower than the row stays `Implemented, untested live` (row 16 on Windows: only the question toast, not the finished-turn notice; row 28 on Windows: only the toast buttons, not opening the question). The same rule is applied to every cell.
+* `Partial` and `Missing` follow the cell text: Partial names a missing behavior, Missing is explicit in the cited source. MCP cells follow M, the completed inventory.
+* Unknown is not a legend word. It marks a cell the sources do not establish (the host CLI entry points are not inventoried, [#2402](https://github.com/danswett/agent-bridge/issues/2402)); it never means the feature is absent.
+
+| Row | PWA | Windows | Apple | MCP agent | Host CLI | Optional HA |
+|---|---|---|---|---|---|---|
+| 4 stop | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 5 approvals | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 8 owner-only updates | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 15 forget machine | `Implemented, untested live` | `Implemented, untested live` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+| 16 finished-turn and question push | `Verified (historical)` | `Implemented, untested live` | `Missing` | `Partial` | Unknown | `Missing` |
+| 17 native forms | `Verified (historical)` | `Implemented, untested live` | `Implemented, untested live` | `Partial` | Unknown | `Missing` |
+| 27 dashboard views | `Verified (historical)` | `Verified (historical)` | `Implemented, untested live` | `Partial` | Unknown | `Missing` |
+| 28 push opens the question | `Verified (historical)` | `Implemented, untested live` | `Partial` | `Missing` | Unknown | `Missing` |
+| 29 images in replies | `Verified (historical)` | `Verified (historical)` | `Implemented, untested live` | `Missing` | Unknown | `Missing` |
+
+Offline Home Assistant-off tests for rows 5 and 17 (approve, deny, stale and unpinned refusals; one form of each field type) are in the open pull requests [#4004](https://github.com/danswett/agent-bridge/pull/4004) and [#4010](https://github.com/danswett/agent-bridge/pull/4010) and are **not on main yet**; this grid does not rely on them. Once merged they show the behavior is built and independent of Home Assistant, but they would not change a status here, because the live runs, three per client and the row minimums below, are still open.
+
+Row 4: the PWA's historical stop predates the Product ruling for guarded-idle states; the host's one-press path there is a known gap tracked in [#2411](https://github.com/danswett/agent-bridge/issues/2411), so that cell is not a pass for the current rule.
+
 ## Row 4: stop, idle one press; non-idle confirmation
 
 | Client | Built evidence | Live evidence | Gap keys |
@@ -148,12 +173,14 @@ Three runs per client/stage; keep relay/client roster before/after and refusal r
 
 | Client | Built evidence | Live evidence | Gap keys |
 |---|---|---|---|
-| PWA | P section 10 documents Web Push; current background parity unresolved by supplied brief | Historical phone question/finished/withdrawal claims in P; not every browser/OS | PWA-PUSH, L-PWA, L-ANDROID |
-| Windows | Built: W tray question/finished toasts, dedupe, withdrawal and quiet behavior | Historical question toast in P; full current lifecycle untested live | L-WIN |
-| Apple | Partial: A open-app notices; iOS/iPadOS APNs background transport missing | Mac/iOS OS delivery/authorization untested live | IOS-PUSH, L-MAC, L-IOS |
+| PWA | P section 10 documents Web Push; current background parity unresolved by supplied brief. **HA off, scanned and run without a connector:** `HaOffNotificationTests` (a source scan: the push code names no Home Assistant type, API or notify service) and `PushFlowTests.A_question_its_withdrawal_and_a_finished_turn_reach_the_phone_with_no_Home_Assistant_connector_in_the_process` (question, withdrawal and finished turn reach a PWA phone through the relay with no connector in the process; it does not detect a call to Home Assistant); `PushNotifierTests.After_a_relay_reconnect_a_question_and_a_finished_turn_already_shown_are_not_pushed_again` | Historical phone question/finished/withdrawal claims in P; not every browser/OS | PWA-PUSH, L-PWA, L-ANDROID |
+| Windows | Built: W tray question/finished toasts, dedupe, withdrawal and quiet behavior. **HA off, scanned only:** `HaOffNotificationTests` reads the toast code (`Toasts.cs`, `ToastResponder.cs`) for Home Assistant names; no HA-off flow runs it, and the toast behaviour itself is `ToastTests` | Historical question toast in P; full current lifecycle untested live | L-WIN |
+| Apple | **Missing** for background push: only open-app notices are built; the iOS/iPadOS APNs background transport is not built, so no HA-off test applies | Mac/iOS OS delivery/authorization untested live | IOS-PUSH, L-MAC, L-IOS |
 | MCP agent | Partial (M row 16): read snapshots/polling exist; pipe drops events, no push subscription | Untested live; snapshots do not prove delivery, withdrawal or reconnect/dedup | I-MCP, L-MCP |
 | Host CLI | Unknown question/turn notification client | Untested live | I-CLI, L-CLI |
 | Optional HA | Missing runtime: H uses paired-person notification path, not HA action events | Legacy disposable-HA notification test is not component proof | HA |
+
+**Still OPEN: live per-client counts.** This row's tests show the PWA and Windows push paths work and name no Home Assistant; they are not delivery evidence. The inventory minimum below (ten finished-turn and ten question notices per notifying client, away from the home network, with screen or OS evidence) is not recorded for any client, and Apple has no background path to record.
 
 Pass: question and completed main-agent turn each notify once per session, including
 the required background/locked lifecycle; answering elsewhere withdraws the question

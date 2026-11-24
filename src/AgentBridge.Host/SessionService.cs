@@ -116,6 +116,9 @@ public sealed class SessionService
 
     // An agent's own session.launch (#3237 S3), after AgentPipeLaunch's checks: the card's launch
     // service, with the attributed agent principal as provenance and peer.
+    // Whether the host's own launch record shows an agent started this session's current process through the fleet route (#2741).
+    // Throws, so the caller refuses, when the record is unfinished or unreadable.
+    internal bool IsFleetWorker(string session) => launcher?.IsFleetWorker(session, source.ProcessOf(session)) == true;
     internal Fleet.Grants.StopTarget? GrantTarget(string session) => source.Get(session) is not null
         && source.ProcessOf(session) is { Id: > 0, StartedAt: { } started } process ? new(session, new(process.Id, started)) : null;
     internal async Task<LaunchResult> LaunchAgentAsync(LaunchRequest request, string principal, AgentAuditLog audit, Func<string?> authorized, string? grant = null, Action<string>? confirmed = null)
@@ -205,6 +208,8 @@ public sealed class SessionService
 
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
+    // The client the host's verified roster says a relay channel's device is, for the audit rows; unset or null, a row carries none.
+    internal Func<SecureChannel, ClientIdentity?>? ClientOf { get; init; }
     public Lite.LiteReceiver? LiteReceiver { get; init; }
     public Lite.LiteKill? LiteKill { get; init; }
 
@@ -227,6 +232,7 @@ public sealed class SessionService
         {
             push.Watching = Watching;
             push.Presences = Presences;
+            if (launcher is not null) { push.TrustQuestions = launcher.TrustQuestions; }
         }
     }
 
@@ -322,6 +328,8 @@ public sealed class SessionService
             // Never this machine's pipe: a LocalChannel falls through to an unknown op.
             case DiagnosticsProtocol.Get when Diagnostics is not null && channel is SecureChannel:
                 return await Diagnostics.HandleAsync(channel, data);
+            case "load.get" when LoadEnabled() && Load is not null && Direct(channel):
+                return Load.Figures();                                  // only the figures launch admission reads, never the relay's full record (#2982)
             case "load.get" or "load.subscribe" or "load.unsubscribe" when LoadEnabled() && Load is not null && channel is SecureChannel:
                 return await Load.HandleAsync(channel, op);
             case Ops.SessionsList:
@@ -510,6 +518,8 @@ public sealed class SessionService
         {
             if (AnswerGate(session, question, operation, "person-client") is not { } gate) { return null; }
             gate = gate with { Path = channel is SecureChannel ? "relay" : "local" };
+            if (request.CardTarget is { } card && GateAuditMetadata.CardTargetShape(card)) { gate = gate with { ClientReportedCardTarget = card }; }
+            if (channel is SecureChannel viaRelay && ClientOf?.Invoke(viaRelay) is { } client) { gate = gate with { ClientKind = client.Kind, ClientPlatform = client.Platform }; }
             var principal = channel is SecureChannel relay ? $"person:{relay.PeerId}" : "person:local";
             var intent = new AgentAuditEntry(gate.Path, gate.Operation.ToString(), principal, [], Ops.SessionAnswer,
                 gate.Incarnation.ToString(), "attempted", Gate: gate);
@@ -532,7 +542,7 @@ public sealed class SessionService
         return progress ? result with { Timings = watch.Timings } : result;
     }
 
-    static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
+    internal static GateAuditMetadata? AnswerGate(Session session, Question question, Guid operation, string actor)
     {
         if (!Guid.TryParse(session.Id, out var incarnation) || incarnation == Guid.Empty) { return null; }
         var native = session.Agent switch
@@ -785,7 +795,7 @@ public sealed class SessionService
         if (stops is null) { return new StopResult(StopOutcome.Refused, "this host does not end sessions; end it at the machine"); }
         return stops is StopService audited && audit is not null
             ? await StopAudit.StopAsync(audited, source, audit, request, Direct(channel) ? "local" : "relay",
-                Direct(channel) ? "person:local" : $"person:{channel.PeerId}")
+                Direct(channel) ? "person:local" : $"person:{channel.PeerId}", client: channel is SecureChannel relayed ? ClientOf?.Invoke(relayed) : null)
             : await stops.StopAsync(request);
     }
 

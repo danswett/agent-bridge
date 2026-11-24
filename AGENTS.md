@@ -104,7 +104,9 @@ Keep iterative PRs draft (fast CI only); submit readiness to Quality. Never push
 
 Every merge to `main` whose CI builds the app (any change the app's jobs select) publishes a
 release-build pre-release of the Windows app
-(`v0.1.<run>`, Velopack, with deltas), and installed apps download it in the background and
+(`v0.1.<run>`, Velopack, with deltas), at least 15 minutes after the previous release (owner
+decision: a run inside that is deferred, never dropped; a critical fix may skip it by Quality's
+dispatch; docs/app-windows.md, "Spacing"), and installed apps download it in the background and
 install it when the person chooses Restart to update (#516). A red `main` CI therefore blocks
 publishing: fix it quickly. PR builds are dev
 builds, and guard G6 limits their HA connector to a disposable HA.
@@ -112,7 +114,7 @@ builds, and guard G6 limits their HA connector to a disposable HA.
 ## Relay deploys
 
 - `relay.yml` deploys to staging and smoke-tests it.
-- Production is a separate job gated on the owner as required reviewer. Never approve a production deploy without the owner's go-ahead.
+- Production is a separate job whose required reviewer is the owner's account. The owner typed "Deploying never needs me" (Nov 23). The conditions are Chief S17's wording as relayed, not the owner's: SRE approves it through the per-command danswett route, after the normal gates (merged on main through Quality, staging deploy and smoke green, only the newest run, a health check after, the runbook rollback if bad, report to Chief). Not covered: enforce flags, kill switches, repository settings or variables, credentials ([docs/relay-deploy.md](docs/relay-deploy.md#who-approves-a-production-deploy)).
 - An older run waiting at the production gate blocks newer ones (concurrency group `relay-production`), so cancel superseded runs.
 - Infrastructure changes go through `infra/deploy.ps1` (staging), then `-Production` with `-ProductionImage <running digest>` to keep the current image ([docs/relay-deploy.md](docs/relay-deploy.md)).
 
