@@ -28,8 +28,8 @@
   Run elevated (the .env files and services belong to the runner account). -WhatIf shows every change and writes
   nothing; it also runs without elevation, then saying where a file can't be read. Changes nothing else on the machine.
 
-  Tests only (AbCiEnvScriptTests): with AGENT_BRIDGE_ABCI_TEST=1, -Root must be a folder other than C:\ab-ci-runners;
-  its numbered folders are the runners, AGENT_BRIDGE_ABCI_TEST_ACCOUNT (a SID) their account, the caller counts as an
+  Tests only (AbCiEnvScriptTests): with AGENT_BRIDGE_ABCI_TEST=1, a banner says so and -Root must resolve to a folder
+  under the temp folder, by no device or UNC form and through no reparse point; its numbered folders are the runners, AGENT_BRIDGE_ABCI_TEST_ACCOUNT (a SID) their account, the caller counts as an
   admin, AGENT_BRIDGE_ABCI_TEST_PATH ('|'-separated) replaces the tool folders, and no service is touched. Without
   the flag, any -Root but C:\ab-ci-runners is refused.
 .EXAMPLE
@@ -48,10 +48,18 @@ Set-StrictMode -Version Latest
 
 $realRoot = 'C:\ab-ci-runners'
 $testMode = $env:AGENT_BRIDGE_ABCI_TEST -eq '1'
-$isRealRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\') -eq $realRoot
-if ($testMode -and $isRealRoot) { throw "AGENT_BRIDGE_ABCI_TEST is set: refusing to touch $realRoot." }
-if (-not $testMode -and -not $isRealRoot) { throw "-Root other than $realRoot is for tests only." }
+# No device (\\?\, \\.\) or UNC form: each is another spelling of a path that a string compare would miss.
+if ($Root -match '^[\\/]{2}') { throw "-Root must be a plain drive path, not a device or UNC path." }
 $Root = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+if ($testMode) {
+    Write-Warning '*** TEST SEAM ON (AGENT_BRIDGE_ABCI_TEST=1): fake runner root under the temp folder, no services touched. Never set this on a VM. ***'
+    # The seam takes only a folder under this user's temp folder, reached through no reparse point.
+    $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+    if ($temp -match '^[\\/]{2}' -or -not $Root.StartsWith("$temp\", [StringComparison]::OrdinalIgnoreCase)) { throw "AGENT_BRIDGE_ABCI_TEST is set: -Root must be under the temp folder $temp." }
+    for ($p = $Root; $p.Length -gt $temp.Length; $p = Split-Path -Parent $p) {
+        if ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "AGENT_BRIDGE_ABCI_TEST is set: -Root crosses a reparse point at $p." }
+    }
+} elseif ($Root -ne $realRoot) { throw "-Root other than $realRoot is for tests only." }
 
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $elevated -and -not $WhatIfPreference -and -not $testMode) { throw 'Run this from an elevated PowerShell (or add -WhatIf to see the plan).' }

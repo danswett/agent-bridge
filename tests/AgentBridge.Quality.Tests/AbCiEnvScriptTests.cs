@@ -19,7 +19,7 @@ public class AbCiEnvScriptTests
     public void It_writes_each_runners_env_with_dotnet_in_its_work_folder_and_keeps_other_lines()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var folder = Fixture.ScratchFolder();
+        var folder = TempFolder();
         try
         {
             var root = Tree(folder, "root", 2);
@@ -47,7 +47,7 @@ public class AbCiEnvScriptTests
     public void WhatIf_prints_each_runners_install_dir_and_writes_nothing()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var folder = Fixture.ScratchFolder();
+        var folder = TempFolder();
         try
         {
             var root = Tree(folder, "root", 1);
@@ -75,7 +75,7 @@ public class AbCiEnvScriptTests
     public void A_bad_value_or_runner_refuses_the_whole_run_before_any_env_is_written(string rootName, string arg, string value, string problem)
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var folder = Fixture.ScratchFolder();
+        var folder = TempFolder();
         try
         {
             var root = Tree(folder, rootName, 2);
@@ -83,11 +83,7 @@ public class AbCiEnvScriptTests
             if (arg == "junction")
             {
                 var elsewhere = Directory.CreateDirectory(Path.Combine(folder, "elsewhere")).FullName;
-                // A junction needs no privilege (a symbolic link does).
-                using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", Path.Combine(root, "2", "_work", "_tool"), elsewhere]) { RedirectStandardOutput = true })!;
-                mklink.StandardOutput.ReadToEnd();
-                mklink.WaitForExit();
-                Assert.Equal(0, mklink.ExitCode);
+                Junction(Path.Combine(root, "2", "_work", "_tool"), elsewhere);
             }
 
             var (exit, output) = arg.StartsWith('-') ? Run(root, arg, value) : Run(root);
@@ -106,30 +102,63 @@ public class AbCiEnvScriptTests
         }
     }
 
+    // R8b P1 (#4214): the seam takes only a folder under the temp folder, by its plain path; the flag shows a banner.
     [Fact]
-    public void A_fake_root_needs_the_test_flag_and_the_test_flag_refuses_the_real_root()
+    public void A_fake_root_needs_the_test_flag_and_the_flag_takes_only_a_plain_folder_under_temp()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var folder = Fixture.ScratchFolder();
+        var folder = TempFolder();
+        var outside = Fixture.ScratchFolder();
         try
         {
             var root = Tree(folder, "root", 1);
+            var (exit, output) = Run(root, "-WhatIf");
+            Assert.True(exit == 0, output);
+            Assert.Contains("TEST SEAM ON", output);
 
-            var (exit, output) = Run(root, testFlag: false);
+            (exit, output) = Run(root, testFlag: false);
             Assert.NotEqual(0, exit);
             Assert.Contains("-Root other than C:\\ab-ci-runners is for tests only", output);
 
-            (exit, output) = Run("C:\\ab-ci-runners", "-WhatIf");
+            foreach (var refused in new[] { "C:\\ab-ci-runners", Tree(outside, "root", 1) })
+            {
+                (exit, output) = Run(refused, "-WhatIf");
+                Assert.NotEqual(0, exit);
+                Assert.Contains("AGENT_BRIDGE_ABCI_TEST is set: -Root must be under the temp folder", output);
+            }
+            foreach (var alias in new[] { "\\\\?\\" + root, "\\\\.\\" + root, "\\\\?\\C:\\ab-ci-runners", "\\\\localhost\\C$\\ab-ci-runners" })
+            {
+                (exit, output) = Run(alias, "-WhatIf");
+                Assert.NotEqual(0, exit);
+                Assert.Contains("-Root must be a plain drive path, not a device or UNC path", output);
+            }
+
+            // A root reached through a junction under temp is refused too.
+            var linked = Path.Combine(folder, "linked");
+            Junction(linked, root);
+            (exit, output) = Run(Path.Combine(linked), "-WhatIf");
             Assert.NotEqual(0, exit);
-            Assert.Contains("AGENT_BRIDGE_ABCI_TEST is set: refusing to touch C:\\ab-ci-runners", output);
+            Assert.Contains("-Root crosses a reparse point", output);
+            Directory.Delete(linked);
             Assert.False(File.Exists(Path.Combine(root, "1", ".env")));
         }
         finally
         {
             Fixture.Delete(folder);
+            Fixture.Delete(outside);
         }
     }
 
+    static string TempFolder() => Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "abci-env-test-" + Guid.NewGuid().ToString("N"))).FullName;
+
+    // A junction needs no privilege (a symbolic link does).
+    static void Junction(string link, string target)
+    {
+        using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target]) { RedirectStandardOutput = true })!;
+        mklink.StandardOutput.ReadToEnd();
+        mklink.WaitForExit();
+        Assert.Equal(0, mklink.ExitCode);
+    }
     // <folder>\<rootName> with inherited rules removed and only the test's own account (standing in for an admin)
     // granted; runners 1..n each with a _work the runner account may write.
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -164,10 +193,14 @@ public class AbCiEnvScriptTests
         start.Environment["AGENT_BRIDGE_ABCI_TEST_PATH"] = "C:\\Windows";
         start.Environment["NO_COLOR"] = "1";
         start.Environment["TERM"] = "dumb";
-        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-File", script, "-Root", root })
+        // Through the environment, so nothing needs quoting; the error is written bare (pwsh's error view wraps it).
+        start.Environment["ABCI_TEST_SCRIPT"] = script;
+        start.Environment["ABCI_TEST_ROOT"] = root;
+        start.Environment["ABCI_TEST_VALUE"] = value;
+        var call = "& $env:ABCI_TEST_SCRIPT -Root $env:ABCI_TEST_ROOT" + (arg.Length > 0 ? " " + arg : "") + (value.Length > 0 ? " $env:ABCI_TEST_VALUE" : "");
+        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-Command",
+                     "$ErrorActionPreference = 'Stop'; try { " + call + " } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }" })
             start.ArgumentList.Add(a);
-        if (arg.Length > 0) { start.ArgumentList.Add(arg); }
-        if (value.Length > 0) { start.ArgumentList.Add(value); }
         using var process = Process.Start(start) ?? throw new InvalidOperationException("pwsh did not start.");
         var error = process.StandardError.ReadToEndAsync();
         var output = process.StandardOutput.ReadToEnd();
