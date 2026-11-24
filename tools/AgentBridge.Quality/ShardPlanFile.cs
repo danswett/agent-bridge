@@ -12,7 +12,12 @@ internal enum ShardRun
     Filtered,
 }
 
-internal sealed record ShardChoice(ShardRun Run, string? Filter = null);
+// An empty filter is no filter to `dotnet test`, which runs every test (Quality, #4320): a filtered choice without one is skipped.
+internal sealed record ShardChoice(ShardRun Run, string? Filter = null)
+{
+    public ShardRun Run { get; } = Run == ShardRun.Filtered && string.IsNullOrWhiteSpace(Filter) ? ShardRun.None : Run;
+    public string? Filter { get; } = string.IsNullOrWhiteSpace(Filter) ? null : Filter;
+}
 
 /// <summary>
 /// <c>quality/test-shards.json</c> (S4, #4104): what each test shard job runs. Shards 1 to N-1 LIST their classes, per project; shard N is the
@@ -94,7 +99,8 @@ internal sealed class ShardPlanFile
                     if (!owner.TryAdd(name, i + 1)) { throw new ArgumentException($"In {project}, class {name} is listed in shards {owner[name]} and {i + 1}."); }
                 }
             }
-            // "X." also matches "FakeX.": two such classes in different shards would both run in both.
+            // "X." also matches "FakeX.", and VSTest's ~ ignores case ("Ns.ATests." is inside "Ns.aTests."): two such classes in
+            // different shards would both run in both.
             foreach (var x in owner)
             {
                 foreach (var y in owner.Where(y => y.Value != x.Value && (y.Key + ".").Contains(x.Key + ".", StringComparison.OrdinalIgnoreCase)))

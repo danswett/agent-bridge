@@ -35,6 +35,29 @@ public sealed class ShardFilterTests
         Assert.Contains("Ns.AlphaTests", e.Message, StringComparison.Ordinal);
     }
 
+    // Quality's ask (#4320): `dotnet test --filter ""` runs every test, so a filtered choice with no filter is skipped (none), whoever builds it.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void An_empty_filter_is_skipped_never_run_as_no_filter(string? filter)
+    {
+        var choice = new ShardChoice(ShardRun.Filtered, filter);
+
+        Assert.Equal(ShardRun.None, choice.Run);
+        Assert.Null(choice.Filter);
+        var plan = ShardPlanFile.Parse(Plan.Replace("\"2\": [\"GammaTests\"],", "\"2\": [],", StringComparison.Ordinal));
+        Assert.Equal(ShardRun.None, plan.For("Host.Tests", 2).Run);
+    }
+
+    // VSTest's ~ ignores case (#4317's planner fix): "Ns.ATests." is inside "Ns.aTests.", so two such classes in different shards would both run twice.
+    [Fact]
+    public void Lists_whose_terms_match_each_others_tests_case_aside_are_refused()
+    {
+        var e = Assert.Throws<ArgumentException>(() => ShardPlanFile.Parse(Plan.Replace("\"GammaTests\"", "\"Ns.alphaTests\"", StringComparison.Ordinal)));
+
+        Assert.Contains("would run twice", e.Message, StringComparison.Ordinal);
+    }
     // "GammaTests." is inside "Ns.FakeGammaTests.": listed in different shards, the tests of one would run in both.
     [Fact]
     public void Lists_whose_terms_match_each_others_tests_are_refused()

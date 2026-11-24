@@ -305,6 +305,10 @@ which the tunnel forwards to VM-W. Everything in the VMs goes through `az vm run
 (`rehearsal-azure-vmw.ps1 -InvokeScript`), so it runs as a scheduled task of the VM's user, not
 from an agent session, and the #67 guard does not stand in its way.
 
+Both scripts refuse unless `az` is signed in as the account the rehearsal belongs to: set the
+`AGENT_BRIDGE_REHEARSAL_AZURE_USER` user environment variable once, in Windows settings
+([parity-checklist.md](parity-checklist.md), VM-W in Azure).
+
 ```powershell
 ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Start; ./build/rehearsal-azure-vmw.ps1 -Subscription <id> -Role M -Start
 ./build/shadow-soak-vm.ps1 -Subscription <id> -Prepare [-HostRef main] [-DriverRef main]
