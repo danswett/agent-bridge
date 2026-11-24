@@ -3,12 +3,12 @@ using System.Text.RegularExpressions;
 namespace AgentBridge.Quality.Tests;
 
 // Owner principle on #2643: no machine name or list anywhere in code, scripts, docs or tests, so
-// fleet membership can only come from the relay roster. Fixtures are exempt.
+// fleet membership can only come from the relay roster. Recorded fixtures (the JSON under a fixtures folder) are exempt.
 public class MachineNameScanTests
 {
     // The shapes the fleet's machine names take (a numbered VM, also inside an underscore slug,
     // or the owner's name as a prefix), so that no name itself is written here.
-    static readonly Regex MachineName = new(@"(?<![a-z0-9])vm[1-9]\d*(?![a-z0-9])|\bdswett-[a-z0-9]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex MachineName = new(@"(?<![a-z0-9])vm[-_ ]?[1-9]\d*(?![a-z0-9])|\bdswett-[a-z0-9]|(?<![a-z0-9])arm" + @"8(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // Areas a later #2643 slice still has to clean. The list only shrinks: an entry with nothing
     // left in it fails until it is removed. docs/design/ also names a machine the shapes above
@@ -20,7 +20,8 @@ public class MachineNameScanTests
 
     // What the scan leaves alone: the recorded JSON under a fixtures folder, and nothing else. A source file dropped into Fixtures is read (Q10's P2 on #4390).
     static bool Exempt(string path) =>
-        path.Split('/').Any(part => part.Equals("fixtures", StringComparison.OrdinalIgnoreCase));
+        path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+        && path.Split('/').Any(part => part.Equals("fixtures", StringComparison.OrdinalIgnoreCase));
 
     [Theory]
     [InlineData("tests/AgentBridge.HomeAssistant.Tests/Fixtures/ha-contract.json", true)]

@@ -4,11 +4,12 @@ using Xunit;
 // Fleet machines are dynamic: their membership comes only from the relay roster, so no test names one. The tests of this project take the
 // machine they use from the recorded contract fixture (Contract.Machine), and the Fixtures themselves, which are recorded by agent-ha-bridge's
 // own functions and are not edited by hand, are the one place such a name may stay. This file, which holds sample names to prove the lint sees
-// them, is the one source it skips. A line lint cannot see a name split across a concatenation. Owner principle (Nov 17), #2880 and #2924.
+// them, is the one source it skips (and bin and obj), and only the recorded JSON under Fixtures is exempt: a .cs file there is read like any other.
+// A line lint cannot see a name split across a concatenation. Owner principle (Nov 17), #2880 and #2924.
 public sealed class MachineNamesLintTests
 {
     // Built in pieces so that this file does not name what it looks for.
-    static readonly Regex Names = new("dsw" + "ett|dev[-_ ]?vm[0-9]+|(?<![a-z0-9])vm[0-9]+(?![a-z0-9])|arm" + "8(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex Names = new("dsw" + "ett|dev[-_ ]?vm[0-9]+|(?<![a-z0-9])vm[-_ ]?[0-9]+(?![a-z0-9])|arm" + "8(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     static string Root()
     {
@@ -20,7 +21,7 @@ public sealed class MachineNamesLintTests
     // The sources of a project and the lines of them that name a machine.
     static (List<string> Files, List<string> Hits) Scan(string project)
     {
-        var skipped = new[] { "bin", "obj", "Fixtures" };
+        var skipped = new[] { "bin", "obj" };
 
         // Judged on the path inside the project, so a checkout under a folder that is itself called bin or obj is still read.
         var files = Directory.EnumerateFiles(project, "*.cs", SearchOption.AllDirectories)
