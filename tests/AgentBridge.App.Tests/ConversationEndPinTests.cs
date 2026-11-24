@@ -775,8 +775,9 @@ public sealed class ConversationEndPinTests
         }
         view.Scroller.EndGesture("release");
         view.LaidOutForProbe();
-        // Once let go, the view is still again, and the last realisation's move is put back as before.
-        Assert.Equal([47042.0], view.Scroller.Targets);
+        // Once let go, the last realisation's move was already drawn under the thumb: it starts again from there
+        // rather than pulling the view back on release (#4243).
+        Assert.Empty(view.Scroller.Targets);
     }
 
     // #4243 trackpad: a tool row realises above the top block while a pan (or the thumb) is held still, so the

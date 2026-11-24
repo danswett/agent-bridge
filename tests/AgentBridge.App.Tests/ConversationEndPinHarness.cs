@@ -220,7 +220,7 @@ namespace AgentBridge.App
         public void DrawEarlierForProbe() => DrawEarlier();
         public void ProgrammaticBringForProbe(Microsoft.UI.Xaml.UIElement target, double alignment) => ScrollProgrammatically(() => Scroller.Bring(target, alignment));
         public void AnchorForProbe(double to) => Anchoring(Scroller, to);
-        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; }
+        public void TakeAnchorForProbe(double top) { anchor = new(0, top); anchorAt = Scroller.VerticalOffset; anchorHeld = false; }
         public void LaidOutForProbe() => KeepAnchoredBlock();
         public double BlockTopForProbe { set => ConversationList.BlockTop = value; }
         public void DrainForProbe() => DispatcherQueue.Drain();
