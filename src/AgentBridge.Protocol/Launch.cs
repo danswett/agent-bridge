@@ -60,6 +60,9 @@ public static partial class LaunchProtocol
         if (launch.Role is not null && !RoleName().IsMatch(launch.Role)) { return $"'{Cut(launch.Role)}' is not a role name; use letters, digits and hyphens, at most {MaxRole}"; }
         if (launch.CoordinatorRole is not null && !RoleName().IsMatch(launch.CoordinatorRole)) { return $"'{Cut(launch.CoordinatorRole)}' is not a coordinator role name; use letters, digits and hyphens, at most {MaxRole}"; }
         if (launch.CoordinatorRole is not null && (launch.Resume is not null || launch.Transfer is not null)) { return "a coordinator role is for a new session"; }
+        if (launch.AgentScope is not null && launch.AgentScope != AgentProtocol.ScopeReadReplyLaunch)
+        { return $"'{Cut(launch.AgentScope)}' is not an agent scope a launch can ask for; the only one is \"{AgentProtocol.ScopeReadReplyLaunch}\""; }
+        if (launch.AgentScope is not null && (launch.Resume is not null || launch.Transfer is not null)) { return "an agent scope is for a new session"; }
         if (launch.Resume is not null && launch.Workspace is not null)
         {
             return "a resumed session reopens in its own folder; name a workspace or a session to resume, not both";
@@ -143,6 +146,9 @@ public sealed record LaunchRequest
     // it narrows no MCP servers. The host records it in the launch record, and only a person's launch can (an agent's or a script's is refused);
     // a later fleet.resume judges the caller by it (docs/design/agent-resume.md).
     public string? CoordinatorRole { get; init; }
+    // The app's "May start agents" tick (#2777), a PERSON's launch only: the launched session gets the agent launch scope, read+reply+launch (the
+    // only value), instead of read. The host refuses it unless its agent launch switch is on, and refuses an agent's or a script's launch carrying it.
+    public string? AgentScope { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
     // With sessions.transfer: a session from another machine, resumed here as one of its own
@@ -207,6 +213,8 @@ public sealed record LaunchOptions
     // Set only when resumable sessions were left out of this answer (#1292), so a client can tell a
     // partial list from a full one. A count and a reason, never a title, folder or path.
     public ResumableIncomplete? ResumableIncomplete { get; init; }
+    // Set when the host's agent launch switch is on (agents.enabled and agents.launch.enabled): a client may then offer the "May start agents" tick.
+    public bool? AgentLaunch { get; init; }
 }
 
 // Resumable sessions the host did not check in time. Reason is "deadline", the only value v1

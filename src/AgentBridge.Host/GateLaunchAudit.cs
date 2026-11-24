@@ -63,7 +63,7 @@ internal static class GateLaunchAudit
         {
             if ((denied = refusal?.Invoke()) is not null) { return null; }
             var gate = new GateAuditMetadata(1, operation, ingress.Run?.Run ?? Guid.Empty, 0, "intent",
-                ingress.Path, ingress.ActorKind, operation, "none", LaunchBinding: binding, CoordinatorRole: request.CoordinatorRole);
+                ingress.Path, ingress.ActorKind, operation, "none", LaunchBinding: binding, CoordinatorRole: request.CoordinatorRole, AgentScope: request.AgentScope);
             var intent = new AgentAuditEntry(ingress.Path == "relay" ? "in" : "local", id.ToString(),
                 ingress.Principal, [], "session.launch", id.ToString(), "reserved", Gate: gate) { Grant = ingress.Grant ?? (fleet ? "fleet" : null) };
             if (!audit.Append(intent))

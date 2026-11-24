@@ -79,6 +79,9 @@ public sealed class LaunchServiceOptions
     // The coordinator roles the person listed in agents.resume.roles, read when a launch names one. Null or empty: not checked (the role is
     // recorded and has no authority until a person lists it). Listed: a person's launch naming another role is a typo, refused with the list.
     public Func<IReadOnlyList<string>>? CoordinatorRoles { get; init; }
+    // Whether the machine's agent launch switch is on (agents.enabled and agents.launch.enabled). Null or false: off, so a launch cannot give a session the
+    // agent launch scope (the May start agents tick, #2777) and launch.options does not offer the tick.
+    public Func<bool>? AgentLaunchOn { get; init; }
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
     public bool HomeAssistantEnabled { get; init; }
     public Uri? HomeAssistantBaseUrl { get; init; }
@@ -417,6 +420,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Resumable = resumableList,
             Defaults = new LaunchDefaults { Agent = defaultAgent, Workspace = defaultWorkspace, Permissions = Config.Permissions },
             Busy = BusyReason(status: true),
+            AgentLaunch = options.AgentLaunchOn?.Invoke() == true ? true : null,
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
             ResumablePending = pending ? true : null,
             ResumableIncomplete = omitted is { Count: >= 1 } ? new ResumableIncomplete(omitted.Count, omitted.Reason) : null,
@@ -797,6 +801,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public bool IsFleetWorker(string session, SessionProcess? process) => provenance.IsFleetWorker(session, process);
     public bool WasFleetLaunched(string session) => provenance.WasFleetLaunched(session);
     public string? LaunchRole(string session) => provenance.RoleOf(session);
+    public string? LaunchAgentScope(string session) => provenance.ScopeOf(session);
     public LaunchConfig FleetConfig => Config;
 
     public Task<LaunchResult> LaunchAuditedAsync(LaunchRequest request, string peer, Func<Guid, Action<string>?> prepare,
@@ -889,7 +894,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null, string? CoordinatorRole = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null, string? CoordinatorRole = null, string? AgentScope = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -916,6 +921,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Only a person's launch gives a session a coordinator role: a new coordinator needs the owner (Nov 23 decision, item 2).
             if (request.CoordinatorRole is not null && (fleet || peer.StartsWith("agent:", StringComparison.Ordinal)))
             { return Refused("a coordinator role is for a person's launch, not an agent's or a script's"); }
+            if (request.AgentScope is not null && (fleet || peer.StartsWith("agent:", StringComparison.Ordinal)))
+            { return Refused("an agent scope is for a person's launch, not an agent's or a script's"); }
+            if (request.AgentScope is not null && options.AgentLaunchOn?.Invoke() != true)
+            { return Refused("agent launch is off on this machine (agents.launch.enabled), so a launch cannot give the session the agent launch scope"); }
             if (request.CoordinatorRole is { } named && options.CoordinatorRoles?.Invoke() is { Count: > 0 } listed && !listed.Contains(named, StringComparer.Ordinal))
             { return Refused($"'{named}' is not a coordinator role this machine lists in agents.resume.roles; use one of: {string.Join(", ", listed)}"); }
             var settings = string.Join(", ", new[] { ("agent", request.Agent), ("workspace", request.Workspace), ("resume", request.Resume), ("profile", request.Profile), ("model", request.Model), ("effort", request.Effort), ("context", request.Context), ("permissions", request.Permissions) }
@@ -1122,7 +1131,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role, r.CoordinatorRole), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role, r.CoordinatorRole, r.AgentScope), null);
     }
 
     // No account checker is a refusal, not a pass: production always wires one, and a launch must
@@ -1355,17 +1364,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             // A crash before registration must not turn an unbound launch into an adoptable process.
             provenance.Preparing(key, sessionId, fleet ? "fleet" : null,
-                provenance.RoleFor(plan.CoordinatorRole, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume);
+                provenance.RoleFor(plan.CoordinatorRole, agentPrincipal) ?? (restoring && plan.Resume is not null ? provenance.RoleKept(sessionId) : null), supersedes: fleetResume, scope: plan.AgentScope);
             // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
             var credentialIssued = false;
             if (credentials is not null && sessionId.Length > 0)
             {
-                try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
+                try { environment[Launchers.TokenVariable] = fleet ? credentials.PrepareFleet(sessionId, launchId) : plan.AgentScope is { } wider ? credentials.PrepareScoped(sessionId, launchId, wider) : credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
                 catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
                 {
                     log($"launch {Short(key)}: no agent credential was issued: {e.GetType().Name}");
                 }
             }
+            if (plan.AgentScope is not null && !credentialIssued) { provenance.Abandon(key); return Refused("the agent launch scope could not be given: no credential was issued for this session"); }
             if (fleet && !credentialIssued) { provenance.Abandon(key); return Refused("a read+reply fleet worker credential could not be issued"); }
             Started started;
             try { started = starter.Start(spec); created = null; }

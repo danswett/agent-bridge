@@ -16,7 +16,7 @@ internal sealed class LaunchProvenance
     readonly HashSet<Guid> superseding = [];
     bool unavailable;
     // Role: the launch's own role name (a coordinator's role, #4318), kept so a later caller is judged by what was recorded, never by a name.
-    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null);
+    sealed record Origin(string Session, SessionProcess? Process, string? Grant = null, string? Role = null, string? Scope = null);
 
     public LaunchProvenance(string? path, Action<string> log)
     {
@@ -29,7 +29,7 @@ internal sealed class LaunchProvenance
             if (stream.Length > MaxBytes) { throw new InvalidDataException(); }
             var stored = JsonSerializer.Deserialize<Dictionary<Guid, Origin>>(stream, Json)
                 ?? throw new InvalidDataException();
-            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Role is { } role && !RoleName.IsMatch(role) || o.Session is not { Length: <= 1024 } ||
+            if (stored.Values.Any(o => o is null || o.Grant is not (null or "fleet") || o.Role is { } role && !RoleName.IsMatch(role) || o.Scope is not (null or "read+reply+launch") || o.Session is not { Length: <= 1024 } ||
                 (o.Process is not null && (o.Session.Length == 0 || o.Process is not { Id: > 0, StartedAt: not null }
                     || o.Process.StartedAt == default(DateTimeOffset)))))
             { throw new InvalidDataException(); }
@@ -46,7 +46,7 @@ internal sealed class LaunchProvenance
 
     // supersedes: a fleet worker resumed in place (#4318): its earlier records go when this one is bound, and only if every one of
     // them is a fleet launch (a session a person ever launched is never taken over).
-    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null, bool supersedes = false)
+    public void Preparing(Guid request, string session = "", string? grant = null, string? role = null, bool supersedes = false, string? scope = null)
     {
         lock (gate)
         {
@@ -58,7 +58,7 @@ internal sealed class LaunchProvenance
                 { throw new InvalidOperationException("refused: only a fleet launch's own session is resumed in place"); }
                 superseding.Add(request);
             }
-            origins[request] = new(session, null, grant, role);
+            origins[request] = new(session, null, grant, role, scope);
             Save();
         }
     }
@@ -73,7 +73,7 @@ internal sealed class LaunchProvenance
         lock (gate)
         {
             Check();
-            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role);
+            var origin = new Origin(session, process, origins.GetValueOrDefault(request)?.Grant, origins.GetValueOrDefault(request)?.Role, origins.GetValueOrDefault(request)?.Scope);
             if (origins.GetValueOrDefault(request) == origin) { return; }
             origins[request] = origin;
             if (superseding.Remove(request))
@@ -135,6 +135,18 @@ internal sealed class LaunchProvenance
     // new session records no role at all, even its own: a coordinator is never minted by an agent. A role survives an agent's
     // action only on the same session resumed in place (RoleKept).
     public string? RoleFor(string? requested, string? agentPrincipal) => agentPrincipal is null ? requested : null;
+
+    // The agent launch scope a person's launch gave the session (the May start agents tick, #2777): the one value, or none; none when the records disagree.
+    public string? ScopeOf(string session)
+    {
+        lock (gate)
+        {
+            Check();
+            Unfinished(session);
+            var scopes = origins.Values.Where(o => string.Equals(o.Session, session, StringComparison.OrdinalIgnoreCase)).Select(o => o.Scope).Distinct().ToArray();
+            return scopes is [{ } scope] ? scope : null;
+        }
+    }
 
     // The role a resumed or restored session keeps (#4318): what its own earlier record says, so a resume never drops the role it
     // is judged by. None when unknown or unreadable.
