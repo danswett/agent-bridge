@@ -1,14 +1,8 @@
-From 5346bb1af1648a03dbce7ebf961ddc8f145ce370 Mon Sep 17 00:00:00 2001
+From eebb658c3e446efb1cedaa6bb63ae54d41b07616 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 20:15:40 -0800
-Subject: [PATCH] CI S2, piece 6a2: FULL self-tests the packed app on both
- architectures (additive; Part of #4104)
+Date: Mon, 23 Nov 2026 21:33:12 -0800
+Subject: [PATCH] scratch 6a2
 
-app-selftest (win-x64, win-arm64) starts the app from the publish folder app-pack uploaded in the same run (no run-id: never another run's bytes), in demo
-mode, as ci.yml's app job does. x64's failure fails the job and holds the release. Arm64 gets one retry (#2026) and the job still fails when the retry
-fails too: full-gate will waive Arm64's self-test (owner, #2454) and full-red's issue names it, so it is never silent. full-gate needs the job. Tests first.
-
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .github/workflows/full.yml                    | 56 ++++++++++++++++++-
  quality/catalog.yml                           |  4 +-
@@ -87,10 +81,10 @@ index 3f61e9c13..cf77b8556 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index 965e2801d..229cfd269 100644
+index 075cca234..aef468381 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1199,11 +1199,11 @@ suites:
+@@ -1230,11 +1230,11 @@ suites:
      ring: 2
      select: always
      # The release train's packages (S2, #4104, piece 6a): FULL publishes, packs (Velopack) and records the installer input and SBOM of the Windows app on both
@@ -105,7 +99,7 @@ index 965e2801d..229cfd269 100644
      status: exists
    # ---------------------------------------------------------------- live, on disposable machines
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 0c47b0c70..e97446391 100644
+index 0a69625a1..574caeea9 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -126,7 +120,7 @@ index 0c47b0c70..e97446391 100644
              Assert.Equal("needs.trigger.outputs.ok == 'true'", Expression(Scalar(job, "if")));
          }
          foreach (var (id, job) in jobs.Children)
-@@ -191,4 +191,34 @@ public class FullWorkflowTests
+@@ -192,4 +192,34 @@ public class FullWorkflowTests
          Assert.DoesNotContain("github.run_number", AllText(job), StringComparison.Ordinal);
          Assert.Contains("-Commit $env:SHA -RunId '${{ github.run_id }}'", AllText(job), StringComparison.Ordinal);
      }
