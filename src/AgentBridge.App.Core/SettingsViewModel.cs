@@ -321,7 +321,16 @@ public sealed partial class SettingsViewModel : Observable
     // agentMessaging.scope (docs/design/beta-messaging.md section 3): on is same-person, off is off. Only this person-pressed
     // control writes it; the host refuses any other caller, and a kill (agentMessaging.remote off) keeps it off, which the
     // host reports as a refused change. Disabled while the host does not report a scope (an older host).
-    public bool CanChangeAgentMessaging => HostRunning && host.Can(HostOps.Capability) && !Busy && Status?.Settings.AgentMessagingScope is "same-person" or "off";
+    public bool CanChangeAgentMessaging => HostRunning && host.Can(HostOps.Capability) && !Busy && Status?.Settings.AgentMessagingScope is "same-person" or "off"
+        && Status.Settings.AgentMessagingOffBy is null;
+
+    // What the toggle cannot say itself: loading or an older host is not "off", and a kill that keeps messaging off is named with the key that clears it.
+    public string AgentMessagingStatus => Status is not { } s ? "Checking this machine's setting"
+        : s.Settings.AgentMessagingOffBy == "kill" ? "Off: a kill is recorded on this machine and agentMessaging.remote is not own-account. Only a person at the machine can turn it back on."
+        : s.Settings.AgentMessagingScope switch { "same-person" => "On", "off" => "Off", _ => "Unknown: this host does not report the setting" };
+
+    // Asked before turning messaging off, which cuts every agent's messages at once; null where nothing can ask (tests).
+    public Func<Task<bool>>? ConfirmAgentMessagingOff { get; set; }
     public bool AgentMessagingSamePerson
     {
         get => Status?.Settings.AgentMessagingScope == "same-person";
@@ -331,6 +340,11 @@ public sealed partial class SettingsViewModel : Observable
             var scope = value ? "same-person" : "off";
             _ = RunAsync(async () =>
             {
+                if (!value && ConfirmAgentMessagingOff is { } confirm && !await confirm())
+                {
+                    Raise(nameof(AgentMessagingSamePerson));
+                    return;
+                }
                 var saved = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(AgentMessagingScope: scope));
                 if (saved.Settings.AgentMessagingScope != scope) { throw new InvalidOperationException("The host did not save the agent messaging scope."); }
                 await host.RefreshStatusAsync();

@@ -2101,6 +2101,64 @@ public sealed class SettingsTests : IAsyncLifetime
         finally { page.Detach(); }
     }
 
+    [Theory]
+    [InlineData(null, "Unknown")]
+    [InlineData("off", "Off")]
+    [InlineData("same-person", "On")]
+    public async Task The_agent_messaging_line_says_unknown_for_a_host_that_reports_nothing_and_never_writes_on_load(string? scope, string line)
+    {
+        await using var other = new FakeHost { Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, AgentMessagingScope: scope) } };
+        other.Start();
+        await using var connection = other.Connect(ui);
+        var page = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        try
+        {
+            await Wait.UntilAsync(() => page.HostRunning, "the host");
+            page.AgentMessagingSamePerson = page.AgentMessagingSamePerson;
+            await connection.CallAsync(FakeHost.Barrier);
+
+            Assert.StartsWith(line, page.AgentMessagingStatus);
+            Assert.Empty(other.Sent(HostOps.Settings));
+        }
+        finally { page.Detach(); }
+    }
+
+    [Fact]
+    public async Task A_kill_that_keeps_messaging_off_disables_the_toggle_and_names_why()
+    {
+        host.Status = host.Status with { Settings = new HostSettingsView(true, AgentMessagingScope: "off", AgentMessagingOffBy: "kill") };
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.HostRunning, "the host");
+
+        Assert.False(settings.CanChangeAgentMessaging);
+        Assert.Contains("a kill is recorded", settings.AgentMessagingStatus);
+        Assert.Contains("agentMessaging.remote", settings.AgentMessagingStatus);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Turning_agent_messaging_off_asks_first_and_writes_only_when_confirmed(bool confirmed)
+    {
+        host.Status = host.Status with { Settings = new HostSettingsView(true, AgentMessagingScope: "same-person") };
+        host.On(HostOps.Settings, data =>
+        {
+            host.Status = host.Status with { Settings = host.Status.Settings with { AgentMessagingScope = data.GetProperty("agentMessagingScope").GetString() } };
+            return new SettingsResult(host.Status.Settings, RestartRequired: false);
+        });
+        await ConnectedWith(host.Status);
+        await Wait.UntilAsync(() => settings.CanChangeAgentMessaging, "the agent messaging control");
+        var asked = 0;
+        settings.ConfirmAgentMessagingOff = () => { asked++; return Task.FromResult(confirmed); };
+
+        settings.AgentMessagingSamePerson = false;
+        await Wait.UntilAsync(() => asked == 1 && !settings.Busy, "the question");
+        await connection.CallAsync(FakeHost.Barrier);
+
+        Assert.Equal(confirmed ? 1 : 0, host.Sent(HostOps.Settings).Count);
+        Assert.Equal(!confirmed, settings.AgentMessagingSamePerson);
+    }
+
     [Fact]
     public async Task A_refused_agent_messaging_save_shows_the_error_and_keeps_the_hosts_scope()
     {

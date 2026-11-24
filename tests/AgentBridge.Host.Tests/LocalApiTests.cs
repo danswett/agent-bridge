@@ -111,7 +111,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             PrepareStop = () => prepareStop(),
             Restart = () => Interlocked.Increment(ref restarts),
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
-        });
+        }, m => { lock (logged) { logged.Add(m); } });
         authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
         server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
         owned.Add(server);
@@ -694,6 +694,75 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { agentMessagingScope = scope, name = "not saved" }));
 
         Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    // A recorded kill with no agentMessaging.remote own-account keeps messaging dead whatever the file says, so the app is told off and why (#4520's hazard:
+    // a toggle showing on over dead messaging).
+    [Theory]
+    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true}}""", "kill")]
+    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true,"scope":"same-person"}}""", "kill")]
+    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true,"scope":"off"}}""", null)]
+    [InlineData("""{"agentMessaging":{"remote":"own-account"}}""", null)]
+    public async Task A_recorded_kill_is_reported_as_off_with_its_reason_and_an_own_account_key_is_not_a_kill(string config, string? offBy)
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), config);
+        File.WriteAllText(Path.Combine(profile, "lite-kill-epoch.json"), """{"epoch":1700000000}""");
+        var ch = await ConnectAsync();
+
+        var view = (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings;
+
+        Assert.Equal(config.Contains("own-account") ? "same-person" : "off", view.AgentMessagingScope);
+        Assert.Equal(offBy, view.AgentMessagingOffBy);
+    }
+
+    [Theory]
+    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true}}""")]
+    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true,"scope":"off"}}""")]
+    public async Task Turning_messaging_on_after_a_recorded_kill_with_no_remote_key_is_refused_and_leaves_the_file_as_it_was(string config)
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, config);
+        File.WriteAllText(Path.Combine(profile, "lite-kill-epoch.json"), """{"epoch":1700000000}""");
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "same-person" }));
+
+        Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    List<string> ScopeLines() { lock (logged) { return logged.Where(l => l.Contains("agent messaging scope")).ToList(); } }
+
+    [Fact]
+    public async Task A_scope_change_by_the_app_logs_exactly_one_line_and_the_same_scope_again_writes_and_logs_nothing()
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, """{"agentMessaging":{"remote":"own-account"}}""");
+        var ch = await ConnectAsync();
+
+        await ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "off" });
+        Assert.Equal(["agent messaging scope changed by the app: off"], ScopeLines());
+        var written = File.ReadAllBytes(path);
+        var stamp = File.GetLastWriteTimeUtc(path);
+
+        await ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "off" });
+
+        Assert.Single(ScopeLines());
+        Assert.Equal(written, File.ReadAllBytes(path));
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
+    }
+
+    [Fact]
+    public async Task A_scope_write_that_fails_logs_the_failure_and_not_a_change()
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), "{ not json");
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "same-person" }));
+
+        var lines = ScopeLines();
+        Assert.Single(lines);
+        Assert.StartsWith("agent messaging scope not changed by the app:", lines[0]);
+        Assert.DoesNotContain(lines, l => l.Contains("changed by the app: off"));
     }
 
     [Theory]

@@ -150,10 +150,12 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // PhoneSignIn: permissions.phoneSignIn, signing an agent in from a person's device (#972).
 // FleetLaunchRule: fleetNames.launchRule, on or off, read fresh for each launch; null from older hosts.
 // AgentMessagingScope: the effective agentMessaging scope (docs/design/beta-messaging.md section 3), same-person or off,
-// read fresh for each message; null from older hosts.
+// read fresh for each message, with the kill epoch and agentMessaging.remote counted in; null from older hosts.
+// AgentMessagingOffBy: why messaging is off although the config does not ask for it: "kill" when a recorded kill with no
+// agentMessaging.remote own-account keeps it off (only a person at the machine sets that key); null otherwise.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
     bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true, string? FleetLaunchRule = null,
-    string? AgentMessagingScope = null)
+    string? AgentMessagingScope = null, string? AgentMessagingOffBy = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
@@ -163,7 +165,8 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
         && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
-        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && (AgentMessagingScope ?? "same-person") == (other.AgentMessagingScope ?? "same-person");
+        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && (AgentMessagingScope ?? "same-person") == (other.AgentMessagingScope ?? "same-person")
+        && AgentMessagingOffBy == other.AgentMessagingOffBy;
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
