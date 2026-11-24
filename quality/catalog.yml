@@ -1165,7 +1165,8 @@ suites:
     ring: 4
     select: always
     # By hand on main with use_ab_ci: proves an ab-ci runner's environment as the runner (PATH, NuGet mirror, a
-    # Release build), before AB_CI_SELF_HOSTED is set again (#4104).
+    # Release build, and the tests that failed only there: HostManagerTests and EfficiencyActiveSessionTests, of
+    # which 2 of 3 run, the third being quarantined in issue 3121), before AB_CI_SELF_HOSTED is set again (#4104).
     platforms: [win-x64]
     runner: lab
     command: see ab-ci-smoke.yml smoke

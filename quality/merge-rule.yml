@@ -124,6 +124,18 @@ main_green:
       - Post Run actions/checkout@*
       - Run actions/setup-node@*
       - .NET for the installer input quality harness
+    # The jobs split out of light (#4340): the same setup and teardown steps, never the checks themselves.
+    design-gen:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
+      - Run actions/setup-node@*
+    playwright-apt:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success

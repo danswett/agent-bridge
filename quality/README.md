@@ -309,10 +309,12 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    **A main run records what it relied on (#2454).** Its plan job emits the notice annotation
    `plan-base: base=<sha> relied-parent=<sha|none>`: the commit the run diffed from, and the in-flight
-   parent run it counted on to test only its own change. The judges (the merge rule, main_green and the
-   train selector) read it, so a run counts green only if what it relied on is green too. Today every run
-   records `relied-parent=none`: it diffs from a passed base. The record comes first, the judges next, and the
-   first-parent shortcut that makes a run rely on its parent last, so nothing changes until the judges honour it.
+   parent run it counted on to test only its own change. Today only `build/select-release-commit.ps1` reads it; the
+   merge rule, main_green and the train selector will read it, so a run counts green only if what it relied on is green
+   too. Today every run records `relied-parent=none`: a run with a proven base diffs from a passed base, and a run
+   with no proven base (the whole ring runs) records the first parent it diffed from without vouching for it. The record
+   comes first, the judges next, and the first-parent shortcut that makes a run rely on its parent last, so nothing
+   changes until the judges honour it.
 
    **Packaging needs an app reason over a known range (#1910).** Pull requests and main pushes
    with a proven base pass

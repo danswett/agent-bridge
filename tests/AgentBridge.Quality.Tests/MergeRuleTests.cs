@@ -558,6 +558,17 @@ public class MergeRuleTests
         Assert.Equal(state, verdict.State);
     }
 
+    // #4558: a failed checkout or setup in a job split out of light is excused after one rerun, as light's is; a step that runs the checks never is.
+    [Theory]
+    [InlineData("design-gen", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*", "Run actions/setup-node@*" })]
+    [InlineData("playwright-apt", new[] { "Set up job", "Complete job", "Run actions/checkout@*", "Post Run actions/checkout@*" })]
+    public void The_jobs_split_out_of_light_excuse_only_their_setup_and_teardown_steps(string job, string[] steps)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        Assert.Equal(steps, config.MainGreen.InfraSteps[job]);
+    }
+
     [Fact]
     public void Sensitive_paths_match_whatever_the_case() =>
         Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);
