@@ -84,7 +84,7 @@ public class WatchDigestTests
     {
         string Name(string? l) => Names(WatchDigest.Compose([N(WatchRule.Prompt, "a")], _ => l!)!.Value.Body);
         Assert.Equal("a b c d", Name("a" + (char)0x202E + "b" + (char)13 + (char)10 + "c" + (char)7 + "d"));
-        Assert.Equal("evil name", Name(((char)0x202E) + "evil" + (char)0x2066 + " name" + (char)0x200F));
+        Assert.Equal("evil name", Name(((char)0x202E) + "evil" + (char)0x2066 + " name" + (char)0x200F + (char)0x200E + (char)0x061C + (char)0x202A + (char)0x2069 + (char)0x202D));
         Assert.Equal("a session", Name(""));
         Assert.Equal("a session", Name("   " + (char)0x202E + " "));
         Assert.Equal("a session", Name(null));
