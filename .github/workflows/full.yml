@@ -34,7 +34,7 @@ jobs:
       actions: read
       contents: read
     outputs:
-      sha: ${{ steps.commit.outputs.sha }}
+      tested: ${{ steps.commit.outputs.tested }}
       ok: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
     steps:
       # The commit every other job checks out, and the only place a commit is decided. A workflow_run's is read from the CI run itself through the API (by its number), not taken from
@@ -59,7 +59,7 @@ jobs:
             sha=$REF_SHA
           fi
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "the commit under test is not 40 lowercase hex characters"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tested=$sha" >> "$GITHUB_OUTPUT"
           echo "FULL lane for commit $sha" >> "$GITHUB_STEP_SUMMARY"
 
   spikes:
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.trigger.outputs.sha }}
+          ref: ${{ needs.trigger.outputs.tested }}
           persist-credentials: false
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
@@ -128,7 +128,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.trigger.outputs.sha }}
+          ref: ${{ needs.trigger.outputs.tested }}
           persist-credentials: false
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:

@@ -8,7 +8,7 @@ namespace AgentBridge.Quality.Tests;
 /// </summary>
 public class FullWorkflowTests
 {
-    const string Sha = "${{ needs.trigger.outputs.sha }}";
+    const string Sha = "${{ needs.trigger.outputs.tested }}";
 
     static string Root => ChangedFiles.RepoRoot(AppContext.BaseDirectory);
 
@@ -126,7 +126,7 @@ public class FullWorkflowTests
         var step = ((YamlSequenceNode)trigger["steps"]).Children.OfType<YamlMappingNode>().Single(s => s.Children.ContainsKey("id") && Scalar(s, "id") == "commit");
         var script = Scalar(step, "run");
 
-        Assert.Equal("${{ steps.commit.outputs.sha }}", Scalar(trigger["outputs"], "sha"));
+        Assert.Equal("${{ steps.commit.outputs.tested }}", Scalar(trigger["outputs"], "tested"));
         Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
         foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
             Assert.Contains(part, script, StringComparison.Ordinal);
@@ -175,7 +175,7 @@ public class FullWorkflowTests
         foreach (var job in ((YamlMappingNode)Load(".github/workflows/full.yml")["jobs"]).Children.Where(j => j.Key.ToString() != "trigger"))
             foreach (var checkout in ((YamlSequenceNode)((YamlMappingNode)job.Value)["steps"]).Children.OfType<YamlMappingNode>()
                          .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal)))
-                Assert.Equal("${{ needs.trigger.outputs.sha }}", Scalar(checkout["with"], "ref"));
+                Assert.Equal("${{ needs.trigger.outputs.tested }}", Scalar(checkout["with"], "ref"));
     }
 
     [Fact]
