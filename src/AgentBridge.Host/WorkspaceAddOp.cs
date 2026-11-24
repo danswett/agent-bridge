@@ -7,7 +7,8 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host;
 
 // host.workspace.add (docs/protocol/local-pipe.md): the person in the app approves a folder for launching, with no terminal. The same check as
-// `workspace add`, answered as a closed code, every outcome audited. Who may call it is LocalApi's guard. Workspaces are read at start, so it applies after a restart.
+// `workspace add`, answered as a closed code, every outcome audited. Who may call it is LocalApi's guard. The new workspace is applied to the running
+// host at once, only when config.json reads back clean, and otherwise (or where the host cannot) the answer says it takes a restart.
 internal static class WorkspaceAddOp
 {
     public const string InvalidRequest = "invalid-request";
@@ -15,7 +16,7 @@ internal static class WorkspaceAddOp
     const int MaxPath = 4096;
 
     // HostControl holds its settings gate across the read, check, write and audit.
-    public static object Handle(string folder, JsonElement data, Action<string> log)
+    public static object Handle(string folder, JsonElement data, Action<string> log, Action<IReadOnlyList<WorkspaceConfig>>? apply = null)
     {
         string path = "";
         string? label = null;
@@ -26,10 +27,23 @@ internal static class WorkspaceAddOp
         {
             var added = WorkspaceApproval.Add(folder, path, label, isolate: false, Folders.IsSystemDirectory);
             if (added.Code != WorkspaceApproval.Added) { return Refused(added.Code, log); }
-            log($"local pipe: {HostOps.WorkspaceAdd} approved {JsonSerializer.Serialize(added.Label)} at {JsonSerializer.Serialize(added.Path)} by the local app");
-            return new { result = "added", label = added.Label, path = added.Path, restartRequired = true };
+            var live = false;
+            if (apply is not null)
+            {
+                var (loaded, problem) = HostSettings.Load(folder);
+                if (problem is null && loaded.LaunchProblems.Count == 0 && !loaded.SectionProblems.Any()) { live = Apply(apply, loaded.Launch.Workspaces); }
+            }
+            log($"local pipe: {HostOps.WorkspaceAdd} approved {JsonSerializer.Serialize(added.Label)} at {JsonSerializer.Serialize(added.Path)} by the local app ({(live ? "applied now" : "applies after a restart")})");
+            return new { result = "added", label = added.Label, path = added.Path, restartRequired = !live };
         }
         catch (JsonException) { return Refused(ConfigUnreadable, log); }
+    }
+
+    // The folder is already saved, so a host that fails to take it live still answers approved, and says it takes a restart.
+    static bool Apply(Action<IReadOnlyList<WorkspaceConfig>> apply, IReadOnlyList<WorkspaceConfig> workspaces)
+    {
+        try { apply(workspaces); return true; }
+        catch (Exception) { return false; }
     }
 
     static object Refused(string code, Action<string> log)

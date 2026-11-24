@@ -252,11 +252,16 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             () => new LaunchResult(LaunchOutcome.Busy, "the host is preparing a departure"));
         trustAnswers = new OutcomeMemory<TrustAnswerResult>(options.Time, options.RememberFor, deliveryGate,
             () => new TrustAnswerResult(TrustAnswerOutcome.Refused, "the host is preparing a departure"));
+        config = options.Config;
         remoteFolderTrust = options.Config.RemoteFolderTrust;
         TrustDevices = options.Config.RemoteFolderTrustDevices;
     }
 
-    LaunchConfig Config => options.Config;
+    // The launch configuration as it is now: config.json's at start, with the approved workspaces replaced as the person approves one
+    // (SetWorkspaces), so a new folder is launchable at once. A launch reads it through this property, never a copy held across a call.
+    LaunchConfig config;
+    LaunchConfig Config => Volatile.Read(ref config);
+    public void SetWorkspaces(IReadOnlyList<WorkspaceConfig> workspaces) => Volatile.Write(ref config, Config with { Workspaces = workspaces });
     public IReadOnlyList<LaunchStatus> LaunchStatuses() => statusLedger.Read();
     public void PublishAlias(string principal, string request, LaunchRequest source, LaunchResult result)
     {

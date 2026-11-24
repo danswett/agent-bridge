@@ -1405,7 +1405,7 @@ Settings has a group, "Folders Slipgates may start sessions in", with an **Add f
 offers `host.workspaces` (docs/protocol/local-pipe.md, `host.workspace.add`): it opens the folder picker, shows
 the full path in a confirmation (Cancel is the default) saying that agents started there can read and change
 its files, and only Approve asks the host. The host makes the same check as `agent-bridge-host workspace add`
-and a new folder applies after the host restarts. No terminal is needed.
+and a new folder is launchable at once, without a restart. No terminal is needed.
 
 The Windows delegate strip reserves 20 DIPs below each item and its overflow footer:
 16 for the expanded horizontal scrollbar and 4 for focus clearance
