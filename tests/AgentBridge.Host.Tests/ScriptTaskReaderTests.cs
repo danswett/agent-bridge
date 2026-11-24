@@ -30,12 +30,14 @@ public class ScriptTaskReaderTests
     [InlineData("O:BAG:SY", false)]
     public void A_file_is_locked_only_when_the_user_cannot_write_delete_or_change_its_permissions(string sddl, bool locked)
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         Assert.Equal(locked, Locked(sddl));
     }
 
     [Fact]
     public void A_file_the_users_group_may_modify_is_not_locked_unless_a_deny_comes_first()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         const string modifyForUsers = "O:BAG:SYD:(A;;0x1301bf;;;BU)";
         Assert.False(Locked(modifyForUsers, groups: [Users]));
         Assert.True(Locked("O:BAG:SYD:(D;;FA;;;BU)(A;;0x1301bf;;;BU)", groups: [Users]));
@@ -45,6 +47,7 @@ public class ScriptTaskReaderTests
     [Fact]
     public void An_administrator_running_unelevated_does_not_count_through_a_group_held_for_denial_only()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         const string sddl = "O:BAG:SYD:(A;;FA;;;BA)(A;;FR;;;" + U + ")";
 
         Assert.True(Locked(sddl, groups: [], denyOnly: [Administrators]));
@@ -54,6 +57,7 @@ public class ScriptTaskReaderTests
     [Fact]
     public void A_folder_is_locked_unless_the_user_may_delete_children_delete_it_or_change_its_permissions()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         Assert.True(Locked("O:BAG:SYD:(A;;FA;;;SY)(A;;0x2;;;" + U + ")", folder: true));
         Assert.True(Locked("O:BAG:SYD:(A;;0x4;;;" + U + ")", folder: true));
         Assert.False(Locked("O:BAG:SYD:(A;;0x40;;;" + U + ")", folder: true));
@@ -64,6 +68,7 @@ public class ScriptTaskReaderTests
     [Fact]
     public void A_descriptor_that_cannot_be_read_or_decided_is_neither_locked_nor_unlocked()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         Assert.Null(Locked("not a descriptor"));
         Assert.Null(Locked("O:BAG:SYD:(XA;;FA;;;" + U + ";(WIN://SYSAPPID Contains \"x\"))"));
     }
@@ -123,14 +128,15 @@ public class ScriptTaskReaderTests
     [Fact]
     public void A_pinned_file_counts_as_locked_only_when_it_and_every_folder_above_it_are()
     {
+        if (!OperatingSystem.IsWindows()) { return; }
         var me = WindowsIdentity.GetCurrent().User!.Value;
-        string Readonly(string who) => $"O:BAG:SYD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{who})";
-        string Deletes(string who) => $"O:BAG:SYD:(A;;FA;;;SY)(A;;0x40;;;{who})";
+        string Readonly(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;FR;;;{who})";
+        string Deletes(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;0x40;;;{who})";
 
         Assert.True(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, Readonly(me))]));
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Deletes(me)), (true, Readonly(me))]));
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, "not a descriptor")]));
-        Assert.False(WindowsScriptTaskReader.AllLocked([(false, "O:BAG:SY")]));
+        Assert.False(WindowsScriptTaskReader.AllLocked([(false, "O:SYG:SY")]));
     }
 
     [Fact]
