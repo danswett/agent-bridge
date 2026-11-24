@@ -9,6 +9,14 @@ namespace AgentBridge.App.Tests;
 // The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, but never of the test process itself:
 // MiniDumpWriteDump of the process that is running other tests can deadlock with their threads and kill the test host (#4351). The real
 // dump is of a child process; every other case replaces the dump with a fake that only records the call.
+//
+// The hang dump is MiniDumpNormal: thread stacks and modules, no heap. It is written for real here, from the test process itself.
+// MiniDumpWriteDump on its own process suspends its other threads, which Microsoft warns can deadlock, and this assembly's test host
+// hung on CI three times with this class in flight in one: so it runs ALONE, in a collection with no parallelism (xunit runs it after
+// the parallel ones have finished), and keeps its coverage. QuarantineTests lists it. That removes one suspected cause of the hang.
+// The four lines just above, which say the dump is of the test process itself, are stale since #4351: no test dumps the test host any more, so running
+// alone is redundant for the dump. The collection stays because QuarantineTests pins this list; the class is not removed from it.
+[Collection(nameof(WindowsMiniDumpTests))]
 public sealed class WindowsMiniDumpTests : IDisposable
 {
     int dumps;
@@ -115,3 +123,6 @@ public sealed class ResumeNotifierTests
         Assert.False(notifier.Registered);
     }
 }
+
+[CollectionDefinition(nameof(WindowsMiniDumpTests), DisableParallelization = true)]
+public sealed class WindowsMiniDumpCollection;
