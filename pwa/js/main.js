@@ -31,6 +31,7 @@ import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js'
 import { accountStore, startDeviceFlow } from './signin.js';
 import { sentImages } from './sent-images.js';
 import { BridgeConnection } from './connection.js';
+import { signedOutText } from './device-approval.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
 import { Reading } from './reading.js';
@@ -1073,7 +1074,7 @@ function begin(account) {
       default: return setPill(state);
     }
   });
-  connection.on('signed-out', () => {
+  connection.on('signed-out', (closed) => {
     void sentImages.clear();
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
@@ -1097,7 +1098,7 @@ function begin(account) {
     connection.stop();
     // This account's machines must not go on notifying this device.
     notices.forget().catch(() => {});
-    showSignIn('The relay no longer accepts this sign-in. Sign in again.');
+    showSignIn(signedOutText(closed));
   });
   $('use-here').onclick = () => connection.start();
 

@@ -15,7 +15,7 @@ const mac = async (secret, ...parts) => {
 
 // A relay's end of the socket: early, it sends the challenge as the socket opens when asked to.
 // Every message either way is noted, in order, to count round trips after the opening.
-function fakeRelay({ early, feedback = 0 }) {
+function fakeRelay({ early, feedback = 0, roster = null, presence = null }) {
   const flights = [];
   const relay = { flights, url: null, proofOk: null, feedbackRequest: null, socket: null, frames: [] };
   class FakeSocket {
@@ -57,6 +57,11 @@ function fakeRelay({ early, feedback = 0 }) {
         this.#reply(relay.proofOk
           ? { t: 'ready', device, account: '1', login: 'octo', ...(feedback ? { feedback: { max: feedback } } : {}) }
           : { t: 'refused' });
+        if (relay.proofOk && presence) { this.#reply({ t: 'presence', ...presence }); }
+      } else if (m.t === 'roster-get') {
+        relay.rosterAsked = (relay.rosterAsked ?? 0) + 1;
+        // A pending device's roster-get gets no answer at all (the relay ignores it).
+        if (roster) { this.#reply({ t: 'roster', id: m.id, mode: roster, generation: null, entries: [] }); }
       } else if (m.t === 'feedback-put') {
         relay.feedbackRequest = m;
         this.#reply({ t: 'feedback-result', id: m.id, url: 'https://blob.example/once', expires: '2026-11-07T01:00:00Z' });
@@ -128,3 +133,52 @@ test('a probe goes to this device itself, which the relay routes back, and its e
   await new Promise((resolve) => { setTimeout(resolve, 10); });
   assert.deepEqual(data, [], 'the echo is not handed on');
 });
+
+async function connectTo(t, options) {
+  const { relay, FakeSocket } = fakeRelay({ early: true, ...options });
+  const real = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket;
+  t.after(() => { globalThis.WebSocket = real; });
+  const key = await P256KeyPair.generate();
+  const r = new Relay({ base: 'https://relay.example', key, deviceId: await deviceIdOf(key.public), name: 'Phone' });
+  const seen = [];
+  r.onPresence = (devices, known, pending) => seen.push({ devices, known, pending });
+  await r.connect('token');
+  return { r, relay, seen };
+}
+
+test('the relay roster reply gives the account mode, matched to its request', async (t) => {
+  const { r, relay } = await connectTo(t, { roster: 'enforce' });
+
+  const answer = await r.rosterGet();
+
+  assert.deepEqual(answer, { mode: 'enforce' });
+  assert.equal(relay.rosterAsked, 1);
+});
+
+test('a roster request the relay never answers (a pending device) ends as no answer, not as an error or a hang', async (t) => {
+  const { r } = await connectTo(t, {});
+
+  assert.equal(await r.rosterGet(50), null);
+  assert.equal(r.busy, false);
+});
+
+test('a presence with nothing but pending is passed on as pending, and an ordinary one is not', async (t) => {
+  const pending = await connectTo(t, { presence: { devices: [], pending: true } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(pending.seen, [{ devices: [], known: null, pending: true }]);
+
+  const ordinary = await connectTo(t, { presence: { devices: [{ id: 'a'.repeat(32), name: 'Laptop', kind: 'host' }] } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(ordinary.seen[0].pending, false);
+});
+
+test('a roster request still waiting when the socket closes ends at once as no answer and leaves no timer running', async (t) => {
+  const { r, relay } = await connectTo(t, {});
+
+  const waiting = r.rosterGet(600000);
+  relay.socket.onclose({ code: 1006, reason: 'lost' });
+
+  assert.equal(await waiting, null);
+});
+
