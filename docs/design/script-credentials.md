@@ -260,7 +260,7 @@ revocable at the machine in one app press.
 * **Where it lives.** One owner-only file per script, outside session folders and the profile
   bundle area, wrapped by the platform's user-bound protection (DPAPI on Windows), the same
   rules as agent-token-rotation.md §1. The host keeps only the hash.
-* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design):** how that
+* **How a script gets it.** The script reads **its own file**. **OPEN (#1414 design; proposal: [script-credentials-run.md](script-credentials-run.md), the `script-run` launcher):** how that
   path reaches the script now that no terminal step may set it (a per-script path the host reports
   to the app, or a fixed per-profile location the script derives). It is not put in any session's environment, and the
   `set-agent-ha-token.ps1` approach of setting a per-VM environment variable is not repeated:

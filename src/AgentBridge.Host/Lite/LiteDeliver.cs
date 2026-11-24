@@ -144,7 +144,10 @@ public sealed class LiteDeliver(
         if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
-        var framed = Frame(body.Principal, body.Request, safe);
+        // An older order that comes after a newer one from the same sender is still typed, and says so (#4435). The time is when the sender
+        // first asked to send, which a busy retry keeps, never when this envelope was sealed.
+        var sent = envelope.SentAt ?? body.IssuedAt;
+        var framed = Frame(body.Principal, body.Request, safe, IsStale(peer, id, sent) ? sent : null, envelope.SentAtIgnored);
         // The prompt this types is the sender's: armed, once the typing slot is held and the keys are
         // about to go, with the exact words and a label from the verified principal, never from the body,
         // so userMessageFrom=agent is set by the host alone. A delivery that typed nothing (refused,
@@ -192,6 +195,7 @@ public sealed class LiteDeliver(
         try { result = await replier.ReplyAsync(reply, null, ct); }
         catch { Unarm(); Record(null); throw; }
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
+        else { Delivered(peer, id, sent); }
         Record(result);
         return result.Outcome switch
         {
@@ -320,11 +324,37 @@ public sealed class LiteDeliver(
     static string? SenderLabel(AgentPrincipal from) => Limits.KeepStart(
         from.Kind == "script" ? $"script {Clean(from.SenderId)}" : $"{Clean(from.Session)} on {Clean(from.Machine)}", Limits.UserMessageLabel);
 
-    // The provenance line: who sent it, from where, and that the user did not type it.
-    static string Frame(AgentPrincipal from, string request, string escaped) =>
-        from.Kind == "script"
-            ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)} · not typed by your user] {escaped}"
-            : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)} · not typed by your user] {escaped}";
+    // The newest sent time typed to each session by each sender, in memory for this host run (a restart forgets it, which marks fewer
+    // messages, never more). Equal times are not stale. Past the cap it starts again rather than grow.
+    readonly Dictionary<(string Sender, string Session), long> newest = [];
+    const int MaxNewest = 4096;
+
+    bool IsStale(string sender, string session, long sent)
+    {
+        lock (newest) { return newest.TryGetValue((sender, session), out var seen) && sent < seen; }
+    }
+
+    void Delivered(string sender, string session, long sent)
+    {
+        lock (newest)
+        {
+            if (newest.Count >= MaxNewest && !newest.ContainsKey((sender, session))) { newest.Clear(); }
+            newest[(sender, session)] = newest.TryGetValue((sender, session), out var seen) ? Math.Max(seen, sent) : sent;
+        }
+    }
+
+    static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+
+    // The provenance line: who sent it, from where, and that the user did not type it. A stale one also says when it was sent.
+    static string Frame(AgentPrincipal from, string request, string escaped, long? staleSent = null, bool sendTimeIgnored = false)
+    {
+        var stale = staleSent is { } at
+            ? $" · STALE: sent {TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(at), Pacific):HH:mm} PT, a newer message from this sender was delivered first" : "";
+        if (sendTimeIgnored) { stale += " · send time not given"; }
+        return from.Kind == "script"
+            ? $"[{Brand} · from script {Clean(from.SenderId)} · request {Clean(request)}{stale} · not typed by your user] {escaped}"
+            : $"[{Brand} · from an agent on {Clean(from.Machine)} · session {Clean(from.Session)} · request {Clean(request)}{stale} · not typed by your user] {escaped}";
+    }
 
     // Nothing in the body may pass as part of the header or as a key or an attachment.
     static string Escape(string text)
