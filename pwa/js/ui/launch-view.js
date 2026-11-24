@@ -126,6 +126,7 @@ export class LaunchPanel {
   // with nothing else on this page changing.
   #others = [];
   #probeTimer = null;
+  #probeVisibility = null;
   #target = null;
   #options = null;
   // When #options was read from its machine (ms), for the age shown beside them.
@@ -175,6 +176,7 @@ export class LaunchPanel {
   #alive = new AbortController();
   // The jump to a session's card still waiting for it to arrive (#jumpTo).
   #jumpTimer = null;
+  #jumpVisibility = null;
   // By machine, the launch shown as started since its unconfirmed outcome: { request, session },
   // its session's id when it is known: the one its outcome named, or a Trust answered here started.
   #lateStarted = new Map();
@@ -207,6 +209,7 @@ export class LaunchPanel {
     this.#follow.clear();
     this.#alive.abort();
     this.#cancelJump();
+    this.#stopProbes();
     this.#lateStarted.clear();
   }
 
@@ -380,7 +383,22 @@ export class LaunchPanel {
 
   #armProbes() {
     if (!this.#others.length) { this.#stopProbes(); return; }
-    if (this.#probeTimer) { return; }
+    if (!this.#probeVisibility) {
+      let hidden = !!globalThis.document?.hidden;
+      this.#probeVisibility = () => {
+        const next = !!globalThis.document?.hidden;
+        if (hidden === next) { return; }
+        hidden = next;
+        clearTimeout(this.#probeTimer);
+        this.#probeTimer = null;
+        if (!hidden) {
+          for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
+          this.#armProbes();
+        }
+      };
+      globalThis.document?.addEventListener?.('visibilitychange', this.#probeVisibility);
+    }
+    if (globalThis.document?.hidden || this.#probeTimer !== null) { return; }
     this.#probeTimer = setTimeout(() => {
       this.#probeTimer = null;
       for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
@@ -391,6 +409,8 @@ export class LaunchPanel {
   #stopProbes() {
     clearTimeout(this.#probeTimer);
     this.#probeTimer = null;
+    globalThis.document?.removeEventListener?.('visibilitychange', this.#probeVisibility);
+    this.#probeVisibility = null;
     this.#others = [];
   }
 
@@ -977,16 +997,29 @@ export class LaunchPanel {
     if (!wanted()) { return; }
     if (!globalThis.document?.hidden && this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
-    this.#jumpTimer = setInterval(() => {
+    const tick = () => {
       if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
       if (globalThis.document?.hidden) { return; }
       if (this.jump(id, hostId)) { this.#cancelJump(); }
-    }, 250);
+    };
+    this.#jumpVisibility = () => {
+      if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
+      if (globalThis.document?.hidden) {
+        clearInterval(this.#jumpTimer);
+        this.#jumpTimer = null;
+      } else if (this.#jumpTimer === null) {
+        this.#jumpTimer = setInterval(tick, 250);
+      }
+    };
+    globalThis.document?.addEventListener?.('visibilitychange', this.#jumpVisibility);
+    this.#jumpVisibility();
   }
 
   #cancelJump() {
     if (this.#jumpTimer !== null) { clearInterval(this.#jumpTimer); }
     this.#jumpTimer = null;
+    globalThis.document?.removeEventListener?.('visibilitychange', this.#jumpVisibility);
+    this.#jumpVisibility = null;
   }
 
   #show(entry) {

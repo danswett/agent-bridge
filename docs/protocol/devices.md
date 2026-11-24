@@ -6,11 +6,11 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
+**Status: the library (R1a to R1c) and the host's observe side are built. Not built: any client screen** (the relay's enforce mode is described below, and the host's channel gate is #1359) (the build status of each slice is under §12 of [device-approval.md](../design/device-approval.md)). R1a is the encoding: framing, ids, entries, their strict parsing,
 presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
 (design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
-attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
-(slices R2 to R5).
+attestations in both. R1d keeps signing keys (TPM, DPAPI, WebCrypto). The relay stores the roster and starts every account in `observe`; an account moves to `enforce` (below) and the relay then tags each socket approved, pending or removed. The host reads and verifies the roster in
+`off` and `observe` and can enroll over its local pipe; the host's own gate is slice R3b.
 
 | Implementation | Where |
 |---|---|
@@ -206,22 +206,51 @@ Neither the relay nor the other device can reset them. An expiry blocks no pendi
 approver. A relay that ends both channels has two different `h`, so the codes it could read off one
 leg do not match the other.
 
-`EnrollmentLockout` holds its counts in memory only. A restart would forget them, so the host that
-runs an exchange must persist and restore the counts and blocks, or the limits can be reset by
-restarting. That persistence belongs to the host slice that runs enrollment over the pipe (R3 in the
-design's §12 table); until then a caller that does not persist them does not meet §4.4.
+`EnrollmentLockout` holds its counts in memory only. The host joiner (brief 184b, brief 198) charges
+only what a person does at the host: each wrong code 2 typed on the local control surface is logged
+in `enrollment-attempts.json` in the pin's private roster folder (flushed to disk before the rename) before it is answered, and replayed
+into the joiner's lockout (counting wrong entries), so a restart cannot reset §4.4. Opening an
+attempt, a peer binding or abandoning it, expiry and any peer message charge nothing, so a relay
+peer cannot spend the person's lockout. An unreadable log refuses (`attempt-store`); three wrong
+entries end the attempt, and three in an hour refuse (`locked`) for 15 minutes. Marks are kept for
+the hour plus the lock, so a replay never ends a lock early. The relay keeps no pending state for it.
 
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
 
+## Enrollment refusals
+
+When an enrollment is refused, the refusing side answers with a `refusal` member holding one of these codes (`{ "value": null, "refusal": "wrong-code" }`, the shape the host's enrollment answers already use), and the other side is told the same code, so both ends can say why. `EnrollmentRefusal` (`src/AgentBridge.Roster/EnrollmentRefusal.cs`) and `pwa/js/roster/enrollment-refusal.js` hold the same list, and tests compare each with this table. The host's own step errors (`attempt-store`, `no-attempt`, `locked`, and so on) are not on it and are not shown to a person as a reason; a code a client does not know is shown as a generic refusal.
+
+| Code | When |
+|---|---|
+| `wrong-code` | The code typed does not match (§4.2); three in a row end the attempt (§4.4) |
+| `expired` | The attempt is over its 5 minutes |
+| `already-approved` | The joining key is already active in the roster |
+| `removed` | A signed removal of this key is in the roster: "this device was removed; sign out and in again to make a new key" |
+| `unknown-kind` | The kind is not one of `host`, `app`, `pwa`, `phone` |
+| `roster-limit` | The roster already holds the most active devices it can (64) |
+| `approver-probation` | The approver is on probation (§3.4) or held by one |
+| `no-presence` | The approver is not in the roster, or cannot prove a person is present (`presence: none`, §4.6) |
+
+`EnrollmentRefusal.Check(verifier, approver, joiner, kind)` gives the first of the roster-based reasons, in this order: `unknown-kind`, `already-approved`, `removed`, `roster-limit`, `approver-probation`, `no-presence`. `wrong-code` and `expired` come from the exchange itself. Nothing here changes who may approve: it names the refusals the rules already make.
+
 ### Host descriptor foundation (#2289)
 
-The dormant `HostEnrollment` library requires a private pinned `HostRosterReader`,
+The `HostEnrollment` library, live behind the app's local pipe since brief 184 (#3450), describes
+this host for approve-gesture enrollment. With host-sign v2 off it describes a v1 host (`id dh kind
+platform name`, the machine's name), pinned or not and without opening custody; a v2 descriptor is
+made only while a verified pin's `AcceptHostSign` switch is on, with the custody rules below. A
+held pin must be readable and this account's (and generation's when one is named). One attempt is
+open per profile: an `enrollment.lock` file in the pin's private roster folder
+(`HostRosterPinWriter.PinPath`) holds it across instances and processes, for the exchange's
+5 minutes. A pin written while the host serves is used from the next verify, without a restart.
+For v2, it requires a private pinned `HostRosterReader`,
 matching account and generation, and its verified `AcceptHostSign` switch before
 opening existing hostSign custody. It neither provisions nor repairs keys, writes
 the roster, nor contacts a relay. Refusals are content-free codes (`no-switch`,
-`missing-key`, `account`, `generation`, `not-pinned`, `invalid-descriptor`,
-`attempt-already-open`); absent, unreadable and wrong-tier keys all use `missing-key`.
+`missing-key`, `account`, `generation`, `not-pinned`, `pin-unreadable`, `invalid-descriptor`,
+`attempt-already-open`, `attempt-store`, and `signed-out` on the pipe); absent, unreadable and wrong-tier keys all use `missing-key`.
 Custody opens and signs outside the reader lock; the account, generation and switch
 are checked again before publication. Same-instance attempts are serialized.
 The key loader consumes the exact privately validated reference and encrypted-key
@@ -230,9 +259,48 @@ bytes without reopening either file. Expected custody/provider failures use
 The descriptor carries only public device fields and the hostSign binding proof.
 The existing person-approver exchange is the sole add path; descriptor equality
 also covers `hostSign`, `hostSignAlg` and `hostSignProof`. Status is `enrolled` only
-when the host's own pinned verifier holds the exact matching active v2 add and the
-joiner accepts its approver and matched exchange; otherwise `pending` or
-`not-enrolled`. The CLI remains dormant pending #2367 and host wiring.
+when the host's own verifier holds the exact matching active add (v1, or v2 while the switch is
+on) and the joiner accepts its approver and matched exchange; otherwise `pending` or
+`not-enrolled`. The CLI remains dormant.
+
+**The exchange and the pin (brief 184b, Engineering ruling (b)).** The host is the joiner. The
+approver sends `enroll.commit`, `enroll.offer`, `enroll.genesis` and `enroll.abandon` (`{ "value": base64url }`, answered
+`{ "value"?, "refusal"? }`) on its Noise channel to the host, which answers them only for a peer
+the relay's presence asserts is a person device (`app`, `pwa`, `phone`; a host or agent principal
+gets `not-person`) and, while device pins are on, holding the trusted-person role. The first valid
+commit binds one peer, shown by name in `host.enroll.status`; another cannot rebind
+(`attempt-bound`), and each peer may commit once per 10 seconds (`throttled`), counted before the value is read: a
+malformed commit value (`invalid-value`) starts the window too, and a value over 256 characters is refused unread. They reach only an attempt the person
+opened here (`no-attempt` otherwise), and only from the channel, by handshake hash `h` and
+authenticated static key, that sent the commit (`attempt-bound`). The bound peer can only end its
+attempt (`enroll.abandon`, or an offer that fails), never charge the lockout. The person types code 2 at the
+host (`host.enroll.code`). Only after it matched does the host take the approver's full 32-byte
+genesis hash (`not-matched`, `invalid-genesis`), never the 16-hex fingerprint. `host.enroll.finish` then
+reads the roster over the serving relay connection, verifies the chain itself, and pins through
+`HostRosterPinWriter` only when its root is that genesis (`genesis-mismatch`) and it holds this
+host's exact v1 add by the matched approver, an active person device, carrying this exchange's
+transcript (`not-added`), and that approver is neither on probation nor held (§4.4,
+`approver-probation`). The attempt and account are checked again with the write (`account-changed`,
+`expired`); signing in as another account ends the attempt. A held pin is never replaced (`pin-exists`), and the writer's capSign (v3)
+gate still applies.
+
+The host checks each remote step and local code entry against the attempt's monotonic elapsed
+time, even if its expiry timer is delayed. The joiner's deadline is the earlier of its own
+five-minute window and the advertised host deadline; expired entries neither match nor charge.
+The third wrong code's persisted mark and clearing of the attempt share the same lock.
+Finish adopts earlier add-acceptance times only from this host's retained verified chain for
+the same account, generation and genesis, matching exact add hashes on the same running clock.
+Peer-supplied times are never adopted; unconfirmed non-genesis adds without prior acceptance
+start probation here. Before a pin exists, Finish retains history only after checking the
+matched genesis and this exchange's exact host add. This separate history is never exposed as
+a pinned verifier or fleet/command authority. Same-path retries, including new attempts, retain
+that authenticated probation while this reader lives.
+
+The host uses process-local monotonic elapsed time (`HostRoster.Now`), not UTC wall time.
+Finish uses the reader's clock even if its caller supplies a different clock. Neither the
+clock nor acceptance history is persisted yet: a host restart starts probation again from
+the next acceptance, and stopped time earns no credit. Persisting both together remains
+out of scope for this dormant enrollment slice; no restart-survival claim is made.
 
 ## Acceptance and state
 
@@ -317,8 +385,8 @@ confirmed, the conflicted (several adds of one id, none winning) and the names (
 non-void rename, the smallest hash among concurrent ones).
 
 **Probation** (§3.4): an add that is not the genesis and not confirmed is on probation for 72 hours
-of the verifier's running time from when it first accepted it (an earlier time reported at
-enrollment can be adopted). A device whose approval lineage passes through a device on probation,
+of the verifier's running time from when it first accepted it (authenticated local acceptance
+history on the same clock can be adopted, never a peer-reported time). A device whose approval lineage passes through a device on probation,
 or through a held device, is **held**: active, shown, and not **served**.
 
 **Names**: a rename signed by a device on probation, or by a held device, is **pending** until that
@@ -371,7 +439,8 @@ issuedAt, expiresAt, heads }`, with exactly the members its action has:
 order. `sig` is over `F("agent-bridge person command v1", bodyBytes)`, the assertion for role
 `command`. The library checks, in order: `action` (not the op's), `machine` (not this host),
 `signer` (by is the machine or `to`, or is not an active person's device), `probation` (on
-probation, or held), `signature`, `presence`, `lifetime` (expiring at or before issue, or over 10
+probation, or held), `signature`, `presence`, `host-key` (signer key separation),
+`lifetime` (expiring at or before issue, or over 10
 minutes after), `future` (issued over 2 minutes after `now`), `expired` (expiring before `now`),
 `floor` (issued at or before the floor), `nonce` (an action with one, not this channel's), `heads`
 (a head the host does not hold: it syncs, then asks again), and for `attest` given the last
@@ -431,6 +500,12 @@ S: the platforms sign in IEEE P1363 (`r ‖ s`), and S is replaced by n − S wh
 | PWA | `pwa/js/roster/signing-key.js`: a WebCrypto key generated non-extractable, usable only to sign, kept in IndexedDB beside the device key |
 | Apple clients | The Secure Enclave, with slice A1 |
 
+A person's `capSign` custody (below, "Signer and enrollment") reuses these stores as a separate
+key behind one seam, `ICapSignKeys` in `src/AgentBridge.App.Core` (a `cap-sign` profile folder) and
+`openCapSignKey` in `pwa/js/roster/cap-sign-key.js` (record `roster-cap-sign`). It exposes only the
+public point, algorithm, tier and `Sign`. It is made once on first need; a damaged entry, or a lost
+key the roster still names, is the fixed failure `no-capsign`, never a new key. Nothing enrolls it yet.
+
 `RosterSigningKeyTests` (in `tests/AgentBridge.Transport.Tests`) and
 `pwa/test/unit/roster-signing-key.test.mjs` check the DPAPI and WebCrypto stores on every run. The
 TPM test runs only on a machine whose TPM can sign with P-256. GitHub's runners have none, so after
@@ -480,7 +555,7 @@ and epoch/sequence ordering before yielding any routable node. No v2 switch chan
 
 ## The relay's copy
 
-The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.
+The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode starts as `observe`: the relay serves every account's log and refuses no connection for want of a roster entry, until a person's device switches the account to `enforce` (see "The relay's enforce mode").
 
 Both messages are text frames from an admitted device of any kind, counted against the frame rate. Entries are the canonical text of §Framing. A device's own `id` (a number) is echoed so a reply can be matched.
 
@@ -504,20 +579,47 @@ Both messages are text frames from an admitted device of any kind, counted again
 
 A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode, next section) is what feeds it.
 
+## The relay's enforce mode (R2, first part)
+
+Each account's relay mode starts as `observe`, which is what the relay has always done, and is reported as `mode` in `roster`. It moves to `enforce` only when a device that is an active **person** device in the account's roster (not a host) sends `{ "t": "roster-enforce", "id": n }` on its own connection; the relay answers `{ "t": "roster-enforce-result", "id": n, "mode": "enforce" }` or `{ ..., "error": "not-approved" }`. (`RelayClient.EnforceRosterAsync`.) It never moves back (a reset is a later slice). The request needs no presence proof: it only tightens, and the relay is never the gate (device-approval.md §4.5). An account with no roster cannot be switched.
+
+In `enforce` the relay tags each connecting key from its own verified copy of the roster:
+
+* **approved**: the key is active in the roster. Served as before.
+* **pending**: any other key. Its presence is `{ "devices": [], "pending": true }`. Its control messages (push, blobs, feedback, roster, forget, registry, `roster-enforce`) are ignored. Its binary frames are routed only to a device that has itself sent to it, and only an approved **person** device may send to a pending one first, so a pending device never opens a channel and two pending devices cannot talk.
+* **removed**: an add of this key was revoked in the roster. The socket is closed at admission with close code `4030` (`removed`), advisory like everything the relay says.
+
+A roster append that adds or removes a key re-tags the account's connected devices at once (an approved device stops being pending; a removed one is closed with 4030). Enforce does not fail open. The relay latches an account in memory once it has seen or set `enforce` (the mode only moves one way). For a latched account, a store that cannot answer (an error, a timeout, a body that does not read, a roster that has gone missing, a mode that has gone back) closes the connecting device with `1012` (`try-later`, a fixed reason that carries no error text) and it reconnects with the usual backoff; a re-tag that cannot read the store keeps every connected device's current tag, so a transient error never un-pends one. The latch is memory only and is lost when the relay restarts: until its first good read after a restart, an account that is in `enforce` is served as `observe` through a store outage. It is not persisted, on purpose: a persisted latch would live in the same store that failed. A stored mode that reads back as anything but `enforce` for a latched account (`observe`, `off`, a value the relay does not know) is refused the same way. An account the relay has never seen in `enforce` is served as before through an outage. The hosts' own gate (`security.roster enforce`) is still the one that counts. Accounts in `observe` are unchanged byte for byte.
+
+An account in `enforce` holds at most 8 pending devices connected at once; the next is closed with `4029` (`too-many-devices`). Not in this part: the pending list and bound kinds in approvers' presence, invite hints, the 20-attempts-an-hour limit and the hour cap on a pending socket, enforce at a new account's genesis, generation hold and veto, bound tokens and the administration reset.
+
 ## The host's verifier (OFF mode)
 
-A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the only value this slice reads; anything else is reported in the log and read as `off`).
+A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the default; `observe` is [below](#observe-mode); anything else is reported in the log and read as `off`).
 
-Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; observe and enforce modes, pinning and the ChannelHub gate are later slices.
+Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The roster reply is the one text frame the host reads past the ordinary frame bound (up to six times the relay's 224 KiB stored cap, for JSON escaping); a reply past even that is discarded as no roster, and the relay connection stays up (up to 4 MiB drained; beyond that, or for any other oversized text frame, the connection is closed as for any oversized frame). The generation is not pinned, so against a hostile relay this check protects nothing yet; enforce mode, pinning and the ChannelHub gate are later slices.
+
+## Enforce mode: the channel gate
+
+`security.roster = "enforce"` (#1359, slice R3b) is the host's first refusal. It is off by default, is never set by an upgrade, and is set only by `config set security.roster enforce` run at the machine by a person (an agent session is refused, #67). `off` and `observe` never consult it: `ChannelHub.RosterGate` is not set to refuse anything and the frames on the wire are exactly those of a hub without a gate (`RosterGateTests` compares them).
+
+In `enforce`, `ChannelHub` asks `HostRosterGate.Allows(peer, op)` before it runs any request, on both the XX and the IK path and for the early request in an IK first message. It allows a peer only when the host's pinned, verified roster lists it as active and not held (§3.4, §3.5). Otherwise the reply is `{ ok: false, error: "approve this machine" }` and no handler runs. That covers a device the roster does not list, one that was removed (checked on every request, so a removal ends an open channel's use at its next request), and any device when there is no pin or the roster is unreadable, another account's or not yet verified. An op the host lists as needing a senior device is also refused to a device still on probation (§3.4); the list is empty in this slice and is filled with the commands that use it (R6).
+
+Not in this slice: the handshake's empty introduction and the `transport` member of `hello` (device-approval.md §7.1), the relay's own enforce and admission (R2), and any screen to approve a device (R4, R5). A refused device is refused at its first request, not in its handshake.
 
 ### Retained pin-reader foundation (#1358, part 1)
 
-`HostRosterReader` reads an existing `roster-pin.json` in a private host-state folder.
+`HostRosterReader` reads an existing `roster-pin.json` in a private host-state folder
+(`<profile>/roster/`).
 The file is at most 4,096 bytes, owner-only, not a link, and has exactly
 `account`, `generation`, `genesis` and `heads`: the account id, a lowercase-hex generation,
 the full base64url genesis hash and one to four distinct hashes in head order.
-The person/enrollment writer must write and flush this record before a reader uses it;
-this reader has no write or creation API.
+The reader has no write or creation API. `HostRosterPinWriter` (#3450) alone creates the
+record, from a person's genesis (an 8-byte fingerprint compared out of band, or a 32-byte hash
+from a later app or enrollment caller): one v3 (capSign) genesis, for this account and the relay's generation,
+matching in fixed time, a chain with no refused entry, written atomically and never over a pin,
+then read back as above. Every other case is a closed refusal and writes nothing. It has two callers: the local `roster-pin set` command ([runbook](../runbooks/roster-pin.md)) and, after a matched
+enrollment exchange, `HostEnrollment.Finish` (`host.enroll.finish`, below).
 
 A matching snapshot retains one verifier, including its probation clock. A different
 account, generation or genesis is `pin-mismatch`; heads not including or descending from
@@ -526,10 +628,25 @@ A missing pin reports `unpinned` and gives no trusted reader; a damaged, inacces
 oversize or public pin reports the fixed `pin-unreadable` code. A failed sync reports
 `no-roster` without discarding the retained reader.
 
-This foundation is not wired into the running host yet, enables no mode and refuses no
-operation. The running OFF verifier now explicitly reports `unpinned`. Observe/report
-integration and durable advancement of accepted heads remain follow-up #1358 work;
-this reader never advances a disk pin or claims rollback protection beyond it after restart.
+This reader enables no mode by itself and refuses no operation. The OFF verifier never feeds it
+and explicitly reports `unpinned`; only observe mode (next section) does. Durable advancement of
+accepted heads remains follow-up work; this reader never advances a disk pin or claims rollback
+protection beyond it after restart.
+
+### Observe mode
+
+`security.roster` = `observe` (#3450, default `off`) feeds the relay's roster to `HostRosterReader`
+on each connection and again about every five minutes while connected (plus or minus 20 percent;
+doubling after each failed pass, up to 40 minutes), because the relay sends hosts no notice when
+the device roster changes. It is read-only: it never creates, writes, expands or re-pins
+`roster-pin.json`, and the only decision it moves is the pinned, verified roster that fleet
+membership and the fleet-target gate read. A failed fetch, signature, account, generation or
+genesis leaves an unverified reader unverified, so those refuse; with no pin they behave as today.
+The host logs one line per change of state with a closed code (`verified`, `unpinned`, `no-roster`,
+`pin-mismatch`, `head-regress`, `pin-unreadable`, `not-verified` or `unavailable`), never the
+roster's contents. A restart re-verifies from the pin, so a relay serving an older valid roster
+after a restart is not detected across restarts; this matters for removals only (follow-up #3460).
+Pin creation and enforce mode are separate slices.
 
 ### Fail-closed transition persistence foundation (#2288, slice 2b-1)
 

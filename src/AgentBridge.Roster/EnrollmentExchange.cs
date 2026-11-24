@@ -182,13 +182,15 @@ public sealed class EnrollmentJoiner
     bool _codeMatched;
     bool _ended;
 
-    public EnrollmentJoiner(string account, byte[] h, EnrollmentLockout lockout, Func<DateTimeOffset> now, byte[]? nonce = null)
+    public EnrollmentJoiner(string account, byte[] h, EnrollmentLockout lockout, Func<DateTimeOffset> now, byte[]? nonce = null,
+        DateTimeOffset? expires = null)
     {
         _account = account;
         _h = h;
         _lockout = lockout;
         _now = now;
-        _expires = now() + EnrollmentLockout.AttemptLifetime;
+        var window = now() + EnrollmentLockout.AttemptLifetime;
+        _expires = expires is { } deadline && deadline < window ? deadline : window;
         _nN = nonce ?? RandomNumberGenerator.GetBytes(Enrollment.NonceBytes);
     }
 
@@ -213,8 +215,9 @@ public sealed class EnrollmentJoiner
     // What the person typed at N, from the approver's screen.
     public CodeResult EnterCode2(string input)
     {
+        if (Over()) { return CodeResult.Ended; }
         if (_codeMatched) { return CodeResult.Match; }
-        if (_transcript is null || Over()) { return CodeResult.Ended; }
+        if (_transcript is null) { return CodeResult.Ended; }
         if (_lockout.IsBlocked(Attempt)) { return CodeResult.Locked; }
         if (Enrollment.Matches(Enrollment.Code2(_transcript), input))
         {
@@ -246,12 +249,14 @@ public sealed class EnrollmentJoiner
     }
 
     // Record equality would compare the key arrays by reference.
-    static bool SameDevice(DeviceDescriptor a, DeviceDescriptor b) =>
+    internal static bool SameDevice(DeviceDescriptor a, DeviceDescriptor b) =>
         a.Id == b.Id && a.Kind == b.Kind && a.Platform == b.Platform && a.Name == b.Name && a.Presence == b.Presence
         && a.SignAlg == b.SignAlg && a.Dh.AsSpan().SequenceEqual(b.Dh)
-        && a.HostSignAlg == b.HostSignAlg
+        && a.HostSignAlg == b.HostSignAlg && a.CapSignAlg == b.CapSignAlg
         && (a.HostSign is null ? b.HostSign is null : b.HostSign is not null && a.HostSign.AsSpan().SequenceEqual(b.HostSign))
         && (a.HostSignProof is null ? b.HostSignProof is null : b.HostSignProof is not null && a.HostSignProof.AsSpan().SequenceEqual(b.HostSignProof))
+        && (a.CapSign is null ? b.CapSign is null : b.CapSign is not null && a.CapSign.AsSpan().SequenceEqual(b.CapSign))
+        && (a.CapSignProof is null ? b.CapSignProof is null : b.CapSignProof is not null && a.CapSignProof.AsSpan().SequenceEqual(b.CapSignProof))
         && (a.Sign is null ? b.Sign is null : b.Sign is not null && a.Sign.AsSpan().SequenceEqual(b.Sign))
         && (a.WebAuthn is null ? b.WebAuthn is null : b.WebAuthn is not null && a.WebAuthn.RpId == b.WebAuthn.RpId
             && a.WebAuthn.CredentialId.AsSpan().SequenceEqual(b.WebAuthn.CredentialId) && a.WebAuthn.Key.AsSpan().SequenceEqual(b.WebAuthn.Key)

@@ -50,6 +50,10 @@ public class CatalogTests
     [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]
     // Embedded in App.Core for the demo the app job's self-test runs (#487).
     [InlineData("docs/protocol/examples/sessions-list.json", "app-package")]
+    // The Pages rollback fence and its test file (#4425, #4437): quality/** is a global trigger, so a change to either runs the whole ring, quality-tool (these tests' own suite) included;
+    // they need no triggers line of their own (#4451), and these rows are what would notice if that stopped being true.
+    [InlineData("quality/pages-rollback.ps1", "quality-tool")]
+    [InlineData("quality/test-pages-gate.ps1", "quality-tool")]
     public void A_file_a_job_checks_from_outside_its_folders_selects_that_suite_in_the_repository_catalog(string file, string suite)
     {
         var root = AppContext.BaseDirectory;
@@ -89,6 +93,38 @@ public class CatalogTests
         var problem = Assert.Single(Catalog.Parse("sutes:\n  - id: a\n").Validate(_ => 1));
 
         Assert.Equal("the catalog lists no suites", problem.Message);
+    }
+
+    [Fact]
+    public void Only_exact_tier_jobs_in_a_post_merge_suites_where_are_post_merge_and_an_unknown_tier_stays_blocking()
+    {
+        static string Suite(string id, string where, string tier) => $"""
+              - id: {id}
+                validation_plan: native
+                kind: ui
+                ring: 1
+                select: always
+                platforms: [browser]
+                runner: hosted
+                command: see ci.yml
+                where: ci.yml {where}
+                status: exists
+            {tier}
+            """ + "\n";
+        var catalog = Catalog.Parse("suites:\n" + string.Concat(
+            Suite("ui", "pwa-ui", "    tier: post-merge\n    tier_jobs: [pwa-ui (webkit 1/3), app (win-arm64)]"),
+            Suite("e2e", "pwa-e2e, light", "    tier: post-merge\n    tier_jobs: [pwa-e2e]"),
+            Suite("typo", "spikes", "    tier: post_merge\n    tier_jobs: [spikes]"),
+            Suite("bare", "product", "    tier: post-merge"),
+            Suite("plain", "app", "    tier: blocking")));
+
+        Assert.Equal(["pwa-e2e", "pwa-ui (webkit 1/3)"], catalog.PostMergeJobs().Order(StringComparer.Ordinal));
+        Assert.Equal([
+            "tier: suite ui names tier job 'app (win-arm64)', which isn't a ci.yml job in its where",
+            "tier: suite typo has tier 'post_merge', not one of blocking, post-merge, so it counts as blocking",
+            "tier: suite typo names tier_jobs but isn't tier post-merge",
+            "tier: suite bare is tier post-merge but names no tier_jobs",
+        ], catalog.Validate(_ => 1).Select(p => $"{p.Kind}: {p.Message}"));
     }
 
     [Fact]

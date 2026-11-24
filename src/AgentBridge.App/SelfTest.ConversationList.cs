@@ -275,21 +275,41 @@ static partial class SelfTest
         if (code < 0) { return ("setup: a code block after block 20 with a stop before it", "none"); }
         var from = Enumerable.Range(0, code).Last(j => blocks[j].Focusable);
         var method = "none";
+        var trace = new List<string>();
+        void Observe(string step)
+        {
+            var focus = FocusManager.GetFocusedElement(list.XamlRoot);
+            var path = new List<string>();
+            for (var node = focus as DependencyObject; node is not null && path.Count < 8;
+                node = node is TextElement text ? text.ContentStart?.VisualParent : VisualTreeHelper.GetParent(node))
+            {
+                path.Add($"{node.GetType().Name}[{AutomationProperties.GetAutomationId(node)}]");
+            }
+            var shown = list.ContainerFromIndex(code) as FrameworkElement;
+            var copy = shown is null ? null : FocusManager.FindFirstFocusableElement(shown);
+            var detail = $"{step}: focus {string.Join("/", path)}, block {(BlockOf(list, focus) is { } b ? b + 1 : 0)}; "
+                + $"target {code + 1}, Copy realized {copy is Button}, top {(shown is null ? double.NaN : Top(shown, scroll)):0.##}; "
+                + $"offset {scroll.VerticalOffset:0.##}, viewport {scroll.ViewportHeight:0.##}, extent {scroll.ExtentHeight:0.##}, scale {list.XamlRoot.RasterizationScale:0.###}";
+            trace.Add(detail);
+            Log(detail);
+        }
+        (string? Problem, string Method) Failed(string problem) => ($"{problem}; {string.Join(" | ", trace)}", method);
+        Observe("entry");
         foreach (var wholly in new[] { true, false })
         {
             var where = wholly ? "wholly in view" : "across the view's bottom edge";
             list.ScrollIntoView(blocks[code], ScrollIntoViewAlignment.Leading);
             await Still(scroll);
-            if (list.ContainerFromIndex(code) is not FrameworkElement placed) { return ($"setup: block {code + 1} realised at the leading edge", method); }
+            if (list.ContainerFromIndex(code) is not FrameworkElement placed) { Observe("not realized"); return Failed($"setup: block {code + 1} realised at the leading edge"); }
             var (height, view) = (placed.ActualHeight, scroll.ViewportHeight);
             var at = scroll.VerticalOffset + Top(placed, scroll) - (wholly ? view - height - 8 : view - height / 2);
-            if (height + 16 > view || at < 0) { return ($"setup: block {code + 1} ({height:0.#} px) placed {where} in a {view:0.#} px view", method); }
+            if (height + 16 > view || at < 0) { Observe("placement refused"); return Failed($"setup: block {code + 1} ({height:0.#} px) placed {where} in a {view:0.#} px view"); }
             scroll.ChangeView(null, at, null, disableAnimation: true);
             await Still(scroll);
-            if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(from) is not FrameworkElement before) { return ($"setup: blocks {from + 1} and {code + 1} realised", method); }
+            if (list.ContainerFromIndex(code) is not FrameworkElement block || list.ContainerFromIndex(from) is not FrameworkElement before) { Observe("setup not realized"); return Failed($"setup: blocks {from + 1} and {code + 1} realised"); }
             var top = Top(block, scroll);
-            if (wholly != ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || (!wholly && (top < 0 || top >= scroll.ViewportHeight))) { return ($"setup: block {code + 1} {where}: its top {top:0.#} px, {block.ActualHeight:0.#} px tall, in a {scroll.ViewportHeight:0.#} px view", method); }
-            if (FocusManager.FindLastFocusableElement(before) is not DependencyObject stop) { return ($"setup: a stop in block {from + 1}", method); }
+            if (wholly != ConversationKeyboard.WhollyInView(top, block.ActualHeight, scroll.ViewportHeight) || (!wholly && (top < 0 || top >= scroll.ViewportHeight))) { Observe("setup placement missed"); return Failed($"setup: block {code + 1} {where}: its top {top:0.#} px, {block.ActualHeight:0.#} px tall, in a {scroll.ViewportHeight:0.#} px view"); }
+            if (FocusManager.FindLastFocusableElement(before) is not DependencyObject stop) { Observe("starting stop missing"); return Failed($"setup: a stop in block {from + 1}"); }
             // Focus taken without the view moving to it: the content where it was on screen, measured
             // before and after. The offset the view was asked for is no measure of that, the list
             // re-estimating its blocks' heights as it scrolls (run 41994389656).
@@ -304,9 +324,10 @@ static partial class SelfTest
             }
             finally { before.BringIntoViewRequested -= held; }
             var (offset, topAfter) = (scroll.VerticalOffset, Top(block, scroll));
+            Observe($"{where}, before Tab");
             Log($"block {code + 1} {where}, its top {topBefore:0.#} px before focus and {topAfter:0.#} px after, focus on the last stop of block {from + 1}: {(focused ? "taken" : "refused")}, the view at {offsetBefore:0.#} px then {offset:0.#} px");
-            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return ($"setup: focus on the last stop of block {from + 1}", method); }
-            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - topBefore) > 0.5) { return ($"setup: block {code + 1} left where it was on screen while block {from + 1} took focus: its top {topBefore:0.#} px, then {topAfter:0.#} px", method); }
+            if (!focused || !ReferenceEquals(FocusManager.GetFocusedElement(list.XamlRoot), stop)) { return Failed($"setup: focus on the last stop of block {from + 1}"); }
+            if (Math.Abs(offset - offsetBefore) > 0.5 || Math.Abs(topAfter - topBefore) > 0.5) { return Failed($"setup: block {code + 1} left where it was on screen while block {from + 1} took focus: its top {topBefore:0.#} px, then {topAfter:0.#} px"); }
 
             // Tab, pressed as the keyboard presses it.
             var seen = false;
@@ -315,24 +336,28 @@ static partial class SelfTest
             try
             {
                 method = Press(window.Handle, VirtualKey.Tab, foreground: true, extended: false);
-                if (!await Until(() => seen, TimeSpan.FromSeconds(2)) && method == "SendInput")
+                var received = await Until(() => seen, TimeSpan.FromSeconds(2));
+                Observe($"after Tab ({method}, received {received})");
+                if (!received && method == "SendInput")
                 {
                     method = Press(window.Handle, VirtualKey.Tab, foreground: false, extended: false);
                     await Until(() => seen, TimeSpan.FromSeconds(2));
+                    Observe($"after retry Tab ({method}, received {seen})");
                 }
             }
             finally { scroll.RemoveHandler(UIElement.PreviewKeyDownEvent, heard); }
-            if (!seen) { return ($"Tab reaching the conversation ({method})", method); }
+            if (!seen) { return Failed($"Tab reaching the conversation ({method})"); }
             var landed = await Until(() => BlockOf(list, FocusManager.GetFocusedElement(list.XamlRoot)) == code, TimeSpan.FromSeconds(3));
             await Still(scroll);
             var on = FocusManager.GetFocusedElement(list.XamlRoot);
             var shown = list.ContainerFromIndex(code) as FrameworkElement;
             var first = shown is null ? null : FocusManager.FindFirstFocusableElement(shown);
             var now = shown is null ? double.NaN : Top(shown, scroll);
+            Observe("after landing and settle");
             Log($"Tab pressed by {method}: focus on {on?.GetType().Name ?? "nothing"} in block {(BlockOf(list, on) is { } b ? b + 1 : 0)}, block {code + 1}'s top {now:0.#} px, the view moved {scroll.VerticalOffset - offset:0.#} px");
-            if (!landed || first is not Button || !ReferenceEquals(on, first)) { return ($"Tab from block {from + 1} onto the Copy button of block {code + 1} {where}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}", method); }
-            if (wholly && Math.Abs(scroll.VerticalOffset - offset) > 0.5) { return ($"block {code + 1} wholly in view left where it was: the view moved {scroll.VerticalOffset - offset:0.#} px", method); }
-            if (!wholly && Math.Abs(now) > 1.5) { return ($"block {code + 1} across the view's bottom edge brought to the leading edge: its top {now:0.#} px from the view's", method); }
+            if (!landed || first is not Button || !ReferenceEquals(on, first)) { return Failed($"Tab from block {from + 1} onto the Copy button of block {code + 1} {where}: on {on?.GetType().Name ?? "nothing"} in {(BlockOf(list, on) is { } to ? $"block {to + 1}" : "no block")}"); }
+            if (wholly && Math.Abs(scroll.VerticalOffset - offset) > 0.5) { return Failed($"block {code + 1} wholly in view left where it was: the view moved {scroll.VerticalOffset - offset:0.#} px"); }
+            if (!wholly && Math.Abs(now) > 1.5) { return Failed($"block {code + 1} across the view's bottom edge brought to the leading edge: its top {now:0.#} px from the view's"); }
         }
         return (null, method);
     }

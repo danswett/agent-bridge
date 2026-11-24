@@ -222,7 +222,7 @@ public sealed class DaemonHaReader : IDisposable
     // a further Copilot login the host is given (usage.copilotAccounts) and this machine's daemon is
     // not, because another machine reads it for the account. That machine's sensor, of the host's
     // login, is the daemon's figure; with none, the daemon has no reading, a mismatch. Seen on
-    // DEV-VM1 as usage.missingOnDaemon on copilot_2 for hours while DSWETT-HOME read it (#40).
+    // one machine as usage.missingOnDaemon on copilot_2 for hours while another read it (#40).
     public IReadOnlyCollection<string> ReaderEntities => readerEntities;
     volatile HashSet<string> readerEntities = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> lastReader = new(StringComparer.Ordinal);
@@ -352,8 +352,8 @@ public sealed class DaemonHaReader : IDisposable
                 // A place with no figure of this daemon's own whose account reader has stopped
                 // reading: what the daemon's machines show for it is that lapsed figure, which says
                 // nothing about now, as a lapsed figure of its own does not (UsageLapsed). Taken as
-                // no reading at all, it was a mismatch: on DEV-VM1, 2026-10-30 22:40 PT, while
-                // DSWETT-HOME went 35 minutes without reading the login (#40).
+                // no reading at all, it was a mismatch: on one machine, 2026-10-30 22:40 PT, while
+                // another went 35 minutes without reading the login (#40).
                 if (stale is not null && staleSlug is not null && !usage.ContainsKey(key))
                 {
                     // Kept as the reader found last, as a current one is: found through a resume

@@ -10,7 +10,7 @@ namespace AgentBridge.HomeAssistant;
 
 // agent-ha-bridge's per-machine Home Assistant contract: the topics, entity ids and discovery
 // payloads its PowerShell daemon publishes (hooks/decision-mqtt.ps1), which the dashboard
-// DSWETT-HOME generates is built around. A migrated machine has to publish exactly these, or
+// the writer generates is built around. A migrated machine has to publish exactly these, or
 // its cards stop drawing (docs/ha-connector.md). Every function here is a port of one there,
 // named in its comment, and tests/AgentBridge.HomeAssistant.Tests checks each against the
 // fixture recorded by running the original (tools/ha-contract/Export-HaContract.ps1).

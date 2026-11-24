@@ -92,8 +92,8 @@ export function signEscapedApproval({ session, question, shown, request, ...rest
 // session, its request only inside, and args binding now, the release shown and what the
 // confirmation showed (accept, absent for one press on a quiet machine). Lives PRESS_LIFETIME_S.
 export const UPDATE_NOW_ACTION = 'update.install.now';
-export function signUpdateNow({ release, accept = null, request, ...rest }) {
-  return signCommand({ ...rest, action: UPDATE_NOW_ACTION, request, args: nowArgs({ release, accept }), lifetimeS: PRESS_LIFETIME_S });
+export function signUpdateNow({ release, accept = null, unchecked = false, request, ...rest }) {
+  return signCommand({ ...rest, action: UPDATE_NOW_ACTION, request, args: nowArgs({ release, accept, unchecked }), lifetimeS: PRESS_LIFETIME_S });
 }
 
 // The sessions the account's other machines offer for a transfer to target, each with its

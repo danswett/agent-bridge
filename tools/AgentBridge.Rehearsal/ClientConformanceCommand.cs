@@ -13,6 +13,10 @@ internal static class ClientConformanceCommand
     };
 
     public static int Run(Parsed p, TextWriter output, WindowsConformanceCallback? windowsClient = null)
+        => Run(p, output, (_, _) => windowsClient);
+
+    public static int Run(Parsed p, TextWriter output,
+        Func<IReadOnlyList<ConformanceRun>, IReadOnlyList<ConformanceResult>, WindowsConformanceCallback?> windowsClientFactory)
     {
         var runs = ReadArray<ConformanceRun>(p.Option("--runs")!);
         IReadOnlyList<ConformanceCapability> capabilities = ReadArray<ConformanceCapability>(p.Option("--capabilities")!);
@@ -21,6 +25,7 @@ internal static class ClientConformanceCommand
             throw new UsageException($"No required run for client '{client}'.");
         var results = File.ReadLines(p.Option("--results")!).Where(line => !string.IsNullOrWhiteSpace(line))
             .Select(Read<ConformanceResult>).ToArray();
+        var windowsClient = client == "Windows" ? windowsClientFactory(runs, results) : null;
         if (client == "Windows" && windowsClient is not null)
         {
             capabilities = ConformanceInventory.ForClient(client);

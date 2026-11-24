@@ -136,7 +136,7 @@ public sealed partial class SessionCardViewModel
         // The counts the host reports, beside the delegates the strip lists (or in place of them).
         if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", Words.Plural(t, "turn", "turns"))); }
-        if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", Words.Plural(c, "compaction", "compactions"))); }
+        if (Words.Compactions(session.Activity.Compactions) is { } compactions) { rows.Add(new("Compactions", compactions)); }
         if (session.ProcessId is { } pid) { rows.Add(new("Process", $"pid {pid.ToString(invariant)}", Mono: true)); }
         rows.Add(new("ID", session.Id, Mono: true, Copy: true));
         return rows;

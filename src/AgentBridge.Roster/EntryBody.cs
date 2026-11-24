@@ -42,7 +42,8 @@ public sealed record WebAuthnCredential(string RpId, byte[] CredentialId, byte[]
 public sealed record DeviceDescriptor(
     string Id, byte[] Dh, byte[]? Sign, string? SignAlg, string? Presence, WebAuthnCredential? WebAuthn,
     string Kind, string Platform, string Name,
-    byte[]? HostSign = null, string? HostSignAlg = null, byte[]? HostSignProof = null)
+    byte[]? HostSign = null, string? HostSignAlg = null, byte[]? HostSignProof = null,
+    byte[]? CapSign = null, string? CapSignAlg = null, byte[]? CapSignProof = null)
 {
     public bool IsPerson => RosterKinds.IsPerson(Kind);
 }
@@ -103,11 +104,12 @@ public sealed record EntryBody(
 
         if (!root.TryGetProperty("v", out var v)) { throw new RosterFormatException(Refusal.Missing, "body.v"); }
         // Version 2 is a host's add carrying a `hostSign` key (agent-principals.md §8.10, V1).
-        if (v.ValueKind != JsonValueKind.Number || v.GetRawText() is not ("1" or "2")) { throw new RosterFormatException(Refusal.Version, "body.v"); }
-        var version = v.GetRawText() == "2" ? 2 : 1;
+        if (v.ValueKind != JsonValueKind.Number || v.GetRawText() is not ("1" or "2" or "3")) { throw new RosterFormatException(Refusal.Version, "body.v"); }
+        var version = v.GetRawText()[0] - '0';
         if (!root.TryGetProperty("op", out var opElement)) { throw new RosterFormatException(Refusal.Missing, "body.op"); }
         var op = ParseOp(StrictJson.String(opElement, "body.op")) ?? throw new RosterFormatException(Refusal.Value, "body.op");
         if (version == 2 && op != EntryOp.Add) { throw new RosterFormatException(Refusal.Version, "body.v: 2 is only for a host's add"); }
+        if (version == 3 && op is not (EntryOp.Genesis or EntryOp.Add)) { throw new RosterFormatException(Refusal.Version, "body.v: 3 is only for a person's genesis or add"); }
         var (required, optional) = Fields(op);
         StrictJson.Members(root, [.. required, .. optional], Order.Where(required.Contains), "body");
 
@@ -121,7 +123,7 @@ public sealed record EntryBody(
         var cosigner = root.TryGetProperty("cosigner", out var c) ? DeviceId(c, "body.cosigner") : null;
         var at = Time(StrictJson.String(root.GetProperty("at"), "body.at"));
         var device = root.TryGetProperty("device", out var d) ? ParseDevice(d, version, account, generation) : null;
-        var approval = root.TryGetProperty("approval", out var a) ? ParseApproval(a, op) : null;
+        var approval = root.TryGetProperty("approval", out var a) ? ParseApproval(a, op, version) : null;
         var target = root.TryGetProperty("target", out var t) ? ParseTarget(t) : null;
         IReadOnlyList<byte[]> keep = root.TryGetProperty("keep", out var k) ? Hashes(k, "body.keep", 0, MaxKeep) : [];
         var name = root.TryGetProperty("name", out var n) ? DeviceName(n, "body.name") : null;
@@ -140,6 +142,16 @@ public sealed record EntryBody(
             if (cosigner is not null && (cosigner == by || cosigner == target.Id)) { throw new RosterFormatException(Refusal.Signer, "a cosigner is neither the signer nor the target"); }
         }
         return new EntryBody(op, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt, version);
+    }
+
+    // A v3 genesis whose device carries capSign, its proof already verified at parse (the pin seam).
+    public bool HasCapSign => Op == EntryOp.Genesis && Version == 3 && Device?.CapSign is not null;
+
+    // The exact UTF-8 bytes of a body's `device` object (D of the v3 transcript), never reserialized.
+    public static byte[] DeviceBytes(byte[] bodyBytes)
+    {
+        using var doc = StrictJson.Parse(bodyBytes, "body");
+        return System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(StrictJson.Object(doc.RootElement, "body").GetProperty("device")).ToArray();
     }
 
     // The relay's account id: 1 to 128 UTF-8 bytes with no control character.
@@ -199,6 +211,7 @@ public sealed record EntryBody(
         if (!RosterKinds.IsKnown(kind)) { throw new RosterFormatException(Refusal.Value, "body.device.kind"); }
         var person = RosterKinds.IsPerson(kind);
         if (version == 2 && person) { throw new RosterFormatException(Refusal.Version, "body.v: 2 is only for a host's add"); }
+        if (version == 3 && !person) { throw new RosterFormatException(Refusal.Version, "body.v: 3 is only for a person"); }
         string? presence = null;
         if (person)
         {
@@ -209,6 +222,7 @@ public sealed record EntryBody(
         string[] fields = !person ? (version == 2 ? HostV2Order : ["id", "dh", "kind", "platform", "name"])
             : presence == Presence.WebAuthn ? DeviceOrder
             : ["id", "dh", "sign", "signAlg", "presence", "kind", "platform", "name"];
+        if (version == 3) { fields = [.. fields[..^3], "capSign", "capSignAlg", "capSignProof", .. fields[^3..]]; }
         StrictJson.Members(d, fields, fields, "body.device");
 
         var id = DeviceId(d.GetProperty("id"), "body.device.id");
@@ -236,11 +250,23 @@ public sealed record EntryBody(
             P256.CheckRosterSignature(hostSignProof, "body.device.hostSignProof");
             if (hostSign.AsSpan().SequenceEqual(dh)) { throw new RosterFormatException(Refusal.Device, "body.device.hostSign is its dh key"); }
         }
+        byte[]? capSign = null, capSignProof = null;
+        string? capSignAlg = null;
+        if (version == 3)
+        {
+            capSign = P256.Point(StrictJson.String(d.GetProperty("capSign"), "body.device.capSign"), "body.device.capSign");
+            capSignAlg = StrictJson.String(d.GetProperty("capSignAlg"), "body.device.capSignAlg");
+            if (capSignAlg != SignAlgorithm) { throw new RosterFormatException(Refusal.Value, "body.device.capSignAlg"); }
+            capSignProof = Codec.FromBase64Url(StrictJson.String(d.GetProperty("capSignProof"), "body.device.capSignProof"), "body.device.capSignProof");
+            P256.CheckRosterSignature(capSignProof, "body.device.capSignProof");
+            if (new[] { dh, sign!, webauthn?.Key }.Any(k => k is not null && k.AsSpan().SequenceEqual(capSign))) { throw new RosterFormatException(Refusal.Device, "body.device.capSign is its own dh, sign or webauthn key"); }
+        }
         var platform = StrictJson.String(d.GetProperty("platform"), "body.device.platform");
         if (platform is not ("windows" or "macos" or "linux" or "ios" or "ipados" or "android")) { throw new RosterFormatException(Refusal.Value, "body.device.platform"); }
         var name = DeviceName(d.GetProperty("name"), "body.device.name");
         if (hostSign is not null && !P256.Verify(hostSign, HostKey.Binding(account, generation, dh), hostSignProof!)) { throw new RosterFormatException(Refusal.HostProof, "body.device.hostSignProof"); }
-        return new DeviceDescriptor(id, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof);
+        if (capSign is not null && !P256.Verify(capSign, CapSignKey.Binding(account, generation, dh), capSignProof!)) { throw new RosterFormatException(Refusal.CapProof, "body.device.capSignProof"); }
+        return new DeviceDescriptor(id, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof, capSign, capSignAlg, capSignProof);
     }
 
     static readonly string[] CredentialFields = ["rpId", "credentialId", "key", "attested", "backupEligible"];
@@ -276,7 +302,7 @@ public sealed record EntryBody(
 
     // Exactly one of the member sets of §3.2, by method; the genesis method only on a genesis.
     // Every defect in it is the one refusal, `approval`.
-    static Approval ParseApproval(JsonElement e, EntryOp op)
+    static Approval ParseApproval(JsonElement e, EntryOp op, int version)
     {
         if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty("method", out var m) || m.ValueKind != JsonValueKind.String)
         {
@@ -290,7 +316,7 @@ public sealed record EntryBody(
             "grandfather" or "genesis" => ["method"],
             _ => throw new RosterFormatException(Refusal.Approval, "body.approval.method"),
         };
-        if ((op == EntryOp.Genesis) != (method == "genesis")) { throw new RosterFormatException(Refusal.Approval, "body.approval.method"); }
+        if ((op == EntryOp.Genesis) != (method == "genesis") || (version == 3 && method == "grandfather")) { throw new RosterFormatException(Refusal.Approval, "body.approval.method"); }
         var count = 0;
         foreach (var member in e.EnumerateObject())
         {

@@ -13,7 +13,7 @@ using Xunit;
 // functions), and what reaches the host's reply delivery.
 public sealed partial class ReplyTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    static readonly string Machine = Contract.Machine;
     const string A = "6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20";
     static readonly string Node = HaContract.NodeId(A);
     static readonly string[] TransientKeys = ["error", "hint", "waiting_on", "sent", "unsent", "recorded", "answer", "at"];
@@ -184,6 +184,28 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     JsonElement Ack => Detail.GetProperty("reply_ack");
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("agent-user", false)]
+    [InlineData("person-user", true)]
+    public async Task Envelope_sender_comes_from_HA_context_not_payload_labels(string? user, bool owner)
+    {
+        await using var c = await Ready("agent-user");
+        await Do(c, ha.Type(SessionEntities.Reply(Node), "hello"));
+        await Do(c, ha.Press(SessionEntities.Submit(Node), user));
+        var sender = Assert.Single(replied).Sender!;
+        Assert.Equal(user ?? "unknown", sender.Id);
+        Assert.Equal(owner, sender.Owner);
+    }
+
+    [Fact]
+    public async Task Envelope_sender_does_not_trust_a_payload_claiming_owner()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "hello", driver: "human", sender: "owner"));
+        Assert.Equal(new DeliverySender("unknown"), Assert.Single(replied).Sender);
+    }
 
     [Fact]
     public async Task A_reply_card_publish_with_a_rid_is_acknowledged_with_that_rid_and_its_sender()

@@ -15,6 +15,7 @@ public sealed class DeliveryGate
     int deliveries;
     bool isTyping;
     bool uncertain;
+    bool unknownWorker;
     // The end of each injector worker that failed by exception, which may still be sending keys.
     readonly List<Task> failedWorkers = [];
     Exclusion? exclusion;
@@ -34,18 +35,51 @@ public sealed class DeliveryGate
     {
         lock (state)
         {
-            uncertain = true;
-            failedWorkers.Add(exited ?? Task.FromException(new InvalidOperationException("the injector worker's end cannot be observed")));
+            if (exited is null) { unknownWorker = true; }
+            else { failedWorkers.Add(exited); }
+            WorkerUncertain();
         }
     }
 
+    bool WorkerUncertain()
+    {
+        failedWorkers.RemoveAll(worker =>
+        {
+            if (!worker.IsCompleted) { return false; }
+            if (!worker.IsCompletedSuccessfully) { unknownWorker = true; _ = worker.Exception; }
+            return true;
+        });
+        return unknownWorker || failedWorkers.Count != 0;
+    }
+
+    bool IsUncertain => WorkerUncertain() || uncertain;
+
+    // Null once every injector worker that failed is proven gone; otherwise completes when they
+    // are, or faults if one never can be. Unknown proof must never let a stop kill or say ended.
+    internal Task? WorkerProof()
+    {
+        lock (state)
+        {
+            if (!WorkerUncertain()) { return null; }
+            return unknownWorker ? Task.FromException(new InvalidOperationException("an injector worker's end cannot be proven"))
+                : Task.WhenAll(failedWorkers);
+        }
+    }
+
+    // A stop may pass a provisional exclusion only: a committing or committed departure stays
+    // fenced, or the host could exit before the newly accepted stop settles.
+    bool Excludes(bool allowExclusion) =>
+        exclusion is not null && (!allowExclusion || exclusion.Committed || exclusion.Committing);
+
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
-    public IDisposable? TryEnterDelivery()
+    public IDisposable? TryEnterDelivery() => TryEnterDelivery(false);
+
+    internal IDisposable? TryEnterDelivery(bool allowExclusion)
     {
         lock (state)
         {
             Expire();
-            if (exclusion is not null || stopping is not null) { return null; }
+            if (Excludes(allowExclusion) || stopping is not null) { return null; }
             deliveries++;
             return new Delivery(this);
         }
@@ -112,14 +146,19 @@ public sealed class DeliveryGate
             }
             await mine.Quiet.Task.WaitAsync(limit.Token);
             Task[] workers;
-            lock (state) { workers = [.. failedWorkers]; }
+            lock (state)
+            {
+                WorkerUncertain();
+                if (unknownWorker) { return null; }
+                workers = [.. failedWorkers];
+            }
             try { await Task.WhenAll(workers).WaitAsync(limit.Token); }
             catch (Exception e) when (e is not OperationCanceledException) { return null; }
             lock (state)
             {
                 // Uncertainty forbids a graceful departure, not a recovery stop: with new deliveries
                 // blocked, none in flight and every failed worker gone, nothing can type again.
-                if (!isTyping && failedWorkers.TrueForAll(w => w.IsCompletedSuccessfully))
+                if (!isTyping && !WorkerUncertain())
                 {
                     var lease = mine;
                     mine = null;
@@ -157,9 +196,9 @@ public sealed class DeliveryGate
         lock (state)
         {
             Expire();
-            blocker = uncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
+            blocker = IsUncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
                 : deliveries > 0 || !sessions.IsEmpty ? Blocker.DeliveryInFlight : Blocker.LifecycleInProgress;
-            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
+            if (IsUncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
             return exclusion = new Exclusion(this, lifetime);
         }
     }
@@ -205,7 +244,7 @@ public sealed class DeliveryGate
             lock (owner.state)
             {
                 owner.Expire();
-                blocker = owner.uncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
+                blocker = owner.IsUncertain ? Blocker.JournalUncertain : owner.isTyping ? Blocker.Typing
                     : owner.deliveries > 0 || !owner.sessions.IsEmpty ? Blocker.DeliveryInFlight : null;
                 if (!ReferenceEquals(owner.exclusion, this) || Committed || Committing) { return false; }
                 Committing = true;
@@ -219,7 +258,7 @@ public sealed class DeliveryGate
             {
                 connectionChanged = false;
                 if (!ReferenceEquals(owner.exclusion, this) || !Committing || Committed
-                    || owner.uncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
+                    || owner.IsUncertain || owner.isTyping || owner.deliveries > 0 || !owner.sessions.IsEmpty
                     || owner.time.GetElapsedTime(Started) >= Lifetime) { return false; }
                 lock (connection.Sync)
                 {
@@ -245,21 +284,25 @@ public sealed class DeliveryGate
     }
 
     // Takes the session for this request, or false while another request holds it.
-    public bool TryClaim(string sessionId, Guid request)
+    public bool TryClaim(string sessionId, Guid request) => TryClaim(sessionId, request, false);
+
+    internal bool TryClaim(string sessionId, Guid request, bool allowExclusion)
     {
         lock (state)
         {
             Expire();
-            return exclusion is null && sessions.TryAdd(sessionId, request);
+            return !Excludes(allowExclusion) && sessions.TryAdd(sessionId, request);
         }
     }
 
     public void Release(string sessionId, Guid request) => sessions.TryRemove(new KeyValuePair<string, Guid>(sessionId, request));
 
     // The one typing slot. Whoever holds it makes its last checks, types, and lets go.
-    public async Task WaitToTypeAsync()
+    public Task WaitToTypeAsync() => WaitToTypeAsync(CancellationToken.None);
+
+    public async Task WaitToTypeAsync(CancellationToken cancellationToken)
     {
-        var wait = typing.WaitAsync();
+        var wait = typing.WaitAsync(cancellationToken);
         if (!wait.IsCompleted) { TypingQueued?.TrySetResult(); }
         await wait;
         lock (state)
@@ -285,7 +328,7 @@ public sealed class DeliveryGate
 // pending, or settled) and starts nothing. Settled outcomes are forgotten after RememberFor;
 // the contract promises at least 10 minutes.
 internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, DeliveryGate? deliveryGate = null, Func<T>? blocked = null,
-    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, object?, T>? remember = null)
+    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, object?, T>? remember = null, bool allowExclusion = false)
 {
     readonly Lock gate = new();
     readonly Dictionary<Guid, Entry> requests = [];
@@ -368,7 +411,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
                 if (!repeat && remembered is not null) { prior = remembered(key); }
                 if (!prior.Known)
                 {
-                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
+                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery(allowExclusion)) is null)
                     {
                         // Never remembered: nothing was admitted or typed, and a receipt would refuse the
                         // same request for RememberFor even after a stop that did not happen.

@@ -100,6 +100,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     static bool IsSubagent(JsonElement e) => Json.Str(e, "agentId") is { Length: > 0 };
 
+    string? ReplyId(JsonElement data) => RecordId is { } id
+        ? Conversation.TurnIds.Part(id, Text.NonBlank(Json.Str(data, "reasoningText")) is null ? 0 : 1) : null;
+
     // Who wrote a main-agent user.message, from its data.source (activity.userMessageFrom, #489).
     // Copilot writes none for a prompt typed in its window, and "user" for one typed with an
     // attachment; "schedule-<n>" for a scheduled prompt and "agent-<id>" for one an agent sent.
@@ -245,7 +248,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
-                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; S.ResponseId = ReplyId(data); }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -352,6 +355,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.OwnResponse = null;
         S.OwnResponseCut = false;
         S.ResponseTurn = null;
+        S.ResponseId = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
         S.Notice = null;
@@ -383,7 +387,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     void Prune()
     {
         if (S.Permissions.Count == 0) { return; }
-        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Exists(q => q.Id == id)).ToList()) { S.Permissions.Remove(id); }
+        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Contains(id)).ToList()) { S.Permissions.Remove(id); }
         foreach (var (request, id) in _permissionQuestion.Where(p => !S.Permissions.ContainsKey(p.Value)).ToList()) { _permissionQuestion.Remove(request); }
     }
 
@@ -553,7 +557,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     {
                         var content = MainText(data);
                         S.MainSaid(content, Text.NonBlank(Json.Str(data, "reasoningText")), at);
-                        if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; }
+                        if (content is not null) { S.ResponseTurn = S.TurnId is null ? null : _replyTurn ?? S.TurnId; S.ResponseId = ReplyId(data); }
                     }
                     // The CLI's notice of the error that ended the turn is written after it, and
                     // starts nothing: read as a reply, it set the session working again for good.
@@ -561,7 +565,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     // The turn's latest reply decides whether it goes on to run tools. Copilot answers an
                     // agent_idle notification inside the turn it starts: a read_agent request, its
                     // result, then the reply with nothing more to run. Kept from the first, the session
-                    // read working until its next prompt, idle for hours (#40, DSWETT-DEV-VM1).
+                    // read working until its next prompt, idle for hours (#40).
                     _turnAskedForTools = Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;
                     S.SetStatus(SessionStatus.Working);
                     S.Activity(at);
@@ -595,7 +599,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "abort" or "session.shutdown" when sub:
                 {
                     var agent = Json.Str(e, "agentId");
-                    if (S.Pending.RemoveAll(q => q.Agent is { } a && (a == agent || S.Background.HasEnded(a))) == 0) { return false; }
+                    if (S.Pending.RemoveEnded(S.Background, agent) == 0) { return false; }
                     break;
                 }
             // A sub-agent that failed asks nothing any more either; its failure is written
@@ -603,7 +607,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "subagent.failed":
                 {
                     var agent = Json.Str(e, "agentId") is { Length: > 0 } a ? a : S.Background.AgentOf(Json.Str(data, "toolCallId"));
-                    if (agent is null || S.Pending.RemoveAll(q => q.Agent is { } p && (p == agent || S.Background.HasEnded(p))) == 0) { return false; }
+                    if (agent is null || S.Pending.RemoveEnded(S.Background, agent) == 0) { return false; }
                     break;
                 }
             case "session.shutdown" when !sub:
@@ -653,7 +657,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     // A task call returning ends its agent, failed or not, and whatever that
                     // agent was still asking is asked of no one: left pending, the session and
                     // the failed delegate read waiting.
-                    S.Pending.RemoveAll(q => q.Agent is { } a && S.Background.HasEnded(a));
+                    S.Pending.RemoveEnded(S.Background);
                     S.Activity(at);
                     break;
                 }
@@ -685,7 +689,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     }
 
     // A turn starting leaves the last one's error behind it, as the CLI's own session list clears
-    // its error on a prompt. Never a sign-in: VM1's Quality session (#800) signed out at 16:45:05,
+    // its error on a prompt. Never a sign-in: a Quality session (#800) signed out at 16:45:05,
     // ended a turn at 16:50:55 and failed sign-in again 51 ms later, and Migration's turn_end at
     // 16:47:25 proved nothing either. A prompt, a turn starting or ending, a hook and anything the
     // bridge typed are all written whether the agent can reach its model or not.

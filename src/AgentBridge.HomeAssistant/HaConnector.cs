@@ -723,7 +723,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 starting.Remove(id);
                 // An ended session's rid history goes with it, unless a delivery is still running
                 // (RepliesDoneAsync drops it then).
-                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                if (!underWay.ContainsKey(id) && ridLogs.TryRemove(id, out _)) { Ended(id); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }
@@ -740,9 +740,12 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             foreach (var id in ridLogs.Keys)
             {
-                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { if (ridLogs.TryRemove(id, out _)) { Ended(id); } }
+                // A delivery still running keeps the history, not the queue: the same id back is a new lifetime.
+                else if (!live.ContainsKey(id) && ridLogs.TryGetValue(id, out var ended)) { ended.Drop(); Ended(id); }
             }
         }
+        Discard();
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
         {
@@ -872,6 +875,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
         // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
         if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
+        detail["reply_queue_count"] = QueueCount(s.Id);
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {

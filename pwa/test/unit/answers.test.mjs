@@ -27,7 +27,7 @@ test('other text is accepted only where the field allows it and must say somethi
   const q = form(choice('answer', { other: true }));
   assert.equal(checkAnswer(q, fields({ answer: { other: 'neither, use c' } })), null);
   assert.match(checkAnswer(q, fields({ answer: { other: '  ' } })), /empty/);
-  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 4 KiB/);
+  assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 16 KiB/);
   assert.match(checkAnswer(q, fields({ answer: { other: 'c', also: 1 } })), /unexpected properties beside other/);
   assert.match(checkAnswer(q, fields({ answer: 3 })), /expected a choice/);
 });
@@ -46,6 +46,17 @@ test('a multi choice takes a list with at most one other', () => {
   assert.match(checkAnswer(q, fields({ pick: [{ other: 'c' }, { other: 'd' }] })), /at most one other/);
   assert.match(checkAnswer(q, fields({ pick: 'a' })), /expected a list/);
   assert.match(checkAnswer(q, fields({ pick: ['z'] })), /not one of the choices/);
+});
+
+// Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent; an optional one may be empty.
+test('a required multi takes at least one choice and an optional one may be empty', () => {
+  const required = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }], required: true });
+  assert.equal(checkAnswer(required, fields({ pick: [] })), '"pick" needs an answer');
+  assert.equal(checkAnswer(required, fields({ pick: ['a'] })), null);
+  const withOther = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }], allowOther: true, required: true });
+  assert.equal(checkAnswer(withOther, fields({ pick: [{ other: 'c' }] })), null);
+  const optional = form({ name: 'pick', type: 'multi', options: [{ value: 'a' }, { value: 'b' }] });
+  assert.equal(checkAnswer(optional, fields({ pick: [] })), null);
 });
 
 test('booleans, numbers and text must have their own JSON type', () => {
@@ -74,7 +85,7 @@ test('a question without fields takes non-empty text, and one with fields takes 
   assert.match(checkAnswer(plain, { id: 's1', question: 'q1', request: 'r1', text: ' ' }), /empty/);
   assert.match(checkAnswer(plain, fields({ answer: 'a' })), /not fields/);
   assert.match(checkAnswer(form(choice('answer')), { text: 'a' }), /not a text answer/);
-  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 4 KiB/);
+  assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 16 KiB/);
 });
 
 test('a truncated question is never answered remotely', () => {
@@ -174,36 +185,37 @@ test('a stale answer can be given again only when the host cancelled its form, a
   assert.equal(answeredWords(form(), { text: 'wait' }), 'wait');
 });
 
-test('the 4 KiB limit counts UTF-8 bytes, not characters', () => {
+test('the 16 KiB limit counts UTF-8 bytes, not characters', () => {
   const q = form({ name: 't', type: 'text' });
-  // 1,025 emoji are 2,050 UTF-16 code units and 4,100 bytes: over, though far fewer characters.
-  const emoji = '😀'.repeat(1025);
-  assert.equal(utf8Bytes(emoji), 4100);
-  assert.match(checkAnswer(q, fields({ t: emoji })), /longer than 4 KiB/);
+  // 4,097 emoji are 8,194 UTF-16 code units and 16,388 bytes: over, though far fewer characters (an emoji is 12 bytes of the host's JSON,
+  // so the request budget would refuse them first; the byte count is what the limit is made of).
+  assert.equal(utf8Bytes('😀'.repeat(4097)), 16388);
   assert.equal(checkAnswer(q, fields({ t: '😀'.repeat(1024) })), null);
   assert.equal(checkAnswer(q, fields({ t: 'x'.repeat(Limits.text) })), null);
-  assert.match(checkAnswer(q, fields({ t: '€'.repeat(1366) })), /longer than 4 KiB/);
+  assert.equal(checkAnswer(q, fields({ t: 'é'.repeat(8192) })), null);
+  assert.match(checkAnswer(q, fields({ t: 'é'.repeat(8193) })), /longer than 16 KiB/);
+  assert.match(checkAnswer(q, fields({ t: '€'.repeat(5462) })), /longer than 16 KiB/);
 });
 
-test('a request over 16 KiB is refused even when each text is within its own limit', () => {
+test('a request over 17 KiB is refused even when each text is within its own limit', () => {
   const names = ['t0', 't1', 't2', 't3', 't4'];
-  const text = 'x'.repeat(Limits.text);
+  const text = 'x'.repeat(Limits.request / 4);
   const all = (n) => fields(Object.fromEntries(names.slice(0, n).map((k) => [k, text])));
   const q = (n) => form(...names.slice(0, n).map((name) => ({ name, type: 'text' })));
-  assert.match(checkAnswer(q(5), all(5)), /larger than 16 KiB/);
+  assert.match(checkAnswer(q(5), all(5)), /larger than 17 KiB/);
   assert.equal(checkAnswer(q(3), all(3)), null);
   // Checked before anything else about the fields, as the host checks it.
-  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 16 KiB/);
+  assert.match(checkAnswer(form(), fields(Object.fromEntries(names.map((k) => [k, text])))), /larger than 17 KiB/);
 });
 
 test('the request is measured as the host serializes it: an emoji is a 12-byte surrogate pair', () => {
   // 1,024 emoji are 4 KiB of UTF-8, within the per-text limit, but 12 KiB of the host's
-  // JSON. One fits; two are over 16 KiB, though JSON.stringify makes them 8 KiB.
+  // JSON. One fits; two are over 17 KiB, though JSON.stringify makes them 8 KiB.
   const emoji = '😀'.repeat(1024);
   const q = form(...['a', 'b'].map((name) => ({ name, type: 'text' })));
   const two = fields({ a: emoji, b: emoji });
   assert.ok(utf8Bytes(JSON.stringify(two)) < Limits.request);
-  assert.match(checkAnswer(q, two), /larger than 16 KiB/);
+  assert.match(checkAnswer(q, two), /larger than 17 KiB/);
   assert.equal(checkAnswer(q, fields({ a: emoji })), null);
 });
 
@@ -253,14 +265,15 @@ test('a default that is not an option becomes Other text where Other is allowed'
   assert.deepEqual(buildAnswer(q, st).answer.fields, { c: { other: 'something else' }, m: ['a', { other: 'and b' }] });
 });
 
-test('a multi choice with nothing ticked is answered with an empty list, which any number allows', () => {
+test('a multi choice with nothing ticked is built as an empty list: a required one is then refused by the check, an optional one allowed', () => {
   const q = form({ name: 'm', title: 'Areas', type: 'multi', required: true, options: [{ value: 'a' }, { value: 'b' }], default: ['a'] });
   const st = initialState(q);
   st.m.selected = [];
   const { answer } = buildAnswer(q, st);
   assert.deepEqual(answer.fields, { m: [] });
-  assert.equal(checkAnswer(q, answer), null);
-  // Required with nothing ticked and no default: [], since any number is allowed.
+  // A required multi needs at least one choice, for every agent (owner decision, Nov 23): the check names it.
+  assert.equal(checkAnswer(q, answer), '"Areas" needs an answer');
+  // Required with nothing ticked and no default: [] is built, and refused by the same check.
   const req = form({ name: 'm', type: 'multi', required: true, options: [{ value: 'a' }] });
   assert.deepEqual(buildAnswer(req, initialState(req)).answer.fields, { m: [] });
   // Optional: left alone it is unanswered; cleared after ticking it is [].

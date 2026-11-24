@@ -19,7 +19,7 @@ the first-machine-pin requirement, following fleet #171/#433. A unique verified 
 match returns `found`; every result carries `fleetScope`, the authenticated relay
 account ID captured with that roster read. Caller-supplied scope/account fields cannot
 select another fleet. Missing scope refuses explicitly. Reconnect during a read refuses.
-Verification is unchanged: real unsigned records remain `unverified` until `hostSign`.
+Roster verification is unchanged: unsigned records remain unverified until `hostSign`; the messaging-only exception below does not set `Verified`.
 The typed result carries optional `model` only when supplied by the authenticated
 roster, never inferred from the request or name. The publisher and relay allow-list
 still exclude model; this does not enable live model-checked broadcasts (#416).
@@ -42,6 +42,19 @@ The completed signed record is byte-fitted within 16 KiB, retaining recent state
 changes and marking omissions with `truncated`/`total`. S-N2b's strict relay
 allow-list/total semantics and S-N2c's vectors must precede deployment of this
 publisher. This slice changes neither verification nor selection.
+
+Own-account messaging exception (owner, Nov 20, 2026, 21:22 PT): [AP5-lite](../protocol/agent-lite.md) local `fleet.find`/`fleet.list` uses fresh present-host rows marked `trust: "own-account"` while messaging is on, even without a verified roster. `found.session.trust` and list-row `trust` authorize messaging routing only, never launches, stop, phone approval or remote manage. Off or kill refuses routing as `off`; presence and registry must stay bound to one current connection snapshot whose account still matches the host's current identity account, or the read refuses `notSameAccount`. The actual send still requires own account and matching channel key. Statements below forbidding unsigned routing describe the roster-governed path and future replacement selection, not this temporary exception.
+
+Reader core, slice RC (#2462, part of #1776): `FleetRegistryReader` (`src/AgentBridge.Host/Fleet/FleetRegistryReader.cs`)
+holds registry state from `registry-get` replies and `registry-changed` frames (order rule, 60 s `at` rule, purge on
+`removed` and on a get that no longer lists a machine, 24 h cache on the monotonic clock). It has a verification seam for
+`hostSign` and nothing is wired to `fleet.list` or `fleet.find` yet; records stay unverified.
+
+Owner decisions (relayed by Engineering, Nov 22, 2026 Pacific): S8 is kept: Home Assistant may remain possible as an
+optional Slipgates client on the normal client protocol (no side door, no extra privileges); nothing in Home Assistant
+is required for Slipgates. The slice 11 dual run stays the gate before the HA connector is removed (S7). The suspension of
+`hostSign` (the Nov 20 own-account messaging exception above) stays temporary; R/#1776 remains a later slice. This
+replaces an earlier relayed note that S8 was dropped.
 
 ## Summary in plain English
 
@@ -81,8 +94,8 @@ cannot sign (agent-principals.md section 2); custody alone does not establish en
 Until the signing and verification dependencies land,
 **the relay can invent, change, hide or replay any record, and no client can tell.** So
 an unsigned record is only a display hint, like presence is today: clients may show
-it labelled "unverified", but name lookup never returns "found" from it and no message is ever
-routed by it. When #1776's signing and trusted readers land, a forged
+it labelled "unverified"; outside the own-account messaging exception, name lookup never returns "found"
+or routes a message from it. When #1776's signing and trusted readers land, a forged
 or altered record is rejected. Even then the relay can still read the list, hold it back, or show
 a copy up to 60 seconds old. The list is kept in relay memory only: never in the stored roster,
 never in logs, never in metrics.
@@ -202,7 +215,7 @@ socket (`RelayHub.cs:261-264`). So no frame may ever be built from "all machines
 | One relay frame | 24,576 bytes (24 KiB), always one machine | Under 40% of 65,561 |
 | Machines per account | 32 (`RelayOptions.cs:16`) | At most 32 machine frames plus one `known` frame |
 | `known` frame | 32 entries of about 150 bytes, under 8 KiB | Known-machine metadata with socket liveness, no sessions |
-| `registry-get` | one in 2 s per socket; sooner is refused `slow-down` | A get returns up to 33 frames |
+| `registry-get` | Per socket a token bucket: burst 20, refill 10/s. Per account, across its sockets: burst 50, refill 50/s. Past either, `slow-down` (#1396; named constants in `RegistryReadLimit`) | A get returns up to 33 frames, about 512 KiB worst case, so 50/s is about 25 MB/s per account at the extreme; the old one-in-2-s rule made every send's `fleet.list` collide |
 
 * **One machine per frame.** A `registry-get` is answered with one `registry` frame per machine,
   then one `known` frame, each tagged with the request `id` and `part` and `of`. There is no
@@ -253,11 +266,15 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 
 ## Freshness and replay (5 s and 60 s)
 
-The reader checks/cache below are target RC behavior, not implemented by `FleetList.Parse`.
 The relay's own received-time/sequence checks are not independent reader verification
-(`RosterFields.cs:110-141`).
+(`RosterFields.cs:110-141`). `RelayFleetRoster.Read` now implements the order rule, the
+in-memory cache, the purge of unlisted machines, and pinned-roster membership (#2643).
+The relay's `registry-subscribe` and `registry-changed` (slice 2b) exist. `FleetRegistryReader` (slice RC)
+applies the 60 s `at` rule, `registry-changed` frames and `removed` purges the same way; it is not yet
+wired to `fleet.list`. Signature checks are still to come (#1776).
 
-* A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s,
+* A host sends a new snapshot when any listed field changes, debounced to at most one per 2 s
+  (a session that ends is sent at once, never held for the debounce),
   plus a heartbeat every 20 s even if nothing changed. A heartbeat is a new snapshot: `seq` rises
   and `at` is the current time. The relay pushes each accepted change at once. Expected lag:
   under 3 s, with a hard target of 5 s.
@@ -270,8 +287,11 @@ The relay's own received-time/sequence checks are not independent reader verific
   within 60 s of the reader's own clock (earlier or later) **and** the relay says the machine is
   online. Anything else is stale: its sessions are shown as "last seen at …" and never returned as
   live by `fleet.find`. There is no separate 5-minute window.
-* **Order.** Within one `epoch` a reader rejects a record whose `seq` is not greater than the
-  last one it accepted from that machine. A new `epoch` is accepted when its `at` is later than the
+* **Order.** Within one `epoch` a reader rejects a record whose `seq` is lower than the
+  last one it accepted from that machine. Equal is accepted: the relay serves the same snapshot on
+  every read until the host's next heartbeat, and `seq` rises only with a new snapshot. Once a reader
+  holds an order for a machine, a record whose `epoch`, `seq` or `at` is missing or malformed is
+  rejected too (#3262). A new `epoch` is accepted when its `at` is later than the
   `at` of the last record accepted from that machine. So a restarted host (new epoch, `seq` back at
   1) is accepted without any state kept on disk, and an old epoch's records are refused after a
   newer one was seen.
@@ -289,9 +309,40 @@ The relay's own received-time/sequence checks are not independent reader verific
     reader that was offline learns it from the next `registry-get`, which no longer lists the
     machine, and drops cache entries for machines not listed in `registry` or `known`.
 
+## One registry read for every local caller (#1396)
+
+A host has one relay connection, and every local reader shares it: `fleet.list` and `fleet.find` for each
+agent session on the machine, and the Lite receiver's account and roster checks. Each used to make its own
+`registry-get`, so two sessions replying within the same two seconds made the relay answer `slow-down`
+(seen as "fleet.list refused: the relay allows one registry read every 2 seconds" from `reply-session`).
+The relay's rate is now a token bucket (see "Size and paging", #3787); this rule removes the avoidable reads
+so the bucket is spent on distinct work.
+
+* **Single flight.** While a `registry-get` is in flight on the host's relay connection, readers that may share
+  wait for that one read and get its result. One shared read serves both of the host's roster readers
+  (the fleet roster and the Lite messaging roster), not one each.
+* **Freshness window.** A successful read is reused for `RegistryReadFreshness` (1 s, monotonic clock) by a reader that may
+  share. Liveness is judged on the registry's own `lastSeen` (5 s and 60 s windows), and the target host
+  resolves a node id again itself before typing.
+* **Who may share, and who must not.** Sharing is for listing and routing: `fleet.list` and `fleet.find` as an agent
+  session calls them to send to a node id or to look at the fleet. These **bypass it and always start their own
+  read, after the request arrived**: (1) the send-time name fence, which asks `fleet.list` with `fresh: true`
+  (a name that moved from A to B must never send to A); (2) name-uniqueness checks, the rename enrollment's duplicate
+  test and a named launch's availability test; any caller that sends `fresh: true`. A shared read is never used for
+  a decision about whether a name is free or still belongs to a node.
+* **Never cached:** a failed or refused read (a `slow-down` or a transport failure is reported to each caller, never
+  answered from an older copy), a read after the connection changed (attaching a new connection resets the shared
+  read, and a read still in flight for the old connection is not kept for the new one), and anything across accounts.
+* **Same answer.** The reply shape and scoping of `fleet.list` and `fleet.find` do not change; `fresh` is the only new
+  request field, and a value that is not the boolean `true` means not fresh. The shared read is the account snapshot
+  before each caller's own filtering and authorization.
+* **Not changed:** the sender's refusal when the target is not live in the read, the expected-node fence and the
+  name fence (now fresh by the rule above). A held discovery pass on the target is a separate refusal
+  (`sessionResolutionIncomplete`, #3802). The 30 s pin on a lost reply is not changed here (follow-up).
+
 ## Offline machines and the cache
 
-This cache is planned RC work; today's fleet op reads the connected relay, not a disk cache.
+The host's fleet reader keeps this cache in memory only (#2643), cleared on each new relay connection.
 
 An offline machine appears in the list (name, `online: false`, last seen) so a reader can say
 "machine is off". Its sessions are not served as live: the relay drops them from memory when the
@@ -299,7 +350,7 @@ host goes offline. A reconnecting host can appear online before its full snapsho
 no sessions are invented in that interval.
 
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
-(then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
+measured on a monotonic clock (then deleted; a wall-clock correction does not change it, #3262). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
 "this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
 
@@ -383,7 +434,7 @@ truth. The host-owned fleet name is the canonical lookup key; routing still uses
 resolved machine/node, never a node ID typed by a person.
 
 ```
-{ "op": "fleet.find", "data": { "name": "SG Quality Lead", "machine": "<optional device id>" } }
+{ "op": "fleet.find", "data": { "sessionId": "<live node, bare 16-hex or published full UUID>", "machine": "<optional device id>" } }
 -> { "result": "found",      "fleetScope": "<account id>", "session": { "id", "node", "machine", "state", "since", "model"? } }
 -> { "result": "ambiguous",  "fleetScope": "<account id>", "candidates": [ { "id", "node", "machine", "state", "since",
                                                "online" } … ] }
@@ -393,11 +444,13 @@ resolved machine/node, never a node ID typed by a person.
 -> { "result": "notFound",   "fleetScope": "<account id>" }
 ```
 
+**ID-first supersedes the legacy name/replacement rules below** ([#3607](https://github.com/danswett/agent-bridge/issues/3607), owner Nov 19, 2026, 12:10/12:12 PT). The exclusive `sessionId` resolves only from live roster rows; full UUIDs require the published node binding. `name`/`machineName` selectors refuse, and `machine` pins only an exact device ID. Unknown, stale or offline IDs now produce a loud `refused:` reason naming the ID, not the legacy `notFound`/`offline` responses above. Trust, completeness, account, kill and final-effect fences stay unchanged. See [the current protocol](../protocol/agent-operations.md#fleetfind). Names are display only; role-ID code/claims remain paused.
+
 Every `session` and candidate holds typed fields only; **the session name is never echoed back**.
 Where a reply includes a machine object, session or candidate, it may also carry `machineName`
 as described above. `incomplete` still lists only machine IDs. Display names do not verify a
 record or alter any lookup result. Only
-verified, live records ever contribute a `node`: `unverified` and `incomplete` answers
+roster-verified live records or messaging-only own-account live matches contribute a `node`: `unverified` and `incomplete` answers
 list machines and flags, never a node to route to. `model` is omitted when unavailable;
 callers requiring model binding must refuse missing/mismatched values, never guess.
 
@@ -408,23 +461,23 @@ first-pin requirement. Scope comes from the authenticated connection, never requ
 
 **Implemented selector precedence.** The following branches exist (`FleetList.cs:185-204`),
 but production `Verified` remains false. Verified cases are fixtures/future reader inputs,
-not today's live behavior. #2360 changes those branches only after the external reader lands:
+not today's roster-verified behavior. Own-account messaging uses the distinct trust exception in these branches; #2360 changes signed replacement selection only after the external reader lands:
 
 1. `incomplete`: any machine that could hold a match (every live machine, or only the one given
    as `machine`) has `truncated: true`. This applies even when a verified match was seen, because a
    duplicate could be hidden.
-2. `unverified`: at least one live unverified match, whether or not a verified live match also
+2. `unverified`: at least one live unverified match without own-account messaging trust, whether or not a verified live match also
    exists.
-3. `ambiguous`: two or more verified live matches, including duplicates on the same machine.
+3. `ambiguous`: two or more roster-verified or own-account messaging live matches, including duplicates on the same machine.
 4. `offline`: matches exist only on offline or stale machines.
-5. `found`: exactly one verified live match in scope, with or without `machine`.
+5. `found`: exactly one roster-verified or own-account messaging live match in scope, with or without `machine`.
    Offline/stale matches do not create a live duplicate.
 6. `notFound`: otherwise.
 
 * **Name-only is not identity proof.** A verified same-account machine can claim another
   session's name while the original is offline. Removing the first pin does not solve
-  that limitation. Signature verification remains mandatory; unsigned records never
-  yield `found`. Signed name ownership remains separate roster-v2 work.
+  that limitation. Outside the messaging-only own-account exception, signature verification remains mandatory and unsigned records never
+  yield `found`. The exception still verifies the send's signed envelope and channel key; signed name ownership remains separate roster-v2 work.
 * **Exact match**, case-sensitive, trimmed. Never fuzzy. A caller that wants a fragment search
   filters `fleet.list` itself.
 * **Callers pin.** A caller that is about to act, `agent.send` above all, passes the `machine` and
@@ -536,8 +589,8 @@ sender's own pinned machines. It cannot make a message reach another account or 
 machine. That is the only protection, and it is not enough to rely on a name.
 
 **What a record is worth before #1776 verification.** A display hint, equal to a machine's presence today.
-Clients may show it, labelled "unverified". `fleet.find` returns `unverified`, never `found`, and
-scripts do not act on it. A person who needs a verified answer uses the end-to-end path (`sessions.list`
+Clients may show it, labelled "unverified". Outside the own-account messaging exception, `fleet.find` returns `unverified`, never `found`,
+and scripts do not act on it. A person who needs a verified answer uses the end-to-end path (`sessions.list`
 over the Noise channel, Option B), which does authenticate the host.
 
 **What changes after #1776** (roster v2, agent-principals.md section 8.10):
@@ -570,6 +623,7 @@ alone, observe mode or roster library support is not evidence those gates are de
 | Session name | Never | Relay sees (cap 64, optional) | Only person-set names; filter; per-machine off switch (Decision 2); not stored, not logged |
 | Session state and since | Never | Relay sees | Coarse enum only |
 | Process startedAt (#2360, planned) | Never | Relay sees | Optional process time only; signed before ranking |
+| Session owner principal, PR number, finished flag (#2643) | Never | Relay sees, only once known | Bounded closed shapes; unknown sent as absent; not stored, not logged |
 | Count of sessions per machine | Never | Relay sees | Capped at 64, `total` when more |
 | Prompts, questions, paths, repo, branch, model, first message, folder | Never | Never | Allow-list test on host and relay |
 | Storage | Machine blob, 30 s writes | Registry is **not** in the blob | Memory only; lost on relay restart, rebuilt from host heartbeats within 20 s |
@@ -599,7 +653,7 @@ first draft of this note.
 |---|---|---|---|---|
 | 0 | This note (design slice, PR #1422) | S | none | Docs checks |
 | 1 | `fleet-registry.json` vectors and the records spec in roster.md (shape, allow-list, epoch and seq, truncation, paging, error codes, signing layout) | M* | 0 | C# writes and replays vectors; PWA and Apple mirror files assert the same bytes; a README table row |
-| R | **Roster v2 and `hostSign`** (agent-principals.md §8.10, #391). Not part of this epic's slices; needed for `verified` and for `found` | L, tracked in #391 | none | Its own suite |
+| R | **Roster v2 and `hostSign`** (#1776). Not part of this epic's slices; needed for `verified` and for `found` | L, tracked in #1776 | none | Its own suite |
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
@@ -614,12 +668,21 @@ first draft of this note.
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
 | 11 | 24 h dual run against HA, then S8 | n/a | 2a to 9, RC | At most 5 s lag, zero missing sessions, 100% of person-set names resolved |
 
+Slice 11's definitions (live, lag, missing, extra, person-set name), pass bar, exclusions and evidence file are in
+[slipgates-fleet `docs/ha-dual-run.md`](https://github.com/danswett/slipgates-fleet/blob/main/docs/ha-dual-run.md). The sampler and the run each
+need their own approval; the owner decides S7 after Quality attests the evidence.
+
+Stuck-prompt evidence needs no new field here. `fleet.list` already returns `attention`, `openAsks`, `unsentLength`, `unsentHash`,
+`observedAt` and `lastReplyAt` ([agent-operations.md](../protocol/agent-operations.md)); the fleet tools' relay roster projection
+(`Get-FleetRoster`) now carries them, so the stuck-prompt shadow reads them with HA off. The read scope is unchanged and an `approval`
+attention is passed through unmapped, so a reader refuses it rather than guessing.
+
 Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L/M, was one L);
 #1399 grows from S to M; #1412 stays L; the reader core RC is a new issue. The epic's seven-day
 estimate for the host side is unchanged only if `hostSign` (R) is built elsewhere in parallel.
 
-Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; `found`
-cannot be returned, so slice 9 (the scripts) cannot switch off HA name lookup before R. That makes
+Until R lands, slices 1 to 8 still ship and the fleet view works, labelled "unverified"; outside the own-account
+messaging exception, `found` cannot be returned and slice 9 cannot switch off HA name lookup before R. That makes
 roster v2 a real dependency of #1399's acceptance criterion "correct with HA blocked"; see
 Decision 4. #2151 removes the caller's machine requirement, not R's verification gate.
 
@@ -688,11 +751,11 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
    rename; S-N1 owns app enrollment and CLI disclosure/warning, not a new authority.
 4. **Signing and routing** (Engineering). #2360 confirms: records are unverified until #1776's
    roster-v2 enrollment, signing and trusted reader dependencies land; `fleet.find` returns
-   `found` only for verified live records. No routing from unverified records and no interim
+   `found` only for verified live records outside the own-account messaging exception. No other unsigned routing and no interim
    key; protected custody alone is insufficient.
 5. **Transport shape and limits** (Engineering). Recommended: dedicated `registry-*` frames, opt-in
    by `registry-get` or `registry-subscribe`, one machine per frame, 64 sessions, 16 KiB per
-   record, 24 KiB per frame, one get per 2 s. Confirm the numbers.
+   record, 24 KiB per frame, token-bucket gets (#1396: socket 20 burst + 10/s, account 50 burst + 50/s). Owner confirms the numbers.
 6. **Non-person client pairing** (Owner, tracked in S6). Needed before S8, not before slices 1 to 9.
 7. **Name-only lookup** (#2151, fleet #171/#433). Supersedes the first-machine-pin
    recommendation; a unique verified live name may be found within authenticated account scope.
@@ -705,17 +768,16 @@ Hosted failing-first red proof/output; no live changes; wrapper #605 separate. Q
 * Same-account fan-out, host-only put, and refusal of cross-account requests.
 * The name rules, the "untrusted display text" marking, that `fleet.find` never echoes a name, and
   that no agent-written title (Claude `aiTitle`, Copilot `name:`) reaches the relay.
-* That current name-only `found` requires one verified live match; #2360's future duplicate
+* That name-only `found` requires one roster-verified or messaging-only own-account live match; #2360's future duplicate
   selection requires all matches verified and one provably newest signed start. Scope,
   incomplete/unverified precedence, no inferred model and name-ownership limits remain.
 * That the relay's power is stated honestly: today it can forge, alter, hide and replay records and
   no client can tell; after `hostSign` it can read, withhold and replay within 60 s, not forge.
-* That `found` and `agent.send` are never produced or driven by an unverified, stale or offline
-  record.
+* That only the temporary own-account exception may route messaging from an unsigned record; stale/offline rows never route.
 
 ## Not in this note
 
 The messaging cut-over (#728), the audit log (#1401), script credentials (#1402, #1414),
-pairing of non-person clients (S6), roster v2 and `hostSign` (#391) and the client protocol as a
+pairing of non-person clients (S6), roster v2 and `hostSign` (#1776) and the client protocol as a
 whole (#1406, `docs/design/client-protocol.md`). This note must fit that frame: the registry is a
 few ordinary frames and two ordinary ops, with the same auth for every caller.

@@ -447,3 +447,27 @@ test('version.json is always asked of the network, even when a release has kept 
   assert.deepEqual(plain(sw.fetched), [{ input: `${scope}version.json`, init: { cache: 'no-cache', credentials: 'same-origin' } }]);
   assert.equal(sw.kept(CURRENT)[`${scope}version.json`], 'stale', 'and never kept');
 });
+
+const failures = (data = {}, extra = {}) => ({
+  web_push: 8030,
+  notification: {
+    title: 'Messages not delivered',
+    body: 'DEV · 3 messages not delivered',
+    navigate: `${scope}?host=${MACHINE}`,
+    tag: `${MACHINE}:~failures`,
+    lang: 'en',
+    data: { v: 1, kind: 'failures', machine: MACHINE, session: '', failures: 3, at: '2026-10-28T04:22:43.182Z', ...data },
+    ...extra,
+  },
+});
+
+test('a failures notice is shown alerting under the machine\'s failures tag, keeps its kind and count, and its tap target is the machine', async () => {
+  const sw = worker();
+  await sw.fire('push', push(failures()));
+  const [n] = sw.shown;
+  assert.equal(n.title, 'Messages not delivered');
+  assert.equal(n.tag, `${MACHINE}:~failures`);
+  assert.equal(n.renotify, true);
+  assert.equal(n.silent, undefined);
+  assert.deepEqual(plain(n.data), { url: `${scope}?host=${MACHINE}`, kind: 'failures', machine: MACHINE, session: null, question: null, failures: 3 });
+});

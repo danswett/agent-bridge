@@ -37,6 +37,18 @@
 #   security_sensitive
 #                 default false: a change reaching it adds the security suites and the
 #                 security-review label (quality/README.md §2, AGENTS.md rule 5)
+#   tier          blocking (the default) | post-merge. A post-merge suite's tier_jobs run as
+#                 selected on main and manual runs, never on a pull request (ci.yml, #3209), and
+#                 neither a pull request's merge-rule verdict nor main-green counts
+#                 them; both still show them (quality/README.md §4.9). check reports an unknown
+#                 tier, which counts as blocking
+#   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
+#                 post-merge ("pwa-ui (webkit 1/3)"), each a job its where names. Any post-merge
+#                 suite naming a job makes it post-merge; a renamed job blocks again
+#   lane          fast (the default) | full (S2, #4104, quality/README.md §4.7). A fast suite's where names
+#                 ci.yml jobs, the merge gate; a full suite's where names full.yml jobs, the FULL lane that
+#                 never gates a merge. check reports an unknown lane (it counts as fast), a full suite whose
+#                 where names ci.yml or no full.yml job, and a fast suite whose where names full.yml
 #
 # A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
@@ -238,7 +250,23 @@ suites:
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
+    # Product's Windows on Arm leg runs every product suite; it's named once, here (#3208).
+    tier: post-merge
+    tier_jobs: [product (windows-11-arm)]
     baseline: { tests: 609, seconds: 30 }
+    status: exists
+
+  - id: session-reaper
+    validation_plan: native
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    triggers: [src/AgentBridge.Host/Reaping/**, tests/AgentBridge.Host.Tests/SessionReaper*]
+    command: dotnet test tests/AgentBridge.Host.Tests -c Release -m:1 --filter "FullyQualifiedName~SessionReaper"
+    where: ci.yml product
     status: exists
 
   - id: hooks
@@ -315,6 +343,48 @@ suites:
     where: ci.yml product
     status: exists
 
+  # The no-new-HA-call-sites guard (Part of #1396; slipgates-fleet #726's design). It scans every tracked text file outside the top-level
+  # tests/, docs/, design/, spikes/ and backlog/ (any bin, obj and node_modules folder, and binary types, are skipped), so the triggers
+  # name every other top-level folder, and '*' the root-level files; .github/** and quality/** already run the whole ring
+  # (global_triggers). quality-tool above is not widened.
+  - id: ha-callsite-guard
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Quality.Tests
+    triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter "FullyQualifiedName~HaCallSiteGuardTests"
+    where: ci.yml product
+    baseline: { tests: 51, seconds: 3 }
+    status: exists
+
+  - id: product-crash-diagnostics
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/run.ps1, quality/dotnet-test-command.ps1, quality/test-product-crash.ps1]
+    command: pwsh -NoProfile -File quality/test-product-crash.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: product-test-retry
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [.github/workflows/ci.yml, quality/product-test-retry.ps1, quality/test-product-retry.ps1]
+    command: pwsh -NoProfile -File quality/test-product-retry.ps1
+    where: ci.yml light
+    status: exists
+
   - id: catalog-check
     validation_plan: native
     kind: static
@@ -385,7 +455,10 @@ suites:
     # The merge rule GitHub enforces (quality/README.md §4.9): main's copy of merge-rule.yml judges
     # every open pull request into main against main's quality/merge-rule.yml and posts the
     # merge-rule status main's ruleset requires. Never a pull request's own run, so it can't loosen
-    # its own gate. Its logic is quality-tool's MergeRule.cs, tested there.
+    # its own gate. Its logic is quality-tool's MergeRule.cs, tested there. Its triggers (#4104):
+    # every open-PR workflow's start and finish, CI's push run on main finishing only, statuses on any
+    # failure, error or pending and on success only for the contexts read by name; one run per key
+    # (MergeRuleTests: the event table, the status table, the cancel proof).
     platforms: [linux-x64]
     runner: hosted
     command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
@@ -468,9 +541,9 @@ suites:
     # Both Windows runners run these steps, so a build/ change reaches windows-11-arm too.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    triggers: [build/**]
+    triggers: [build/**, .github/workflows/publish-pending.yml]
     command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
-    where: ci.yml product
+    where: ci.yml product; publish-pending.yml
     status: exists
 
   - id: lab-scripts
@@ -541,17 +614,60 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: ci-speed-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # How fast main's CI is (#4104): the merge-gate wall from created_at and from run_started_at, the full run, the gate's queue
+    # wait and the red rate per day, on a fixed run and job list. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/ci-speed.ps1, quality/test-ci-speed.ps1]
+    command: pwsh -NoProfile -File quality/test-ci-speed.ps1
+    where: ci.yml light
+    # planned until the ci.yml step lands (patches/ci-speed-step-4104.patch, applied by Quality): until then only a local run tests it.
+    # Flip to exists with that patch.
+    status: planned
+
+  - id: stale-pwa-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The stale-PWA alarm's decision (#4369 Fix 3, #4104): app.slipgates.com's served build (config.js APP_VERSION and BUILT_AT) against main's newest PWA-changing
+    # commit; more than 24 h behind fails loudly, and anything unreadable fails closed. On files, offline: no request, no token.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/stale-pwa.ps1, quality/test-stale-pwa.ps1]
+    command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
+    where: ci.yml light, stale-pwa.yml check
+    status: exists
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
     ring: 0
     select: affected
-    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
-    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    # quality-gate's win-arm64 waiver (#2564, permanent since Nov 22): which failed jobs it waives, every
+    # refusal, and that the switch and date are ignored, on fixed needs and jobs JSON. Nothing reaches GitHub.
     platforms: [win-x64, linux-x64]
     runner: local
     triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
     command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: host-shards-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The deterministic split of tests/AgentBridge.Host.Tests into class-level shards (#2454, #2225): no test
+    # lost or run twice, the same split every time, balanced by the committed per-class seconds. Offline.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/host-shards.ps1, quality/test-host-shards.ps1, quality/baselines/host-test-class-seconds.json]
+    command: pwsh -NoProfile -File quality/test-host-shards.ps1
     where: ci.yml light
     status: exists
 
@@ -567,6 +683,42 @@ suites:
     triggers: [quality/rerun-known-flakes.ps1, quality/test-rerun-known-flakes.ps1, .github/workflows/rerun-known-flakes.yml]
     command: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
     where: ci.yml light; rerun-known-flakes.yml rerun
+    status: exists
+
+  - id: main-red
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/main-red.ps1, quality/test-main-red.ps1, .github/workflows/main-red.yml]
+    command: pwsh -NoProfile -File quality/test-main-red.ps1
+    where: ci.yml light; main-red.yml
+    status: exists
+
+  - id: merge-rule-sweep
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/merge-rule-sweep.ps1, quality/test-merge-rule-sweep.ps1, .github/workflows/merge-rule-sweep.yml]
+    command: pwsh -NoProfile -File quality/test-merge-rule-sweep.ps1
+    where: ci.yml light; merge-rule-sweep.yml sweep
+    status: exists
+
+  - id: revert-culprit
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/revert-culprit.ps1, quality/test-revert-culprit.ps1, quality/main-red.ps1, quality/red-minutes.ps1, quality/rerun-known-flakes.ps1, .github/workflows/revert-culprit.yml]
+    command: pwsh -NoProfile -File quality/test-revert-culprit.ps1
+    where: ci.yml light; revert-culprit.yml
     status: exists
 
   - id: beta-acceptance
@@ -629,6 +781,9 @@ suites:
     triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
     command: see ci.yml app and app-installer jobs
     where: ci.yml app, app-installer
+    # Arm64 packaging and both installers run after merge (#3208); app (win-x64) blocks.
+    tier: post-merge
+    tier_jobs: [app (win-arm64), app-installer (win-x64), app-installer (win-arm64)]
     status: exists
 
   - id: app-package-host
@@ -791,6 +946,9 @@ suites:
     # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
     where: ci.yml pwa-ui
+    # WebKit runs after merge (#3208); Chromium blocks.
+    tier: post-merge
+    tier_jobs: [pwa-ui (webkit 1/3), pwa-ui (webkit 2/3), pwa-ui (webkit 3/3)]
     baseline: { files: 25 }
     status: exists
 
@@ -807,6 +965,9 @@ suites:
     triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
     where: ci.yml pwa-e2e
+    # The live browser suite, through the dev stack's relay: runs after merge (#3208).
+    tier: post-merge
+    tier_jobs: [pwa-e2e]
     status: exists
 
   - id: pwa-site-csp
@@ -830,8 +991,8 @@ suites:
     runner: hosted
     # The system-package download and offline install before browser-only installs (#799, #689):
     # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
-    # archive on Azure DNS/update timeout or exhausted network retries; cache warnings require
-    # the offline install to succeed, and package errors fail at once.
+    # archive on Azure DNS/update timeout or exhausted network retries; cached debs install only
+    # after matching live signed indexes, and package errors fail at once.
     triggers: [.github/actions/playwright-system-packages/**]
     command: bash .github/actions/playwright-system-packages/test.sh
     where: ci.yml light
@@ -985,6 +1146,45 @@ suites:
     where: relay.yml production, rollback
     status: exists
 
+  - id: ab-ci-smoke
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand on main with use_ab_ci: proves an ab-ci runner's environment as the runner (PATH, NuGet mirror, a
+    # Release build), before AB_CI_SELF_HOSTED is set again (#4104).
+    platforms: [win-x64]
+    runner: lab
+    command: see ab-ci-smoke.yml smoke
+    where: ab-ci-smoke.yml smoke
+    status: exists
+
+  - id: release-feed-worker
+    validation_plan: native
+    kind: unit
+    ring: 4
+    select: always
+    # The release feed Worker's own tests (#927), the gate before release-feed-deploy.yml deploys it.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [infra/cloudflare/release-feed/**]
+    command: node infra/cloudflare/release-feed/worker.test.mjs
+    where: release-feed-deploy.yml test
+    status: exists
+
+  - id: release-feed-deploy
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand, main only, after SRE approves: deploys the Worker, then purges its list URL and checks the next
+    # answer was fetched after the purge, and a 304 for its ETag (#3870, #3880).
+    platforms: [linux-x64]
+    runner: staging
+    command: see release-feed-deploy.yml deploy and purge-check
+    where: release-feed-deploy.yml deploy, purge-check
+    status: exists
+
   - id: epic-dashboard-unit
     validation_plan: native
     kind: unit
@@ -1021,8 +1221,25 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: hosted
     triggers: [spikes/**]
-    command: see ci.yml spikes, spikes-linux
-    where: ci.yml spikes, spikes-linux
+    # The FULL lane since S2 piece 4 (#4104): a change under spikes/ no longer waits on these in a pull request; they run in
+    # full.yml after the merge, and a red one opens a full-red issue (piece 7) and never holds a merge.
+    command: see full.yml spikes, spikes-linux
+    where: full.yml spikes, spikes-linux
+    lane: full
+    status: exists
+
+  - id: full-gate
+    validation_plan: native
+    kind: static
+    ring: 2
+    select: always
+    # The FULL lane's own plumbing (full.yml, S2, #4104): the trigger job that says whether the FAST run was a green push to main,
+    # and full-gate, which fails when any FULL job did not pass (a skipped one included), as quality-gate does for ci.yml.
+    platforms: [linux-x64]
+    runner: hosted
+    command: see full.yml trigger, full-gate
+    where: full.yml trigger, full-gate
+    lane: full
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines

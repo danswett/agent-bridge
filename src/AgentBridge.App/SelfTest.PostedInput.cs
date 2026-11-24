@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Windows.System;
 
@@ -49,15 +50,23 @@ static partial class SelfTest
             if (focused is not null && !ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), focused))
             {
                 var held = new Windows.Foundation.TypedEventHandler<UIElement, BringIntoViewRequestedEventArgs>((_, e) => e.Handled = true);
-                window.RootElement.BringIntoViewRequested += held;
-                try
-                {
-                    var restored = (await FocusManager.TryFocusAsync(focused, focusState)).Succeeded
-                        && ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), focused);
-                    ready &= restored;
-                    check(restored, $"restores focus after the independent F24 canary ({FocusedName(window)})");
-                }
-                finally { window.RootElement.BringIntoViewRequested -= held; }
+                // A window-root handler runs after the scroller has already moved. A link's
+                // visual parent, like a focused control itself, receives the request below it.
+                var restoreAt = focused as UIElement ?? (focused as TextElement)?.ContentStart?.VisualParent;
+                var restored = restoreAt is not null && await NativeInputSetup.RestoreFocus(restoreAt,
+                    (element, hold) =>
+                    {
+                        if (hold) { element.BringIntoViewRequested += held; }
+                        else { element.BringIntoViewRequested -= held; }
+                    },
+                    async () =>
+                    {
+                        var succeeded = (await FocusManager.TryFocusAsync(focused, focusState)).Succeeded;
+                        await CaptureFrame(window.RootElement);
+                        return succeeded && ReferenceEquals(FocusManager.GetFocusedElement(window.RootElement.XamlRoot), focused);
+                    });
+                ready &= restored;
+                check(restored, $"restores focus after the independent F24 canary ({FocusedName(window)})");
             }
         }
         var selectionKept = ReferenceEquals(selected, window.Sessions.Rows.SelectedItem);
@@ -79,10 +88,10 @@ static partial class SelfTest
             || DateTimeOffset.UtcNow >= PostedQuarantineExpiry) { return false; }
         if (result.GetValueOrDefault(PostedQuarantineKey) is not PostedQuarantine quarantine)
         {
-            quarantine = new("quarantined", [2471, 2476, 2483], "SG Builder 1981 fix", "Engineering Lead accountable",
+            quarantine = new("quarantined", [2471, 2476, 2483], "agent-bridge #2483 and #2508", "Engineering Lead accountable",
                 "2026-11-20T08:00:00Z", []);
             result[PostedQuarantineKey] = quarantine;
-            check(true, "posted F24 input not delivered on ARM64 installer (quarantined, issues 2471, 2476, 2483, expires 2026-11-20; owner SG Builder 1981 fix; Engineering Lead accountable; 2483 posts no input: Chief runner-cohort exception, not a proven delivery cause)");
+            check(true, "posted F24 input not delivered on ARM64 installer (quarantined, issues 2471, 2476, 2483, expires 2026-11-20; owner agent-bridge #2483 and #2508; Engineering Lead accountable; 2483 posts no input: Chief runner-cohort exception, not a proven delivery cause)");
         }
         quarantine.Checks.Add(new { name, detail });
         AppLog.Write($"self-test: quarantined: {name}: {System.Text.Json.JsonSerializer.Serialize(detail)}; {ForegroundOwner()}");

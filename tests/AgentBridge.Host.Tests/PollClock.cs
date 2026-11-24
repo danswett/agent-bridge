@@ -26,6 +26,11 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     bool afterFrozen;
     long lastActive = Stopwatch.GetTimestamp();
     static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
+    // A budget is jumped to only after the service has made this many look-again waits since the clock was let run: it has
+    // LOOKED, whatever the load. A service that never polls is reached by the longer wall-time backstop instead.
+    const int LooksNeeded = 3;
+    static readonly TimeSpan Backstop = TimeSpan.FromSeconds(2);
+    int looks;
     // The longest wait a frozen clock still fires: a service's look-again interval, not its budget.
     static readonly long SteadyTicks = TimeSpan.FromMilliseconds(100).Ticks;
 
@@ -43,9 +48,15 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         driving = Task.Run(DriveAsync);
     }
 
+    // The other way: a test that needs a budget to run out only for a later step keeps time still until then.
+    public void Freeze()
+    {
+        lock (gate) { frozen = true; afterFrozen = false; looks = 0; lastActive = Stopwatch.GetTimestamp(); }
+    }
+
     public void Run()
     {
-        lock (gate) { afterFrozen = frozen; frozen = false; lastActive = Stopwatch.GetTimestamp(); }
+        lock (gate) { afterFrozen = frozen; frozen = false; looks = 0; lastActive = Stopwatch.GetTimestamp(); }
         armed.Release();
     }
 
@@ -85,10 +96,13 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
                     // is the soonest wait only because the service is between two looks, and
                     // jumping then ran it out before its first look (a 400 ms wait, before the
                     // session it waited for was even seen).
-                    if (still || Stopwatch.GetElapsedTime(lastActive) < Quiet) { due = null; gated = !still; }
+                    var quiet = Stopwatch.GetElapsedTime(lastActive);
+                    if (still || quiet < Quiet || (looks < LooksNeeded && quiet < Backstop)) { due = null; gated = !still; }
                 }
                 if (due is not null)
                 {
+                    // A look-again wait firing is the service having looked once more.
+                    if (due.DueAt - now <= SteadyTicks) { looks++; }
                     if (!still && due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
                     waits.Remove(due);
                     if (due.Period is { } every) { due.Arm(now + every); }

@@ -305,6 +305,21 @@ public sealed class LocalPipeTests : IAsyncDisposable
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task An_unverified_process_cannot_reach_the_load_handler()
+    {
+        var called = false;
+        var server = Serve((_, _, _) => { called = true; return Task.FromResult<object?>(new { runQueueAvg = 0 }); });
+        server.Check = _ => PeerPolicy.Refusal(new PipePeer(0, null, null, null), "fixture-user", false);
+        var ch = await ConnectAsync();
+        var response = await ch.RequestAsync("load.get", new { });
+        Assert.False(response.GetProperty("ok").GetBoolean());
+        Assert.Contains("could not verify", response.GetProperty("error").GetString());
+        Assert.False(called);
+        await ch.Closed.WaitAsync(Patience);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_server_started_while_the_last_one_on_its_endpoint_is_still_stopping_can_be_reached()
     {
         // A pipe name has no file to remove: it goes with its last instance.

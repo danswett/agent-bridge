@@ -269,7 +269,7 @@ public sealed class ManageService
             // is fenced from here on, so it leaves anyway if the reply cannot be sent (a dropped channel).
             // Inline on the timer's thread, so under a fake clock the host has left by the time Advance returns.
             _ = Task.Delay(LeaveAnyway, time).ContinueWith(_ => Leave(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-            return new ChannelReply(Result(accepted) with { Transition = transition }, _ => { Leave(); return Task.CompletedTask; });
+            return new ChannelReply(Result(accepted) with { Transition = transition }, _ => { Leave(); return Task.CompletedTask; }, RunsIfUnsent: true);
         }
         finally { Volatile.Write(ref acquiring, 0); }
     }

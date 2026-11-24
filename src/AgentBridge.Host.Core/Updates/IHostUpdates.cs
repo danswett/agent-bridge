@@ -14,6 +14,9 @@ public interface IHostUpdates
     string? ReleasesUrl { get; }
     // The newest release when it is newer than the one installed; null when current.
     Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken);
+    // pressed: a person asked (Home Assistant's Check), so a release list kept for background
+    // checks is revalidated rather than reused (#3441).
+    Task<UpdateRelease?> CheckAsync(CancellationToken cancellationToken, bool pressed) => CheckAsync(cancellationToken);
     Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken);
     // Hands the downloaded release to the updater, which applies it once this process has exited,
     // and has the host exit. Throws when it cannot be handed over.

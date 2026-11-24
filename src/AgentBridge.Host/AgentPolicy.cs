@@ -31,6 +31,8 @@ public sealed record AgentPolicy
     public AgentInboundPolicy InboundRemote { get; init; } = AgentInboundPolicy.Off;
     public IReadOnlyList<string> ExcludedSessions { get; init; } = [];
     public IReadOnlyList<string> ExcludedWorkspaces { get; init; } = [];
+    // The role names that count as coordinators for resume (#4318), set only by the person; empty means resume is off.
+    public IReadOnlyList<string> ResumeRoles { get; init; } = [];
     public AgentPolicyLimits Limits { get; init; } = AgentPolicyLimits.Default;
 
     // "prefix" or "none"; the design forces the prefix for cross-account, so prefix is the default.
@@ -115,6 +117,16 @@ public sealed record AgentPolicy
                         else { Unknown($"agents.inbound.{i.Name}", problems); }
                     }
                     break;
+                case "resume":
+                    if (!Object(p.Value, "agents.resume", problems, out var resume)) { return Denied(problems); }
+                    foreach (var r in resume.EnumerateObject())
+                    {
+                        if (r.Name != "roles") { Unknown($"agents.resume.{r.Name}", problems); continue; }
+                        var roles = Strings(r.Value, "agents.resume.roles", problems);
+                        if (roles is not null && roles.All(role => System.Text.RegularExpressions.Regex.IsMatch(role, "^[A-Za-z0-9-]{1,64}$"))) { policy = policy with { ResumeRoles = roles }; }
+                        else if (roles is not null) { problems.Add("agents.resume.roles: a role is letters, digits and hyphens, up to 64"); }
+                    }
+                    break;
                 case "limits":
                     if (!Object(p.Value, "agents.limits", problems, out var limits)) { return Denied(problems); }
                     launchLimits = limits;
@@ -184,6 +196,7 @@ public sealed record AgentPolicy
         IReadOnlyList<string> workspaces = [];
         IReadOnlyList<string> agents = [];
         IReadOnlyList<string> profiles = [];
+        var allowAllLaunch = false;
         var ok = true;
         foreach (var p in v.EnumerateObject())
         {
@@ -201,11 +214,15 @@ public sealed record AgentPolicy
                     break;
                 case "agents": if (Strings(p.Value, k, problems) is { } a) { agents = a; } else { ok = false; } break;
                 case "profiles": if (Strings(p.Value, k, problems) is { } pr) { profiles = pr; } else { ok = false; } break;
+                case "allowAllLaunch":
+                    allowAllLaunch = Bool(p.Value, k, problems);
+                    if (p.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { ok = false; }
+                    break;
                 default: Unknown(k, problems); break;
             }
         }
         if (!v.TryGetProperty("permissions", out _)) { problems.Add($"{key}.permissions must be stated as \"ask\"; the launch grant is off"); ok = false; }
-        return ok && workspaces.Count > 0 ? new AgentLaunchGrant(workspaces, agents, profiles) : null;
+        return ok && workspaces.Count > 0 ? new AgentLaunchGrant(workspaces, agents, profiles, allowAllLaunch) : null;
     }
 
     static (AgentPolicy, IReadOnlyList<string>) Denied(List<string> problems, string? why = null)
@@ -274,7 +291,8 @@ public sealed record AgentInboundPolicy
 
 public sealed record AgentCoordinationGroups(int MaxHours, int PerMemberPerDay, int PerGroupPerMinute);
 
-public sealed record AgentLaunchGrant(IReadOnlyList<string> Workspaces, IReadOnlyList<string> Agents, IReadOnlyList<string> Profiles);
+public sealed record AgentLaunchGrant(IReadOnlyList<string> Workspaces, IReadOnlyList<string> Agents, IReadOnlyList<string> Profiles,
+    bool AllowAllLaunch = false);
 
 public sealed record AgentPolicyLimits
 {

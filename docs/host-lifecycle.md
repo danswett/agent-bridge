@@ -37,7 +37,10 @@ exited: the worker injector kills a failed worker's process tree and hands the g
 its exit (`InjectorWorkerException.Exited`); any other injector exception, or an exit
 that cannot be awaited, refuses stops for the rest of the process. A stop that is
 refused leaves a waiting restart uncancelled; the restart is interrupted only once
-the stop holds the fence.
+the stop holds the fence. A session stop (`StopService`) may pass a provisional
+exclusion but never a committing or committed one, which answers Busy. It fails
+closed on the same proof: while any failed worker is unproven it never terminates
+or reports ended, and keeps the PID handle (and its own typing fence) until proof.
 
 Quiet means **no delivery/mutation in flight and no typing now**. Running turns,
 questions and session `Working`/`Idle` state are not consulted. #819 and #801
@@ -109,7 +112,7 @@ installed by this slice.
 
 ### Committed-departure watchdog (#805 N1)
 
-A committed guard fences deliveries until the process exits, so a follow-on action
+A committed guard fences deliveries, session stops included, until the process exits, so a follow-on action
 that fails after commit (an update apply that throws, a restart that never happens)
 would leave the host refusing deliveries for ever. `DepartureWatchdog` notices that.
 

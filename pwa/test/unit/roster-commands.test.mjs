@@ -83,6 +83,22 @@ test('accept-host-sign preserves the exact received body and has only a machine 
   assert.equal(command.body.choice, null);
 });
 
+test('committed accept-host-sign proofs reject missing presence and malformed commands', async () => {
+  const v = await roster();
+  for (const [name, verdict] of [
+    ['presence-none', { code: 'presence' }], ['malformed-wrapper', { refusal: 'json' }], ['malformed-body', { refusal: 'json' }],
+    ['duplicate-member', { refusal: 'duplicate-member' }], ['extra-wrapper', { refusal: 'unknown-member' }],
+    ['nonce-type', { refusal: 'type' }], ['nonce-base64', { refusal: 'base64' }],
+    ['extra-question', { refusal: 'unknown-member' }], ['extra-choice', { refusal: 'unknown-member' }],
+  ]) {
+    const matches = vectors.commands.filter((c) => c.name === `accept-host-sign-${name}`);
+    assert.equal(matches.length, 1, `required proof ${name}`);
+    const c = matches[0], x = c.context;
+    const context = { host: x.host, action: x.action, now: instant(x.now), nonce: b64(x.nonce) };
+    assert.deepEqual(await outcome(() => parsePersonCommand(utf8(c.wrapper)), (command) => checkPersonCommand(command, v, context)), verdict);
+  }
+});
+
 // A person whose sign key is a sibling host's hostSign, after probation, in both arrival orders.
 for (const k of vectors.collisions) {
   async function collided() {
@@ -104,6 +120,7 @@ for (const k of vectors.collisions) {
       const v = await collided();
       const x = c.context;
       const context = { host: x.host, action: x.action, now: instant(x.now), floor: null, nonce: x.nonce ? b64(x.nonce) : null, previous: null };
+      if (c.name === 'accept-host-sign-by-host-key') assert.notEqual(parsePersonCommand(utf8(c.wrapper)).body.by, context.host);
       assert.deepEqual(await outcome(() => parsePersonCommand(utf8(c.wrapper)), (command) => checkPersonCommand(command, v, context)), expected(c));
     });
   }

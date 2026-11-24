@@ -67,7 +67,9 @@ public sealed class SignInTests(ITestOutputHelper output)
         var phase = "create harness";
         try
         {
-            await using var h = await Harness.CreateAsync();
+            // No queued source-change sweeps: each one runs Schedule() on a pool thread, and one that computes the retention
+            // due before the clock advance but arms it after resets the fake timer to a full retention, so it never fires.
+            await using var h = await Harness.CreateAsync(manualSourceChanges: true);
             harness = h;
             h.Clock.Observed = observations.Enqueue;
             phase = "start";
@@ -85,6 +87,9 @@ public sealed class SignInTests(ITestOutputHelper output)
             await h.Service.CancelAsync(phone, Json(new { flow }));
             phase = "wait for retention timer";
             await retained.Task.WaitAsync(Patience);
+            // The recovery task's finally and any in-flight sweep finish their Schedule() before the clock moves.
+            phase = "drain background sweeps";
+            await h.Service.SweepAsync().WaitAsync(Patience);
             phase = "assert retention armed";
             Assert.Equal(1, h.Clock.Armed);
             h.Clock.UtcOffset = TimeSpan.FromSeconds(jump);
@@ -680,7 +685,9 @@ public sealed class SignInTests(ITestOutputHelper output)
     [Fact]
     public async Task An_inflight_uuid_with_a_newer_auth_failure_is_refused_instead_of_silently_busy()
     {
-        await using var h = await Harness.CreateAsync();
+        // Queued source notifications sweep too, and a sweep that ends the flow first makes Start replay a finished flow
+        // (a deferred reply) instead of refusing the attach. Hold them; the closing SweepAsync is the sweep (#2558).
+        await using var h = await Harness.CreateAsync(manualSourceChanges: true);
         var phone = h.Phone();
         var request = Guid.NewGuid();
         await h.Start(phone, request).Then(phone);

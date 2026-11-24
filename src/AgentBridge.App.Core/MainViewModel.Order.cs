@@ -25,6 +25,10 @@ public sealed partial class MainViewModel
     public void DeleteGroup(string id) { Order.Groups.Delete(id); Rearrange(chosen: true); }
     public void MoveToGroup(SessionCardViewModel card, string id) { Order.Groups.SetGroup(KeyOf(card), id); Rearrange(chosen: true); }
     public void RemoveFromGroup(SessionCardViewModel card) { Order.Groups.SetGroup(KeyOf(card), null); Rearrange(chosen: true); }
+
+    public bool CanSort(int index) => index >= 0 && index < SortChoices.Count
+        && (index != (int)SessionSort.Yours || Order.Usable);
+
     // The sort the picker was last told of: a failed save anywhere (a pin, a drop, a host's list)
     // turns the list to Most recent, and the next arrangement says so.
     SessionSort toldSort;
@@ -36,7 +40,7 @@ public sealed partial class MainViewModel
         get => (int)Order.Sort;
         set
         {
-            if (value < 0 || value >= SortChoices.Count) { return; }
+            if (!CanSort(value)) { return; }
             Order.Sort = (SessionSort)value;
             Rearrange(chosen: true);
             toldSort = Order.Sort;

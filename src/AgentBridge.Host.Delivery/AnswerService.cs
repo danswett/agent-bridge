@@ -1354,7 +1354,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (!resuming && Touched(shown) is { } touched) { return Stop(touched); }
             var commit = keys[^1];
             var first = keys.GetRange(0, keys.Count - 1);
-            if (commit.Text.Length > 0) { first.Add(commit with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }); }
+            if (commit.Text.Length > 0) { first.Add(commit with { Submit = SubmitKey.None, EnterDelayMs = 0, PauseAfterMs = 0 }); }
             if (resuming)
             {
                 // Its walk went before the form was left: its Enter goes only to the options drawn
@@ -1379,7 +1379,7 @@ public sealed class AnswerService : ISessionAnswerer
                 shown = on;
                 progress.Walked = CopilotFormScreen.Input(on, form, Field());
             }
-            if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs)], last, shown) is { } committed) { return committed; }
+            if (await WriteAsync([new KeySend("", commit.Submit, 0, commit.PauseAfterMs)], last, shown) is { } committed) { return committed; }
             leaving = wrote;
             at++;
             progress.Committed(at);
@@ -1392,7 +1392,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (!IsWords(send))
             {
                 pending.Add(send);
-                if (send.Enter)
+                if (send.Submit != SubmitKey.None)
                 {
                     if (await FieldAsync(pending, i == plan.Sends.Count - 1) is { } stopped) { return stopped; }
                     pending = [];
@@ -1441,7 +1441,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             if (showing is null)
             {
-                if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }], false, field) is { } held) { return held; }
+                if (await WriteAsync([send with { Submit = SubmitKey.None, EnterDelayMs = 0, PauseAfterMs = 0 }], false, field) is { } held) { return held; }
                 (progress.Walked, progress.Words) = (null, true);
                 if (await AwaitOnScreenAsync(pid, Shows(tail), before) is not { } shown)
                 {
@@ -1461,7 +1461,7 @@ public sealed class AnswerService : ISessionAnswerer
             // were typed into this form at this field.
             // Seen on screen, they reached the CLI apart from anything after them, so their Enter
             // needs no pause of its own; held to the rows that show them, it goes into nothing else.
-            if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs)], i == plan.Sends.Count - 1, showing) is { } entered) { return entered; }
+            if (await WriteAsync([new KeySend("", send.Submit, 0, send.PauseAfterMs)], i == plan.Sends.Count - 1, showing) is { } entered) { return entered; }
             leaving = wrote;
             at++;
             progress.Committed(at);
@@ -1474,14 +1474,14 @@ public sealed class AnswerService : ISessionAnswerer
         return await WriteAsync(pending, true, rest) ?? (new InjectionResult(InjectionStatus.Typed, "ok"), null);
     }
 
-    static bool IsWords(KeySend send) => send.Enter && CopilotPlanner.HasWords(send.Text);
+    static bool IsWords(KeySend send) => send.Submit != SubmitKey.None && CopilotPlanner.HasWords(send.Text);
 
     // Where in a plan the keys of the field after the first `fields` begin: each field's keys
     // end with its Enter (CopilotPlanner).
     static int Start(KeyPlan plan, int fields)
     {
         var (i, n) = (0, 0);
-        while (n < fields && i < plan.Sends.Count) { if (plan.Sends[i++].Enter) { n++; } }
+        while (n < fields && i < plan.Sends.Count) { if (plan.Sends[i++].Submit != SubmitKey.None) { n++; } }
         return i;
     }
 

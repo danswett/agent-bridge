@@ -19,5 +19,21 @@ decision-linked dispositions. Host/fleet obligations remain obligations, not cli
 intentional drops, the excluded Apple host cohort and resolved owner inventory stay distinct.
 Client scheduling (required, parked, unshipped or optional) never excuses a missing behavior
 when that client is explicitly selected. Multi-field forms remain required despite retiring
-HA's dropdown workaround. Catalog-to-CLI wiring, exclusion reporting and drivers are later slices;
-the command above still requires an explicit capabilities file and does not apply the catalog.
+HA's dropdown workaround.
+
+For `--client Windows`, the production command passes `WindowsClientCallback.Create` to the
+existing driver. Its minimal injectable self-test evidence seam is normalized, recorded
+`ConformanceResult` JSONL in `--results`, using the schema above: exact declared run
+(including version, protocol and implementation head), inventory capability, verdict,
+reason and evidence link. It reads no client process, pipe or live host. There is no
+native self-test producer wired in this slice: the app's raw `passed`/`failed`/`unfinished`
+report is **not** accepted or automatically promoted to conformance proof.
+
+Windows always uses every required row in `ConformanceInventory.ForClient("Windows")`,
+not a caller-selected subset. `--capabilities` remains required and must be valid JSON,
+but does not narrow Windows coverage. Absent evidence stays `missing`; a live pass
+without a recorded HTTP(S) run link also stays `missing`. Invalid or duplicate evidence,
+including another run or an unknown capability, is refused before output.
+Exit 0 requires all required rows to pass. Other clients retain their explicit capabilities
+and recorded-result path. Exclusion reporting and recorded live Windows pass results
+remain separate work; synthetic test records are not retirement certification.

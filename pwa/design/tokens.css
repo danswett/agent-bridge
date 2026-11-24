@@ -219,6 +219,12 @@
   --ab-motion-reorder-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-collapse-duration: 167ms;
   --ab-motion-collapse-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-feedback-disclosure-duration: 120ms;
+  --ab-motion-image-viewer-duration: 200ms;
+  --ab-motion-ease-linear: linear;
+  --ab-motion-ease-feedback-disclosure: ease;
+  --ab-motion-ease-image-viewer: ease-out;
+  --ab-motion-progress-period: 1000ms;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -350,5 +356,7 @@
     --ab-motion-scroll-duration: 0ms;
     --ab-motion-reorder-duration: 0ms;
     --ab-motion-collapse-duration: 83ms;
+    --ab-motion-feedback-disclosure-duration: 0ms;
+    --ab-motion-image-viewer-duration: 0ms;
   }
 }

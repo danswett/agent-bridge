@@ -28,6 +28,7 @@ sealed class Catalog
                 throw new FormatException("A suite in the catalog has no id.");
             suite.Platforms ??= [];
             suite.Triggers ??= [];
+            suite.TierJobs ??= [];
             suite.Project = suite.Project is null ? null : RepoPath.Normalize(suite.Project);
             suite.Builds = suite.Builds is null ? null : RepoPath.Normalize(suite.Builds);
         }
@@ -99,9 +100,46 @@ sealed class Catalog
                 if (count != 1)
                     Add(suite, $"names {field} {folder}, which holds {(count == 0 ? "no" : count.ToString(System.Globalization.CultureInfo.InvariantCulture))} .csproj files, not one");
             }
-        }
+            // Its own kind, so select still plans with it: an unknown tier only ever blocks.
+            void Tier(string message) => problems.Add(new("tier", $"suite {suite.Id} {message}"));
+            if (suite.Tier is not null && !Tiers.Contains(suite.Tier, StringComparer.Ordinal))
+                Tier($"has tier '{suite.Tier}', not one of {string.Join(", ", Tiers)}, so it counts as blocking");
+            if (suite.Tier == PostMerge)
+            {
+                if (suite.TierJobs.Count == 0)
+                    Tier("is tier post-merge but names no tier_jobs");
+                foreach (var job in suite.TierJobs.Where(j => !InWhere(suite, j)))
+                    Tier($"names tier job '{job}', which isn't a ci.yml job in its where");
+            }
+            else if (suite.TierJobs.Count > 0)
+                Tier("names tier_jobs but isn't tier post-merge");
+            // The two lanes (S2, #4104): ci.yml's jobs are the FAST lane, full.yml's the FULL lane, which never gates a merge.
+            void LaneProblem(string message) => problems.Add(new("lane", $"suite {suite.Id} {message}"));
+            var wheres = string.IsNullOrWhiteSpace(suite.Where) ? [] : Completeness.ParseWhere(suite.Where).ToList();
+            if (suite.Lane is not null && !Lanes.Contains(suite.Lane, StringComparer.Ordinal))
+                LaneProblem($"has lane '{suite.Lane}', not one of {string.Join(", ", Lanes)}, so it counts as fast");
+            else if (suite.Lane == FullLane.Name && wheres.Any(w => w.File == "ci.yml"))
+                LaneProblem("is lane full, but its where names ci.yml: the FULL lane's jobs are full.yml's");
+            else if (suite.Lane == FullLane.Name && wheres.Count > 0 && !wheres.Any(w => w.File == FullLane.File))
+                LaneProblem("is lane full, but its where names no full.yml job");
+            else if (suite.Lane != FullLane.Name && wheres.Any(w => w.File == FullLane.File))
+                LaneProblem("is lane fast (the default), but its where names full.yml: mark it lane: full");        }
         return problems;
     }
+
+    const string PostMerge = "post-merge";
+    static readonly string[] Tiers = ["blocking", PostMerge];
+    static readonly string[] Lanes = ["fast", FullLane.Name];
+
+    static bool InWhere(Suite suite, string job) => !string.IsNullOrWhiteSpace(suite.Where)
+        && Completeness.ParseWhere(suite.Where).Any(w => w.File == "ci.yml" && w.Jobs.Contains(job.Split(" (")[0], StringComparer.Ordinal));
+
+    /// <summary>
+    /// The exact ci.yml job display names that run after merge: neither a pull request's verdict nor
+    /// main-green counts them. Only a valid post-merge suite's names; anything else stays blocking.
+    /// </summary>
+    public IReadOnlySet<string> PostMergeJobs() => Suites.Where(s => s.Tier == PostMerge)
+        .SelectMany(s => s.TierJobs.Where(j => InWhere(s, j))).ToHashSet(StringComparer.Ordinal);
 }
 
 sealed class Suite
@@ -124,6 +162,11 @@ sealed class Suite
     public string? Command { get; set; }
     public string? Where { get; set; }
     public string? Status { get; set; }
+    /// <summary>blocking (when absent) or post-merge, for exactly the <see cref="TierJobs"/> named.</summary>
+    public string? Tier { get; set; }
+    public List<string> TierJobs { get; set; } = [];
+    /// <summary>fast (when absent: ci.yml, the merge gate) or full (full.yml, which never gates a merge), S2, #4104.</summary>
+    public string? Lane { get; set; }
 
     public bool IsSentinel => string.Equals(Select, "always", StringComparison.OrdinalIgnoreCase);
 }

@@ -13,6 +13,10 @@ internal sealed class FleetTrust(HostRosterReader reader, string profile, Func<s
             reader.Enrollment<RosterVerifier?>(scope, current.Generation, verified => verified, _ => null);
     }
 
+    // Which hosts' registry rows the fleet reader reads; null with no pin (every host today), a refusal
+    // when a pin exists but cannot supply a verified roster for this account.
+    public RosterVerifier? Membership() => reader.Pinned(account());
+
     public JsonElement Sign(JsonElement record) =>
         VerifiedRoster() is null ? record : FleetRecordSigning.SignExisting(record, profile);
 }

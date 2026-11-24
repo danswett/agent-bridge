@@ -57,7 +57,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier() => new(source, f.Processes, probe, new NoGuard(), console, new ReplyOptions
+    ReplyService Replier(DeliveryGate? gate = null) => new(source, f.Processes, probe, new NoGuard(), console, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = true,
@@ -67,7 +67,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
         Time = clock,
-    }, logged.Enqueue, attachments: store);
+    }, logged.Enqueue, gate, store);
 
     ReplyService? replier;
     // Left at the product's 15 s for the tests that press Enter again, which end on what the box
@@ -154,6 +154,188 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(("Looks good. Ship it 🚀", true), (send.Text, send.Enter));
         // Typed only while the box still reads as it did: the rule, the empty row, the rule.
         Assert.Equal([(4, Rule), (5, ">"), (6, Rule)], send.Expect!.Select(r => (r.Row, r.Text)));
+    }
+
+    [Fact]
+    public async Task A_Claude_reply_calls_KeysGoing_once_just_before_its_first_keys_and_not_for_a_refusal_before_them()
+    {
+        console.Rows = ClaudeIdle();
+        var calls = new List<int>();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", KeysGoing = () => calls.Add(console.Plans.Count) };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(typed, Peer)).Outcome);
+        Assert.Equal([0], calls); // before any key went, and only once
+
+        var refused = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true, KeysGoing = () => calls.Add(-1) };
+        Assert.Equal(AnswerOutcome.Refused, (await replier.ReplyAsync(refused, Peer)).Outcome);
+        Assert.Equal([0], calls);
+    }
+
+    [Fact]
+    public async Task A_Claude_reply_that_requires_an_idle_session_is_refused_as_busy_while_it_works()
+    {
+        console.Rows = ClaudeIdle(); // the fixture's transcript ends on the person's prompt: the turn is still running
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Busy), (result.Outcome, result.Refusal));
+        Assert.Empty(console.Plans);
+    }
+
+    // Slice C of claudeBusyQueue (docs/message-delivery.md, #3828): the box must be positively empty or show exactly the known hint.
+    [Theory]
+    [InlineData("> half a thought")]
+    [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_refused_for_a_draft_or_an_unknown_suggestion_with_no_keys(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Empty(console.Plans);
+    }
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("> Press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_typed_into_an_empty_box_or_the_exact_queued_hint(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(request, Peer)).Outcome);
+        Assert.Single(console.Plans);
+    }
+
+    // D2b (#3828, #3856): a Claude reply confirmed by its queue entry is accepted into Claude's queue, not yet taken; one recorded as a prompt is not marked queued.
+    [Fact]
+    public async Task A_Claude_reply_confirmed_by_its_queue_entry_reports_the_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Also add tests.");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)ReplyStage.Queued), (result.Outcome, result.Stage));
+    }
+    [Fact]
+    public async Task A_Claude_reply_recorded_as_a_prompt_reports_no_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Ship it");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)null), (result.Outcome, result.Stage));
+    }
+
+    // NoKeysSent (#3856): set only where no key could have gone; a typed reply, or an injector failing after keys, stays MayHaveBeenSent.
+    [Fact]
+    public async Task A_Claude_reply_stopped_before_any_key_is_NoKeysSent_whatever_stopped_it()
+    {
+        console.Rows = ClaudeIdle();
+        var busy = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (busy.Outcome, busy.KeyDisposition));
+        var gone = await ReplyAsync("no-such-session", "Ship it");
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (gone.Outcome, gone.KeyDisposition));
+        var current = true; console.BeforeInject = () => current = false;
+        var stale = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current }, Peer);
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (stale.Outcome, stale.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task A_Claude_reply_that_was_typed_or_whose_injector_failed_after_keys_is_MayHaveBeenSent()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Delivered, ReplyKeyDisposition.MayHaveBeenSent), (typed.Outcome, typed.KeyDisposition));
+        console.OnInject = _ => throw new IOException("the worker died after typing");
+        var failed = await ReplyAsync(ClaudeId, "Ship it again");
+        Assert.Equal((AnswerOutcome.Unconfirmed, ReplyKeyDisposition.MayHaveBeenSent), (failed.Outcome, failed.KeyDisposition));
+    }
+    // #3926 review, non-blocking P2s (R10): a result that skips the typing attempt, or fails before any key, says NoKeysSent, so a busy-Claude slot is
+    // freed instead of held with nothing typed.
+    [Fact]
+    public async Task A_foreign_request_and_a_reply_refused_during_a_stop_are_NoKeysSent()
+    {
+        console.Rows = ClaudeIdle();
+        var key = Guid.NewGuid().ToString();
+        var first = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = key, Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal(AnswerOutcome.Refused, first.Outcome);
+        var foreign = await replier.ReplyAsync(new ReplyRequest { Id = "another-session", Request = key, Text = "Ship it" }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (foreign.Outcome, foreign.KeyDisposition));
+        var gate = new DeliveryGate(); replier = Replier(gate);
+        using var stop = await gate.PrepareStopAsync(TimeSpan.FromSeconds(5));
+        var blocked = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Busy, ReplyKeyDisposition.NoKeysSent), (blocked.Outcome, blocked.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task An_exception_before_any_key_is_NoKeysSent_and_the_keys_going_callback_having_run_is_not()
+    {
+        console.Rows = ClaudeIdle();
+        var failed = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => throw new InvalidOperationException("fence down") }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (failed.Outcome, failed.KeyDisposition));
+        Assert.Empty(console.Plans);
+        var going = 0;
+        var late = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => true, KeysGoing = () => { going++; throw new InvalidOperationException("arm failed"); } }, Peer);
+        Assert.Equal(1, going);
+        Assert.Equal(ReplyKeyDisposition.MayHaveBeenSent, late.KeyDisposition);
+    }    [Fact]
+    public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
+    {
+        console.Rows = ClaudeIdle();
+        var current = true;
+        console.BeforeInject = () => current = false;
+        var stale = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+        Assert.Equal(AnswerOutcome.Stale, (await (replier ??= Replier()).ReplyAsync(stale, Peer)).Outcome);
+        Assert.Empty(console.Plans);
+
+        var handoff = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => true, HandoffText = () => "x" };
+        Assert.Equal(AnswerOutcome.Refused, (await replier.ReplyAsync(handoff, Peer)).Outcome);
+        Assert.Empty(console.Plans);
+    }
+
+    [Fact]
+    public async Task A_Claude_replys_injector_fence_stops_the_keys_once_the_send_or_the_session_changes()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var current = true;
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(request, Peer)).Outcome);
+
+        var fence = Assert.Single(console.Plans).Plan.Proceed!;
+        Assert.Null(fence());
+        current = false;
+        Assert.NotNull(fence());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fenced_Claude_reply_is_typed_only_while_the_fence_holds_at_both_looks(bool current)
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal(current ? AnswerOutcome.Delivered : AnswerOutcome.Stale, result.Outcome);
+        Assert.Equal(current ? 1 : 0, console.Plans.Count);
+        Assert.All(console.Plans, p => Assert.NotNull(p.Plan.Proceed));
     }
 
     [Theory]
@@ -287,6 +469,66 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         var enter = Assert.Single(console.Plans[1].Plan.Sends);
         Assert.Equal(("", true), (enter.Text, enter.Enter));
         Assert.Equal((5, drawn), (enter.Expect![1].Row, enter.Expect[1].Text));
+    }
+
+    // Codex review of #3743: the Enter pressed again once Claude took the first as part of the paste is a send
+    // like the first, so a fenced reply (Lite) whose authority is lost meanwhile presses nothing more.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_fenced_Claude_reply_presses_Enter_again_only_while_its_fence_holds_and_holds_the_keys_to_it(bool lost)
+    {
+        console.Rows = ClaudeIdle();
+        var current = true;
+        console.OnInject = plan =>
+        {
+            if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("a long reply")); return; }
+            console.Rows = [.. ClaudeIdle().Take(5), "> a long reply", .. ClaudeIdle().Skip(6)];
+            if (lost) { current = false; } // messaging killed, grant revoked or account changed while the paste was taken in
+        };
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "a long reply", StillCurrent = () => current };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        if (lost)
+        {
+            Assert.Single(console.Plans);
+            Assert.NotEqual(AnswerOutcome.Delivered, result.Outcome);
+            return;
+        }
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        Assert.Equal(2, console.Plans.Count);
+        Assert.NotNull(console.Plans[1].Plan.Proceed);
+    }
+
+    // Claude Code drops the head of a burst it takes for a paste. The console here keeps only the last 300
+    // characters of any one send, as the live one did to a 4514-character reply, and records the prompt on Enter.
+    [Fact]
+    public async Task A_long_Claude_reply_arrives_whole_because_no_one_send_is_long_enough_to_be_taken_for_a_paste()
+    {
+        var words = string.Concat(Enumerable.Range(1, 90).Select(i => $"word{i:000} ")).Trim();
+        var typed = new System.Text.StringBuilder();
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            foreach (var send in plan.Sends)
+            {
+                typed.Append(send.Text.Length > 300 ? send.Text[^300..] : send.Text);
+                if (send.Enter) { Fixture.Append(claude, ClaudePrompt(typed.ToString())); }
+            }
+        };
+
+        var result = await ReplyAsync(ClaudeId, words);
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        var sends = console.Plans.SelectMany(p => p.Plan.Sends).ToList();
+        Assert.True(sends.Count > 1, "typed in one burst");
+        Assert.All(sends, s => Assert.True(s.Text.Length <= 100));
+        Assert.NotNull(sends[0].Expect);
+        Assert.All(sends.Skip(1), s => Assert.Null(s.Expect));
+        Assert.All(sends.SkipLast(1), s => Assert.False(s.Enter));
+        Assert.True(sends[^1].Enter);
+        Assert.Equal(words, typed.ToString().Trim());
     }
 
     [Fact]
@@ -671,6 +913,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             BeforeInject?.Invoke();
             BeforeInject = null;
+            // As the real injector: a fence that fails stops the keys before any are typed.
+            if (plan.Proceed?.Invoke() is { } stop) { return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, $"stopped before typing: {stop}")); }
             var rows = Rows;
             if (plan.Sends[0].Expect is { } expect && expect.Any(e => e.Row >= rows.Count || Worker.Read(rows[e.Row]) != Worker.Read(e.Text)))
             {

@@ -129,12 +129,27 @@ public static class ProtocolVectors
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
-        MachineLoadRecords(catalog.File("machine-load.json", "v1-machine-load.md#1-machineload-1150", "Numerical machine and session load on the relay channel."));
+        MachineLoadRecords(catalog.File("machine-load.json", "v1-machine-load.md#1-machineload-1150", "Numerical machine and session load on authenticated channels; subscriptions are relay-only."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
+        DeliveryRecords(catalog.File("delivery.json", "../message-delivery.md", "Local delivery envelope helpers, not channel requests or sender authority."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
+    }
+
+    static void DeliveryRecords(VectorFileBuilder f)
+    {
+        var sender = new DeliverySender("ha-person", "Person", true);
+        var (header, body) = DeliveryEnvelope.Prepare(new(sender.From, Request, "q1", T0, "normal", 0), "hello");
+        f.Record<DeliverySender>("local")
+            .Valid("authenticated-principal", sender)
+            .Valid("unknown-agent", new("unknown"));
+        f.Record<DeliveryHeader>("local").Valid("prepared-handoff", header);
+        f.Record<DeliveryEntry>("local")
+            .Valid("verified-delivery", new(body, header))
+            .Valid("unverified-console", new("console"))
+            .Valid("length-mismatch", new("console", LengthMismatch: true));
     }
 
     static void MachineLoadRecords(VectorFileBuilder f)
@@ -142,7 +157,7 @@ public static class ProtocolVectors
         var session = new SessionLoad { Session = SessionId, Agent = LoadAgentKind.Agency, Processes = 3, CpuPercent = 12.5, WorkingSetBytes = 104857600, Handles = 42, HandleKind = LoadHandleKind.Handles, State = SessionLoadState.Fresh };
         var full = new MachineLoad
         {
-            SampledAt = T0, AgeMs = 100, State = MachineLoadState.Fresh, StaleAfterMs = 15000,
+            SampledAt = T0, AgeMs = 100, RunQueueAvg = 2.5, State = MachineLoadState.Fresh, StaleAfterMs = 15000,
             Cpu = new(25, 8), Memory = new(17179869184, 8589934592, 50), Sessions = [session], Unattributed = new(1, 1048576),
         };
         f.Record<MachineLoadCpu>(Host).Valid("whole-machine", full.Cpu).Valid("no-figure", new());
@@ -154,10 +169,16 @@ public static class ProtocolVectors
             .Valid("no-figure", new SessionLoad { Session = SessionId })
             .Valid("descriptors", session with { Agent = LoadAgentKind.Direct, HandleKind = LoadHandleKind.Fds })
             .Reads("unknown-enums", """{"session":"s-1","agent":"future","state":"future","handleKind":"future"}""");
-        f.Record<MachineLoad>(Host)
+        // The local pipe's reply (#2982): only the four figures launch admission reads, never a session list or machine totals.
+        f.Record<MachineLoadFigures>(Host)
+            .Valid("fresh", new MachineLoadFigures { State = MachineLoadState.Fresh, AgeMs = 100, RunQueueAvg = 2.5, StaleAfterMs = 15000 })
+            .Valid("stale-no-figure", new MachineLoadFigures { State = MachineLoadState.Stale, AgeMs = 16000, StaleAfterMs = 15000 })
+            .Valid("unavailable", new MachineLoadFigures())
+            .Reads("unknown-state", """{"state":"future"}""")
+            .Reads("mixed-case-names", """{"STATE":"stale","AGEMs":16000,"runQUEUEavg":2.5,"sTaleAfterMS":15000}""");        f.Record<MachineLoad>(Host)
             .Valid("full", full)
             .Valid("partial", full with { State = MachineLoadState.Partial, Memory = null })
-            .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000 })
+            .Valid("stale", full with { State = MachineLoadState.Stale, AgeMs = 16000, RunQueueAvg = null })
             .Valid("first-sample-no-cpu", full with { Cpu = null, Sessions = [session with { CpuPercent = null }] })
             .Valid("unavailable", new MachineLoad())
             .Reads("over-200-sessions", Broken(full, j => j["sessions"] = JsonSerializer.SerializeToNode(
@@ -414,6 +435,7 @@ public static class ProtocolVectors
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("host-roster-with-unknown-outcomes", MinimalSession with { Machine = MachineId, Owner = new(), Pr = new(), Finished = new(), StartedAt = null })
             .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
             .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
@@ -521,7 +543,7 @@ public static class ProtocolVectors
             .Valid("an-other-answer", Answer(form, With("spike", new { other = "S9: a third relay" })), form)
             .Valid("one-other-among-choices", Answer(form, With("parts", new object[] { "host", new { other = "the docs" } })), form)
             .Valid("a-text-answer", Answer(plain, text: "main"), plain)
-            .Valid("a-text-answer-at-its-4-KiB-limit", Answer(plain, text: Repeat('a', Limits.AnswerText)), plain)
+            .Valid("a-text-answer-at-its-16-KiB-limit", Answer(plain, text: Repeat('a', Limits.AnswerText)), plain)
             .Valid("an-approval", Answer(approval, new() { ["decision"] = "approve" }), approval)
             .Valid("words-led-by-a-hangul-filler", Answer(plain, text: "\u3164ship it"), plain)
             .Valid("a-joined-emoji", Answer(plain, text: "\U0001F468\u200D\U0001F469\u200D\U0001F467"), plain)
@@ -538,7 +560,7 @@ public static class ProtocolVectors
             .Refused("only-an-unassigned-code-point", Answer(plain, text: "\u0378"), plain)
             .Refused("an-other-answer-of-only-a-hangul-filler", Answer(form, With("spike", new { other = "\u3164" })), form)
             .Refused("no-answer-at-all", Answer(plain), plain)
-            .Refused("a-text-answer-over-4-KiB", Answer(plain, text: Repeat('a', Limits.AnswerText + 1)), plain)
+            .Refused("a-text-answer-over-16-KiB", Answer(plain, text: Repeat('a', Limits.AnswerText + 1)), plain)
             .Refused("text-for-a-form", Answer(form, good, "main"), form)
             .Refused("a-field-the-question-lacks", Answer(form, With("colour", "red")), form)
             .Refused("a-required-field-left-out", Answer(form, new() { ["parts"] = new[] { "host" } }), form)
@@ -549,14 +571,14 @@ public static class ProtocolVectors
             .Refused("an-other-answer-the-machine-cannot-send-yet", Answer(lone, new() { ["pick"] = new { other = "DuckDB" } }), lone)
             .Refused("an-empty-other-answer", Answer(form, With("spike", new { other = " " })), form)
             .Refused("more-beside-other", Answer(form, With("spike", new { other = "s9", label = "x" })), form)
-            .Refused("an-other-answer-over-4-KiB", Answer(form, With("spike", new { other = Repeat('a', Limits.AnswerText + 1) })), form)
+            .Refused("an-other-answer-over-16-KiB", Answer(form, With("spike", new { other = Repeat('a', Limits.AnswerText + 1) })), form)
             .Refused("two-other-answers", Answer(form, With("parts", new object[] { new { other = "a" }, new { other = "b" } })), form)
             .Refused("a-multi-answer-that-is-not-a-list", Answer(form, With("parts", "host")), form)
             .Refused("a-choice-that-is-a-number", Answer(form, With("spike", 6)), form)
             .Refused("a-boolean-as-text", Answer(form, With("confirm", "yes")), form)
             .Refused("a-number-as-text", Answer(form, With("count", "3")), form)
             .Refused("text-as-a-number", Answer(form, With("notes", 3)), form)
-            .Refused("a-text-field-over-4-KiB", Answer(form, With("notes", Repeat('a', Limits.AnswerText + 1))), form)
+            .Refused("a-text-field-over-16-KiB", Answer(form, With("notes", Repeat('a', Limits.AnswerText + 1))), form)
             .Refused("no-fields-for-a-form-without-required-ones", Answer(approval, new()), approval)
             // #766: a field's schema constraints, checked exactly.
             .Valid("inside-every-constraint", Answer(limited, Within), limited)
@@ -627,10 +649,21 @@ public static class ProtocolVectors
             Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
         };
         f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
+        // A guarded clear's escrow (#804): the whole draft escaped as the host shows it, spaces kept.
+        var hidden = ShownText.RevealMarked("rerun the build\u202E gol", rightToLeft: true);
+        f.Record<ClearedComposer>(Host)
+            .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
+            .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
+        // What a refused reply shows of a full Copilot box (#804): escaped, capped, digest of the whole text; never clearable yet.
+        var shownBox = ComposerInput.From("rerun the build‮ gol");
+        f.Record<ComposerInput>(Host)
+            .Valid("a-plain-box", ComposerInput.From("rerun the tests"))
+            .Valid("an-escaped-box", shownBox);
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
             .Valid("refused-without-bindings", new ReplyResult(AnswerOutcome.Refused, "the session is asking a question"))
+            .Valid("refused-with-the-box", new ReplyResult(AnswerOutcome.Refused, "something is already typed") { Input = shownBox })
             .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
             .Reads("unreadable-bindings-are-absent", """{"outcome":"delivered","attachments":"wrong"}""")
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
@@ -729,8 +762,14 @@ public static class ProtocolVectors
         var keys = new PushKeys("BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48", Attachments.Base64Url([.. Enumerable.Range(16, 16).Select(i => (byte)i)]));
         f.Record<PushSubscribeRequest>(Client)
             .Valid("full", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Device = "iPhone · Agent Bridge" })
-            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" });
+            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" })
+            .Valid("with-notify-filters", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { PinnedSessions = [SessionId] } })
+            .Valid("notify-every-turn-no-questions", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { Questions = false, All = true } });
         f.Record<PushKeys>(Client).Valid("keys", keys);
+        f.Record<PushNotify>(Client)
+            .Valid("defaults", new PushNotify())
+            .Valid("pinned-set", new PushNotify { PinnedSessions = [SessionId] })
+            .Reads("only-the-flags-sent", """{"all":true}""");
         f.Record<PushSubscribeResult>(Host).Valid("subscribed", new PushSubscribeResult(true, 2));
         f.Record<PushUnsubscribeRequest>(Client)
             .Valid("this-device", new PushUnsubscribeRequest())
@@ -748,6 +787,7 @@ public static class ProtocolVectors
             .Valid("sign-in", SignInData)
             .Valid("a-reminder", data with { Reminder = true })
             .Valid("group", GroupData)
+            .Valid("failures", FailuresData)
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
@@ -766,6 +806,11 @@ public static class ProtocolVectors
             {
                 Title = "Needs you", Body = "node-a · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
                 Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
+            })
+            .Valid("failures", new PushNotification
+            {
+                Title = "Messages not delivered", Body = "node-a · 3 messages not delivered", Tag = PushNotice.Tag(MachineId, PushNotice.FailuresKey), Data = FailuresData,
+                Navigate = PushNotice.NavigateMachine("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
@@ -774,6 +819,9 @@ public static class ProtocolVectors
 
     // #913 rule 3: three questions of the machine's sessions within 30 s, as one notice.
     static PushNoticeData GroupData => new() { Kind = NoticeKind.Group, Machine = MachineId, Session = "", Sessions = 3, Class = NotificationClass.NeedsYou, At = T0 };
+
+    // A count of messages the machine's delivery lane could not deliver, over one window: no session, id or text.
+    static PushNoticeData FailuresData => new() { Kind = NoticeKind.Failures, Machine = MachineId, Session = "", Failures = 3, At = T0 };
 
     // ---- launching ----
 
@@ -1170,6 +1218,8 @@ public static class ProtocolVectors
             .Valid("revoked", new AgentRevokeResult("session-1", true));
         f.Record<AgentCredentialResult>(Host)
             .Valid("a-credential", new AgentCredentialResult(AgentProtocol.TokenPrefix + Repeat('A', 43), "agent:machine1/session-1", AgentProtocol.ScopeRead, T0));
+        f.Record<SamePcPinRequest>(Client).Valid("roster-root", new SamePcPinRequest("owner@example", MachineId, Sha, [Sha], MachineId));
+        f.Record<SamePcPinResult>(Host).Valid("pinned", new SamePcPinResult(SamePcPinProtocol.Pinned));
     }
 
     // ---- diagnostics ----

@@ -32,7 +32,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // for more input until closed, so a finished one is idle, not ended. Its own sub-agents would
 // be in its own rollout, which is not read: they are neither listed nor counted.
 // Sign-in and turn-ending errors (session.attention): TODO(#800), once a real redacted sample of
-// Codex's is captured (AgentErrors). None was on VM1, and no string is guessed meanwhile.
+// Codex's is captured (AgentErrors). None was in #800's sample, and no string is guessed meanwhile.
 internal sealed class CodexParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
@@ -58,11 +58,13 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     // The session's own thread: a sub-agent another sub-agent started is not the main agent's.
     string? _thread;
+    readonly CodexReplyIds _replyIds = new();
 
     public override void Reset()
     {
         base.Reset();
         _thread = null;
+        _replyIds.Reset(false);
     }
 
     // A sub-agent the skim saw start may have stopped in bytes never read: listed with no
@@ -71,10 +73,18 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     {
         S.Background.ForgetRuns();
         S.Effort = null;
+        _replyIds.Reset(false);
+    }
+
+    protected override void Unreadable(ReadOnlySpan<byte> line)
+    {
+        _replyIds.Reset(false);
+        base.Unreadable(line);
     }
 
     protected override void Count(JsonElement e)
     {
+        _replyIds.Validate(CodexReplyIds.Read(e));
         var payload = Json.Obj(e, "payload") ?? default;
         switch (Json.Str(e, "type"))
         {
@@ -113,6 +123,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     protected override bool Apply(JsonElement e, DateTimeOffset? at)
     {
         var payload = Json.Obj(e, "payload") ?? default;
+        var reply = CodexReplyIds.Read(e);
+        _replyIds.Validate(reply);
         switch (Json.Str(e, "type"))
         {
             case "session_meta":
@@ -132,9 +144,9 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 S.Compactions++;
                 return true;
             case "event_msg":
-                return Event(payload, at);
+                return Event(payload, at, reply);
             case "response_item":
-                return Item(payload, at);
+                return Item(payload, at, reply);
             default:
                 return false;
         }
@@ -152,11 +164,12 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         }
     }
 
-    bool Event(JsonElement p, DateTimeOffset? at)
+    bool Event(JsonElement p, DateTimeOffset? at, CodexReplyKey reply)
     {
         switch (Json.Str(p, "type"))
         {
             case "task_started":
+                _replyIds.Reset(false);
                 S.Prompt(at);
                 S.Reasoning = null;
                 S.SetStatus(SessionStatus.Working);
@@ -173,7 +186,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 S.Activity(at);
                 break;
             case "user_message" when Text.NonBlank(Json.Str(p, "message")) is { } text:
-                UserMessage(text, at);
+                UserMessage(text, at, reply);
                 break;
             case "agent_message" when Text.NonBlank(Json.Str(p, "message")) is { } text:
                 Replied(text);
@@ -219,7 +232,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                     break;
                 }
             case "item_completed" when Json.Obj(p, "item") is { } item:
-                return Completed(item, at);
+                return Completed(item, at, reply);
             default:
                 // token_count and the like.
                 return false;
@@ -227,15 +240,15 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         return true;
     }
 
-    bool Completed(JsonElement item, DateTimeOffset? at)
+    bool Completed(JsonElement item, DateTimeOffset? at, CodexReplyKey reply)
     {
         switch (Json.Str(item, "type"))
         {
             case "UserMessage" when ContentText(item) is { } text:
-                UserMessage(text, at);
+                UserMessage(text, at, reply);
                 break;
             case "AgentMessage" when ContentText(item) is { } text:
-                Replied(text);
+                Replied(text, reply);
                 S.Activity(at);
                 break;
             case "Reasoning":
@@ -390,14 +403,14 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         }
     }
 
-    bool Item(JsonElement p, DateTimeOffset? at)
+    bool Item(JsonElement p, DateTimeOffset? at, CodexReplyKey reply)
     {
         switch (Json.Str(p, "type"))
         {
             case "message" when Json.Str(p, "role") == "assistant":
                 {
                     var text = OutputText(p);
-                    if (text is not null) { Replied(text); S.Activity(at); }
+                    if (text is not null) { Replied(text, reply); S.Activity(at); }
                     break;
                 }
             // Otherwise what Codex injects, never shown: only a sub-agent's notice is read.
@@ -446,6 +459,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         S.FirstUserMessage ??= text;
         S.UserMessageKey = Key(at);
         TurnStarts();
+        _replyIds.Reset(false);
     }
 
     // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: the records
@@ -500,20 +514,22 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         _ => null,
     };
 
-    void UserMessage(string text, DateTimeOffset? at)
+    void UserMessage(string text, DateTimeOffset? at, CodexReplyKey reply)
     {
         // task_started counted the turn; a user message only says what it is.
         Skimmed(text, at);
+        _replyIds.Reset(!reply.Ambiguous, reply.Turn);
         S.Pending.Clear();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);
     }
 
     // The main agent's reply, and the turn it is of (activity.responseTurn).
-    void Replied(string text)
+    void Replied(string text, CodexReplyKey reply = default)
     {
         S.Response = text;
         S.ResponseTurn = S.TurnId;
+        S.ResponseId = S.TurnId is not null && RecordId is { } record ? _replyIds.Match(reply, record, 0) : null;
     }
 
     void Start(string? id, string name, string? summary, DateTimeOffset? at)

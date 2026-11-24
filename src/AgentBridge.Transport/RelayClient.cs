@@ -76,6 +76,13 @@ public sealed class RelayClient : IAsyncDisposable
     public long BlobMaxBytes { get; private set; }
     // The largest feedback bundle (stored bytes) the relay takes, or 0 when it takes none.
     public long FeedbackMaxBytes { get; private set; }
+    // What the relay advertised in this connection's ready; empty from an older relay. A new
+    // connection reads it afresh, so a reconnect to an older relay never keeps a capability.
+    public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
+    public static IReadOnlySet<string> ReadCapabilities(JsonElement ready) =>
+        ready.TryGetProperty("capabilities", out var caps) && caps.ValueKind == JsonValueKind.Array
+            ? caps.EnumerateArray().Where(c => c.ValueKind == JsonValueKind.String).Select(c => c.GetString()!).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>();
     public string Login { get; private set; } = "";
     PresenceSnapshot snapshot = new([], null);
     // Both lists from the same presence message: read this, not Presence then Known, wherever the
@@ -248,6 +255,22 @@ public sealed class RelayClient : IAsyncDisposable
         finally { rosterReads.TryRemove(id, out _); }
     }
 
+    // Asks the relay to move the account to enforce (devices.md, "The relay's enforce mode"): honoured only for an active person
+    // device, one way. True when it is now in enforce.
+    public async Task<bool> EnforceRosterAsync(CancellationToken ct = default)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rosterReads[id] = tcs;
+        try
+        {
+            await SendTextAsync(new { t = "roster-enforce", id }, ct);
+            var r = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            return !r.TryGetProperty("error", out var e) || e.ValueKind == JsonValueKind.Null;
+        }
+        finally { rosterReads.TryRemove(id, out _); }
+    }
+
     // Ends, never faults, when the connection does; the caller then reconnects.
     public Task Completion => loop;
     public WebSocketCloseStatus? CloseStatus => ws.CloseStatus;
@@ -289,6 +312,7 @@ public sealed class RelayClient : IAsyncDisposable
             if (ready.GetProperty("device").GetString() != c.DeviceId) { throw new CryptographicException("relay assigned a different device id"); }
             c.AccountId = early ? ready.GetProperty("account").GetString()! : challenge.GetProperty("account").GetString()!;
             c.Login = ready.GetProperty("login").GetString() ?? "";
+            c.Capabilities = ReadCapabilities(ready);
             if (ready.TryGetProperty("feedback", out var fb) && fb.ValueKind == JsonValueKind.Object && fb.TryGetProperty("max", out var fmax) && fmax.TryGetInt64(out var fm)) { c.FeedbackMaxBytes = Math.Max(0, fm); }
             // Absent from a relay without a blob store, and from one that predates it.
             if (ready.TryGetProperty("blobs", out var blobs) && blobs.ValueKind == JsonValueKind.Object && blobs.TryGetProperty("max", out var max) && max.TryGetInt64(out var m)) { c.BlobMaxBytes = Math.Max(0, m); }
@@ -451,7 +475,7 @@ public sealed class RelayClient : IAsyncDisposable
                         case "feedback-result":
                             if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
                             break;
-                        case "roster":
+                        case "roster" or "roster-enforce-result":
                             if (rosterReads.TryRemove(j.GetProperty("id").GetInt64(), out var rr)) { rr.TrySetResult(j.Clone()); }
                             break;
                         case "forget-result":
@@ -467,6 +491,8 @@ public sealed class RelayClient : IAsyncDisposable
                         case "registry":
                             if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
+                                // Keep this wording: the fleet tools retry a registry-rate refusal by matching it (reply-session.ps1). It names the old
+                                // 2 s rule; change both together.
                                 if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
                                 else if (j.TryGetProperty("known", out _))
                                 {

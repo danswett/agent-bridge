@@ -50,6 +50,21 @@ public sealed class AgentPolicyTests
         Assert.Equal("none", a.Label);
     }
 
+    [Fact]
+    public void Resume_roles_are_off_unless_the_person_lists_valid_role_names()
+    {
+        Assert.Empty(Parse("""{ "agents": { "enabled": true } }""").Agents.ResumeRoles);
+        var listed = Parse("""{ "agents": { "enabled": true, "resume": { "roles": ["quality-lead", "sre"] } } }""");
+        Assert.Empty(listed.AgentsProblems);
+        Assert.Equal(["quality-lead", "sre"], listed.Agents.ResumeRoles);
+        foreach (var bad in new[] { "\"roles\": [\"a b\"]", "\"roles\": \"sre\"", "\"roles\": [1]", "\"who\": []" })
+        {
+            var s = Parse("{ \"agents\": { \"enabled\": true, \"resume\": { " + bad + " } } }");
+            Assert.NotEmpty(s.AgentsProblems);
+            Assert.Empty(s.Agents.ResumeRoles);
+        }
+    }
+
     [Theory]
     [InlineData("""{ "agents": "yes" }""")]
     [InlineData("""{ "agents": { "enabled": true, "inbound": [] } }""")]
@@ -126,5 +141,15 @@ public sealed class AgentPolicyTests
         var s = Parse("""{ "agents": { "inbound": { "local": { "launch": { "workspaces": "approved" } } } } }""");
         Assert.Null(s.Agents.InboundLocal.Launch);
         Assert.Single(s.AgentsProblems);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    [InlineData("\"true\"", false)]
+    public void Person_grant_all_extension_is_explicit_boolean_without_changing_standing_ask(string value, bool expected)
+    {
+        var s = Parse("{\"agents\":{\"inbound\":{\"local\":{\"launch\":{\"workspaces\":\"approved\",\"permissions\":\"ask\",\"allowAllLaunch\":" + value + "}}}}}");
+        Assert.Equal(expected, s.Agents.InboundLocal.Launch?.AllowAllLaunch ?? false);
     }
 }

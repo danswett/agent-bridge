@@ -19,6 +19,9 @@ sealed record Selection(
 {
     public bool NonProductOnly { get; init; }
 
+    /// <summary>The catalog's post-merge ci.yml job names (Catalog.PostMergeJobs), whatever was selected.</summary>
+    public IReadOnlyCollection<string> PostMergeJobs { get; init; } = [];
+
     /// <summary>
     /// Each platform, with the selected suites that run on it: the OS matrix. With a platform
     /// filter it's this machine's run, and what was left out is in <see cref="Skipped"/>; CI
@@ -147,6 +150,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
         return new Selection(ring, platform, mode, files, unclaimed, selected, skipped)
         {
             NonProductOnly = files.Count > 0 && mode is ("affected" or "docs-only") && files.All(NonProduct),
+            PostMergeJobs = catalog.PostMergeJobs(),
         };
     }
 

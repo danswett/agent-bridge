@@ -12,6 +12,12 @@ the approved HA-off rehearsal and final sign-off govern retirement. S8 is option
 and later, not a retirement prerequisite. S0 is complete: no owner-built HA
 function must survive. Existing compatibility is unchanged by this note.
 
+Owner decision (relayed by Engineering, Nov 22, 2026 Pacific): S8 is kept. Home Assistant may remain possible as an
+optional Slipgates client on the normal client protocol, with no side door and no extra privilege, and nothing in Home
+Assistant is required for Slipgates. The slice 11 dual run (24 h, registry vs HA) stays the gate before the HA connector
+is removed (S7). The suspension of `hostSign` (the Nov 20 own-account messaging exception) stays temporary; R/#1776
+remains a later slice. This replaces an earlier relayed note that S8 was dropped.
+
 ## Placement and state
 
 The component runs inside whichever HA installation the person chooses, never
@@ -119,8 +125,12 @@ These are required target views, not claims that the initial service grant cover
 them all. Build an HA push coordinator (`should_poll = false`), not polling.
 Entity keys derive from enrolled identity and current protocol session identity;
 never keep session/node addresses or a named machine roster in configuration.
-`fleet.find` remains the canonical name lookup, with verified fresh records and
-person-confirmed machine pins; no guessed, unverified or ambiguous target is routed.
+`fleet.find` remains the canonical live session-ID lookup from the authenticated
+roster, with person-confirmed exact device-ID pins and the
+[documented trust/completeness precedence](../protocol/agent-operations.md#fleetfind).
+Names are display only. Unknown, stale or offline IDs refuse; no name, fragment or
+HA fallback routes a target. Incomplete, unverified or ambiguous results stay
+unroutable; the messaging-only own-account exception grants this service no actions.
 
 | Card role | Entities/view and parity rows | Subscription source and authority |
 |---|---|---|
@@ -156,10 +166,12 @@ Keep decrypted activity bounded in memory, not persisted as Recorder history:
 entity state/attributes hold only minimal status; the authenticated card view
 reads current permitted detail without exporting tokens or transcripts to logs.
 
-`registry-subscribe`/`registry-changed` are **not implemented**: registry `get`
-alone cannot prove subscription parity. Do not replace the missing feed with
-polling. Later scoped registry readers must verify host signatures, epoch/sequence,
-60-second freshness and removals; relay metadata never carries prompt/detail text.
+The relay now serves `registry-subscribe`/`registry-changed` (slice 2b, #3760;
+[roster.md](../protocol/roster.md#session-registry-each-machines-sessions)), so the feed this client needs exists on the
+ordinary relay socket: subscribe, then `registry-get`, and apply both with the same order rule. The host reader (#3780)
+and the PWA reader (#3795) are the reference ports, and HA's Python reader mirrors them case for case. Do not replace the
+feed with polling. Readers apply epoch/sequence, 60-second freshness and removals today; records stay unverified, and
+readers verify host signatures only once `hostSign` (#1776) lands. Relay metadata never carries prompt/detail text.
 
 ## Proposed build slices and proof
 
@@ -177,7 +189,7 @@ S6a owns enrollment rules; the existing HA repository retains implementation.
 | B5 Session entity coordinator | 150-200 | B4 | Snapshot, mutation, sequence-1 gap, removal and host restart reconcile; disconnect never shows empty success |
 | B6 One card role per PR, seven PRs | 100-200 | B5; each role's approved read source | Render each role on disposable HA; compare its mapped rows, escaping and missing-capability behavior |
 | B7 Paired-person action links | 100-180 | S4/S6a person UI; B6 | Person UI completes an allowed action; service-key attempts refuse, stale question cannot be answered |
-| B8 Fleet registry view | 150-200 | Scoped registry grant, signed change feed; B5 | Two disposable hosts join/leave; stale/forged/ambiguous lookup never routes; zero polling |
+| B8 Fleet registry view | 150-200 | Scoped registry grant (S6a); relay feed exists (2b), signature checks wait on #1776; B5 | Two disposable hosts join/leave; stale/forged/ambiguous lookup never routes; zero polling |
 | B9 Packaging and conformance evidence | 100-200 | B1-B8 and each mapped capability built | Install/unload/remove HA while another client messages/approves; nothing else affected; #1407 results per row |
 
 Both model families must read this whole note at the exact review head.

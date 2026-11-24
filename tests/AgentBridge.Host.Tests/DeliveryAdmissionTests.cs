@@ -30,11 +30,24 @@ public sealed class DeliveryAdmissionTests
     }
 
     [Fact]
-    public async Task A_stop_is_refused_before_any_delivery_work_while_the_shared_gate_is_fenced()
+    public async Task A_stop_is_refused_before_any_delivery_work_while_a_departure_is_committed()
     {
         var time = new FakeTimeProvider();
         var gate = new DeliveryGate(time);
         using var fence = gate.TryExclude(TimeSpan.FromSeconds(30), out _);
+        Assert.True(fence!.TryBeginCommit(out _));
+        Assert.True(fence.TryCommit(new DepartureConnection(), 0, false, 0, out _));
+        var service = new StopService(gate, null!, null!, null!, null!, null!, new StopOptions { CopilotHome = "." });
+        var result = await service.StopAsync(new StopRequest { Id = "unvisited", Request = Guid.NewGuid().ToString() });
+        Assert.Equal(StopOutcome.Busy, result.Outcome);
+    }
+
+    [Fact]
+    public async Task A_stop_is_refused_before_any_delivery_work_while_a_planned_stop_holds_the_gate()
+    {
+        var gate = new DeliveryGate(new FakeTimeProvider());
+        using var lease = await gate.PrepareStopAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(lease);
         var service = new StopService(gate, null!, null!, null!, null!, null!, new StopOptions { CopilotHome = "." });
         var result = await service.StopAsync(new StopRequest { Id = "unvisited", Request = Guid.NewGuid().ToString() });
         Assert.Equal(StopOutcome.Busy, result.Outcome);
@@ -78,9 +91,9 @@ public sealed class DeliveryAdmissionTests
         var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs"));
         Assert.Single(Regex.Matches(program, @"new DeliveryGate\(").Cast<Match>());
         Assert.Contains("relayBlobs, codexUnsettled, deliveryGate)", program);
-        Assert.Matches(@"Launcher\(source, g5, attachments, transfers, deliveryGate(, restore)?(, agentCredentials)?(, diagnosticsJournal)?, machine\.Name, agentAudit\)", program);
+        Assert.Matches(@"Launcher\(source, g5, attachments, transfers, deliveryGate(, restore)?(, agentCredentials)?(, diagnosticsJournal)?, machine\.Name, agentAudit(, id => hooksNotSetUp\(id\))?\)", program);
         // Launches only carry an agent credential when the host hands its store to the launcher and the launcher on to LaunchService (#720).
-        Assert.Contains("restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit)", program);
+        Assert.Contains("restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, id => hooksNotSetUp(id))", program);
         Assert.Contains("MachineName = machineName,", program);
         Assert.Contains("Log, attachments, credentials: credentials, account: new CopilotLaunchAccount(launchHttp, log: Log))", program);
         // The lease every planned departure takes is composed with remote management (#801), over the same gate.

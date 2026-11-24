@@ -3,6 +3,8 @@
 Status: proposed design only, under #1396. No operation, storage, caller permission,
 rollout or transition is implemented or enabled by this note. Engineering and both
 independent reader families must clear the design before its code cuts are assigned.
+Label-to-role selection here is superseded by [role-ids.md](role-ids.md)
+([#3334](https://github.com/danswett/agent-bridge/pull/3334)); the registry projection remains.
 
 ## One registry, one read-only view
 

@@ -1,5 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import * as launch from '../../js/launch.js';
+import * as follow from '../../js/launch-follow.js';
+import { ago } from '../../js/ui/time.js';
+import { LINGER_READ_MS } from '../../js/ui/receipt.js';
 import { LaunchService } from '../../js/launch-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { checkLaunch, flattenPrompt, readLaunchOptions, readLaunchResult, readTrustResult, MAX_PROMPT } from '../../js/launch.js';
@@ -228,4 +234,179 @@ test('a folder-trust answer from a newer host is read as unconfirmed, never as r
   assert.deepEqual(describeTrust({ state: 'done', choice: 'trust', result: { outcome: 'unconfirmed', reason: 'Not confirmed: answer at the machine. The question is still in Codex\'s window.' } }, q),
     { text: 'Not confirmed: answer at the machine. The question is still in Codex\'s window.', tone: 'warn' });
   assert.equal(describeTrust({ state: 'done', choice: 'quit', result: { outcome: 'refused', reason: 'Answer at the machine' } }, q).tone, 'bad');
+});
+
+const panelSource = readFileSync(new URL('../../js/ui/launch-view.js', import.meta.url), 'utf8')
+  .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
+
+function timerPanel(t, hidden = false) {
+  let now = 100000;
+  let next = 0;
+  let intervalTicks = 0;
+  let timeoutTicks = 0;
+  let jumps = 0;
+  let ready = false;
+  let entry = null;
+  const pending = new Map();
+  const listeners = new Set();
+  const doc = {
+    hidden,
+    get visibilityState() { return this.hidden ? 'hidden' : 'visible'; },
+    addEventListener(type, fn) { assert.equal(type, 'visibilitychange'); listeners.add(fn); },
+    removeEventListener(type, fn) { listeners.delete(fn); },
+  };
+  const h = (tag, props, ...children) => ({
+    ...props, children, dataset: {}, value: props?.value ?? '', textContent: '',
+    classList: { add() {}, toggle() {} },
+    setAttribute() {}, removeAttribute() {}, replaceChildren() {},
+    addEventListener() {}, querySelectorAll() { return []; }, contains() { return false; },
+  });
+  const schedule = (fn, ms, repeat) => {
+    const id = ++next;
+    pending.set(id, { fn, ms, repeat, due: now + ms });
+    return id;
+  };
+  const Panel = vm.runInNewContext(`${panelSource}\nLaunchPanel`, {
+    ...launch, ...follow, ago, LINGER_READ_MS, h, document: doc, AbortController, TextEncoder,
+    Date: class extends Date { static now() { return now; } },
+    setInterval: (fn, ms) => schedule(fn, ms, true),
+    setTimeout: (fn, ms) => schedule(fn, ms, false),
+    clearInterval: (id) => pending.delete(id), clearTimeout: (id) => pending.delete(id),
+  });
+  const root = { ...h('section'), querySelector: () => h('div') };
+  const view = new Panel(root, {
+    service: { get: () => entry, watch: () => () => {} },
+    jump: () => { jumps++; return ready; },
+  });
+  view.setTarget({ hostId: 'h1', load: () => new Promise(() => {}) });
+  view.setOpen(true);
+  t.after(() => view.clear());
+  const tick = (ms) => {
+    const until = now + ms;
+    for (;;) {
+      const due = [...pending].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!due) { break; }
+      const [id, timer] = due;
+      now = timer.due;
+      if (timer.repeat) { timer.due += timer.ms; intervalTicks++; } else { pending.delete(id); timeoutTicks++; }
+      timer.fn();
+    }
+    now = until;
+  };
+  const start = () => {
+    entry = { hostId: 'h1', request: 'r1', state: 'done', outcome: 'started', detail: { session: 's1' } };
+    view.els.open.onclick();
+  };
+  const show = (visible) => { doc.hidden = !visible; for (const fn of [...listeners]) { fn(); } };
+  return {
+    view, pending, listeners, start, tick, show, cadence: Panel.recheckMs,
+    get intervalTicks() { return intervalTicks; }, get timeoutTicks() { return timeoutTicks; },
+    get jumps() { return jumps; }, set ready(value) { ready = value; },
+    supersede() { entry.request = 'r2'; },
+  };
+}
+
+test('jump interval is not scheduled while hidden', (t) => {
+  const s = timerPanel(t, true);
+  s.start();
+  s.tick(5000);
+  assert.equal(s.intervalTicks, 0);
+  assert.equal(s.jumps, 0);
+  assert.equal(s.pending.size, 0);
+});
+
+test('jump resumes once on return and ends at the original 15 s deadline', (t) => {
+  const s = timerPanel(t, true);
+  s.start();
+  s.tick(8000);
+  s.show(true);
+  s.show(true);
+  assert.equal(s.pending.size, 1);
+  s.tick(250);
+  assert.equal(s.jumps, 1);
+  s.show(false);
+  assert.equal(s.pending.size, 0);
+  s.tick(1000);
+  assert.equal(s.jumps, 1);
+  s.ready = true;
+  s.show(true);
+  s.tick(250);
+  assert.equal(s.jumps, 2);
+  assert.equal(s.pending.size, 0);
+  assert.equal(s.listeners.size, 0);
+  for (const superseded of [false, true]) {
+    const late = timerPanel(t, true);
+    late.start();
+    late.tick(superseded ? 8000 : 15001);
+    if (superseded) { late.supersede(); }
+    late.ready = true;
+    late.show(true);
+    late.tick(1000);
+    assert.equal(late.jumps, 0);
+    assert.equal(late.pending.size, 0);
+    assert.equal(late.listeners.size, 0);
+  }
+});
+
+test('probe timer is not armed while hidden, one round on return', (t) => {
+  const s = timerPanel(t, true);
+  const calls = [];
+  s.view.probeOthers(['h2', 'h3'].map((hostId) => ({
+    hostId, load: async () => { calls.push(hostId); return { trust: [] }; },
+  })));
+  s.tick(60000);
+  assert.equal(s.timeoutTicks, 0);
+  assert.deepEqual(calls, []);
+  assert.equal(s.pending.size, 0);
+  s.show(true);
+  assert.deepEqual(calls, ['h2', 'h3']);
+  s.show(true);
+  assert.deepEqual(calls, ['h2', 'h3']);
+  assert.equal(s.pending.size, 1);
+  s.tick(s.cadence - 1);
+  assert.equal(calls.length, 2);
+  s.tick(1);
+  assert.deepEqual(calls, ['h2', 'h3', 'h2', 'h3']);
+  s.show(false);
+  assert.equal(s.pending.size, 0);
+  const fired = s.timeoutTicks;
+  s.tick(60000);
+  assert.equal(s.timeoutTicks, fired);
+});
+
+test('visibility listener is removed on cancel and on close', (t) => {
+  const s = timerPanel(t, true);
+  s.start();
+  assert.equal(s.listeners.size, 1);
+  s.view.setOpen(false);
+  assert.equal(s.listeners.size, 0);
+  s.show(true);
+  s.tick(16000);
+  assert.equal(s.jumps, 0);
+  let probes = 0;
+  const others = [{ hostId: 'h2', load: async () => { probes++; return { trust: [] }; } }];
+  s.show(false);
+  s.view.probeOthers(others);
+  assert.equal(s.listeners.size, 1);
+  s.view.probeOthers([]);
+  assert.equal(s.listeners.size, 0);
+  s.view.setOpen(true);
+  s.start();
+  s.view.probeOthers(others);
+  s.view.clear();
+  assert.equal(s.listeners.size, 0);
+  s.show(true);
+  s.tick(60000);
+  assert.equal(s.jumps, 0);
+  assert.equal(probes, 0);
+  assert.equal(s.pending.size, 0);
+});
+
+test('a visible jump succeeds on first try with no timer', (t) => {
+  const s = timerPanel(t);
+  s.ready = true;
+  s.start();
+  assert.equal(s.jumps, 1);
+  assert.equal(s.pending.size, 0);
+  assert.equal(s.listeners.size, 0);
 });
