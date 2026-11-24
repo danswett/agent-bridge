@@ -39,6 +39,52 @@ public sealed class ReplyClearTests
         Assert.DoesNotContain("handoffText", JsonSerializer.Serialize(request, ProtocolJson.Options));
     }
 
+    [Fact]
+    public async Task A_reply_refused_for_a_full_copilot_box_shows_the_box_and_offers_no_clear()
+    {
+        await using var h = await Harness.Create(); h.Draft = "rerun the tests";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Equal(("rerun the tests", ComposerInput.From("rerun the tests").Digest), (result.Input!.Text, result.Input.Digest));
+        Assert.False(result.Input!.Clearable);
+        Assert.Equal(0, h.Replies);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Only_a_person_class_reply_is_shown_the_box_never_an_agent_or_unclassified_sender(bool person)
+    {
+        await using var h = await Harness.Create(); h.Draft = "a draft someone left here";
+        var request = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true,
+            IntentSource = () => person ? ReplyIntent.Steer : ReplyIntent.Unknown };
+        var result = await h.Replier.ReplyAsync(request);
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Equal(person, result.Input is not null);
+        Assert.Equal(person, JsonSerializer.Serialize(result, ProtocolJson.Options).Contains("someone left"));
+    }
+
+    [Fact]
+    public async Task A_person_class_refusal_is_never_replayed_to_a_non_person_resend_of_the_same_request()
+    {
+        await using var h = await Harness.Create(); h.Draft = "a draft someone left here";
+        var asked = h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true };
+        var first = await h.Replier.ReplyAsync(asked with { IntentSource = () => ReplyIntent.Steer });
+        Assert.NotNull(first.Input);
+        // The same device, session and request UUID, now from an unclassified sender: it must not read the cached person result.
+        var again = await h.Replier.ReplyAsync(asked with { IntentSource = () => ReplyIntent.Unknown });
+        Assert.Null(again.Input);
+        Assert.DoesNotContain("someone left", JsonSerializer.Serialize(again, ProtocolJson.Options));
+    }
+
+    [Fact]
+    public async Task An_empty_box_has_no_input_to_show()
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
+        Assert.Null(result.Input);
+    }
+
     [Theory]
     [InlineData("remote", false)]
     [InlineData("remote", true)]

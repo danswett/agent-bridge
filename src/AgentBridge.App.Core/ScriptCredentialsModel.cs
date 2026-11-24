@@ -3,7 +3,20 @@ using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
 
-public sealed record ScriptCredentialRow(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch, DateTimeOffset? LastUse);
+public sealed record ScriptCredentialRow(string Name, string Scope, DateTimeOffset ExpiresAt, int Live, bool FleetLaunch, DateTimeOffset? LastUse)
+{
+    // A credential lives 30 days and is never extended silently (design/script-credentials.md), so the page warns in the last week. ExpiresAt is the
+    // latest among the script's live credentials (the host's own figure, also during a rotation); renewal is the Rotate press, nothing automatic.
+    public const int WarnDays = 7;
+
+    public string? ExpiryNote(DateTimeOffset now)
+    {
+        var left = ExpiresAt - now;
+        if (left <= TimeSpan.Zero) { return "expired: the script's runs fail until it is rotated"; }
+        var days = (int)Math.Ceiling(left.TotalDays);
+        return days > WarnDays ? null : days == 1 ? "expires in 1 day" : $"expires in {days} days";
+    }
+}
 
 // Settings > Script credentials (HA retirement row 1, owner option 1, ruling A). The page never holds a secret: the host writes a script's
 // credential straight into its own owner-only file, and every press carries the host's confirmation for exactly that action, script and

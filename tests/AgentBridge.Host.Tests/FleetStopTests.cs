@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Fleet.Grants;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -588,6 +589,59 @@ public sealed class FleetStopTests : IDisposable
         var again = await End(request: request);
         Assert.Equal(("ended", null, calls), (again.Outcome, again.Reason, injector.Calls));
         Assert.Contains(GateAuditProjection.Load(Folder).Rows, r => r.Action == "fleet.end.replay" && r.Request == request.ToString());
+    }
+    // #2741: an agent ends a session an agent started, by the host's own launch record (no grant), never by guess.
+    int pendingReads;
+    FleetStopCommands Provenance(Func<string, SessionProcess?, bool> fleetWorker, bool pending = false) => new(Folder, key, () => "123", Device, credentials,
+        new(source, new(Device, "fixture", "windows", "1"), stops: stops, launcher: new Worker(fleetWorker)), source, stops, unpushed: _ => { pendingReads++; return pending; });
+    Task<FleetStopReceipt> EndByRecord(FleetStopCommands handler, string? session = null) => handler.HandleAsync(caller,
+        JsonSerializer.SerializeToElement(new FleetStopInput(1, Guid.NewGuid(), Guid.Empty, session ?? id), ProtocolJson.Options));
+    [Fact]
+    public async Task An_agent_ends_a_session_the_launch_record_shows_an_agent_started()
+    {
+        var receipt = await EndByRecord(Provenance((_, process) => process is { Id: 700 }));
+        Assert.Equal(("ended", null), (receipt.Outcome, receipt.Reason));
+        Assert.Equal(1, injector.Calls);
+        Assert.Equal(1, pendingReads); // one git result per request, not one for prepare and another at dispatch
+    }
+    [Fact]
+    public async Task A_session_a_person_started_or_with_no_launch_record_is_refused_without_typing()
+    {
+        Assert.Equal("scope", (await EndByRecord(Provenance((_, _) => false))).Reason);
+        Assert.Equal("scope", (await EndByRecord(Provenance((_, _) => throw new InvalidOperationException("refused: launch provenance is unavailable")))).Reason);
+        Assert.Equal(0, injector.Calls);
+    }
+    [Fact]
+    public async Task An_agent_cannot_end_its_own_session_by_the_record_path()
+    {
+        source.Sessions.Add(source.Sessions[0] with { Id = caller.Session });
+        var receipt = await EndByRecord(Provenance((_, _) => true), caller.Session);
+        Assert.Equal(("refused", "scope", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+    }
+    [Theory]
+    [InlineData("derived")]
+    [InlineData("unknown")]
+    public async Task A_derived_or_unknown_node_is_refused_by_the_record_path(string kind)
+    {
+        var node = kind == "derived" ? id.Replace("-", "")[..16] : Guid.NewGuid().ToString();
+        var receipt = await EndByRecord(Provenance((_, _) => true), node);
+        Assert.Equal(("refused", kind == "derived" ? "bad-argument" : "scope", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+    }
+    [Fact]
+    public async Task A_record_ended_session_with_unpushed_or_unreadable_work_is_refused_and_git_decides_by_default()
+    {
+        var receipt = await EndByRecord(Provenance((_, _) => true, pending: true));
+        Assert.Equal(("refused", "policy", 0), (receipt.Outcome, receipt.Reason, injector.Calls));
+        var folder = Path.Combine(f.Root, "work");
+        Directory.CreateDirectory(folder);
+        Assert.True(UnpushedWork.Pending(folder));
+    }
+    sealed class Worker(Func<string, SessionProcess?, bool> fleetWorker) : ISessionLauncher
+    {
+        public bool Available => false;
+        public bool IsFleetWorker(string session, SessionProcess? process) => fleetWorker(session, process);
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
     sealed class Chan : IProtocolChannel
     {

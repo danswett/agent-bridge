@@ -556,7 +556,8 @@ test.describe('on a phone, with the person\'s settings', () => {
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowLeft');
     const box = await v.locator('.stream-scroll').boundingBox();
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 100);
+    // Over the conversation, clear of the reply area floating over its foot (121 tall at rest on a phone, three lines).
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 200);
     for (let i = 0; i < 4; i += 1) { await page.mouse.wheel(0, 120); }
     await expect.poll(async () => (await read(v)).scroll).toBeGreaterThan(300);
     await settle(v);
@@ -570,7 +571,8 @@ test.describe('on a phone, with the person\'s settings', () => {
     await v.getByRole('tab', { name: 'Tools' }).click();
     await v.getByRole('tab', { name: 'Conversation' }).click();
     const box = await v.locator('.stream-scroll').boundingBox();
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 100);
+    // Over the conversation, clear of the reply area floating over its foot (121 tall at rest on a phone, three lines).
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 200);
     for (let i = 0; i < 4; i += 1) { await page.mouse.wheel(0, 120); }
     await expect.poll(async () => (await read(v)).scroll).toBeGreaterThan(300);
     await expect.poll(async () => (await read(v)).ty).toBe(-room);
