@@ -6194,7 +6194,6 @@
             "activity": {
               "turn": "Tn01aBcDeFgHiJkL",
               "responseTurn": "Tn01aBcDeFgHiJkL",
-              "responseId": null,
               "responseRef": "Rc02mNoPqRsTuVwX.0",
               "response": "Second reply, no id"
             }
@@ -6217,7 +6216,6 @@
             "activity": {
               "turn": "Tn01aBcDeFgHiJkL",
               "responseTurn": "Tn01aBcDeFgHiJkL",
-              "responseId": null,
               "responseRef": "Rc02mNoPqRsTuVwX.0",
               "response": "Second reply, no id, grown"
             }

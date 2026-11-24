@@ -97,15 +97,15 @@ public class PatchReplayTests(ITestOutputHelper output)
         });
         // #4245: a reply the host cannot place in history has no responseId but still has a responseRef, and the next reply has another. The patch carries the
         // id going away and the ref changing; a client with no id uses the ref to tell a new reply from an update.
-        JsonObject Said(string? id, string reference, string text) => new()
+        // An absent field is left out, as the host's wire leaves it out; never an explicit null.
+        JsonObject Said(string? id, string reference, string text)
         {
-            ["id"] = "s1",
-            ["activity"] = new JsonObject
-            {
-                ["turn"] = "Tn01aBcDeFgHiJkL", ["responseTurn"] = "Tn01aBcDeFgHiJkL",
-                ["responseId"] = id, ["responseRef"] = reference, ["response"] = text,
-            },
-        };
+            var activity = new JsonObject { ["turn"] = "Tn01aBcDeFgHiJkL", ["responseTurn"] = "Tn01aBcDeFgHiJkL" };
+            if (id is not null) { activity["responseId"] = id; }
+            activity["responseRef"] = reference;
+            activity["response"] = text;
+            return new JsonObject { ["id"] = "s1", ["activity"] = activity };
+        }
         var first = Said("Rc01aBcDeFgHiJkL.0", "Rc01aBcDeFgHiJkL.0", "First reply");
         var second = Said(null, "Rc02mNoPqRsTuVwX.0", "Second reply, no id");
         var grown = Said(null, "Rc02mNoPqRsTuVwX.0", "Second reply, no id, grown");
