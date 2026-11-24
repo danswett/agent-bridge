@@ -15,7 +15,7 @@ public class MachineNameScanTests
     // can't catch, so it is cleaned with design/.
     static readonly string[] NotYetCleaned =
     [
-        "design/", "docs/design/",
+        
     ];
 
     // What the scan leaves alone: the recorded JSON under a fixtures folder, and nothing else. A source file dropped into Fixtures is read (Q10's P2 on #4390).
