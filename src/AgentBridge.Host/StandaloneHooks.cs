@@ -260,7 +260,7 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         // Shown to the person (owner decision, Nov 23 about 23:05 PT): what is added, where, that only this product's own entries are touched, and the way back.
-        if (agent == "claude") { output.WriteLine($"Changes to {path}: adds this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd) and nothing else; your other settings and hooks are not touched. The original is kept once at {Path.Combine(HookFolder, "backups", "claude-settings.json")}. Remove restores it, taking out only these entries. No token is written."); }
+        if (agent == "claude") { output.WriteLine($"{(dryRun ? "Would change" : "Changing")} {path}: adds this product's own hooks (PreToolUse, Notification, Stop, SessionStart, UserPromptSubmit, SessionEnd) and nothing else; your other settings and hooks are not touched. The original is kept once at {Path.Combine(HookFolder, "backups", "claude-settings.json")}. Remove restores it, taking out only these entries. No token is written."); }
         if (dryRun) { return; }
         if (agent == "claude" && before is not null)
         {

@@ -115,6 +115,20 @@ public sealed class StandaloneHooksTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task A_dry_run_says_what_it_would_change_and_writes_nothing_and_a_real_run_says_what_it_changed()
+    {
+        var dry = new StringWriter();
+        await Setup.InstallAsync("claude", true, dry);
+        Assert.Contains("Would change", dry.ToString());
+        Assert.DoesNotContain("Changing", dry.ToString());
+        Assert.False(File.Exists(Registration("claude")));
+
+        var real = new StringWriter();
+        await Setup.InstallAsync("claude", false, real);
+        Assert.Contains("Changing", real.ToString());
+    }
+
     [Theory]
     [InlineData("copilot")]
     [InlineData("claude")]

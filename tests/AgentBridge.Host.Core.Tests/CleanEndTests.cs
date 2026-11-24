@@ -53,6 +53,7 @@ public class CleanEndTests
         g.Processes.Run(AgentKind.Claude, 701);
         await using var other = g.Source();
         await other.RefreshAsync();
+        Assert.Single(other.Snapshot());
         g.Processes.Exit(AgentKind.Claude, 701);
         await other.RefreshAsync();
         Assert.Empty(other.Snapshot());
