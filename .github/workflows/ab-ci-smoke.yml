@@ -13,6 +13,10 @@ on:
         description: Run on the ab-ci pool (main only), to prove a runner's environment
         type: boolean
         default: false
+      run_tests:
+        description: Also run App.Tests and the Quality.Tests efficiency tests (proves the host-process and timing fixes under load)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +70,13 @@ jobs:
       - name: Build the whole solution, Release
         shell: pwsh
         run: dotnet build AgentBridge.slnx -c Release --no-restore --nologo
+      - name: App.Tests (HostManagerTests) and efficiency tests, opt-in
+        if: inputs.run_tests
+        shell: pwsh
+        run: |
+          dotnet test tests/AgentBridge.App.Tests -c Release --no-build --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet test tests/AgentBridge.Quality.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~Efficiency"
       - name: Stop this job's build servers
         if: always()
         run: dotnet build-server shutdown
