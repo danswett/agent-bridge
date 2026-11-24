@@ -57,6 +57,17 @@ public static class ClaudeApproval
     public static string? Proof(string nonce, string eventJson) =>
         Parts(eventJson) is var (s, t, i) && RequestId(eventJson) is { } request ? Hash($"{nonce}\n{request}\n{s}\n{t}\n{i}", 64) : null;
 
+    // What the hook asks the host for, below the timeout Claude is given.
+    public static readonly TimeSpan AskWait = TimeSpan.FromSeconds(105);
+
+    // Claude's answer for the HOST's verdict (approval.wait), the one place an allow can come from: allow or deny, anything else nothing.
+    public static string Answer(string? verdict) => verdict switch
+    {
+        "allow" => "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}\n",
+        "deny" => Reply("deny"),
+        _ => "",
+    };
+
     // Claude's decision for a verdict: a deny, or nothing (no output, the prompt stays at the terminal). Never an allow: see AuthenticatedChannel.
     public static string Reply(string? verdict) => verdict switch
     {

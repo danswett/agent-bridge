@@ -56,6 +56,8 @@ public static class HookRunner
             var forced = rest.Remove("--fallback");
             if (rest.Count < 2) { return 0; }
             var (agent, hook) = (rest[0], rest[1]);
+            // Claude's permission prompt answered from a device (#1003): asks the host over its pipe, never spools, never allows by itself, and is off.
+            if (agent == "claude" && hook == "permission" && !forced) { Permission(stdin, stdout, env); return 0; }
             reply = SpoolContract.Reply(agent, hook);
             if (reply is null) { return 0; }
             // Copilot's ask_user needs nothing from its event to be let through (invariant 3), and
@@ -153,6 +155,24 @@ public static class HookRunner
     }
 
     // The runtime root the pointer beside the program names, or null with why.
+    // claude permission: the host's verdict (approval.wait) becomes Claude's answer; nothing is printed for none, for a failure, or while it is off.
+    static void Permission(Stream stdin, Stream stdout, HookEnvironment env)
+    {
+        string? verdict = null;
+        try
+        {
+            var (finished, utf8, whole) = ReadInput(stdin, env.InputWait);
+            var text = Encoding.UTF8.GetString(Trim(utf8));
+            if (env.ApprovalEnabled && env.Approval is { } ask && finished && whole && utf8.Length <= ApprovalClient.MaxEventBytes && ClaudeApproval.RequestId(text) is not null)
+            {
+                verdict = ask(text, ClaudeApproval.AskWait).GetAwaiter().GetResult();
+            }
+        }
+        catch (Exception) { verdict = null; }
+        try { var bytes = Encoding.UTF8.GetBytes(ClaudeApproval.Answer(verdict)); stdout.Write(bytes); stdout.Flush(); }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or NotSupportedException) { }
+    }
+
     public static (string? Root, string? Problem) RuntimeRoot(string? executableDirectory)
     {
         if (string.IsNullOrEmpty(executableDirectory)) { return (null, "the hook's own folder is unknown"); }
@@ -254,6 +274,9 @@ public sealed class HookEnvironment
     // The same for Copilot's ask_user, which is let through before its event is read: the agent
     // waits for the process too, and the event is only for the record.
     public TimeSpan LetThroughInputWait { get; init; } = TimeSpan.FromMilliseconds(500);
+    // claude permission (#1003): off unless the contract's one switch is on and the environment says so; asks the host for a verdict (allow, deny or none).
+    public bool ApprovalEnabled { get; init; } = ClaudeApproval.Enabled(true);
+    public Func<string, TimeSpan, Task<string?>>? Approval { get; init; }
 
     // How long the agent has waited on this process, from when the OS started it.
     static long SinceStart()
