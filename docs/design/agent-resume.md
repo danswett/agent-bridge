@@ -43,8 +43,14 @@ person without a role, is refused. No name, title or fleet-name lookup is ever u
 2. **Refused:** an unknown id; a session only a person launched; any session another person's host record names (nothing
    crosses people: this host's record is one person's); a derived (16-hex) id; a session already running (`running`; no
    force, no kill-and-restart, stop it first); the caller's own session; a kill switch, read-only host or excluded session.
-3. **No new rights.** The resume uses what the host recorded for that session, never anything the caller supplies, and
-   permissions are always `Ask`. The caller names a session and nothing else.
+3. **Never wider than the original.** The resume uses the settings the host recorded when the session was launched
+   (agent, profile, model, effort, context, and permissions as launched), never anything the caller supplies, and never
+   wider: a setting the machine no longer offers falls back to its default, and settings that cannot be read refuse the
+   resume. The "Ask permission only" rule in agent-launch-scope.md (lines 29 and 33) is a design-document line for NEW agent
+   launches, not an owner decision; the owner decisions run the other way for fleet sessions (Fleet register, Nov 21, 12:47
+   PT: "every fleet launch is `Allow all`"; Nov 15: every launched session explicitly uses `Allow all`; pipeline-rules.md
+   line 93). So a resumed Allow-all builder stays Allow-all and can work unattended; a session launched under Ask resumes
+   under Ask.
 4. **Counts as a launch.** It takes a live-launch slot under the same agent limits as a launch, and frees it when the
    session ends, so resumes cannot exceed the cap.
 5. **Logged and audited.** One audit row per request under the agent's principal and chain (`fleet.resume`: session,
