@@ -820,6 +820,41 @@ public sealed class ConversationEndPinTests
         Assert.Equal([view.Scroller.VerticalOffset + 112], view.Scroller.Targets);
     }
 
+    // #4243 owner repro: spinning the wheel down "goes about 3 notches and then jumps back up four notches". The
+    // last rows realise as the end comes into view (a tall tool row 112 over its estimate), and the list's native
+    // remeasure lands one viewport (about four notches) short of the end. The wheel had released the pin and the
+    // pointer over the conversation holds end-following, so nothing undid it; spinning on looped.
+    [Fact]
+    public void Spinning_the_wheel_down_to_the_end_never_moves_the_view_back_up_and_stops_at_the_end()
+    {
+        var view = new SessionView();
+        (view.Scroller.ViewportHeight, view.Scroller.ScrollableHeight) = (600, 48000);
+        view.Moved(48000);
+        view.FollowState.PointerOver(7);
+        var (offsets, extent) = (new List<double> { 47424 }, 48000.0);
+        view.Scroller.Wheel(); view.Moved(47712, final: false); view.Moved(47424);
+        for (var notch = 0; notch < 8; notch++)
+        {
+            view.Scroller.Targets.Clear();
+            var from = view.Scroller.VerticalOffset;
+            view.Scroller.Wheel();
+            view.Moved(Math.Min(from + 72, extent), final: false);
+            view.Moved(Math.Min(from + 144, extent));
+            if (view.Scroller.VerticalOffset >= extent - 0.5 && extent < 48112)
+            {
+                extent = 48112;
+                view.LayoutForProbe(() => { view.Scroller.ScrollableHeight = extent; view.Moved(extent - 600); });
+            }
+            view.Follow();
+            view.DrainForProbe();
+            if (view.Scroller.Targets.Count > 0) { view.Moved(view.Scroller.Targets[^1]); }
+            offsets.Add(view.Scroller.VerticalOffset);
+        }
+        var back = offsets.Zip(offsets.Skip(1), (a, b) => a - b).Max();
+        Assert.True(back <= 0.5 && Math.Abs(offsets[^1] - extent) <= 0.5,
+            $"offset after each notch: {string.Join(", ", offsets)} (end {extent}, worst move back {back})");
+    }
+
     // A wheel that cannot move the view (already at an edge) raises no view change: its hold lapses by itself,
     // and only the latest notch's lapse lets go.
     [Fact]
