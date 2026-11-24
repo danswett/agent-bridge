@@ -169,6 +169,25 @@ public static class McpTools
         return answer;
     }
 
+    const string NoGrant = "00000000-0000-0000-0000-000000000000";
+
+    // Ends a session the host's own launch record shows an agent started (#4286), by the host's fleet.end with no grant. Thin on purpose:
+    // every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is "unknown" and keeps its request:
+    // send the same request again, never a new one, to learn what happened.
+    public static async Task<JsonObject> EndAsync(IMcpCalls host, string id, string? request, CancellationToken ct = default)
+    {
+        request ??= Guid.NewGuid().ToString();
+        JsonObject? receipt;
+        try { receipt = Node(await host.CallAsync("fleet.end", new { version = 1, request, grant = NoGrant, session = id }, ct: ct))?.AsObject(); }
+        catch (McpToolException e)
+        {
+            return new JsonObject { ["id"] = id, ["request"] = request, ["outcome"] = e.Kind == McpFailure.Unavailable ? "unknown" : "refused", ["reason"] = e.Message };
+        }
+        var answer = new JsonObject { ["id"] = id, ["request"] = request, ["outcome"] = receipt?["outcome"]?.DeepClone() };
+        if (receipt?["reason"] is JsonValue r && r.TryGetValue<string>(out var reason) && reason.Length > 0) { answer["reason"] = reason; }
+        return answer;
+    }
+
     // What launches made through this server came to, newest 200.
     public sealed class LaunchLedger
     {

@@ -43,6 +43,8 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             """{"type":"object","properties":{"machine":{"type":"string","description":"Ignored."}}}"""),
         ("read_agent_usage", "usage", false, "Read this host's last usage report, including allowance windows, sources, reading times and errors. Requires an accepted agent principal and the usage capability; no shared or remote reads.",
             """{"type":"object","properties":{},"additionalProperties":false}"""),
+        ("end_agent_session", "sessions.launch", false, "End a session on this machine that an agent started through the fleet launch route. The host refuses a person-started session, your own, an unknown or shortened id, one with uncommitted or unpushed work, or one it has no launch record for; outcome \"refused\" with a reason means do not try another way. outcome \"unknown\" means send the SAME request again.",
+            """{"type":"object","required":["session_id"],"properties":{"session_id":{"type":"string","description":"Full session id (a UUID) from list_agent_sessions."},"request":{"type":"string","description":"A UUID of your own; resend the same one after an unknown outcome."}}}"""),
     ];
 
     readonly McpTools.LaunchLedger ledger = new();
@@ -145,6 +147,7 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
                 "launch_agent_session" => await McpTools.LaunchAsync(conn, ledger, a, ct),
                 "read_launch_result" => ledger.Read((string)a["request"]!),
                 "read_agent_usage" => await McpTools.UsageAsync(conn, ct),
+                "end_agent_session" => await McpTools.EndAsync(conn, (string)a["session_id"]!, (string?)a["request"], ct),
                 _ => await McpTools.LaunchOptionsAsync(conn, ct),
             };
             return new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = value.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) }), ["structuredContent"] = value };
@@ -169,6 +172,11 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
             {
                 throw new McpToolException("request must be 1 to 128 characters: letters, digits, \"-\", \"_\", \".\" or \":\".");
             }
+        }
+        void Uuid(string key, bool optional)
+        {
+            if (!a.ContainsKey(key) && optional) { return; }
+            if (a[key] is not JsonValue v || !v.TryGetValue<string>(out var s) || !Guid.TryParseExact(s, "D", out _)) { throw new McpToolException($"{key} must be a full UUID."); }
         }
         switch (tool)
         {
@@ -198,6 +206,7 @@ public sealed class McpServer(Func<Task<IMcpConnection?>> ensure)
                 if (a.ContainsKey("role") && string.IsNullOrWhiteSpace((string?)a["role"])) { throw new McpToolException("role must not be blank; omit it to use the default worker role."); }
                 break;
             case "read_launch_result": RequestKey(); break;
+            case "end_agent_session": Uuid("session_id", false); Uuid("request", true); break;
             case "read_agent_usage" when a.Count > 0: throw new McpToolException("read_agent_usage takes no arguments.");
         }
         return a;
