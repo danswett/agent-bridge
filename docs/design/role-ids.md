@@ -303,3 +303,11 @@ Slice 1 is first. After 1, slices 2 and 3 can run in parallel; after 9, 10 and 1
 | 13 | Bridge | PWA role-send binding, 220 | 8,12 | Yes | Session reply/answer drafts stay pinned; changed holder requires new action; uncertain request never retargets |
 | 14 | Bridge | Person assignment/recovery approval UI, 240 | 2,7-8 | Yes | Per-successor owner approval and confirmed stop; resume/move/host recovery preserves ROLE, renews SESSION; compromised ROLE stays retired |
 | 15 | Fleet | Explicit name-to-ID configuration migration, 220 | 10-14 | Yes | Person-enrolled mappings only; rename leaves GUIDs/epoch unchanged; legacy names display-only, rollback cannot restore name-send fallback |
+
+### Slice 1 wire format (additive; fills gaps, changes nothing above)
+
+Engineering lead ruling, Nov 23, 2026 PT: these fill gaps by reusing [devices.md](../protocol/devices.md) conventions; vectors are [role-claim.json](../protocol/vectors/role-claim.json).
+- A purposes, as the §Framing label table (devices.md:26-53): the authority signs `F("agent-bridge role claim v1", body)` and refuses any other purpose; `agent-bridge role binding v1` is reserved for the host proof (slice 6), and the vectors show neither it nor `agent-bridge host key binding v1` verifies as the other.
+- B `version` is the integer `1`, as person commands' `v` (devices.md:406-421); any other value refuses.
+- C bytes: compact UTF-8 JSON, members in §2's order; the body omits `signature`. No HTML escaping (devices.md:529-530); claim strings hold no controls, so only quotes and backslashes are escaped; readers re-encode and compare byte for byte. `account` as entries'; `generation`, `hostKeyId`, `authorityKeyId` 32 lowercase hex and `hostAdd`, `assignmentDigest` 32-byte base64url (§Encodings, devices.md:55-60); `bindingProof`, `signature` strict low-S DER (devices.md:65); `holderEpoch` an integer as `seq` (devices.md:138): the first holder's is 0 and each succession adds one (§3, line 111); times as `at`: RFC 3339 UTC, `Z` only, up to nine fraction digits (devices.md:140, 1262). Time order and lifetime are verifier checks (slice 6).
+- D `state` is `active`, `quiescing`, `revoked` or `noHolder`: §3's and §6's words. A reader refuses a claim whose `roleId` is not the role it asked for, or equals its `sessionId`.
