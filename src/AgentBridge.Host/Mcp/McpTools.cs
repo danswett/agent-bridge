@@ -113,6 +113,27 @@ public static class McpTools
         return answer;
     }
 
+    // A message to a session on another of the same person's machines, through this host's agent.send (docs/design/beta-messaging.md
+    // section 4). The host signs it, opens the relay channel and says what came of it; the receiver refuses another account's host. The
+    // five outcomes (delivered, refused, undeliverable, unconfirmed, off) come back as the host gave them; none is retried here, and a
+    // failure never falls back to a local reply or any other route.
+    public static async Task<JsonObject> SendAsync(IMcpCalls host, string machine, string node, string text, CancellationToken ct = default)
+    {
+        var answer = new JsonObject { ["machine"] = machine, ["id"] = node };
+        JsonObject? result;
+        try { result = Node(await host.CallAsync("agent.send", new { machine, session = node, text }, TimeSpan.FromSeconds(30), ct))?.AsObject(); }
+        catch (McpToolException e)
+        {
+            // No answer leaves it possibly sent: unknown, and the caller must not send it again unasked.
+            answer["outcome"] = e.Kind == McpFailure.Unavailable ? "unknown" : "refused";
+            answer["reason"] = e.Message;
+            return answer;
+        }
+        answer["outcome"] = result?["outcome"]?.DeepClone();
+        foreach (var key in new[] { "code", "request" }) { if (result?[key] is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0) { answer[key] = s; } }
+        return answer;
+    }
+
     const string NoGrant = "00000000-0000-0000-0000-000000000000";
     // Ends a session the host's own launch record shows an agent started (#4286), by the host's fleet.end with no grant. Thin on purpose:
     // every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is "unknown": resend the SAME request.

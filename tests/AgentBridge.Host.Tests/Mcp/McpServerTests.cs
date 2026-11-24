@@ -13,6 +13,7 @@ public sealed class McpServerTests
     sealed class Conn(string? principal, params string[] caps) : IMcpConnection
     {
         public readonly List<string> Ops = [];
+        public readonly List<JsonNode?> Sent = [];
         public bool Open = true;
         public Func<string, JsonNode?> Answer = op => op == "session.get" ? new JsonObject { ["status"] = "idle", ["activity"] = new JsonObject { ["response"] = "r" } } : new JsonObject { ["sessions"] = new JsonArray(), ["outcome"] = "delivered", ["session"] = "s9" };
         public string? Principal => principal;
@@ -21,6 +22,7 @@ public sealed class McpServerTests
         public Task<JsonElement> CallAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
         {
             Ops.Add(op);
+            Sent.Add(data is null ? null : JsonSerializer.SerializeToNode(data));
             return Task.FromResult(JsonSerializer.SerializeToElement(Answer(op)));
         }
     }
@@ -131,6 +133,102 @@ public sealed class McpServerTests
         Assert.Null(replies[3]["id"]);
     }
 
+    // --- C3 PR5a: a reply to a session on another of the same person's machines (design section 4), through the host's agent.send ---
+
+    const string Machine = "0123456789abcdef0123456789abcdef";
+    const string Node = "agent_bridge_0123456789abcdef";
+    static string Remote(string text = "hello", string machine = Machine, string session = Node) =>
+        new JsonObject { ["machine"] = machine, ["session_id"] = session, ["text"] = text }.ToJsonString();
+
+    [Fact]
+    public async Task A_reply_naming_a_machine_goes_to_agent_send_with_exactly_those_three_fields_and_nothing_local()
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply") { Answer = op => new JsonObject { ["outcome"] = "delivered", ["request"] = "rq1" } };
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote()));
+        Assert.Equal(["agent.send"], conn.Ops);
+        var sent = conn.Sent.Single()!.AsObject();
+        Assert.Equal(["machine", "session", "text"], sent.Select(p => p.Key));
+        Assert.Equal((Machine, Node, "hello"), ((string?)sent["machine"], (string?)sent["session"], (string?)sent["text"]));
+        var result = replies[0]["result"]!["structuredContent"]!;
+        Assert.Equal("delivered", (string?)result["outcome"]);
+        Assert.Equal("rq1", (string?)result["request"]);
+        Assert.Equal(Machine, (string?)result["machine"]);
+        Assert.Equal(Node, (string?)result["id"]);
+    }
+
+    [Theory]
+    [InlineData("unconfirmed")]
+    [InlineData("undeliverable")]
+    [InlineData("off")]
+    public async Task Every_outcome_comes_back_as_the_host_gave_it_and_is_asked_for_once_never_resent_or_sent_another_way(string outcome)
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply") { Answer = op => new JsonObject { ["outcome"] = outcome, ["code"] = "c" } };
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote()));
+        Assert.Equal(outcome, (string?)replies[0]["result"]!["structuredContent"]!["outcome"]);
+        Assert.Equal(["agent.send"], conn.Ops);
+    }
+
+    [Theory]
+    [InlineData("refused: notSameAccount: the host account changed")]
+    [InlineData("refused: noSuchMachine: not a present host of this account")]
+    public async Task A_target_of_another_person_or_account_or_machine_is_refused_and_nothing_falls_back_to_a_local_reply(string reason)
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply") { Answer = op => throw new McpToolException(reason, McpFailure.Refused) };
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote()));
+        var result = replies[0]["result"]!["structuredContent"]!;
+        Assert.Equal("refused", (string?)result["outcome"]);
+        Assert.Contains(reason, (string?)result["reason"]);
+        Assert.Equal(["agent.send"], conn.Ops);
+    }
+
+    [Fact]
+    public async Task A_host_that_does_not_answer_is_unknown_not_refused_and_is_not_resent()
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply") { Answer = op => throw new McpToolException("did not answer", McpFailure.Unavailable) };
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote()));
+        Assert.Equal("unknown", (string?)replies[0]["result"]!["structuredContent"]!["outcome"]);
+        Assert.Single(conn.Ops);
+    }
+
+    [Theory]
+    [InlineData("desk-pc", Node, "x")]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF", Node, "x")]
+    [InlineData("0123456789abcdef0123456789abcde", Node, "x")]
+    [InlineData(Machine, "5b3a1c2e-0000-4000-8000-000000000001", "x")]
+    [InlineData(Machine, "agent_bridge_0123456789ABCDEF", "x")]
+    [InlineData(Machine, Node, "")]
+    [InlineData(Machine, Node, "  \n ")]
+    [InlineData(Machine, Node, "bell\u0007")]
+    public async Task A_machine_that_is_not_an_exact_id_a_session_that_is_not_a_node_or_a_bad_text_is_refused_before_anything_is_sent(string machine, string session, string text)
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply");
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote(text, machine, session)));
+        Assert.True((bool?)replies[0]["result"]!["isError"]);
+        Assert.Empty(conn.Ops);
+    }
+
+    [Fact]
+    public async Task The_remote_text_cap_is_4096_characters_not_the_local_sixteen_kib()
+    {
+        var conn = new Conn("agent:m/s", "sessions.reply") { Answer = op => new JsonObject { ["outcome"] = "delivered" } };
+        var replies = await RunAsync(With(conn), Call(1, "reply_to_agent_session", Remote(new string('x', 4096))), Call(2, "reply_to_agent_session", Remote(new string('x', 4097))));
+        Assert.Null(replies[0]["result"]!["isError"]);
+        Assert.True((bool?)replies[1]["result"]!["isError"]);
+        Assert.Single(conn.Ops);
+    }
+
+    [Fact]
+    public async Task Without_a_machine_the_reply_is_the_local_one_as_before_and_a_machine_needs_the_reply_capability_and_a_principal()
+    {
+        var local = new Conn("agent:m/s", "sessions.reply");
+        await RunAsync(With(local), Call(1, "reply_to_agent_session", """{"session_id":"s1","text":"hi"}"""));
+        Assert.Equal(["session.get", "session.reply"], local.Ops);
+        var noPrincipal = new Conn(null, "sessions.reply");
+        var replies = await RunAsync(With(noPrincipal), Call(1, "reply_to_agent_session", Remote()));
+        Assert.True((bool?)replies[0]["result"]!["isError"]);
+        Assert.Empty(noPrincipal.Ops);
+    }
+
     // Whatever it is asked, the server asks the host only for the ops of an agent's tools; the host classifies the caller by ancestry
     // and refuses the app-only ones to it (tests/AgentBridge.Host.Tests LocalApi), so this is the server's half of that.
     [Fact]
@@ -139,7 +237,7 @@ public sealed class McpServerTests
         var conn = new Conn("agent:m/s", "sessions.read", "sessions.reply", "sessions.launch", "usage");
         await RunAsync(With(conn), Call(1, "list_agent_sessions"), Call(2, "read_agent_session", """{"session_id":"s"}"""), Call(3, "reply_to_agent_session", """{"session_id":"s","text":"x"}"""),
             Call(4, "launch_agent_session", "{}"), Call(5, "get_launch_options"), Call(6, "read_agent_usage"), Call(7, "host.stop"), Call(8, "session.stop"), Call(9, "read_agent_session", """{"session_id":"host.stop"}"""), Call(10, "end_agent_session", """{"session_id":"11111111-1111-4111-8111-111111111111"}"""));
-        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "fleet.end"];
+        string[] allowed = ["sessions.list", "session.get", "session.reply", "session.launch", "launch.options", "usage.get", "agent.send", "fleet.end"];
         Assert.All(conn.Ops, op => Assert.Contains(op, allowed));
     }
 }
