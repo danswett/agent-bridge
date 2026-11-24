@@ -76,6 +76,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public bool ReportsDownloadFacts { get; set; }
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
+        // As Velopack's: a download completes the release it began with, whatever a check finds while it runs.
+        public bool DownloadsWhatItBeganWith;
         public string? InstalledVersion { get; set; } = "0.1.0";
         public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
@@ -96,12 +98,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
+            var began = Found;
             OnDownload?.Invoke();
             DownloadWithBytes?.Invoke(progress, bytes);
             if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
-            Ready = Found;
+            Ready = DownloadsWhatItBeganWith ? began : Found;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -3455,6 +3458,125 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(AppUpdateViewModel.DidNotInstall("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", again: true), banner.Message);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
     }
+    // Updater robustness (owner, Nov 23: VM6 failed 8040 -> 8050 when 8051 landed minutes later). A download or an
+    // apply under way completes: a newer release found meanwhile (Settings' check, a tick's) is not looked for until
+    // it has finished, so it can neither replace the package being applied nor leave the install to abort or restart.
+    // The newer one is checked for afterwards.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newer_release_found_by_Settings_while_the_host_stops_does_not_abort_the_install_being_applied()
+    {
+        shared = new ObservedUpdater(updater, time);
+        // As Velopack's: a check that finds another release drops the one downloaded.
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+        Assert.Equal("0.2.0", banner.Version);
+        var checks = updater.Checks;
+
+        var press = Task.Run(() => banner.RestartAsync(_ => Task.FromResult(true)));
+        await stopAsked;
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        letGo();
+        await press;
+
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(checks, updater.Checks);
+        Assert.True(updater.Applied, string.Join("\n", log));
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+        Assert.DoesNotContain(log, l => l.Contains("package ready changed"));
+        Assert.Single(processes.Started);
+    }
+
+    [Fact]
+    public async Task A_download_under_way_finishes_though_a_newer_release_is_found_and_the_newer_is_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        updater.DownloadsWhatItBeganWith = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await StartAsync();
+
+        var tick = Task.Run(() => auto.TickAsync());
+        await Wait.UntilAsync(() => updater.Downloads == 1, "the download to begin");
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(1, updater.Checks);
+        updater.DownloadGate.SetResult();
+        await tick;
+
+        Assert.Equal("0.2.0", shared.Ready);
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.True(shared.CheckDeferred);
+        // Afterwards, the next tick that can asks, and the newer release is downloaded and offered.
+        updater.DownloadGate = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.False(shared.CheckDeferred);
+        Assert.Equal("0.3.0", auto.Pending);
+        Assert.Equal("0.3.0", shared.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_install_that_failed_leaves_the_newer_release_found_meanwhile_to_be_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        updater.ApplyFails = new IOException("the installer could not start");
+
+        var press = Task.Run(() => auto.RestartToUpdateAsync());
+        await stopAsked;
+        updater.Found = "0.3.0";
+        await shared.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        letGo();
+        await press;
+
+        Assert.False(updater.Applied);
+        Assert.True(shared.CheckDeferred);
+        updater.ApplyFails = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal("0.3.0", shared.Found);
+    }
+
+    [Fact]
+    public async Task A_hold_for_an_apply_defers_checks_and_other_downloads_until_it_ends()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal("0.2.0", observed.Ready);
+        var (checks, downloads) = (updater.Checks, updater.Downloads);
+
+        var hold = observed.Applying();
+        updater.Found = "0.3.0";
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal((checks, downloads), (updater.Checks, updater.Downloads));
+        Assert.Equal("0.2.0", observed.Ready);
+        Assert.True(observed.CheckDeferred);
+
+        hold.Dispose();
+        Assert.Equal("0.3.0", await observed.CheckAsync());
+        Assert.False(observed.CheckDeferred);
+        Assert.Equal(checks + 1, updater.Checks);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()

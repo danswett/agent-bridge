@@ -168,6 +168,11 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         inner.ApplyAndRestart(version, handedOver);
     }
 
+    // Compile-only stubs for the red tests (updater robustness): no behaviour yet.
+    public bool CheckDeferred => false;
+    public IDisposable Applying() => new Hold();
+    sealed class Hold : IDisposable { public void Dispose() { } }
+
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();
 
