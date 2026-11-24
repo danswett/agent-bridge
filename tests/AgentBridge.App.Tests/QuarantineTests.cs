@@ -12,8 +12,8 @@ namespace AgentBridge.App.Tests;
 public sealed class QuarantineTests
 {
     // GrowthTests and SpeedQuadraticControlTests already ran alone (timing needs a quiet machine); RunCompletionTests and
-    // WindowsMiniDumpTests are the suspected hang causes.
-    static readonly string[] Expected = ["GrowthTests", "RunCompletionTests", "SpeedQuadraticControlTests", "WindowsMiniDumpTests"];
+    // WindowsMiniDumpTests are the suspected hang causes. LifecycleGuardRefusalTests sets the same process-wide variable as RunCompletionTests (#4546).
+    static readonly string[] Expected = ["GrowthTests", "LifecycleGuardRefusalTests", "RunCompletionTests", "SpeedQuadraticControlTests", "WindowsMiniDumpTests"];
     const int Largest = 5;
 
     static List<string> RunningAlone()

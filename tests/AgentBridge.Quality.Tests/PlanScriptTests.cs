@@ -52,6 +52,11 @@ public class PlanScriptTests
     public Task A_whole_ring_run_still_packages_an_earlier_unpaid_app_change() =>
         CheckPlan("push", "quality/notes.md", true, true, unpaidApp: true);
 
+    // A workflow edit between the release and the base still packages the app (it is part of the packaging range), though it is not in the run's own diff.
+    [Fact]
+    public Task A_workflow_edit_since_the_release_still_packages_the_app_in_a_whole_ring_run() =>
+        CheckPlan("push", "quality/notes.md", true, true, unpaidCi: true);
+
     [Theory]
     [InlineData("windows-latest", true)]
     [InlineData("windows-11-arm", true)]
@@ -80,7 +85,7 @@ public class PlanScriptTests
         string changed, bool runsUnreadable) => CheckPlan("push", changed, true, true, runsUnreadable);
 
     static async Task CheckPlan(
-        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false)
+        string eventName, string changed, bool packages, bool wholeRing, bool? runsUnreadable = null, string? anotherFile = null, bool unpaidApp = false, bool unpaidCi = false)
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -110,7 +115,7 @@ public class PlanScriptTests
                     platforms: [linux-x64, win-x64, win-arm64]
                     runner: hosted
                     command: see ci.yml
-                    where: ci.yml product, ha-integration, light, pwa-ui, pwa-e2e
+                    where: ci.yml product, ha-integration, light
                     status: exists
                   - id: docs
                     validation_plan: native
@@ -171,10 +176,11 @@ public class PlanScriptTests
             ChangedFiles.Git(folder, "init", "-q", "-b", "main");
             Commit("base", "quality/plan.ps1", "quality/catalog.yml", "src/AgentBridge.App/App.csproj", "tests/Example.Tests/Tests.csproj");
             ChangedFiles.Git(folder, "tag", "v0.1.1");
-            if (runsUnreadable.HasValue || unpaidApp)
+            if (runsUnreadable.HasValue || unpaidApp || unpaidCi)
             {
-                Write("src/AgentBridge.App/Earlier.cs", "earlier untested app change");
-                Commit("untested app", "src/AgentBridge.App/Earlier.cs");
+                var earlier = unpaidCi ? ".github/workflows/ci.yml" : "src/AgentBridge.App/Earlier.cs";
+                Write(earlier, "earlier untested change");
+                Commit("untested", earlier);
             }
             Write(changed, changed.EndsWith(".props", StringComparison.Ordinal) ? "<Project />" : "changed");
             Commit("change", changed);
@@ -189,7 +195,7 @@ public class PlanScriptTests
             };
             start.Environment["CI_PLAN_TEST_RUN"] = select["run"].ToString();
             start.Environment["CI_PLAN_TEST_WHOLE"] = whole["run"].ToString();
-            start.Environment["CI_PLAN_TEST_RUNS"] = unpaidApp ? "release-debt" : runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
+            start.Environment["CI_PLAN_TEST_RUNS"] = unpaidApp || unpaidCi ? "release-debt" : runsUnreadable.HasValue ? (runsUnreadable.Value ? "unreadable" : "none") : "";
             start.Environment["JOBS"] = ((YamlMappingNode)select["env"])["JOBS"].ToString();
             start.Environment["EVENT"] = eventName;
             start.Environment["DRAFT"] = "false";
@@ -240,7 +246,7 @@ public class PlanScriptTests
             var expected = packages ? "true" : "false";
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
-            foreach (var job in new[] { "product", "ha-integration", "pwa-ui", "pwa-e2e" })
+            foreach (var job in new[] { "product", "ha-integration" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
                     && !wholeRing && anotherFile is null && changed != "tests/Example.Tests/Shared.cs" ? "false"
                     : wholeRing || changed != "docs/guide.md" ? "true" : "false", outputs[job]);

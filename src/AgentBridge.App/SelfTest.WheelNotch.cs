@@ -108,8 +108,9 @@ static partial class SelfTest
                 var (_, to, _) = await Notch(-1);
                 if (to > 0.5) { moved.Add(Math.Round(scroll.ScrollableHeight - scroll.VerticalOffset - fromEnd, 1)); grew.Add(Math.Round(scroll.ScrollableHeight - extentBefore)); }
             }
-            check(moved.Count >= 4 && moved.All(d => Math.Abs(d - notch) <= 1.5),
-                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws (moved {string.Join(", ", moved)}; extent grew {string.Join(", ", grew)})");
+            var notchFailure = WheelNotchRule.Failure(moved, notch);   // each notch within 4 px, the notches together within 1 px each on average (the owner's call, #4500)
+            check(notchFailure is null,
+                $"wheel notch distance: identical notches up move {notch} each from the end while older history draws ({notchFailure ?? "within the rule"}; moved {string.Join(", ", moved)}; extent grew {string.Join(", ", grew)})");
             phase = "down";
             var (offsets, back) = (new List<double>(), 0.0);
             var high = scroll.VerticalOffset;

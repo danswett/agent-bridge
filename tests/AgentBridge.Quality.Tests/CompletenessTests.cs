@@ -11,16 +11,47 @@ public class CompletenessTests
         IReadOnlyList<string>? solution = null,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? workflows = null,
         IReadOnlyList<string>? tracked = null,
-        ProjectGraph? graph = null) =>
+        ProjectGraph? graph = null,
+        IReadOnlyList<string>? mainGreen = null) =>
         Completeness.Check(Fixture.Catalog(), graph ?? Fixture.Graph(), new Completeness.Inputs(
             solution ?? ["src/Protocol", "tests/Protocol.Tests"],
             workflows ?? Workflows,
-            tracked ?? []));
+            tracked ?? [],
+            MainGreenJobs: mainGreen));
 
     [Fact]
     public void The_fixture_catalog_is_complete_so_each_test_below_shows_one_gap()
     {
         Assert.Empty(Check());
+    }
+
+    // The merge waits on the FAST lane only (S2, #4104): main_green's jobs are ci.yml's, never a FULL-lane job of full.yml.
+    static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> TwoLanes = new Dictionary<string, IReadOnlyList<string>>
+    {
+        ["ci.yml"] = ["product", "ha-integration"],
+        ["full.yml"] = ["trigger", "pwa-ui", "full-gate"],
+    };
+
+    [Fact]
+    public void Main_green_may_name_ci_yml_jobs_by_job_or_display_name_and_nothing_is_read_without_it()
+    {
+        var clean = Check(workflows: TwoLanes, mainGreen: ["product", "product (ubuntu-latest)", "ha-integration"]).Where(p => p.Kind == "main-green");
+        var unread = Check(workflows: TwoLanes).Where(p => p.Kind == "main-green");
+
+        Assert.Empty(clean);
+        Assert.Empty(unread);
+    }
+
+    [Fact]
+    public void Main_green_naming_a_full_lane_job_or_one_no_workflow_has_is_reported()
+    {
+        var problems = Check(workflows: TwoLanes, mainGreen: ["product", "pwa-ui (chromium 1/3)", "full-gate", "ghost"]).Where(p => p.Kind == "main-green").Select(p => p.Message);
+
+        Assert.Equal([
+            "merge-rule.yml's main_green names pwa-ui (chromium 1/3), a FULL-lane job (full.yml): the merge waits only on the FAST lane's jobs",
+            "merge-rule.yml's main_green names full-gate, a FULL-lane job (full.yml): the merge waits only on the FAST lane's jobs",
+            "merge-rule.yml's main_green names ghost, which is no ci.yml job",
+        ], problems);
     }
 
     [Fact]

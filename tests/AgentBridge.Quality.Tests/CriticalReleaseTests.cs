@@ -54,8 +54,7 @@ public class CriticalReleaseTests
     [InlineData("true", "", "refs/heads/main", "false", "critical-release needs critical-reason")]
     [InlineData("true", " \t\n", "refs/heads/main", "false", "critical-release needs critical-reason")]
     [InlineData("true", "a reason", "refs/heads/fix", "false", "critical-release only on main")]
-    [InlineData("true", "a reason", "refs/heads/main", "true", "separate runs")]
-    [InlineData("false", "a reason", "refs/heads/main", "false", "a run by hand is only for force-apt-fallback=true")]
+    [InlineData("false", "a reason", "refs/heads/main", "false", "a run by hand is only for critical-release=true")]
     public void Any_other_run_by_hand_on_main_is_refused_before_the_build(string critical, string reason, string reference, string force, string says)
     {
         var (code, output) = RunGuard(critical, reason, reference, force);

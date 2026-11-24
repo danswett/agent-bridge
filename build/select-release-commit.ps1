@@ -81,12 +81,15 @@ function Format-WaivedNotice($run) {
 # The FULL run of a commit is found by the commit's head_sha, never by branch: a branch lookup could name another commit's run.
 function Get-FullRunsPath([string]$Repository, [string]$Sha) { "repos/$Repository/actions/workflows/full.yml/runs?head_sha=$Sha&per_page=20" }
 
-# The first run row (id, conclusion, head_sha, event, head_branch; tab-separated, newest first) that counts for the commit: its head_sha IS the commit (a
-# dispatch made at another head has that head's sha and fails closed, which the go-live proof covers), its event a push or workflow_run, its branch main.
-function Select-FullRunRow([string[]]$Rows, [string]$Sha) {
+# The first run row (id, conclusion, head_sha, event, head_branch[, head repository]; tab-separated, newest first) that counts for the commit: its head_sha IS the commit (a dispatch made at another head
+# has that head's sha and never counts), its event a push, a workflow_run or a run BY HAND (workflow_dispatch), its branch exactly main. A workflow_run run reports the default branch's tip as its head_sha, so
+# only a by-hand run on main names an older commit, and Pages needs it to deploy one; a by-hand run on any BRANCH never counts, so no one can deploy a branch's PWA by dispatching FULL on it. A row that
+# names its repository counts only when it is the one given: a fork's run, or a row compared with no repository at all, is ignored. A pull request's run is no event in the list.
+function Select-FullRunRow([string[]]$Rows, [string]$Sha, [string]$Repository = '') {
     foreach ($row in $Rows) {
-        $id, $conclusion, $head, $evt, $branch = $row -split "`t"
-        if ($head -ceq $Sha -and $evt -cin 'push', 'workflow_run' -and $branch -ceq 'main') { return [pscustomobject]@{ Id = $id; Conclusion = $conclusion } }
+        $id, $conclusion, $head, $evt, $branch, $repo = $row -split "`t"
+        if ($repo -and $repo -cne $Repository) { continue }
+        if ($head -ceq $Sha -and $evt -cin 'push', 'workflow_run', 'workflow_dispatch' -and $branch -ceq 'main') { return [pscustomobject]@{ Id = $id; Conclusion = $conclusion } }
     }
     $null
 }

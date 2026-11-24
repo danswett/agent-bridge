@@ -478,7 +478,8 @@ internal static class CodexLockDiscovery
     // conversation is open in another app" and waits (0.165, seen live).
     public static IReadOnlyList<DiscoveredSession> Find(
         string codexHome, IReadOnlyList<AgentProcess> processes, Func<string, IReadOnlyList<int>> holders,
-        Dictionary<string, CodexLockHolding> known, Func<string, string?> findTranscript, DateTimeOffset now, ICollection<string>? holds = null)
+        Dictionary<string, CodexLockHolding> known, Func<string, string?> findTranscript, DateTimeOffset now, ICollection<string>? holds = null,
+        Func<int, IReadOnlyList<int>>? helperAncestors = null)
     {
         var root = Path.Combine(codexHome, "thread-writer-locks");
         // Only a terminal can hold a session's lock for it. With none running (the daemon and
@@ -517,7 +518,7 @@ internal static class CodexLockDiscovery
                     ? holding.Terminals == signature
                     : running.TryGetValue(holding.Pid, out var cached) && cached.StartedAt == holding.Started)))
             {
-                holding = new CodexLockHolding(created, Holder(holders(file), running) ?? 0, null, now, signature);
+                holding = new CodexLockHolding(created, Holder(holders(file), running, helperAncestors) ?? 0, null, now, signature);
                 if (holding.Pid != 0) { holding = holding with { Started = running[holding.Pid].StartedAt }; }
                 // A holder whose start is unknown cannot be told from a successor, so it is
                 // asked about afresh on every pass rather than remembered.
@@ -553,10 +554,13 @@ internal static class CodexLockDiscovery
     // The one process to bind a lock to: every running Codex process holding it counts, so a
     // lock a terminal shares with the daemon, or with a Codex whose command line could not be
     // read (which may be the daemon, whose stop would end every session it serves), names
-    // nobody. Exactly one holder, and a terminal.
-    static int? Holder(IReadOnlyList<int> pids, Dictionary<int, AgentProcess> running)
+    // nobody. Exactly one holder, and a terminal. A helper program of Codex (0.172's codex-code-mode-host,
+    // which holds a session's lock for the terminal it runs under, #3644) is that terminal: the nearest
+    // listed Codex above it. One whose parents are no listed Codex is no holder, as any other process.
+    static int? Holder(IReadOnlyList<int> pids, Dictionary<int, AgentProcess> running, Func<int, IReadOnlyList<int>>? helperAncestors)
     {
-        var codex = pids.Where(running.ContainsKey).Distinct().ToList();
+        var codex = pids.Select(pid => running.ContainsKey(pid) ? pid : helperAncestors?.Invoke(pid).FirstOrDefault(running.ContainsKey) ?? 0)
+            .Where(pid => pid != 0).Distinct().ToList();
         return codex.Count == 1 && IsTerminal(running[codex[0]].CommandLine) ? codex[0] : null;
     }
 

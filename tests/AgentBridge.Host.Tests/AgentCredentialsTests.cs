@@ -344,6 +344,7 @@ public sealed class AgentCredentialsTests : IDisposable
         public bool TaskLocked(string task) => !Writable.Contains(task);
         public bool FileLocked(string path) => !Writable.Contains(path);
         public string? FileSha256(string path) => Hashes.GetValueOrDefault(path);
+        public bool LoggedOnOnly(string task) => true;
         public static string Sha(string s) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
     }
 

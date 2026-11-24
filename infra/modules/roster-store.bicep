@@ -85,6 +85,8 @@ resource devices 'Microsoft.Storage/storageAccounts/blobServices/containers@2023
 // hosts has connected for half a year is ever old enough to go: its list of offline machines
 // goes with it, and comes back as they connect. Also what clears a smoke test's throwaway
 // accounts. Lifecycle runs once a day.
+// Only machine rosters (roster/v1/) and hourly stats (roster/stats/) are matched: the account
+// records (records/...) must never age out, as reads do not refresh a blob's age.
 resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: account
   name: 'default'
@@ -96,7 +98,7 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
           enabled: true
           type: 'Lifecycle'
           definition: {
-            filters: { blobTypes: ['blockBlob'], prefixMatch: ['roster/'] }
+            filters: { blobTypes: ['blockBlob'], prefixMatch: ['roster/v1/', 'roster/stats/'] }
             actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: 180 } } }
           }
         }

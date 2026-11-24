@@ -12,8 +12,9 @@ public class MainRelianceRecordTests
     // The real whole-ring step, run in a small repository with a stubbed gh. Commits: c0, c1, c2 (tagged v0.1.1, the published release), c3 = HEAD.
     // passed: the shas of main's passed CI runs, newest first (run ids 1000, 1001, ...). relied: for a passed run's sha, the plan-base record its
     // plan job annotated ("none" or a parent sha; absent = no record). broken: shas whose annotations cannot be read.
-    static async Task<(string Stdout, string[] Commits, Dictionary<string, string> Outputs)> RunStep(string passedAt, Func<string[], string>? passed = null,
-        Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null, string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false, string releases = "ok", string listed = "")
+    static async Task<(string Stdout, string[] Commits, int ExitCode, string Stderr, Dictionary<string, string> Outputs)> RunStep(string passedAt, Func<string[], string>? passed = null, string eventName = "push", bool failRevParse = false,
+        Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null, string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false,
+        string releases = "ok", string listed = "")
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
         var folder = Fixture.ScratchFolder();
@@ -60,7 +61,8 @@ public class MainRelianceRecordTests
             start.Environment["CI_PLAN_TEST_RELEASE_LIST"] = string.Join(",", tags.Select(t => t.Tag));
             start.Environment["CI_PLAN_TEST_LOG"] = Path.Combine(folder, "gh.log");
             start.Environment["GH_TOKEN"] = "test-token"; // the workflow's github.token
-            start.Environment["EVENT"] = "push";
+            start.Environment["EVENT"] = eventName;
+            start.Environment["CI_PLAN_TEST_FAIL_REVPARSE"] = failRevParse ? "1" : "0";
             start.Environment["DRAFT"] = "false";
             start.Environment["REPO"] = "o/r";
             start.Environment["SHA"] = commits[3];
@@ -69,6 +71,14 @@ public class MainRelianceRecordTests
             foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-Command",
                          """
                          $ErrorActionPreference = 'Stop'
+                         # The record's own rev-parse of the base fails (every other git call is the real git), as git diff of the same base already ran before it.
+                         if ($env:CI_PLAN_TEST_FAIL_REVPARSE -eq '1') {
+                             $global:realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+                             function global:git {
+                                 if ($args[0] -eq 'rev-parse' -and "$($args[1])" -notlike '*^{commit}') { $global:LASTEXITCODE = 1; return }
+                                 & $global:realGit @args
+                             }
+                         }
                          $stubPassed = @($env:CI_PLAN_TEST_PASSED -split ',' | Where-Object { $_ })
                          $stubRelied = @{}
                          foreach ($pair in ($env:CI_PLAN_TEST_RELIED -split ',' | Where-Object { $_ })) { $k, $v = $pair -split '=', 2; $stubRelied[$k] = $v }
@@ -109,12 +119,12 @@ public class MainRelianceRecordTests
             var error = process.StandardError.ReadToEndAsync();
             var stdout = process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
-            Assert.True(process.ExitCode == 0, (await error) + (await stdout));
-            var outputs = File.ReadAllLines(Path.Combine(folder, "outputs")).Select(line => line.Split('=', 2)).ToDictionary(p => p[0], p => p[1], StringComparer.Ordinal);
+            if (!failRevParse) { Assert.True(process.ExitCode == 0, (await error) + (await stdout)); }
+            var outputs = File.Exists(Path.Combine(folder, "outputs")) ? File.ReadAllLines(Path.Combine(folder, "outputs")).Select(line => line.Split('=', 2)).ToDictionary(p => p[0], p => p[1], StringComparer.Ordinal) : new Dictionary<string, string>(StringComparer.Ordinal);
             var log = File.Exists(Path.Combine(folder, "gh.log")) ? File.ReadAllLines(Path.Combine(folder, "gh.log")) : [];
             outputs["gh-release-reads"] = log.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
             outputs["gh-release-reads-with-token"] = log.Count(l => l.Contains("token=True", StringComparison.Ordinal)).ToString(System.Globalization.CultureInfo.InvariantCulture);
-            return (await stdout, [.. commits], outputs);
+            return (await stdout, [.. commits], process.ExitCode, await error, outputs);
         }
         finally
         {
@@ -125,7 +135,7 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task A_main_push_records_the_base_it_diffs_from_and_that_it_relied_on_no_parent()
     {
-        var (stdout, commits, _) = await RunStep("", shas => shas[1]);
+        var (stdout, commits, _, _, _) = await RunStep("", shas => shas[1]);
 
         Assert.Contains($"::notice title=plan-base::base={commits[1]} relied-parent=none", stdout, StringComparison.Ordinal);
     }
@@ -137,7 +147,7 @@ public class MainRelianceRecordTests
     static async Task<string> BaseOf(Func<string[], string> passed, Func<string[], Dictionary<string, string>>? relied = null, Func<string[], string>? broken = null,
         string parentRuns = "", int releaseAt = 2, bool parentUnreadable = false)
     {
-        var (stdout, commits, _) = await RunStep("", passed, relied, broken, parentRuns, releaseAt, parentUnreadable);
+        var (stdout, commits, _, _, _) = await RunStep("", passed, relied: relied, broken: broken, parentRuns: parentRuns, releaseAt: releaseAt, parentUnreadable: parentUnreadable);
         var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
         var found = commits.Select((sha, i) => (sha, i)).FirstOrDefault(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
         return found.sha is null ? line : $"c{found.i}";
@@ -160,19 +170,22 @@ public class MainRelianceRecordTests
         => Assert.Equal("c0", await BaseOf(c => $"{c[2]},{c[1]},{c[0]}", c => new() { [c[2]] = c[1], [c[1]] = c[2], [c[0]] = "none" }));
 
     [Fact]
+    public async Task A_passed_run_whose_record_is_not_in_the_shape_is_not_a_base()
+        => Assert.Equal("c1", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[2]] = "not-a-sha", [c[1]] = "none" }));
+
+    [Fact]
     public async Task A_run_with_no_plan_record_relied_on_nothing_and_is_a_base()
         => Assert.Equal("c2", await BaseOf(c => $"{c[2]},{c[1]}"));
 
     [Fact]
     public async Task A_passed_run_whose_record_cannot_be_read_is_not_a_base_so_more_is_tested_not_less()
         => Assert.Equal("c1", await BaseOf(c => $"{c[2]},{c[1]}", c => new() { [c[1]] = "none" }, c => c[2]));
-
     // Item A, the shortcut: while the first parent's run is still going, this run tests only its own diff (base = the parent) and records the
     // parent as what it relied on. Anything else keeps the passed base: a failed or cancelled parent carries its change forward, as now.
     static async Task<(string Base, string Relied)> Shortcut(string parentRuns, int releaseAt = 2, bool parentUnreadable = false,
         Func<string[], string>? passed = null)
     {
-        var (stdout, commits, _) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, parentUnreadable);
+        var (stdout, commits, _, _, _) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), parentRuns: parentRuns, releaseAt: releaseAt, parentUnreadable: parentUnreadable);
         var line = stdout.Split('\n').Single(l => l.Contains("::notice title=plan-base::", StringComparison.Ordinal));
         var baseSha = commits.Select((sha, i) => (sha, i)).First(c => line.Contains($"base={c.sha}", StringComparison.Ordinal));
         var relied = line.Contains("relied-parent=none", StringComparison.Ordinal) ? "none"
@@ -211,7 +224,7 @@ public class MainRelianceRecordTests
 
     static async Task<(string Base, string Packaging)> Bases(int releaseAt, string parentRuns = "", Func<string[], string>? passed = null)
     {
-        var (_, commits, outputs) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), null, null, parentRuns, releaseAt, false);
+        var (_, commits, _, _, outputs) = await RunStep("", passed ?? (c => $"{c[1]},{c[0]}"), parentRuns: parentRuns, releaseAt: releaseAt);
         string Name(string sha) => "c" + Array.IndexOf(commits, sha);
         return (Name(outputs["base"]), Name(outputs["packaging-base"]));
     }
@@ -234,7 +247,7 @@ public class MainRelianceRecordTests
     // HEAD^1, the whole ring runs, and packaging is un-narrowed (base-known=false). Each case is one way the read can fail.
     static async Task AssertWidened(string releases = "ok", bool noPassedRun = false)
     {
-        var (stdout, commits, outputs) = await RunStep("", c => noPassedRun ? "" : $"{c[1]},{c[0]}", releases: releases);
+        var (stdout, commits, _, _, outputs) = await RunStep("", c => noPassedRun ? "" : $"{c[1]},{c[0]}", releases: releases);
         Assert.Equal("false", outputs["base-known"]);
         Assert.Equal("true", outputs["whole-ring"]);
         Assert.Equal("HEAD^1", outputs["base"]);
@@ -264,7 +277,7 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task A_proved_release_keeps_the_base_known_and_narrowed()
     {
-        var (_, commits, outputs) = await RunStep("", c => $"{c[1]},{c[0]}");
+        var (_, commits, _, _, outputs) = await RunStep("", c => $"{c[1]},{c[0]}");
         Assert.Equal("true", outputs["base-known"]);
         Assert.Equal("false", outputs["whole-ring"]);
         Assert.Equal(commits[1], outputs["base"]);
@@ -279,7 +292,7 @@ public class MainRelianceRecordTests
     [InlineData("v0.1.7690@2,v0.1.99@1,v0.1.7684@0")]
     public async Task The_newest_release_is_the_newest_by_semver_not_by_the_apis_order(string listed)
     {
-        var (_, commits, outputs) = await RunStep("", c => $"{c[2]},{c[1]},{c[0]}", releases: "tags", listed: listed);
+        var (_, commits, _, _, outputs) = await RunStep("", c => $"{c[2]},{c[1]},{c[0]}", releases: "tags", listed: listed);
         Assert.Equal(commits[2], outputs["base"]);
         Assert.Equal(commits[2], outputs["packaging-base"]);
     }
@@ -289,7 +302,7 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task A_release_list_paged_short_gives_an_older_release_and_a_wider_packaging_base()
     {
-        var (_, commits, outputs) = await RunStep("", c => $"{c[2]},{c[1]},{c[0]}", releases: "tags", listed: "v0.1.99@1,v0.1.7684@0");
+        var (_, commits, _, _, outputs) = await RunStep("", c => $"{c[2]},{c[1]},{c[0]}", releases: "tags", listed: "v0.1.99@1,v0.1.7684@0");
         Assert.Equal(commits[2], outputs["base"]);
         Assert.Equal(commits[0], outputs["packaging-base"]);
     }
@@ -300,7 +313,7 @@ public class MainRelianceRecordTests
     [InlineData("v0.1.5@0", 1, 0)] // release c0 is older than the passed run c1: packaging base = c0
     public async Task Packaging_reaches_back_to_the_older_of_the_passed_base_and_the_release(string listed, int baseAt, int packagingAt)
     {
-        var (_, commits, outputs) = await RunStep("", c => $"{c[baseAt]}", releases: "tags", listed: listed);
+        var (_, commits, _, _, outputs) = await RunStep("", c => $"{c[baseAt]}", releases: "tags", listed: listed);
         Assert.Equal(commits[baseAt], outputs["base"]);
         Assert.Equal(commits[packagingAt], outputs["packaging-base"]);
     }
@@ -310,7 +323,7 @@ public class MainRelianceRecordTests
     [Fact]
     public async Task The_release_list_is_read_once_with_the_workflows_token()
     {
-        var (_, _, outputs) = await RunStep("", c => $"{c[1]},{c[0]}");
+        var (_, _, _, _, outputs) = await RunStep("", c => $"{c[1]},{c[0]}");
         Assert.Equal("1", outputs["gh-release-reads"]);
         Assert.Equal("1", outputs["gh-release-reads-with-token"]);
     }
@@ -336,8 +349,28 @@ public class MainRelianceRecordTests
     public async Task A_main_push_with_no_proven_base_records_the_first_parent_as_a_base_it_does_not_vouch_for()
     {
         // No passed run readable at all: the whole ring runs over HEAD^1; the record still says what the diff was taken from.
-        var (stdout, commits, _) = await RunStep("");
+        var (stdout, commits, _, _, _) = await RunStep("");
 
         Assert.Contains($"::notice title=plan-base::base={commits[2]} relied-parent=none", stdout, StringComparison.Ordinal);
+    }
+
+    // The record is the push's alone: a pull request's run has no main base to record, and it must not print one.
+    [Fact]
+    public async Task A_pull_request_records_no_base()
+    {
+        var (stdout, _, _, _, _) = await RunStep("", eventName: "pull_request");
+
+        Assert.DoesNotContain("plan-base", stdout, StringComparison.Ordinal);
+    }
+
+    // A base git cannot resolve must stop the step: a record with an empty base would look like a diff that was taken from somewhere.
+    [Fact]
+    public async Task A_base_that_cannot_be_resolved_fails_the_step_and_records_nothing()
+    {
+        var (stdout, _, exitCode, stderr, _) = await RunStep("", failRevParse: true);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("git rev-parse", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("plan-base", stdout, StringComparison.Ordinal);
     }
 }

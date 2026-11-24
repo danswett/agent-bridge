@@ -811,6 +811,31 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(words, AgentWords.SetupFailed(remove: false, "Set up", raw));
     }
 
+    // #3644: a leftover agent-ha-bridge folder is named by path with the one step for it, not "older bridge".
+    [Fact]
+    public void A_full_legacy_installation_names_its_folder_and_the_two_Migrate_commands()
+    {
+        const string raw = @"Hook setup incomplete: agent-ha-bridge folder at C:\Users\dana\.agent-ha-bridge: full installation (installation.json); use Migrate";
+        Assert.Equal(@"Setup failed · an older bridge is installed at C:\Users\dana\.agent-ha-bridge. Setup won't touch it. In a terminal of your own run agent-bridge-host migrate --dry-run, then agent-bridge-host migrate",
+            AgentWords.SetupFailed(remove: false, "Set up", raw));
+    }
+
+    [Fact]
+    public void A_legacy_folder_that_may_be_in_use_names_its_folder_why_and_what_to_press()
+    {
+        const string raw = @"Hook setup incomplete: agent-ha-bridge folder at C:\Users\dana\.agent-ha-bridge: may still be in use (a running process uses it: PID 42 pwsh)";
+        Assert.Equal(@"Setup failed · C:\Users\dana\.agent-ha-bridge may still be in use (a running process uses it: PID 42 pwsh). Nothing was changed. Close what uses it, then press Set up again",
+            AgentWords.SetupFailed(remove: false, "Set up", raw));
+    }
+
+    [Fact]
+    public void A_setup_that_renamed_an_unused_legacy_folder_says_so_and_how_to_undo_it()
+    {
+        const string detail = @"Retired the unused older bridge folder: renamed 'C:\Users\dana\.agent-ha-bridge' to 'C:\Users\dana\.agent-ha-bridge.legacy-20261124-181500'. Undo: Rename-Item";
+        Assert.Equal("Set up · restart the bridge, then start a new session to check it · the unused older bridge folder was renamed to .agent-ha-bridge.legacy-20261124-181500 (rename it back to undo)",
+            AgentWords.SetupResult(remove: false, "Set up", new AgentSetupResult(true, detail, true)));
+    }
+
     [Fact]
     public void A_settings_row_names_the_product_where_the_host_names_the_agent()
     {

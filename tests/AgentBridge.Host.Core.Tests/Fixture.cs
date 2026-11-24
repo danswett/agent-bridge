@@ -289,6 +289,11 @@ internal sealed class FakeProcesses : IProcessInspector
     public Dictionary<string, int[]> Holders { get; } = new(StringComparer.OrdinalIgnoreCase);
     public int HolderQueries { get; private set; }
 
+    // The parents above each process that is one of Codex's helper programs (codex-code-mode-host), nearest first.
+    public Dictionary<int, int[]> Helpers { get; } = [];
+
+    public IReadOnlyList<int> CodexHelperAncestors(int pid) => Helpers.TryGetValue(pid, out var parents) ? parents : [];
+
     public IReadOnlyList<int> FileHolders(string path)
     {
         HolderQueries++;
