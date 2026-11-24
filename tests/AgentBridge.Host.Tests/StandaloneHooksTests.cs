@@ -115,6 +115,26 @@ public sealed class StandaloneHooksTests : IDisposable
         }
     }
 
+    // The session watch counts a Claude SessionEnd only for sessions that started after the hook was added (a hook loads at session start): setup records
+    // when it first added it, a repeat setup keeps that time, a removal clears it, and other agents never set it.
+    [Fact]
+    public async Task Setup_records_when_it_first_added_the_Claude_SessionEnd_hook_keeps_it_on_a_repeat_and_removal_clears_it()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        Assert.Null(IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var first = IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt;
+        Assert.NotNull(first);
+
+        await Task.Delay(20);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.Equal(first, IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+        Assert.Null(IntakeState.Load(Profile).State!.ClaudeSessionEndHookAt);
+    }
+
     [Fact]
     public async Task A_dry_run_says_what_it_would_change_and_writes_nothing_and_a_real_run_says_what_it_changed()
     {

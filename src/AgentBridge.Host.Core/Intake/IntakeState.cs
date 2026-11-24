@@ -8,6 +8,10 @@ namespace AgentBridge.Host.Core.Intake;
 public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string InstallationId, DateTimeOffset MigratedAt)
 {
     public bool Standalone { get; init; }
+
+    // When setup first added its SessionEnd hook to the Claude settings, kept while it is there. A hook loads when a session starts, so only a Claude session that
+    // started after this has it (the session watch's R3, docs/design/session-watch.md). Null: not added, or not known (a migrated profile).
+    public DateTimeOffset? ClaudeSessionEndHookAt { get; init; }
     public const string FileName = "intake.json";
     public const int Version = 1;
 
@@ -66,6 +70,7 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
             {
                 Homes = homes,
                 Standalone = e.TryGetProperty("standalone", out var standalone) && standalone.ValueKind == JsonValueKind.True,
+                ClaudeSessionEndHookAt = Json.Time(e, "claudeSessionEndHookAt"),
             }, null);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
@@ -89,6 +94,7 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
             writer.WriteString("installationId", InstallationId);
             writer.WriteString("migratedAt", MigratedAt.ToString("o"));
             if (Standalone) { writer.WriteBoolean("standalone", true); }
+            if (ClaudeSessionEndHookAt is { } hookAt) { writer.WriteString("claudeSessionEndHookAt", hookAt.ToString("o")); }
             if (Homes is { } homes)
             {
                 writer.WriteStartObject("agentHomes");

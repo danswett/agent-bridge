@@ -293,6 +293,8 @@ public sealed class StandaloneHooks(
             {
                 savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
             }
+            // When the Claude SessionEnd hook was first added, for the session watch: kept on a repeat, so the time never moves forward past a session that has it.
+            if (agent == "claude" && savedState.ClaudeSessionEndHookAt is null) { savedState = savedState with { ClaudeSessionEndHookAt = DateTimeOffset.UtcNow }; }
             savedState.Save(profile);
         }
         // Only now, after registrations, the Codex plugin and intake are all written, does the
@@ -356,6 +358,8 @@ public sealed class StandaloneHooks(
         // somebody else's additions must remain attributable, otherwise reinstall would have to
         // claim an unowned file or permanently refuse it; its record stays without completion.
         if (agent != "copilot" || !File.Exists(path)) { DurableFile.Remove(owner, MigrationRecord.Hash(incomplete)); }
+        // The hook is gone from the Claude settings, so the session watch must not count it any more.
+        if (agent == "claude" && IntakeState.Load(profile).State is { ClaudeSessionEndHookAt: not null } recorded) { (recorded with { ClaudeSessionEndHookAt = null }).Save(profile); }
         // Keep the private runtime and binary: sessions already open retain their commands.
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }

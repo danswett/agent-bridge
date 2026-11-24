@@ -19,7 +19,7 @@ public class SessionWatchStarterTests
         var touched = new List<string>();
         var handle = SessionWatchStarter.Start(() => false,
             () => { touched.Add("snapshot"); return [Stuck("a")]; }, () => { touched.Add("held"); return false; }, _ => { touched.Add("owner"); return null; },
-            _ => { touched.Add("ended"); return false; }, (_, _) => touched.Add("notify"), () => { touched.Add("clock"); return T; }, _ => touched.Add("log"),
+            _ => { touched.Add("ended"); return false; }, new Dictionary<AgentKind, DateTimeOffset>(), (_, _) => touched.Add("notify"), () => { touched.Add("clock"); return T; }, _ => touched.Add("log"),
             _ => { touched.Add("wait"); return Task.CompletedTask; }, CancellationToken.None);
 
         Assert.Null(handle);
@@ -32,7 +32,7 @@ public class SessionWatchStarterTests
     {
         var sent = new List<(string Title, string Body)>();
         using var cts = new CancellationTokenSource();
-        var handle = SessionWatchStarter.Start(() => true, () => [Stuck("aaaaaaaa-1")], () => false, _ => null, _ => false,
+        var handle = SessionWatchStarter.Start(() => true, () => [Stuck("aaaaaaaa-1")], () => false, _ => null, _ => false, new Dictionary<AgentKind, DateTimeOffset>(),
             (t, b) => sent.Add((t, b)), () => T, _ => { }, _ => { cts.Cancel(); return Task.CompletedTask; }, cts.Token);
 
         Assert.NotNull(handle);
@@ -53,8 +53,8 @@ public class SessionWatchStarterTests
         using var cts = new CancellationTokenSource();
         var passes = 0;
         var handle = SessionWatchStarter.Start(() => true,
-            () => ++passes == 1 ? [Working("aaaaaaaa-1") with { Agent = agent }] : [], () => false,
-            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", _ => false,
+            () => ++passes == 1 ? [Working("aaaaaaaa-1") with { Agent = agent, StartedAt = T.AddHours(-1) }] : [], () => false,
+            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", _ => false, new Dictionary<AgentKind, DateTimeOffset> { [AgentKind.Claude] = T.AddHours(-5) },
             (t, b) => sent.Add((t, b)), () => T.AddHours(passes), _ => { }, _ => { if (passes >= 4) { cts.Cancel(); } return Task.CompletedTask; }, cts.Token);
 
         await handle!.Task;
@@ -69,7 +69,7 @@ public class SessionWatchStarterTests
         var passes = 0;
         var handle = SessionWatchStarter.Start(() => true,
             () => ++passes == 1 ? [Working("aaaaaaaa-1") with { Agent = AgentKind.Codex }] : [], () => false,
-            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", id => id == "aaaaaaaa-1",
+            _ => "agent:0123456789abcdef0123456789abcdef/agent_bridge_1111111111111111", id => id == "aaaaaaaa-1", new Dictionary<AgentKind, DateTimeOffset>(),
             (t, b) => sent.Add((t, b)), () => T.AddHours(passes), _ => { }, _ => { if (passes >= 4) { cts.Cancel(); } return Task.CompletedTask; }, cts.Token);
 
         await handle!.Task;

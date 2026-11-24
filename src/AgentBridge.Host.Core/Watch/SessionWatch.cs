@@ -15,10 +15,12 @@ public sealed record WatchSettings
     public TimeSpan IdleAfter { get; init; } = TimeSpan.FromMinutes(20);
     // R4: a delivered session idle this long is OFFERED for ending (the host ends nothing).
     public TimeSpan FinishedAfter { get; init; } = TimeSpan.FromMinutes(30);
-    // R3 only watches agents that can say they ended cleanly (their own SessionEnd hook): Codex, and Claude once setup has added its SessionEnd hook
-    // (owner decision, Nov 23 about 23:05 PT). A Copilot session has no such signal yet, so it never raises a missing alarm (it would alarm on every
-    // normal exit) and the log says so.
-    public IReadOnlySet<AgentKind> CleanEndAgents { get; init; } = new HashSet<AgentKind> { AgentKind.Codex, AgentKind.Claude };
+    // R3 only watches sessions that can say they ended cleanly (their own SessionEnd hook). Codex always has it. Claude has it once setup has added its
+    // SessionEnd hook (owner decision, Nov 23 about 23:05 PT), but a hook loads when a session starts, so only a Claude session that STARTED AFTER the time
+    // in CleanEndSince has it. A Copilot session has no such signal yet. Any other session never raises a missing alarm (it would alarm on every normal exit)
+    // and the log says so.
+    public IReadOnlySet<AgentKind> CleanEndAgents { get; init; } = new HashSet<AgentKind> { AgentKind.Codex };
+    public IReadOnlyDictionary<AgentKind, DateTimeOffset> CleanEndSince { get; init; } = new Dictionary<AgentKind, DateTimeOffset>();
     // R3: a missing session is forgotten this long after it was first noticed missing.
     public TimeSpan MissingForget { get; init; } = TimeSpan.FromHours(24);
     // The same episode is not noticed again within this long (#4262: 30 minutes).
@@ -37,7 +39,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
 
     readonly Dictionary<string, (SessionStatus Status, Delivery Delivery)> seen = [];
     readonly Dictionary<(WatchRule, string), (DateTimeOffset Since, DateTimeOffset Last, int Count)> ledger = [];
-    readonly Dictionary<string, AgentKind> owned = [];
+    readonly Dictionary<string, (AgentKind Agent, DateTimeOffset? StartedAt)> owned = [];
     readonly Dictionary<string, DateTimeOffset> missingSince = [];
 
     // held: discovery is held, so absence decides nothing and nothing is judged or forgotten this pass.
@@ -52,7 +54,7 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
             var delivery = Track(s);
             var inState = now - s.StatusSince;
             var owner = ownerOf(s.Id);
-            if (owner is not null && ended is not null) { owned[s.Id] = s.Agent; missingSince.Remove(s.Id); }
+            if (owner is not null && ended is not null) { owned[s.Id] = (s.Agent, s.StartedAt); missingSince.Remove(s.Id); }
             WatchRule? rule = s.Status switch
             {
                 SessionStatus.Waiting when inState >= settings.PromptAfter => WatchRule.Prompt,
@@ -68,9 +70,9 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
         var ids = sessions.Select(s => s.Id).ToHashSet();
         if (ended is not null)
         {
-            foreach (var (id, agent) in owned.Where(o => !ids.Contains(o.Key)).ToList())
+            foreach (var (id, (agent, startedAt)) in owned.Where(o => !ids.Contains(o.Key)).ToList())
             {
-                if (!settings.CleanEndAgents.Contains(agent))
+                if (!CanSayItEnded(agent, startedAt))
                 {
                     log?.Invoke($"session watch: {(id.Length <= 8 ? id : id[..8])} is a {agent} session with no clean-end signal, so it cannot raise a missing alarm");
                     owned.Remove(id); missingSince.Remove(id);
@@ -99,6 +101,11 @@ public sealed class SessionWatch(WatchSettings settings, Func<string, string?> o
         var ids = sessions.Select(s => s.Id).ToHashSet();
         foreach (var id in seen.Keys.Where(id => !ids.Contains(id)).ToList()) seen.Remove(id);
     }
+
+    // Whether this session's agent can tell the host it ended cleanly: always for an agent in CleanEndAgents; for one whose hook setup added later (Claude), only if the
+    // session started after that time. An unknown start proves nothing, so it does not count.
+    bool CanSayItEnded(AgentKind agent, DateTimeOffset? startedAt) =>
+        settings.CleanEndAgents.Contains(agent) || (settings.CleanEndSince.TryGetValue(agent, out var since) && startedAt is { } at && at >= since);
 
     // One notice per episode (the same state since the same moment), then every Repeat, MaxPerEpisode in all, then one final one, then silence.
     bool Due((WatchRule, string) key, DateTimeOffset since, DateTimeOffset now, out bool final)
