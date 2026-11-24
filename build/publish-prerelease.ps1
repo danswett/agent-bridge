@@ -5,11 +5,12 @@
 # publishes and deletes nothing. docs/app-windows.md, "Releases and updates".
 #
 #   pwsh build/publish-prerelease.ps1 -Version 0.1.600 -ReleasesDir out/app/releases, out/app-arm64/releases `
-#       -Repository danswett/agent-bridge -Commit <sha> -MainHead <sha> -MainRepo <dir> [-DryRun]
+#       -Repository danswett/agent-bridge -Commit <sha> -MainHead <sha> [-DryRun]
 #
-# -MainHead is main's head as the publish job read it, and -MainRepo a clone of main at it with
-# the selector built (tools/AgentBridge.Quality): a commit main has since moved past with app
-# changes isn't published, since main's later run publishes those (#938). A dry run needs neither.
+# -MainHead is main's head as the publish job read it: the commit must be on main's line. A commit
+# main has since moved past, app changes or not, still publishes; main's later run publishes its own
+# higher version over it (#4104). A dry run needs no -MainHead. -MainRepo is no longer read; it is
+# accepted so CI's call stays valid until ci.yml stops passing it.
 #
 # Each folder is one Velopack channel, read from the assets.<channel>.json vpk pack wrote there:
 # x64's `win`, the channel every copy installed before Arm64 builds reads, and Arm64's
@@ -40,8 +41,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if (-not $DryRun -and ($MainHead -cnotmatch '^[0-9a-f]{40}$' -or -not $MainRepo)) {
-    throw "publishing needs -MainHead, main's head commit ('$MainHead'), and -MainRepo, a clone of main at it"
+if (-not $DryRun -and $MainHead -cnotmatch '^[0-9a-f]{40}$') {
+    throw "publishing needs -MainHead, main's head commit ('$MainHead')"
 }
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
 if ($RequireSignature) {
@@ -179,7 +180,7 @@ if ($RequireSignature) {
     if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 }
 # --- Whether to publish: once per version, never a version older than one already out, never
-# a commit the latest release's commit isn't part of, and never one main has since changed the app past.
+# a commit the latest release's commit isn't part of, and never one off main's line.
 $releases = Get-Release
 $tagged = @(Invoke-Gh api "repos/$Repository/git/matching-refs/tags/$tag" --jq '.[].ref') -contains "refs/tags/$tag"
 $published = $tagged -or [bool]($releases | Where-Object { -not $_.draft -and $_.tag_name -eq $tag })
@@ -219,29 +220,15 @@ if ($publishing -and $released.Count -and -not $DryRun) {
     }
 }
 if ($publishing -and -not $DryRun -and $MainHead -cne $Commit) {
-    # And the other way round from that: a descendant's run created before this one has the lower
-    # version, so once this is out the checks above refuse it, and its app changes would never be
-    # released (#938's review). Its commit was pushed before this run was made, so it's in main's
-    # head as the publish job read it, under this lock. When main's selector and catalog, at that
-    # head, pick the app job for what came after this commit, main's later run builds the app and
-    # publishes it, this commit's changes with it; this one stands aside. A tail that leaves the
-    # app alone, docs only say, still publishes this, so main's head needn't be this commit.
-    # Anything that can't be read or isn't on main's line stops.
+    # A run publishes its commit even when main has since moved on with app changes: with runs of
+    # 40-60 minutes and frequent merges, standing aside for main's later run left every run stale
+    # (#4104). The later run then publishes its own higher version over this one. The trade (#938):
+    # GitHub promises no order between main's runs, so a descendant's run may have the lower
+    # version; the checks above then refuse it, and its app change waits for main's next run, which
+    # plans from the latest release: delayed, not lost. This commit must still be on main's line, as
+    # the publish job read it under this lock; anything that can't be read or isn't stops.
     $tail = [string](Invoke-Gh api "repos/$Repository/compare/$Commit...$MainHead" --jq '.status')
     if ($tail -cne 'ahead') { throw "main's head $MainHead doesn't follow $Commit (compare: '$tail'); not publishing $tag" }
-    $selector = Join-Path $MainRepo 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
-    $json = (& dotnet $selector select --repo $MainRepo --ring 1 --base $Commit --head $MainHead) -join "`n"
-    if ($LASTEXITCODE) { throw "the selector failed (exit $LASTEXITCODE) on $Commit..$MainHead; not publishing $tag" }
-    $selection = try { $json | ConvertFrom-Json -AsHashtable } catch { $null }
-    $jobs = if ($selection -is [Collections.IDictionary]) { $selection['jobs'] }
-    $ciJobs = if ($jobs -is [Collections.IDictionary]) { $jobs['ci.yml'] }
-    if ($jobs -isnot [Collections.IDictionary] -or ($null -ne $ciJobs -and $ciJobs -isnot [Collections.IDictionary])) {
-        throw "couldn't read the selector's jobs for $Commit..$MainHead; not publishing $tag"
-    }
-    if ($ciJobs -and $ciJobs.Contains('app')) {
-        Write-Plan "main has moved on to $MainHead, which changes the app since $Commit; commit $MainHead must publish both, not $tag" -Warn
-        $publishing = $false
-    }
 }
 
 function Test-Delta($b, [string]$basePath) {
