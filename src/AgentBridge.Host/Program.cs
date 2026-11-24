@@ -1242,6 +1242,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     {
         MachineName = machineName,
         CoordinatorRoles = () => HostSettings.CurrentAgents(serveFolder!).Policy.ResumeRoles,
+        AgentLaunchOn = () => HostSettings.CurrentAgents(serveFolder!) is { Problem: null, Policy: { Enabled: true, LaunchEnabled: true } },
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,

@@ -71,6 +71,7 @@ public sealed partial class LaunchViewModel : Observable
     sealed record Picks(Choice? Resume, Choice? Agent, Choice? Workspace, Choice? Profile, Choice? Model, Choice? Effort, Choice? Context, Choice? Permissions, bool PermissionsSet, string Scope);
     string prompt = "";
     string coordinatorRole = "";
+    bool mayStartAgents;
     // What stops the form being launched now (no prompt for Codex, too long...): about the form,
     // not the last launch, so it is said apart from that launch's outcome and its Try again.
     string problem = "";
@@ -236,6 +237,10 @@ public sealed partial class LaunchViewModel : Observable
     // The host records it so a coordinator can later resume a stuck worker. Blank sends nothing.
     public string CoordinatorRole { get => coordinatorRole; set => Set(ref coordinatorRole, value ?? ""); }
     public bool ShowCoordinatorRole => Resumed is null && Brought is null;
+    // The "May start agents" tick (#2777): the launched session gets the agent launch scope. Shown only while the host says its agent launch switch is
+    // on, for a new session; off again after a launch, so a second launch never widens a session unasked.
+    public bool MayStartAgents { get => mayStartAgents; set => Set(ref mayStartAgents, value); }
+    public bool ShowMayStartAgents => options?.AgentLaunch == true && Resumed is null && Brought is null;
     public string CountText
     {
         get
@@ -610,7 +615,7 @@ public sealed partial class LaunchViewModel : Observable
         finally { filling = false; }
         foreach (var p in new[] { nameof(Resumes), nameof(Resume), nameof(Agents), nameof(Agent), nameof(Workspaces), nameof(Workspace), nameof(Profiles), nameof(Profile),
             nameof(Models), nameof(Model), nameof(Efforts), nameof(Effort), nameof(Contexts), nameof(Context), nameof(Permissions),
-            nameof(ShowForm), nameof(ShowResume), nameof(ShowResumeIncomplete), nameof(ShowWorkspace), nameof(ShowCoordinatorRole), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
+            nameof(ShowForm), nameof(ShowResume), nameof(ShowResumeIncomplete), nameof(ShowWorkspace), nameof(ShowCoordinatorRole), nameof(ShowMayStartAgents), nameof(ShowProfile), nameof(ShowModel), nameof(ShowEffort), nameof(ShowContext),
             nameof(ShowReload), nameof(ReloadText), nameof(CanReload), nameof(Note), nameof(NoteWarns), nameof(Busy), nameof(PromptPlaceholder), nameof(Title) })
         {
             Raise(p);
@@ -647,6 +652,7 @@ public sealed partial class LaunchViewModel : Observable
             Context = ShowContext ? context?.Value : null,
             Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt,
             CoordinatorRole = ShowCoordinatorRole && !string.IsNullOrWhiteSpace(coordinatorRole) ? coordinatorRole.Trim() : null,
+            AgentScope = ShowMayStartAgents && mayStartAgents ? AgentProtocol.ScopeReadReplyLaunch : null,
         };
     }
 
@@ -768,6 +774,7 @@ public sealed partial class LaunchViewModel : Observable
         if (outcome == "started")
         {
             // Only the prompt that went: one typed since for the next launch stays.
+            if (d.Payload is LaunchRequest { AgentScope: not null }) { MayStartAgents = false; }
             if (d.Payload is LaunchRequest sent && (string.IsNullOrWhiteSpace(prompt) ? null : prompt) == sent.Prompt) { Prompt = ""; CoordinatorRole = ""; }
             Open(m, d);
         }

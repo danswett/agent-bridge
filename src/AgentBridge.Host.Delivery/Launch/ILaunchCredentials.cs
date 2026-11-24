@@ -8,6 +8,8 @@ public interface ILaunchCredentials
     // A token for the session about to start, or null when none is issued. Never logged.
     string? Prepare(string session, string launchId);
     string? PrepareFleet(string session, string launchId) => null;
+    // The same with a wider scope a person's launch asked for (the May start agents tick, #2777). An implementation that does not know it issues the read-only token.
+    string? PrepareScoped(string session, string launchId, string scope) => Prepare(session, launchId);
 
     // The launch started: the token now answers only to this process.
     void Bind(string launchId, int processId, DateTimeOffset startedAt);

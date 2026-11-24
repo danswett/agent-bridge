@@ -270,6 +270,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
     // A launch's token is issued before its process exists, so it is bound to none and answers to
     // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
     public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+    // read+reply+launch for a person's launch that ticked May start agents (#2777); LaunchService asks only after the machine switch and the person's tick.
+    public string? PrepareScoped(string session, string launchId, string scope) =>
+        scope == AgentProtocol.ScopeReadReplyLaunch ? Mint(session, launchId, 0, default, scope) : throw new ArgumentException("the only scope a launch can ask for is read+reply+launch", nameof(scope));
     public string PrepareFleet(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeReadReply, depth: 1);
 
     // Called only by the person-authorized management path, never a remote/agent operation.

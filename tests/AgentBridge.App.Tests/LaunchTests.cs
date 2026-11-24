@@ -98,6 +98,30 @@ public sealed class LaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => opened.Contains("new-1"), "the new session's card to open");
     }
 
+    // #2777: the "May start agents" tick: shown only when the host says its agent launch switch is on, sends the scope only when ticked on a new
+    // session, and is off again after a launch.
+    [Fact]
+    public async Task The_may_start_agents_tick_follows_the_machine_switch_and_sends_the_scope_only_when_ticked_and_resets()
+    {
+        Assert.False(launch.ShowMayStartAgents);
+        options = options with { AgentLaunch = true };
+        ui.Post(launch.Opened);
+        await Wait.UntilAsync(() => launch.ShowMayStartAgents, "the tick to show when the machine switch is on");
+        ui.Post(() => { launch.MayStartAgents = true; launch.Prompt = "go"; launch.Launch(); });
+        await Wait.UntilAsync(() => launch.State == "started", "started");
+        Assert.Equal("read+reply+launch", Assert.Single(Sent()).GetProperty("agentScope").GetString());
+        Assert.False(launch.MayStartAgents);
+        ui.Post(() => { launch.Prompt = "again"; launch.Launch(); });
+        await Wait.UntilAsync(() => Sent().Count() == 2, "second launch");
+        Assert.False(Sent().Last().TryGetProperty("agentScope", out _));
+        options = options with { AgentLaunch = null };
+        ui.Post(() => { launch.MayStartAgents = true; launch.Opened(); });
+        await Wait.UntilAsync(() => !launch.ShowMayStartAgents, "the tick to hide when the switch is off");
+        ui.Post(() => { launch.Prompt = "third"; launch.Launch(); });
+        await Wait.UntilAsync(() => Sent().Count() == 3, "third launch");
+        Assert.False(Sent().Last().TryGetProperty("agentScope", out _));   // hidden means not sent, even if it was ticked before
+    }
+
     // #4318: the Role box. A coordinator role a person types goes with a NEW session only; blank is not sent.
     [Fact]
     public async Task A_typed_coordinator_role_is_sent_with_a_new_session_and_blank_is_not()

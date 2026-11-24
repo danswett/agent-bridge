@@ -113,7 +113,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
         Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null,
-        string? statusFolder = null, TimeSpan? rememberFor = null, IReadOnlyList<string>? coordinatorRoles = null)
+        string? statusFolder = null, TimeSpan? rememberFor = null, IReadOnlyList<string>? coordinatorRoles = null, bool? agentLaunchOn = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -121,6 +121,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         {
             MachineName = machineName,
             CoordinatorRoles = coordinatorRoles is null ? null : () => coordinatorRoles,
+            AgentLaunchOn = agentLaunchOn is null ? null : () => agentLaunchOn.Value,
             Time = clock,
             CopilotHome = homes?.Copilot ?? f.CopilotHome,
             ClaudeHome = homes?.Claude ?? f.ClaudeHome,
