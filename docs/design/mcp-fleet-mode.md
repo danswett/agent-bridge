@@ -43,6 +43,20 @@ a **reply to a same-person session on another machine** is the one item proposed
 row 5, for the Chief to confirm); stop and launch, keys and every other bullet stay owner CHANGES. `scope: "fleet"` (a read) and
 `machineName` stay Engineering proposals with their own open rows 1 to 4.
 
+## Owner decision on the fleet list (about 23:05 PT, Nov 23, via the Chief)
+
+The owner chose the option labelled "Yes, allow the list" on rows 1 to 4 below. The terms are the Engineering Lead's relay of the Chief's
+answer, not the owner's words, and `owner-decisions.md` did not record it when this was written: a **read-only list of the same person's
+agent sessions across their machines (machine id, session id, state, how long, machine online), with no folders, titles, prompts or answers.**
+
+So `list_agent_sessions` takes `scope: "fleet"`, and the rows are narrower than the proposal above: `machine`, `node`, `state`, `since`,
+`secondsInState`, `machineOnline` for a session, and `machine`, `state`, `complete` for a machine (so a partial machine is not read as empty).
+**No `machineName`, `name`, evidence members, `lastSeen` or `trust` is returned, with or without `include`**, and `include` with the fleet scope
+is refused. The server asks the host's `fleet.list` with no `include`, needs an accepted agent principal (an unattributed connection is refused,
+never served), drops any row without an exact machine id and node id, and never falls back to a local list. This settles rows 1 to 4: row 4
+(`machineName` only with `include`) no longer applies, because the name is not returned at all. Reply to a session on another machine is
+row 5. Launch, stop and keys stay as written.
+
 ## Not proposed, each an owner CHANGE if wanted
 
 - Returning `cwd`, titles, repository, branch or any question text for another machine's sessions.
