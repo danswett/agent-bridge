@@ -35,7 +35,7 @@ public sealed class AuditArchiveCommandTests : IDisposable
                     v = 1, at = today.AddDays(offset), principal = "agent:fixture/session",
                     action = launch ? "session.launch" : "session.stop", outcome = "reserved",
                     request = operation.ToString(), target = operation.ToString(), previousSha256 = Hash(header),
-                    gate = new GateAuditMetadata(1, operation, operation, ++sequence, "intent", "local", "agent", operation, "none")
+                    gate = new GateAuditMetadata(1, operation, Guid.Empty, ++sequence, "intent", "local", "agent", operation, "none")
                 }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 File.WriteAllText(Day(offset, launch), header + "\n" + row + "\n");
                 previous = Hash(row);

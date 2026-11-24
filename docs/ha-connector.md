@@ -54,6 +54,13 @@ HA integration. Keep current credentials,
 contract fixtures, reversible migration and G5/G6/G7 until reviewed retirement
 slices disposition them; this design neither passes the gate nor changes them.
 
+**Retirement blocker: no F7 launch path through Home Assistant (#1396).** The fleet
+dispatcher launches builders through `script/agent_bridge_launch_payload` today
+(`Invoke-WorkerLaunch` in slipgates-fleet `dispatcher/FleetLaunch.psm1`). It must move
+to `launch:fleet` ([slipgates-fleet #1366](https://github.com/danswett/slipgates-fleet/issues/1366))
+before the HA cut-over. It depends on #2770 (admission and caps) and on the owner
+switching `launch:fleet` on. Until then HA stays on for that path.
+
 Everything below remains the **current compatibility contract**, not an
 alternative authorization path for the optional client.
 
@@ -1607,14 +1614,16 @@ Assistant and broker).
 ```
 agent-bridge-host config set homeAssistant.baseUrl http://127.0.0.1:8123
 agent-bridge-host config set homeAssistant.disposable true
-agent-bridge-host config set homeAssistant.enabled true
 agent-bridge-host ha token set            # paste the token, then explicitly confirm
+agent-bridge-host ha on                   # audited; restart the host once to apply
 agent-bridge-host ha status               # on, or why not, and any refusal; never the token
 agent-bridge-host ha shadow               # compare with agent-ha-bridge's retained topics; writes nothing
 ```
 
 `serve` logs `the Home Assistant connector is on: <url> as agent_bridge_<slug>` or why it is
 off, and `Home Assistant connector paused: …` while agent-ha-bridge runs.
+Use `ha off` or `ha on` for connection changes; generic `config set` and `config unset`
+refuse `homeAssistant.enabled` rather than bypass its audit and startup checks.
 
 `ha token set` requires the base URL first. It reports length, whitespace and only eight SHA256
 hex characters, checks the local JWT shape (not validity), then warns about the recorded

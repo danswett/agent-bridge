@@ -11,7 +11,7 @@ using Xunit;
 // daemon's own functions produced them (Fixtures/ha-launch.json), and what reaches the host.
 public sealed class LaunchTests : IDisposable
 {
-    const string Machine = "DSWETT-DEV-VM1";
+    static readonly string Machine = Contract.Machine;
     const string AgentUser = "agent-user";
     static readonly string Slug = HaContract.MachineSlug(Machine);
 
