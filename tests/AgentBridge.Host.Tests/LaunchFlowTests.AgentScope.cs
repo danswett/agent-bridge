@@ -1,6 +1,8 @@
 using System.Text.Json;
 using AgentBridge.Host;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -51,6 +53,35 @@ public sealed partial class LaunchFlowTests
         Assert.Equal(LaunchOutcome.Refused, result.Outcome);
         Assert.Contains("agent scope", result.Reason);
         Assert.Empty(starter.Specs);
+    }
+
+    // The point of the tick: a session a person launched with it, wearing the credential the launch really minted, can fleet.resume.
+    [Fact]
+    public async Task A_session_launched_with_the_tick_can_fleet_resume_with_the_credential_its_launch_minted()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(f.Root, "tick-resume")).FullName;
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), JsonSerializer.Serialize(new
+        {
+            agents = new { enabled = true, resume = new { roles = new[] { "quality-lead" } } }, launch = new { enabled = true, workspaces = Array.Empty<string>() },
+        }));
+        var credentials = new AgentCredentials(folder, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rootAlive: (_, _) => true);
+        var launcher = Launcher(Config(), credentials: credentials, agentLaunchOn: true);
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "API", Prompt = "go",
+            AgentScope = AgentProtocol.ScopeReadReplyLaunch, CoordinatorRole = "quality-lead" }, "app");
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        var spec = Assert.Single(starter.Specs);
+        var token = spec.Environment![Launchers.TokenVariable]!;
+        var caller = credentials.Check(token, new([new PeerProcess(starter.Pids[0], DateTimeOffset.UtcNow, "agent.exe")], true)).Accepted;
+        Assert.NotNull(caller);
+        Assert.Equal(AgentProtocol.ScopeReadReplyLaunch, caller!.Scope);
+        Assert.Equal(("quality-lead", "session", 0, true), (launcher.LaunchRole(caller.Session), caller.Kind, caller.Depth, credentials.IsLive(caller)));
+        var resumed = new List<ResumeAsk>();
+        var handler = new FleetResumeCommands(folder, credentials, launcher.LaunchRole, _ => true, _ => false,
+            _ => new RestoreLaunch("copilot", "API", null, null, null, null, null, LaunchProtocol.Ask),
+            (ask, _) => { resumed.Add(ask); return Task.FromResult(new LaunchResult(LaunchOutcome.Started, null) { Session = ask.Id }); });
+        var receipt = await handler.HandleAsync(caller, JsonSerializer.SerializeToElement(new { version = 1, request = Guid.NewGuid(), session = Guid.NewGuid().ToString() }));
+        Assert.Equal(("resumed", null), (receipt.Outcome, receipt.Reason));
+        Assert.Single(resumed);
     }
 
     sealed class NoCredentials : AgentBridge.Host.Delivery.ILaunchCredentials
