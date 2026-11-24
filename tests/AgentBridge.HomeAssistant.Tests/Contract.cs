@@ -12,6 +12,12 @@ internal static class Contract
 
     public static JsonObject Root => Loaded.Value;
 
+    // The two machines the recording was made for, as the fixture names them: the tests take their machine from here, so no test source names one.
+    public static string Machine => Text("slugs.0.machineName");
+    public static string Slug => Text("slugs.0.slug");
+    public static string OtherMachine => Text("slugs.1.machineName");
+    public static string OtherSlug => Text("slugs.1.slug");
+
     public static JsonNode At(string path)
     {
         JsonNode node = Root;

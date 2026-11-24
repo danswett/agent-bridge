@@ -285,7 +285,7 @@ public sealed class LiveHomeAssistantTests : IDisposable
         {
             await ha.PublishAsync(p.Topic, p.Payload, true);
         }
-        const string machine = "DSWETT-DEV-VM1";
+        var machine = Contract.Machine;
         var node = HaContract.NodeId("6fcbab0c-1d2e-4f50-9a61-7b8c9d0e1f20");
         string[] filters = [$"{HaContract.TopicRoot}/{node}/#", $"{HaContract.DiscoveryPrefix}/+/{node}/#", $"{HaContract.MachineTopicRoot(HaContract.MachineSlug(machine))}/#"];
         var before = await ha.ReadTopicsAsync(filters, TimeSpan.FromSeconds(3));
