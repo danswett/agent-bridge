@@ -493,7 +493,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      fetch and the Canonical count, belong to the forced proof alone: a fallback after a real
      timeout, on any run, is the one above (#817 first proposed failing
      that one on an Azure fetch too, and dropped it). A run by hand runs every
-     job (the whole ring), but is never a release; only the archives-only apt cache above may be saved.
+     job (the whole ring), but is never a release (the one exception: `critical-release` on main, with a reason,
+     docs/app-windows.md "Spacing"); only the archives-only apt cache above may be saved.
    - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
      It runs only when `spikes/` changes, like `spikes` on Windows.
    - Caches (#468): NuGet packages for `product`, `ha-integration` and `spikes`, keyed by job,

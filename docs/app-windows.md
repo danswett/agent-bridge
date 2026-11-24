@@ -1070,18 +1070,22 @@ connector's Install button on a machine the dashboard drives.
 * **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
   S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
   its age read from the API's `published_at` under the publish lock (`build/release-spacing.ps1`). A run inside that, or
-  one that can't read a release's time, publishes nothing, warns, and sets the step output `deferred=true`; it leaves no
-  release, draft or tag. Its changes are never dropped, even when main goes idle: every 5 minutes `publish-pending.yml`
-  runs `build/publish-pending.ps1`, which takes main's newest green CI run and, once no newer run is still going, that
-  run's version is above every release, its commit follows the latest release's and the window is open, re-runs its
-  `publish` job. So a release at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
+  one that can't read a release's time or finds it in the future, publishes nothing, warns, and sets the step output
+  `deferred=true`; it leaves no release, draft or tag. Its changes are never dropped, even when main goes idle: every 5
+  minutes `publish-pending.yml` runs `build/publish-pending.ps1`, which takes main's newest finished CI run whose
+  `quality-gate` and `publish` jobs succeeded (a run red only by the waived Arm64 leg counts) and, once no newer run is
+  still going (a run going 3 hours is stuck and holds nothing), that run's version is above every release and untagged,
+  its commit follows the latest release's and the window is open, re-runs its `publish` job, at most 4 times. So a release
+  at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
   A read that fails there re-runs nothing and is tried on the next tick. A run that does pass later publishes them first
   (CI's release debt). Every publish, a re-run or a dispatch's too, is a `publish` job in the one `publish-prerelease`
   group, so two never run at once. Only the spacing is held: every other check above runs first. **Critical fix:**
   `-SkipSpacing -SkipSpacingReason <why>` publishes inside the 15 minutes, with a warning and a line in the release notes
   naming the override, who ran it and why; no reason, no publish. CI passes them from a `workflow_dispatch` on `main`, its
   `critical-release` box and `critical-reason` text, which only someone with write access can run (never a label or
-  anything a pull request sets); only Quality runs it, on an owner or Chief call. (Both workflow parts are Quality's to apply.)
+  anything a pull request sets); the plan job lets it through only on `main` with a reason, at once, before any build.
+  Only Quality runs it, on an owner or Chief call. (The workflow parts are Quality's to apply; until then there is no
+  override, and a deferred run waits for main's next run that passes.)
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag

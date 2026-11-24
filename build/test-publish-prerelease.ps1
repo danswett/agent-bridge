@@ -740,14 +740,13 @@ Check 'At 15 minutes the run publishes; the newest release is the last published
     }
 }
 
-Check "A deferred run's changes are never dropped: main's next eligible run, or its own re-run, publishes them" {
+Check "A deferred run's changes are never dropped: main's next run that passes publishes them with its own" {
     # S -> A -> B. A's run (0.1.600) is deferred; it leaves nothing to block a later run. B's run
     # (0.1.601), 40 minutes on, publishes B, which holds A, its notes running from the release
-    # before A's, so A's changes are listed. A re-run of A, if it comes first, publishes A itself.
+    # before A's, so A's changes are listed. With main idle, publish-pending re-runs A (below).
     Reset 3
     $global:PpNow = $spacingNow
     New-PpRelease 'v0.1.504' $true $false $spacingNow.AddMinutes(-5).ToString('o')
-    $global:PpTagSha['v0.1.504'] = $ancestor
     Invoke-Publish '0.1.600' -Head $descendant
     Assert (@(Uploads).Count -eq 0) "A was published inside the spacing: $(Uploads)"
     $global:PpNow = $spacingNow.AddMinutes(40)
@@ -756,26 +755,19 @@ Check "A deferred run's changes are never dropped: main's next eligible run, or 
     & $publishScript -Version '0.1.601' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant 6>$null
     Assert (@(Uploads).Count -eq 2 -and -not (Uploads | Where-Object { $_ -notlike "*--tag v0.1.601 --targetCommitish $descendant *" })) "B didn't publish: $(Uploads)"
     Assert ((Get-Notes) -like "*target_commitish=$descendant *previous_tag_name=v0.1.504") "B's notes don't cover A: $(Get-Notes)"
-    Assert ([array]::IndexOf($global:PpMain, $commit) -lt [array]::IndexOf($global:PpMain, $descendant)) "B doesn't hold A"
-    Reset 3
-    $global:PpNow = $spacingNow
-    New-PpRelease 'v0.1.504' $true $false $spacingNow.AddMinutes(-5).ToString('o')
-    Invoke-Publish '0.1.600'
-    Assert (@(Uploads).Count -eq 0) "A was published inside the spacing: $(Uploads)"
-    $global:PpNow = $spacingNow.AddMinutes(10)
-    Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
-    Invoke-Publish '0.1.600'
-    Assert (@(Uploads).Count -eq 2) "A's re-run, 15 minutes after the newest release, didn't publish: $(Uploads)"
 }
 
 $pendingScript = Join-Path $PSScriptRoot 'publish-pending.ps1'
+function New-PpRun([long]$number, [string]$sha, [string]$status = 'completed', [string]$conclusion = 'success', [int]$attempt = 1, [int]$startedMinutes = -50) {
+    [pscustomobject]@{ id = 9000 + $number; run_number = $number; run_attempt = $attempt; head_sha = $sha; status = $status; conclusion = $conclusion; created_at = $spacingNow.AddMinutes($startedMinutes).ToString('o') }
+}
 function Set-PpPending {
-    # Release v0.1.504 at T on the ancestor; main's run 600 of the commit is green and its publish
-    # job (7600) succeeded, deferred.
+    # Release v0.1.504 at T on the ancestor; main's run 600 of the commit passed quality-gate and its
+    # publish job (7600) succeeded, deferred.
     Reset 3
     New-PpRelease 'v0.1.504' $true $false $spacingNow.ToString('o')
-    $global:PpRuns = @([pscustomobject]@{ id = 9600; run_number = 600; head_sha = $commit; status = 'completed'; conclusion = 'success' })
-    $global:PpJobs = @{ '9600' = @([pscustomobject]@{ id = 7599; name = 'app'; conclusion = 'success' }, [pscustomobject]@{ id = 7600; name = 'publish'; conclusion = 'success' }) }
+    $global:PpRuns = @(New-PpRun 600 $commit)
+    $global:PpJobs = @{ '9600' = @([pscustomobject]@{ id = 7599; name = 'quality-gate'; conclusion = 'success' }, [pscustomobject]@{ id = 7600; name = 'publish'; conclusion = 'success' }) }
 }
 function Invoke-Pending([int]$minutes) { $global:PpNow = $spacingNow.AddMinutes($minutes); & $pendingScript -Repository $repo 6>&1 | Out-String }
 function Reruns { @($global:PpCalls | Where-Object { $_ -like 'gh api -X POST *rerun*' }) }
@@ -795,22 +787,26 @@ Check 'Release at T, green at T+5, no push: the pending check re-runs the deferr
     $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Assert ($r -and -not $r.draft -and [DateTimeOffset]::Parse($r.published_at) -eq $spacingNow.AddMinutes(15)) "release: $($r | ConvertTo-Json -Compress)"
     # Released, nothing is pending: the next tick re-runs nothing.
-    $global:PpTagSha['v0.1.600'] = $commit
     $global:PpCalls.Clear()
     $said = Invoke-Pending 20
     Assert (@(Reruns).Count -eq 0) "re-ran a released version: $said"
 }
 
-Check 'The pending check re-runs only the newest green run that publish deferred, and nothing it cannot read' {
-    $newer = [pscustomobject]@{ id = 9601; run_number = 601; head_sha = $descendant; status = 'in_progress'; conclusion = $null }
+Check 'The pending check re-runs only the newest run whose quality-gate and publish passed, a bounded number of times, and nothing it cannot read' {
     foreach ($case in @(
-        @{ Name = 'a newer run red'; Set = { $newer.status = 'completed'; $newer.conclusion = 'failure'; $global:PpRuns += $newer }; Reruns = 1 },
-        @{ Name = 'a newer run still going'; Set = { $newer.status = 'in_progress'; $newer.conclusion = $null; $global:PpRuns += $newer }; Reruns = 0 },
-        @{ Name = 'its version released'; Set = { New-PpRelease 'v0.1.600' $true $false $spacingNow.ToString('o'); $global:PpTagSha['v0.1.600'] = $commit }; Reruns = 0 },
-        @{ Name = 'a commit behind the latest release'; Set = { $global:PpTagSha['v0.1.504'] = $descendant }; Reruns = 0 },
+        @{ Name = 'a waived red run (Arm64, #2454)'; Set = { $global:PpRuns[0].conclusion = 'failure' }; Reruns = 1 },
+        @{ Name = 'a newer run red'; Set = { $global:PpRuns += New-PpRun 601 $descendant 'completed' 'failure' }; Reruns = 1 },
+        @{ Name = 'a newer run still going'; Set = { $global:PpRuns += New-PpRun 601 $descendant 'in_progress' $null }; Reruns = 0 },
+        @{ Name = 'a newer run stuck for 4 hours'; Set = { $global:PpRuns += New-PpRun 601 $descendant 'in_progress' $null 1 -240 }; Reruns = 1 },
+        @{ Name = 'quality-gate failed'; Set = { $global:PpJobs['9600'][0].conclusion = 'failure' }; Reruns = 0 },
         @{ Name = 'no publish job (the app unchanged)'; Set = { $global:PpJobs['9600'] = @($global:PpJobs['9600'][0]) }; Reruns = 0 },
+        @{ Name = 'its version released'; Set = { New-PpRelease 'v0.1.600' $true $false $spacingNow.ToString('o') }; Reruns = 0 },
+        @{ Name = 'its tag surviving a deleted release'; Set = { $global:PpTags.Add('refs/tags/v0.1.600') }; Reruns = 0 },
+        @{ Name = 'a fifth attempt'; Set = { $global:PpRuns[0].run_attempt = 5 }; Reruns = 0; Says = '*::warning::*run 600 was run 5 times*' },
+        @{ Name = 'a commit behind the latest release'; Set = { $global:PpTagSha['v0.1.504'] = $descendant }; Reruns = 0 },
         @{ Name = 'runs that cannot be read'; Set = { $global:PpRuns = 'fail' }; Reruns = 0; Says = '*::warning::*the next check tries again*' },
-        @{ Name = 'a release time that cannot be read'; Set = { New-PpRelease 'v0.1.100' $false $false 'not a time' }; Reruns = 0; Says = '*::warning::*publication time*the next check tries again*' }
+        @{ Name = 'a release time that cannot be read'; Set = { New-PpRelease 'v0.1.100' $false $false 'not a time' }; Reruns = 0; Says = '*::warning::*publication time*the next check tries again*' },
+        @{ Name = 'a release dated in the future'; Set = { New-PpRelease 'v0.1.100' $false $false $spacingNow.AddMinutes(30).ToString('o') }; Reruns = 0; Says = '*::warning::*in the future*' }
     )) {
         Set-PpPending
         & $case.Set
@@ -852,8 +848,9 @@ Check 'The critical-fix override publishes inside the spacing, says so in the ru
     Assert (@(Uploads).Count -eq 0) "the override published past another check: $(Uploads)"
 }
 
-Check "A release whose publication time can't be read defers the run, to be tried again; a dry run isn't held by the spacing" {
-    foreach ($at in $null, 'not a time') {
+Check "A release whose publication time can't be read, or is in the future, defers the run, to be tried again; a dry run isn't held by the spacing" {
+    # In the future fails closed: an age made absolute would read a release due in 20 minutes as 20 minutes old.
+    foreach ($at in $null, 'not a time', $spacingNow.AddMinutes(20).ToString('o')) {
         Reset 3
         $global:PpNow = $spacingNow
         New-PpRelease 'v0.1.504' $true $false $at

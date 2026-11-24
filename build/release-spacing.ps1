@@ -14,6 +14,8 @@ function Get-NewestRelease([object[]]$Releases, [DateTimeOffset]$Now) {
         elseif ($at -isnot [string] -or -not [DateTimeOffset]::TryParse($at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$parsed)) {
             throw "couldn't read $($r.tag_name)'s publication time ('$at')"
         }
+        # Fails closed: a time ahead of this clock is no age to trust, skewed or wrong.
+        if ($parsed -gt $Now) { throw "$($r.tag_name)'s publication time $($parsed.ToString('o')) is in the future" }
         if (-not $newest -or $parsed -gt $newest.At) { $newest = [pscustomobject]@{ Tag = $r.tag_name; At = $parsed; Age = $Now - $parsed } }
     }
     $newest
