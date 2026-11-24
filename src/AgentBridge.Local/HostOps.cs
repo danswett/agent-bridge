@@ -34,6 +34,8 @@ public static class HostOps
     // The person approves a folder for launching from the app, no terminal (host.workspace.add). In hello only for the app.
     public const string WorkspacesCapability = "host.workspaces";
     public const string WorkspaceAdd = "host.workspace.add";
+    public const string WorkspaceList = "host.workspace.list";
+    public const string WorkspaceRemove = "host.workspace.remove";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.

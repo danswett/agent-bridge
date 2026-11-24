@@ -47,6 +47,31 @@ public sealed class WheelNotchRuleTests
     public void A_steady_drift_the_other_way_fails_the_sum_rule_too() =>
         Assert.Contains("sum rule", WheelNotchRule.Failure([52, 52, 52, 52, 52, 52, 52, 52], 48), StringComparison.Ordinal);
 
+    // #4521: the sum edge is inclusive (exactly 8 short passes), judged in tenths of a pixel (what the self-test measures), so floating-point noise cannot decide it.
+    [Fact]
+    public void The_sum_edge_is_inclusive_and_a_tenth_past_it_fails()
+    {
+        Assert.Null(WheelNotchRule.Failure([47, 47, 47, 47, 47, 47, 47, 47], 48));            // 8 short of 384: on the edge
+        Assert.Contains("sum rule", WheelNotchRule.Failure([47, 47, 47, 47, 47, 47, 47, 46.9], 48), StringComparison.Ordinal);       // 8.1 short
+        Assert.Null(WheelNotchRule.Failure([49, 49, 49, 49, 49, 49, 49, 49], 48));            // 8 over: the other edge
+        Assert.Contains("sum rule", WheelNotchRule.Failure([49, 49, 49, 49, 49, 49, 49, 49.1], 48), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_sum_that_is_exactly_on_the_edge_passes_though_the_doubles_add_up_to_a_hair_short()
+    {
+        double[] moved = [47.1, 47.1, 46.9, 46.9, 47.1, 47.1, 46.9, 46.9];       // 375.99999999999994 as doubles: 8.000000000000057 from 384
+
+        Assert.Null(WheelNotchRule.Failure(moved, 48));
+    }
+
+    [Fact]
+    public void The_per_notch_edge_is_inclusive_too()
+    {
+        Assert.Null(WheelNotchRule.Failure([52, 44, 48, 48, 48, 48, 48, 48], 48));           // exactly 4 either side
+        Assert.Contains("per-notch rule", WheelNotchRule.Failure([52.1, 48, 48, 48, 48, 48, 48, 48], 48), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Too_few_notches_fail()
     {
