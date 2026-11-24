@@ -1,25 +1,23 @@
-From 5366803c88d644500a220471ac6f4a714434cae4 Mon Sep 17 00:00:00 2001
+From a8aebc075639aa7c8b50a8258ca560ca5372fb50 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:32:51 -0800
-Subject: [PATCH] CI S2, piece 5c: pwa-ui moves to FULL (regenerated on main
- with the critical-release dispatch kept in ci.yml)
+Date: Mon, 23 Nov 2026 22:10:39 -0800
+Subject: [PATCH] s 5c
 
-Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 ---
  .../playwright-system-packages/download.sh    |   2 +-
  .../playwright-system-packages/test.sh        |   2 +-
  .github/workflows/ci.yml                      | 186 ++----------------
- .github/workflows/full.yml                    | 160 ++++++++++++++-
+ .github/workflows/full.yml                    | 162 ++++++++++++++-
  quality/README.md                             |  12 +-
  quality/catalog.yml                           |  10 +-
  quality/merge-rule.yml                        |  15 --
  .../AgentBridge.Quality.Tests/CiPlanTests.cs  |   2 +-
  .../CriticalReleaseTests.cs                   |   3 +-
- .../FullWorkflowTests.cs                      |  38 +++-
+ .../FullWorkflowTests.cs                      |  40 +++-
  .../HaValidationCoverageTests.cs              |   2 +-
  .../MergeRuleTests.cs                         |   8 +-
  .../PlanScriptTests.cs                        |   4 +-
- 13 files changed, 232 insertions(+), 212 deletions(-)
+ 13 files changed, 229 insertions(+), 219 deletions(-)
 
 diff --git a/.github/actions/playwright-system-packages/download.sh b/.github/actions/playwright-system-packages/download.sh
 index 86c98cc7c..2474d91ff 100644
@@ -35,7 +33,7 @@ index 86c98cc7c..2474d91ff 100644
  # this fallback before any package is downloaded, to prove it once. Its log says it was forced, not
  # timed out, and how many packages came from https://archive.ubuntu.com. The WebKit legs are the
 diff --git a/.github/actions/playwright-system-packages/test.sh b/.github/actions/playwright-system-packages/test.sh
-index a94d39fd2..6fb778c2e 100644
+index 43b32c046..1b857889e 100644
 --- a/.github/actions/playwright-system-packages/test.sh
 +++ b/.github/actions/playwright-system-packages/test.sh
 @@ -636,7 +636,7 @@ check "a corrupt package alongside a DNS failure still refuses retry and fallbac
@@ -296,7 +294,7 @@ index f930a1a52..85cbe77a3 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index b5023117e..dcaca6ade 100644
+index f00adb695..5d2bd8f9a 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -5,7 +5,7 @@ name: Full
@@ -362,7 +360,22 @@ index b5023117e..dcaca6ade 100644
        - name: The commit under test
          env:
            SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
-@@ -262,11 +298,129 @@ jobs:
+@@ -227,13 +263,8 @@ jobs:
+         with:
+           browsers: chromium webkit
+           working-directory: pwa
++          save: 'false'
+       - run: npx playwright install chromium webkit
+-      - name: Save Playwright's browsers to main's cache
+-        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+-        with:
+-          path: ~/.cache/ms-playwright
+-          key: ${{ steps.browsers.outputs.cache-primary-key }}
+       - run: npx playwright test test/e2e
+       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+         if: failure()
+@@ -252,11 +283,124 @@ jobs:
            if-no-files-found: warn
            retention-days: 7
  
@@ -438,13 +451,8 @@ index b5023117e..dcaca6ade 100644
 +          browsers: ${{ matrix.project }}
 +          working-directory: pwa
 +          force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
++          save: 'false'
 +      - run: npx playwright install "$PROJECT"
-+      - name: Save Playwright's browsers to main's cache
-+        if: github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
-+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-+        with:
-+          path: ~/.cache/ms-playwright
-+          key: ${{ steps.browsers.outputs.cache-primary-key }}
 +      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
 +      # Every test that failed, then passed on the one WebKit retry (#1692): listed in the run's
 +      # summary and as a warning, so a retry never hides a flake. Never fails the job.
@@ -616,7 +624,7 @@ index bf10713d0..f10753641 100644
      {
          var (code, output) = RunGuard(critical, reason, reference, force);
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 20ade2d3c..04feee120 100644
+index 63766e209..b957571d1 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,8 +28,8 @@ public class FullWorkflowTests
@@ -630,10 +638,12 @@ index 20ade2d3c..04feee120 100644
      }
  
      [Fact]
-@@ -116,4 +116,38 @@ public class FullWorkflowTests
- 
-         Assert.Empty(missing);
+@@ -140,4 +140,38 @@ public class FullWorkflowTests
+             .Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/cache/save@", StringComparison.Ordinal));
+         Assert.Contains("inputs.save == 'true'", Scalar(save, "if"), StringComparison.Ordinal);
      }
+-}
+\ No newline at end of file
 +
 +    [Fact]
 +    public void Pwa_ui_runs_the_six_legs_whose_names_are_the_ones_Pages_waits_for_and_none_of_it_is_for_a_pull_request()
@@ -668,7 +678,7 @@ index 20ade2d3c..04feee120 100644
 +        Assert.Equal(["critical-release", "critical-reason"], ciInputs.Children.Keys.Select(k => k.ToString()));
 +        Assert.DoesNotContain("force-apt-fallback", File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml")), StringComparison.Ordinal);
 +    }
- }
++}
 diff --git a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs b/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
 index 66d50d1aa..838a8e1e2 100644
 --- a/tests/AgentBridge.Quality.Tests/HaValidationCoverageTests.cs
