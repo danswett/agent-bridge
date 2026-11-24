@@ -1243,7 +1243,7 @@ for a later app change either, so a green run publishes its own commit without w
     not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
   - its commit follows the latest release's commit;
   - its run number, the version's last part, is above every published version;
-  - the **packages, the SBOMs and the installer inputs** of both architectures (x64 and Arm64; the train's verify downloads the inputs) are all there, unexpired (that commit's FULL run builds them and keeps them 30 days), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
+  - the **packages, the SBOMs and the installer inputs** of both architectures (x64 and Arm64; the train's verify downloads the inputs) are all there, unexpired (that commit's FULL run keeps the packages and SBOMs 30 days but the installer inputs only **7**, so a commit is publishable for 7 days after its FULL run: **the train must run within 7 days**, and a commit whose input has expired is skipped, never published without it), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
 
   One that fails a rule is skipped for the next newest. If the first one found is already
   released, nothing is published and the run does nothing, so an hourly run with nothing new is

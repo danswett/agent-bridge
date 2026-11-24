@@ -75,7 +75,7 @@ Check 'all green Arm64 checks have no notice' ((Waived (Run 'sha103' 103)) -eq $
 Check 'a red x64 installer is not in the notice: it is not waived' ((Waived (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-x64)' = 'failure' })) -match 'win-x64') $false
 Check 'the selection says what was waived' ((Select-ReleaseCommit -Runs @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-installer (win-arm64)' = 'failure' })) -Latest $out -IsDescendant $follows -Explain) -match 'selected sha103.*waived.*app-installer \(win-arm64\)') $true
 # The Arm64 jobs that RUN the app are waived whatever they are called (owner: only the Arm64 PACK is required): the Arm64 app job, and a sharded self-test.
-Check 'a red app (win-arm64) job is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha103'
+Check 'a red app (win-arm64) job in a FULL run is NOT waived: it holds the Arm64 pack (the owner waives what runs the app and its tests, not the pack)' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'a red sharded Arm64 self-test is waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64) 2/3' = 'failure'; 'app-selftest (win-arm64) 3/3' = 'cancelled' }), (Run 'sha102' 102))) 'sha103'
 Check 'a red sharded x64 self-test is not waived' (Pick @((Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-x64) 2/3' = 'failure' }), (Run 'sha102' 102))) 'sha102'
 Check 'the notice names a sharded Arm64 self-test that was red' ((Format-WaivedNotice (Run 'sha103' 103 -fullConclusion failure -fullMore @{ 'app-selftest (win-arm64) 2/3' = 'failure' })) -match 'app-selftest \(win-arm64\) 2/3: failure') $true
@@ -184,16 +184,39 @@ foreach ($v in "True", "TRUE", " true", "true ", "yes", "1") { Check "signing $v
 foreach ($v in "false", "False", " FALSE ", $null) { Check "signing $v may publish" (Signed $v) "published" }
 
 # What the train's pick job hands its other jobs (S2, #4104): the commit, the version (0.1.<the FAST run's number>), the FAST run's id and number, the FULL run's
-# id (where the packages, SBOMs and installer input are: the FAST run builds none of them) and the waived-Arm64 notice for the publish summary. One line each.
-$pick = [pscustomobject]@{ Id = 4101; Sha = 'sha103'; Number = 103; Version = '0.1.103'; Full = [pscustomobject]@{ Id = 4202; Conclusion = 'success'; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'failure'; 'app-selftest (win-arm64)' = 'success' }; ArtifactsUnexpired = $true } }
-$lines = @(Get-PickOutputs $pick)
-Check 'pick outputs: the commit, the version and the FAST run' ($lines[0..3] -join '|') 'sha=sha103|version=0.1.103|run=4101|number=103'
+# id (where the packages, SBOMs and installer inputs are: the FAST run builds none of them, so a download from its id finds nothing) and the waived-Arm64 notice
+# for the publish summary. One line each. The train appends them to GITHUB_OUTPUT as written and uses them to pick the commit it publishes, so a value that is not
+# plainly what it should be (a newline, "::", a stray space) is refused, never handed on.
+$sha40 = 'a' * 40
+function PickRun([hashtable]$over = @{}) {
+    $run = [ordered]@{ Id = 4101; Sha = $sha40; Number = 103; Version = '0.1.103'; Full = [pscustomobject]@{ Id = 4202; Conclusion = 'success'; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'failure'; 'app-selftest (win-arm64)' = 'success' }; ArtifactsUnexpired = $true } }
+    foreach ($key in $over.Keys) { $run[$key] = $over[$key] }
+    [pscustomobject]$run
+}
+function Refused($run) { try { Get-PickOutputs $run | Out-Null; $false } catch { $true } }
+function RefusedAll([string]$field, [object[]]$values) { @($values | Where-Object { Refused (PickRun @{ $field = $_ }) }).Count -eq $values.Count }
+$lines = @(Get-PickOutputs (PickRun))
+Check 'pick outputs: the commit, the version and the FAST run' ($lines[0..3] -join '|') "sha=$sha40|version=0.1.103|run=4101|number=103"
 Check 'pick outputs: the FULL run id, where the packages are' $lines[4] 'full-run=4202'
 Check 'pick outputs: the waived Arm64 result is named for the summary' ($lines[5] -match '^waived=Arm64 checks waived for this release, which was published: .*app-installer \(win-arm64\): failure') $true
-Check 'pick outputs: one line each, nothing multi-line to quote' (@($lines | Where-Object { $_ -match "[`r`n]" }).Count) 0
-$clean = [pscustomobject]@{ Id = 1; Sha = 's'; Number = 5; Version = '0.1.5'; Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'success'; 'app-selftest (win-arm64)' = 'success' } } }
+Check 'pick outputs: every line is plain printable text, with no control character and no ::' (@($lines | Where-Object { $_ -cmatch '[^ -~]' -or $_.Contains('::') }).Count) 0
+Check 'pick outputs: a sharded Arm64 self-test and an installer that did not run are named, and pass' (@(Get-PickOutputs (PickRun @{ Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'full-gate' = 'success'; 'app-selftest (win-arm64) 2/3' = 'failure' } } }))[5] -match 'app-installer \(win-arm64\): not run' -and @(Get-PickOutputs (PickRun @{ Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'full-gate' = 'success'; 'app-selftest (win-arm64) 2/3' = 'failure' } } }))[5] -match 'app-selftest \(win-arm64\) 2/3: failure') $true
+$clean = PickRun @{ Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'full-gate' = 'success'; 'app-installer (win-arm64)' = 'success'; 'app-selftest (win-arm64)' = 'success' } } }
 Check 'pick outputs: nothing waived is an empty notice' (@(Get-PickOutputs $clean)[5]) 'waived='
-$threw = $false; try { Get-PickOutputs ([pscustomobject]@{ Id = 1; Sha = 's'; Number = 5; Version = '0.1.5'; Full = $null }) | Out-Null } catch { $threw = $true }
-Check 'pick outputs: a pick with no FULL run id is an error, never a guess' $threw $true
+Check 'pick outputs: a pick with no FULL run id is an error, never a guess' (Refused (PickRun @{ Full = $null })) $true
+# One rule at a time, each with the values that would otherwise be accepted.
+Check 'rule: the sha is exactly 40 lowercase hex characters' (RefusedAll 'Sha' @('sha103', ('a' * 39), ('a' * 41), ('A' * 40), ($sha40 + "`n"), ($sha40.Substring(0, 39) + "`nsha=evil"), ($sha40 + ' '), '')) $true
+Check 'rule: the version is digits.digits.digits' (RefusedAll 'Version' @('', '0.1', '0.1.x', 'v0.1.103', ' ', '0.1.103 ', "0.1.103`n", "0.1.103`nsha=evil", '0.1.103.4')) $true
+Check 'rule: the FAST run id is digits only' (RefusedAll 'Id' @('', ' ', 'abc', '-1', '41.01', "4101`nsha=evil", "4101`n", ([string][char]0x0664 + [char]0x0661))) $true
+Check 'rule: the FAST run number is digits only' (RefusedAll 'Number' @('', ' ', 'abc', '-1', "103`nsha=evil", "103`n", '10 3')) $true
+Check 'rule: the FULL run id is digits only' (@(@('', ' ', 'abc', '-1', "4202`nsha=evil", "4202`n", ([string][char]0x0664 + [char]0x0661)) | Where-Object { Refused (PickRun @{ Full = [pscustomobject]@{ Id = $_; AllJobs = @{} } }) }).Count) 7
+Check 'rule: a waived result is one of GitHub''s words, never a line or a ::' (@(@("failure`nsha=evil", 'x::y', 'FAILURE', ' ', 'oops') | Where-Object { Refused (PickRun @{ Full = [pscustomobject]@{ Id = 9; AllJobs = @{ 'app-installer (win-arm64)' = $_ } } }) }).Count) 5
+Check 'rule: a waived name is the closed list EXACTLY, so a prefix, a suffix or a newline is not waived and never reaches the notice' (@(@("app-selftest (win-arm64)x", "app-selftest (win-arm64)`nsha=evil", "app-selftest (win-arm64)`n", 'app-selftest (win-arm64) 2/', 'app-selftest (win-arm64) a/3', 'xapp-installer (win-arm64)') | Where-Object { Test-ArmWaived $_ }).Count) 0
+Check 'rule: such a name stays a red job (not waived), and the notice never carries it' ((@(Get-PickOutputs (PickRun @{ Full = [pscustomobject]@{ Id = 9; AllJobs = @{ "app-selftest (win-arm64)`nsha=evil" = 'failure' } } }))[5]) -notmatch 'evil') $true
+Check 'rule: the real waived names are waived (the self-test with or without a shard, the installer, the Arm64 tests)' @(@('app-selftest (win-arm64)', 'app-selftest (win-arm64) 2/3', 'app-installer (win-arm64)', 'product (windows-11-arm)') | Where-Object { -not (Test-ArmWaived $_) }).Count 0
+# The owner's Arm64 conditions: the Arm64 PACK is required; what runs the app (its self-test, its installer) and its tests are waived. The pre-split app job (pack and self-test in one) is not.
+Check 'owner conditions: the pre-split Arm64 app job is not waived (it holds the pack)' (Test-ArmWaived 'app (win-arm64)') $false
+Check 'owner conditions: a red pre-split Arm64 app job in a FULL run blocks the pick' (Pick @((Run 'sha103' 103 -fullMore @{ 'app (win-arm64)' = 'failure' }), (Run 'sha102' 102))) 'sha102'
+Check 'owner conditions: the Arm64 pack is never waived' (Test-ArmWaived 'app-pack (win-arm64)') $false
 if ($failures) { Write-Host "$failures failed"; exit 1 }
 Write-Host 'all passed'

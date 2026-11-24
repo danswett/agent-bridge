@@ -869,7 +869,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   starts the app, so it is the Arm64 self-test; #4159), **but never silently**: the train's publish summary carries a notice listing every waived Arm64 result
   (`Format-WaivedNotice`), and `full-red.yml`'s alert (to be written) opens for a red Arm64 job too while publish continues. **x64 stays strict:** its self-test,
   pack, installer and SBOM are each required, and an absent, skipped or cancelled x64 job is no pass. The Arm64 package is never optional,
-  and the packages, both SBOMs (the Arm64 one is what attestation needs) and both installer inputs (the train's verify downloads them) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
+  and the packages, both SBOMs (the Arm64 one is what attestation needs) and both installer inputs (the train's verify downloads them; they are kept 7 days, the packages and SBOMs 30, so the train must run within 7 days of the FULL run) must be the FAST run's number, **never FULL's own run number**. FULL's run is found by the
   commit's `head_sha`, never by branch. `publish` is the train's, not `ci.yml`'s. Until the train publishes by itself, "Releases and updates" in docs/app-windows.md
   describes what runs.
 * **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
