@@ -1870,20 +1870,21 @@ public class MergeRuleTests
         Assert.Contains(Sha(8)[..7], posted, StringComparison.Ordinal);
     }
 
-    // P2-2: from reliance_record_from on, a missing record is an error (the annotation may not have landed); an older run relied on none.
+    // P2-2: from the cutoff on, a missing plan-base record is an error (the annotation may not have landed); an older run relied on none.
+    // Main's real config sets the cutoff to when #3944 (the record's emitter) merged, so a run after it is held to the record.
     [Theory]
-    [InlineData(-60, " error merge-rule ")]
-    [InlineData(-10, " success merge-rule ")]
-    public void A_run_after_the_record_began_with_no_record_is_an_error_but_an_older_run_relied_on_none(int cutoffMinutesFromNow, string expected)
+    [InlineData(-30, " success merge-rule ")]
+    [InlineData(10, " error merge-rule ")]
+    public void A_run_after_3944_merged_with_no_record_is_an_error_but_an_older_run_relied_on_none(int minutesFromCutoff, string expected)
     {
-        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
-        var from = MainNow.AddMinutes(cutoffMinutesFromNow).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+        var from = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml")).MainGreen.RelianceRecordFrom;
+        Assert.Equal("2026-11-24T18:34:48Z", from);
+        var cutoff = DateTimeOffset.Parse(from!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
 
-        var (posted, _) = JudgeMain(runs, new Dictionary<long, string>(), recordFrom: from);
+        var (posted, _) = JudgeMain(MainRunsAged(cutoff.AddMinutes(minutesFromCutoff + 20), (8, "completed", "success", 1, 20)), new Dictionary<long, string>(), recordFrom: from);
 
         Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
     }
-
     [Fact]
     public void Two_plan_base_records_on_one_run_are_an_error()
     {
@@ -1893,18 +1894,6 @@ public class MergeRuleTests
         var (posted, _) = JudgeMain(runs, new Dictionary<long, string>(), annotations: JsonSerializer.Serialize(new[] { one, one }));
 
         Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
-    }
-
-    // The raw record text reaches the log: its control characters are shown as escapes and its length is capped, so it can't add a workflow command.
-    [Fact]
-    public void An_unreadable_record_is_shown_escaped_and_cut_short_in_the_log()
-    {
-        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
-
-        var (_, output) = Relied(runs, (8, "base=x\n::error::boom" + new string('a', 200)));
-
-        Assert.Contains("unreadable plan-base record 'base=x\\u000a::error::boom", output, StringComparison.Ordinal);
-        Assert.DoesNotContain(new string('a', 100), output, StringComparison.Ordinal);
     }
 
     // The depth cap: a chain of 20 relied-on parents is read to its end; a 21st is a chain too deep to trust, so main is red, never a pass.
@@ -1924,18 +1913,19 @@ public class MergeRuleTests
         if (runCount > 21) Assert.Contains("deeper than 20", posted, StringComparison.Ordinal);
     }
 
-    // A record that is not in the shape is an error, like unreadable jobs: never a guess that the run relied on nothing.
+    // A record that is not in the shape is an error, never a guess that the run relied on nothing. Its raw text reaches the log, so
+    // its control characters are shown as escapes and its length is capped: it can't add a workflow command.
     [Fact]
-    public void A_plan_record_that_is_not_in_the_shape_is_an_error()
+    public void A_plan_record_that_is_not_in_the_shape_is_an_error_shown_escaped_and_cut_short()
     {
         var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
 
-        var (posted, _) = Relied(runs, (8, "base=not-a-sha relied-parent=none"), (7, RelyNone));
+        var (posted, output) = Relied(runs, (8, "base=x\n::error::boom" + new string('a', 200)), (7, RelyNone));
 
         Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
-        Assert.DoesNotContain(" success merge-rule ", posted, StringComparison.Ordinal);
+        Assert.Contains("unreadable plan-base record 'base=x\\u000a::error::boom", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('a', 100), output, StringComparison.Ordinal);
     }
-
     // The parent has a run on its sha, but main's recent history (the window the judge reads) does not hold it: it cannot be judged, so it is red.
     [Fact]
     public void A_parent_that_is_not_in_mains_recent_runs_is_red()
@@ -2693,7 +2683,7 @@ public class MergeRuleTests
     [InlineData("family-skipped", "failure")]
     public void A_selective_main_run_requires_product_but_not_unselected_product_runners(string scenario, string state)
     {
-        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var config = RealConfigWithoutRecordCutoff();
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         object Entry(string name, string conclusion) =>
             new { id = 1, name, status = "completed", conclusion, run_attempt = 1 };
@@ -3188,7 +3178,7 @@ public class MergeRuleTests
     [InlineData("wrong-job", "failure")]
     public void Main_classifies_infra_per_job_and_flags_only_one_rerun(string scenario, string state)
     {
-        var config = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml");
+        var config = RealConfigWithoutRecordCutoff();
         var required = MergeRuleConfig.Load(config).MainGreen.Jobs;
         // A blocking shard: pwa-ui's WebKit shards are post-merge in the catalog beside these rules.
         var target = scenario is "product-infra" or "build-failure" or "prior-test-failure" || scenario.EndsWith("then-cancelled", StringComparison.Ordinal) ? "product (ubuntu-latest)"
@@ -3374,6 +3364,13 @@ public class MergeRuleTests
         finally { File.Delete(config); }
     }
 
+    // The real config, for its job names, minus its plan-base record cutoff: the fixtures that read it carry no run dates and no records.
+    static string RealConfigWithoutRecordCutoff()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
+        File.WriteAllLines(path, File.ReadAllLines(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml")).Where(l => !l.Contains("reliance_record_from", StringComparison.Ordinal)));
+        return path;
+    }
     static string WriteConfig(bool arm64Waiver = false, string? recordFrom = null)
     {
         var path = Path.Combine(AppContext.BaseDirectory, $"merge-rule-{Guid.NewGuid():N}.yml");
