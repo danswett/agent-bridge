@@ -117,9 +117,12 @@ for (const [name, viewport] of [['on a phone', { width: 390, height: 844 }], ['f
       await wheel(page, v, -Math.round((await client(v)) * 3));
       await expect(pill(v)).toBeVisible();
       await v.locator('form.reply').getByRole('textbox', { name: 'Reply' }).fill('Sent from far up');
+      await recordScrolls(v);
       await v.locator('form.reply').getByRole('button', { name: 'Send' }).click();
       await expect.poll(() => gap(v)).toBeLessThan(4);
       await expect(pane(v).getByText('Sent from far up')).toBeVisible();
+      // At once, not smooth: typing straight after Send would otherwise take a smooth scroll over, short of the end.
+      expect(await page.evaluate(() => window.__scrolls)).toMatchObject([{ behavior: 'auto' }]);
     });
 
     test('chosen from the keyboard, focus rests on the conversation, where the keys scroll it', async ({ page }) => {
