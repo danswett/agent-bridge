@@ -172,6 +172,7 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
         var beside = true;
         foreach (var (folder, sddl) in chain)
         {
+            // Additions are refused only in the folder holding the file (lead-approved): adding higher up puts nothing beside the program, and a parent's delete-child, delete and re-permission are still checked.
             if (TaskAccess.Unchangeable(sddl, folder, folder && beside) != true) { return false; }
             if (folder) { beside = false; }
         }

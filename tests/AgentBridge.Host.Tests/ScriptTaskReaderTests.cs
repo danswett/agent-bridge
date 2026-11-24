@@ -244,6 +244,11 @@ public class ScriptTaskReaderTests
 
         Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Adds(me)), (true, Readonly(me))]));
         Assert.True(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, Adds(me))]));
+        // A parent that takes only a subfolder does not refuse; the same parent with delete-child does.
+        string AddsSubfolderOnly(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;0x4;;;{who})";
+        string DeletesChild(string who) => $"O:SYG:SYD:(A;;FA;;;SY)(A;;0x40;;;{who})";
+        Assert.True(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, AddsSubfolderOnly(me))]));
+        Assert.False(WindowsScriptTaskReader.AllLocked([(false, Readonly(me)), (true, Readonly(me)), (true, DeletesChild(me))]));
     }
 
     [Fact]
