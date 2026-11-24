@@ -59,6 +59,28 @@ test('id-less streaming updates stay in one part', async (t) => {
   assert.equal(currentReply(store.get('h', ID), last), 'Partial answer');
 });
 
+// #4245: the host sends no id for a reply it cannot identify (after a gap, a long turn or an unreadable line); two such replies in a row were one
+// live slot, so the second rewrote the first. An id-less reply is an update only of a reply it continues.
+test('two id-less replies that do not continue each other are two parts, and the second still grows in place', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession(null, 'First reply.'));
+  store.live('h', saySession(null, 'Second reply, after the tools.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools.']);
+  store.live('h', saySession(null, 'Second reply, after the tools. And a little more.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply, after the tools. And a little more.']);
+  assert.equal(new Set(shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.id)).size, 2);
+});
+
+test('a truncated id-less reply that grows with its start cut is still one part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  const full = Array.from({ length: 30 }, (_, i) => `sentence number ${String(i).padStart(2, '0')}. `).join('');
+  const grown = (text) => readSession({ id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), response: text, responseTruncated: true, userMessage: 'Question' } });
+  store.live('h', grown(full.slice(0, 400).slice(40)));
+  store.live('h', grown(full.slice(0, 460).slice(100)));
+  assert.deepEqual(replyTexts(store), [full.slice(0, 460).slice(100)]);
+});
 test('the same id updates one part', async (t) => {
   const { store } = await setup(t);
   await store.open('h', ID);

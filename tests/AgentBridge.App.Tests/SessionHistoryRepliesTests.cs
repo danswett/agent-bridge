@@ -82,6 +82,52 @@ public sealed class SessionHistoryRepliesTests
         Assert.Equal(["Partial answer"], Replies(history));
     }
 
+    // #4245: the host sends no id for a reply it cannot identify (after a gap, a long turn or an unreadable line), and two such replies in a row were
+    // one live slot: the second rewrote the first and the owner lost a reply he had read. An id-less reply is an update only of a reply it continues.
+    [Fact]
+    public async Task Two_id_less_replies_that_do_not_continue_each_other_are_two_parts_and_the_second_still_grows_in_place()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said(null, "First reply."));
+        history.Observe(Said(null, "Second reply, after the tools."));
+        Assert.Equal(["First reply.", "Second reply, after the tools."], Replies(history));
+        history.Observe(Said(null, "Second reply, after the tools. And a little more."));
+        Assert.Equal(["First reply.", "Second reply, after the tools. And a little more."], Replies(history));
+        Assert.Equal(2, history.Turns.Single().Parts.Select(p => p.Id).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task A_truncated_id_less_reply_that_grows_with_its_start_cut_is_still_one_part()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        string Cut(string text, int skip) => text[skip..];
+        var full = string.Concat(Enumerable.Range(0, 30).Select(i => $"sentence number {i:D2}. "));
+        Session Grown(string text) => Said(null, text) with { Activity = Said(null, text).Activity with { ResponseTruncated = true } };
+        history.Observe(Grown(Cut(full[..400], 40)));
+        history.Observe(Grown(Cut(full[..460], 100)));
+        Assert.Single(Replies(history));
+        Assert.Equal(Cut(full[..460], 100), Replies(history)[0]);
+    }
+
+    [Fact]
+    public async Task A_page_that_stores_both_id_less_replies_keeps_each_once_under_its_own_id()
+    {
+        await using var host = Serving(() => 0);
+        var history = await OpenAsync(host);
+        history.Observe(Said(null, "First reply."));
+        history.Observe(Said(null, "Second reply, after the tools."));
+        host.On(HistoryProtocol.Op, (JsonElement d) => new HistoryResult
+        {
+            Turns = [new HistoryTurn { Id = "t1", At = T0, Prompt = new HistoryPrompt { Text = "Question" }, Parts = [
+                new HistoryPart { Id = "a", Kind = HistoryPartKind.Response, Text = "First reply.", At = T0 },
+                new HistoryPart { Id = "b", Kind = HistoryPartKind.Response, Text = "Second reply, after the tools.", At = T0.AddSeconds(1) }] }],
+            Start = new HistoryStart { At = T0 },
+        });
+        await history.LoadNewestAsync();
+        Assert.Equal(["a", "b"], history.Turns.Single(t => t.Id == "t1").Parts.Where(p => p.Kind == HistoryPartKind.Response).Select(p => p.Id));
+    }
     [Fact]
     public async Task The_same_id_updates_one_part()
     {
