@@ -12,7 +12,16 @@ internal enum ShardRun
     Filtered,
 }
 
-internal sealed record ShardChoice(ShardRun Run, string? Filter = null);
+// What a shard job runs. An empty filter is no filter to `dotnet test`, which would run every test (Quality, #4320): a filtered
+// choice with nothing to filter by is skipped (None), whoever builds it, never run.
+internal sealed record ShardChoice
+{
+    public ShardChoice(ShardRun run, string? filter = null) =>
+        (Run, Filter) = run == ShardRun.Filtered && string.IsNullOrWhiteSpace(filter) ? (ShardRun.None, null) : (run, filter);
+
+    public ShardRun Run { get; }
+    public string? Filter { get; }
+}
 
 /// <summary>
 /// <c>quality/test-shards.json</c> (S4, #4104): what each test shard job runs. Shards 1 to N-1 LIST their classes, per project; shard N is the
@@ -91,10 +100,11 @@ internal sealed class ShardPlanFile
                     if (!owner.TryAdd(name, i + 1)) { throw new ArgumentException($"In {project}, class {name} is listed in shards {owner[name]} and {i + 1}."); }
                 }
             }
-            // "X." also matches "FakeX.": two such classes in different shards would both run in both.
+            // "X." also matches "FakeX.", and VSTest's ~ ignores case ("Ns.ATests." is inside "Ns.aTests."): two such classes in
+            // different shards would both run in both.
             foreach (var x in owner)
             {
-                foreach (var y in owner.Where(y => y.Value != x.Value && (y.Key + ".").Contains(x.Key + ".", StringComparison.Ordinal)))
+                foreach (var y in owner.Where(y => y.Value != x.Value && (y.Key + ".").Contains(x.Key + ".", StringComparison.OrdinalIgnoreCase)))
                     throw new ArgumentException($"In {project}, class {y.Key} (shard {y.Value}) matches the tests of {x.Key} (shard {x.Value}) and would run twice.");
             }
         }

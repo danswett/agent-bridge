@@ -9,7 +9,7 @@ namespace AgentBridge.App.Core;
 /// was working on than a full dump (a stack can still hold a value in a local: the dump stays in the owner's own data folder and goes nowhere).
 /// Written to <c>%LOCALAPPDATA%\AgentBridge\dumps</c> as <c>AgentBridge-hang-yyyyMMdd-HHmmss-pid.dmp</c>; only the newest three are kept.
 /// </summary>
-public sealed class WindowsMiniDump(string folder, TimeProvider time, int keep = 3, Func<long>? freeBytes = null) : IHangDumpWriter
+public sealed class WindowsMiniDump(string folder, TimeProvider time, int keep = 3, Func<long>? freeBytes = null, Func<Process, SafeFileHandle, bool>? dump = null) : IHangDumpWriter
 {
     const int MiniDumpNormal = 0x00000000;
     const string Prefix = "AgentBridge-hang-";
@@ -20,6 +20,10 @@ public sealed class WindowsMiniDump(string folder, TimeProvider time, int keep =
     [DllImport("dbghelp.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool MiniDumpWriteDump(IntPtr process, uint processId, SafeFileHandle file, int dumpType, IntPtr exception, IntPtr user, IntPtr callback);
+
+    // The dump itself, which a test replaces: dumping the process that is running the tests can deadlock with its other threads (#4351).
+    internal static bool Native(Process process, SafeFileHandle file) =>
+        MiniDumpWriteDump(process.Handle, (uint)process.Id, file, MiniDumpNormal, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
 
     public string? Write()
     {
@@ -32,7 +36,7 @@ public sealed class WindowsMiniDump(string folder, TimeProvider time, int keep =
         bool written;
         using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
-            written = MiniDumpWriteDump(process.Handle, (uint)process.Id, file.SafeFileHandle, MiniDumpNormal, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+            written = (dump ?? Native)(process, file.SafeFileHandle);
         }
         if (!written)
         {

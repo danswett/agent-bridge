@@ -20,9 +20,9 @@ public static class FleetLaunchCommands
         public string Action => "launch";
         public string Time => DateTime.UtcNow.ToString("O");
     }
-    static readonly string[] Reasons = ["grant-missing", "grant-expired", "grant-revoked", "grant-exhausted", "scope",
+    internal static readonly string[] Reasons = ["grant-missing", "grant-expired", "grant-revoked", "grant-exhausted", "scope",
         "name-gate", "duplicate-id", "duplicate-store-full", "target-offline", "kill-switch", "peer-not-trusted",
-        "person-required", "audit-unavailable", "policy", "bad-argument", "unavailable"];
+        "person-required", "audit-unavailable", "policy", "bad-argument", "unavailable", "diskLow"];
 
     public static Task<int> RunAsync(IReadOnlyList<string> args, string root, TextWriter output, TextWriter error) =>
         RunAsync(args, root, output, error, Environment.GetEnvironmentVariable("AGENT_BRIDGE_TOKEN"), null, Console.In);

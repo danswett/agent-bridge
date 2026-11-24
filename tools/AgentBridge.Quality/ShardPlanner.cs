@@ -3,11 +3,15 @@ namespace AgentBridge.Quality;
 /// <summary>
 /// The product job's test shards (S4, #4104): which test classes each shard runs. A shard is a VSTest filter of
 /// <c>FullyQualifiedName~Class.</c> terms, one per class. Two things must hold or a test is dropped or run twice: every class is in exactly one
-/// shard, and a term matches only its own shard's tests. A term "X." also matches "FakeX." (containment), so classes like that are one unit and travel together.
+/// shard, and a term matches only its own shard's tests. A term "X." also matches "FakeX." (containment), and VSTest's contains IGNORES CASE ("Foo.ATests." is inside "Foo.aTests."),
+/// so classes like that are one unit and travel together; the grouping and the simulation here compare with OrdinalIgnoreCase for that reason. Sorting stays ordinal.
 /// </summary>
 internal sealed record ShardPlan(IReadOnlyList<IReadOnlyList<string>> Shards)
 {
-    /// <summary>The <c>dotnet test --filter</c> for one shard: sorted terms joined by <c>|</c>, empty for a shard with no classes.</summary>
+    /// <summary>
+    /// The <c>dotnet test --filter</c> for one shard: sorted terms joined by <c>|</c>. A shard with no classes gives EMPTY text, and <c>dotnet test --filter ""</c> means NO filter, so it
+    /// would run the whole project: the caller must skip an empty shard, never pass its filter on.
+    /// </summary>
     public string Filter(int index) =>
         string.Join('|', Shards[index].Order(StringComparer.Ordinal).Select(c => $"FullyQualifiedName~{c}."));
 
@@ -16,7 +20,7 @@ internal sealed record ShardPlan(IReadOnlyList<IReadOnlyList<string>> Shards)
     {
         for (var i = 0; i < Shards.Count; i++)
         {
-            if (Shards[i].Any(c => testFullName.Contains(c + ".", StringComparison.Ordinal))) { yield return i; }
+            if (Shards[i].Any(c => testFullName.Contains(c + ".", StringComparison.OrdinalIgnoreCase))) { yield return i; }
         }
     }
 }
@@ -58,7 +62,7 @@ internal static class ShardPlanner
         {
             foreach (var y in names)
             {
-                if (x != y && (y + ".").Contains(x + ".", StringComparison.Ordinal))
+                if (x != y && (y + ".").Contains(x + ".", StringComparison.OrdinalIgnoreCase))
                 {
                     var (a, b) = (Find(x), Find(y));
                     if (a != b) { parent[string.CompareOrdinal(a, b) < 0 ? b : a] = string.CompareOrdinal(a, b) < 0 ? a : b; }

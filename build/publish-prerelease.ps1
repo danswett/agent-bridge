@@ -12,6 +12,12 @@
 # higher version over it (#4104). A dry run needs no -MainHead. -MainRepo is no longer read; it is
 # accepted so CI's call stays valid until ci.yml stops passing it.
 #
+# Releases are spaced (owner decision, release-spacing.ps1): a run publishes only once the newest
+# published release is 15 minutes old. A run inside that, or one that can't read the releases'
+# times, publishes nothing and says deferred=true; never dropped, publish-pending.ps1 re-runs it
+# once the window opens. -SkipSpacing -SkipSpacingReason <why> is the critical-fix override, CI's
+# critical-release dispatch, used only by Quality on an owner or Chief call; every other check holds.
+#
 # Each folder is one Velopack channel, read from the assets.<channel>.json vpk pack wrote there:
 # x64's `win`, the channel every copy installed before Arm64 builds reads, and Arm64's
 # `win-arm64` (build/app-channels.ps1). A release carries both, so publishing needs both.
@@ -37,14 +43,20 @@ param(
     [string]$MainRepo,
     [switch]$DryRun,
     [switch]$RequireSignature,
-    [string]$SignerEku
+    [string]$SignerEku,
+    [switch]$SkipSpacing,
+    [string]$SkipSpacingReason
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $DryRun -and $MainHead -cnotmatch '^[0-9a-f]{40}$') {
     throw "publishing needs -MainHead, main's head commit ('$MainHead')"
 }
+# The override is logged with who ran it and why, in the run and the release notes, on one line.
+$SkipSpacingReason = ($SkipSpacingReason -replace '\p{C}+', ' ').Trim()
+if ($SkipSpacing -and -not $SkipSpacingReason) { throw '-SkipSpacing needs -SkipSpacingReason: why this critical fix may not wait' }
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+. (Join-Path $PSScriptRoot 'release-spacing.ps1')
 if ($RequireSignature) {
     . (Join-Path $PSScriptRoot 'app-signing.ps1')
     Assert-AppSignerEku $SignerEku
@@ -88,7 +100,7 @@ function Invoke-GhRetry {
 }
 
 function Get-Release {
-    @(Invoke-GhRetry api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease}' |
+    @(Invoke-GhRetry api "repos/$Repository/releases?per_page=100" --paginate --jq '.[] | {id, tag_name, draft, prerelease, published_at}' |
             Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
 }
 
@@ -229,6 +241,30 @@ if ($publishing -and -not $DryRun -and $MainHead -cne $Commit) {
     # the publish job read it under this lock; anything that can't be read or isn't stops.
     $tail = [string](Invoke-Gh api "repos/$Repository/compare/$Commit...$MainHead" --jq '.status')
     if ($tail -cne 'ahead') { throw "main's head $MainHead doesn't follow $Commit (compare: '$tail'); not publishing $tag" }
+}
+# --- Spacing, last, so it only ever holds a run that would otherwise publish. Read under the publish
+# lock: the newest release, of any version or kind, that installed copies can see. A deferred run
+# leaves nothing behind, and main's next run plans from the latest release (ci.yml's release debt),
+# so this commit's changes go out with the next run that passes, or with this run's re-run.
+$spacingNote = $null
+if ($publishing -and -not $DryRun) {
+    $why = $null
+    try { $newest = Get-NewestRelease $releases ([DateTimeOffset](Get-Date)) }
+    catch { $why = "$($_.Exception.Message), so the release spacing can't be checked" }
+    if (-not $why -and $newest -and $newest.Age -lt $ReleaseSpacing) {
+        $why = "$($newest.Tag) was published $('{0:N1}' -f $newest.Age.TotalMinutes) minutes ago, under the owner's 15-minute release spacing"
+    }
+    if ($why -and $SkipSpacing) {
+        $by = if ($env:GITHUB_ACTOR) { " by $env:GITHUB_ACTOR" } else { '' }
+        Write-Plan -Warn "publishing $tag as a critical fix: $why (-SkipSpacing$by`: $SkipSpacingReason)"
+        $spacingNote = "Published as a critical fix inside the 15-minute release spacing (manual override$by): $SkipSpacingReason"
+    } elseif ($why) {
+        # Never dropped: publish-pending.ps1 re-runs this publish once the newest release is 15
+        # minutes old, unless a later run of main's has published first.
+        Write-Plan -Warn "$tag waits: $why; publish-pending.ps1 re-runs this publish once it may go out"
+        $publishing = $false
+        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'deferred=true' }
+    }
 }
 
 function Test-Delta($b, [string]$basePath) {
@@ -379,6 +415,7 @@ if ($publishing) {
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
         $notes = @(
             "Pre-release of the $AppProductName Windows app and host, built from main at $Commit$run."
+            $(if ($spacingNote) { ''; $spacingNote })
             ''
             $changeNotes
             ''

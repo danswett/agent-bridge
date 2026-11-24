@@ -201,4 +201,31 @@ Describe 'Wake watcher restart progress' {
         ($out -join "`n") | Should -Match 'WAKE comment .*issuecomment-1 '
         $global:WakeWatchFixture.ackBeforeWake | Should -BeFalse
     }
+    # #1109: a watcher started as a blocking shell call holds its session, unable to read messages, for the whole run. Without -Async the
+    # run is capped at one minute and says so; with -Async the requested length is kept. The fixture clock moves 10 s per read.
+    It 'caps a run without -Async at one minute and says to run it async' {
+        $out = (& $watcher -Team watch-test -MaxMinutes 120 -CommentSeconds 0 6>&1) -join "`n"
+
+        $out | Should -Match 'run me async'
+        $out | Should -Match 'WAKE timeout after 1 min'
+        $out | Should -Match 'not async'
+        $global:WakeWatchFixture.calls.Count | Should -BeLessThan 40
+    }
+
+    It 'keeps the requested length with -Async and prints nothing about a cap' {
+        $out = (& $watcher -Team watch-test -MaxMinutes 3 -Async -CommentSeconds 0 6>&1) -join "`n"
+
+        $out | Should -Match 'WAKE timeout after 3 min'
+        $out | Should -Not -Match 'run me async'
+        $out | Should -Not -Match 'not async'
+    }
+
+    It 'leaves a run that already fits in one minute alone, with or without -Async' {
+        foreach ($options in @{}, @{ Async = $true }) {
+            $out = (& $watcher -Team watch-test -MaxMinutes 1 -CommentSeconds 0 @options 6>&1) -join "`n"
+
+            $out | Should -Match 'WAKE timeout after 1 min'
+            $out | Should -Not -Match 'run me async'
+        }
+    }
 }

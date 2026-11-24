@@ -148,7 +148,8 @@ static class Program
             return 0;
         }
         var choice = plan.For(Need("project"), int.Parse(Need("shard"), System.Globalization.CultureInfo.InvariantCulture));
-        output.WriteLine(choice.Run switch { ShardRun.None => "none", ShardRun.All => "all", _ => choice.Filter });
+        // Never an empty line: a shard job given one would run every test (ShardChoice already makes it None).
+        output.WriteLine(choice.Run switch { ShardRun.None => "none", ShardRun.All => "all", _ => string.IsNullOrWhiteSpace(choice.Filter) ? "none" : choice.Filter });
         return 0;
     }
 

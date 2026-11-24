@@ -2,8 +2,12 @@ using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Launch;
 using Xunit;
 
+// Each test needs a repository and a detached host worktree of it. Making them with git took four git processes a test (about a
+// hundred a run), and on the loaded windows-latest hunt one of them took over Git.Run's 30 s now and then ("git init did not finish
+// in time", #2733, #4236, #4237). The pair is made once per class, with git, and copied for each test with no git process at all;
+// the copy is a real repository, so every check still runs against real git.
 [Trait("Category", "Process")]
-public sealed class AgentLaunchWorktreeCheckTests : IDisposable
+public sealed class AgentLaunchWorktreeCheckTests : IDisposable, IClassFixture<AgentLaunchWorktreeCheckTests.BaseRepository>
 {
     readonly string root = Directory.CreateTempSubdirectory("ab-agent-tree-").FullName;
     readonly string repository;
@@ -11,25 +15,75 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
     readonly WorktreeResult created;
     WorkspaceConfig Workspace => new("app", repository, true);
 
-    public AgentLaunchWorktreeCheckTests()
+    public AgentLaunchWorktreeCheckTests(BaseRepository baseline)
     {
-        repository = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
-        tree = Path.Combine(root, "tree");
-        Run(repository, "init", "-q", "-b", "main");
-        File.WriteAllText(Path.Combine(repository, "readme.txt"), "hello\n");
-        File.WriteAllText(Path.Combine(repository, ".gitignore"), "ignored\n");
-        Directory.CreateDirectory(Path.Combine(repository, "src"));
-        File.WriteAllText(Path.Combine(repository, "src", "app.txt"), "app\n");
-        Run(repository, "add", "readme.txt", ".gitignore", "src");
-        Run(repository, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "base");
-        Run(repository, "worktree", "add", "--detach", tree, "HEAD");
+        (repository, tree) = baseline.CopyTo(root);
         File.WriteAllText(Marker, DateTimeOffset.UtcNow.ToString("o"));
         created = new(tree, tree, null, "");
     }
 
-    string Marker => Path.Combine(Git.Run(tree, ["rev-parse", "--absolute-git-dir"]).Output.Trim(), Worktrees.Marker);
+    // The pair git made once for the whole class.
+    public sealed class BaseRepository : IDisposable
+    {
+        const string WorktreeName = "tree";
+        readonly string home = Directory.CreateTempSubdirectory("ab-agent-tree-base-").FullName;
+        string Repository => Path.Combine(home, "repo");
+        string Tree => Path.Combine(home, WorktreeName);
+
+        public BaseRepository()
+        {
+            Directory.CreateDirectory(Repository);
+            Run(Repository, "init", "-q", "-b", "main");
+            File.WriteAllText(Path.Combine(Repository, "readme.txt"), "hello\n");
+            File.WriteAllText(Path.Combine(Repository, ".gitignore"), "ignored\n");
+            Directory.CreateDirectory(Path.Combine(Repository, "src"));
+            File.WriteAllText(Path.Combine(Repository, "src", "app.txt"), "app\n");
+            Run(Repository, "add", "readme.txt", ".gitignore", "src");
+            Run(Repository, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "base");
+            Run(Repository, "worktree", "add", "--detach", Tree, "HEAD");
+        }
+
+        // A copy of the pair under destination, with the two files that name each other by absolute path pointed at the copy.
+        public (string Repository, string Tree) CopyTo(string destination)
+        {
+            var repository = Path.Combine(destination, "repo");
+            var tree = Path.Combine(destination, WorktreeName);
+            Copy(Repository, repository);
+            Copy(Tree, tree);
+            var admin = Path.Combine(repository, ".git", "worktrees", WorktreeName);
+            // git may mark these read-only; the copy keeps that, and they are about to be rewritten.
+            foreach (var file in new[] { Path.Combine(tree, ".git"), Path.Combine(admin, "gitdir") }) { File.SetAttributes(file, FileAttributes.Normal); }
+            File.WriteAllText(Path.Combine(tree, ".git"), $"gitdir: {admin.Replace('\\', '/')}\n");
+            File.WriteAllText(Path.Combine(admin, "gitdir"), $"{Path.Combine(tree, ".git").Replace('\\', '/')}\n");
+            return (repository, tree);
+        }
+
+        static void Copy(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+            foreach (var file in Directory.EnumerateFiles(from)) { File.Copy(file, Path.Combine(to, Path.GetFileName(file))); }
+            foreach (var folder in Directory.EnumerateDirectories(from)) { Copy(folder, Path.Combine(to, Path.GetFileName(folder))); }
+        }
+
+        public void Dispose() => Delete(home);
+    }
+
+    string Marker => Path.Combine(repository, ".git", "worktrees", "tree", Worktrees.Marker);
     string? Check(WorkspaceConfig? workspace = null, WorktreeResult? result = null, string agent = "claude") =>
         AgentLaunchWorktreeCheck.Check(workspace ?? Workspace, result ?? created, agent);
+
+    [Fact]
+    public void The_copy_is_a_real_clean_detached_worktree_of_its_own_repository_and_leaves_the_base_alone()
+    {
+        var common = Git.Run(tree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+        Assert.True(common.Ok, common.Said);
+        Assert.Equal(Path.GetFullPath(Path.Combine(repository, ".git")), Path.GetFullPath(common.Output.Trim()), ignoreCase: OperatingSystem.IsWindows());
+        Assert.Equal("", Git.Run(tree, ["status", "--porcelain", "--ignored"]).Output.Trim());
+        Assert.Equal("HEAD", Git.Run(tree, ["rev-parse", "--abbrev-ref", "HEAD"]).Output.Trim());
+        // A change in this copy is not in the next test's.
+        File.AppendAllText(Path.Combine(tree, "readme.txt"), "changed\n");
+        Assert.NotEqual("", Git.Run(tree, ["status", "--porcelain"]).Output.Trim());
+    }
 
     [Fact]
     public void A_clean_detached_host_worktree_of_the_approved_repository_is_accepted()
@@ -165,12 +219,14 @@ public sealed class AgentLaunchWorktreeCheckTests : IDisposable
         Assert.True(result.Ok, result.Said);
     }
 
-    public void Dispose()
+    static void Delete(string folder)
     {
-        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
         {
             File.SetAttributes(file, FileAttributes.Normal);
         }
-        Directory.Delete(root, true);
+        Directory.Delete(folder, true);
     }
+
+    public void Dispose() => Delete(root);
 }
