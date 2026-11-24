@@ -149,8 +149,10 @@ foreach ($runner in $runners) {
 }
 if ($refused) { throw "Refusing, nothing changed: .NET folders the runner account couldn't install to:`n  $($refused -join "`n  ")" }
 
-# All or nothing: every .env is read and written to <.env>.new first; only when every one is written are they moved
-# into place, and only then is any service restarted. A failure before the moves changes no .env.
+# All or nothing: every .env is read and written to <.env>.new first. Then every target is probed (it must open with
+# no one else holding it, not be read-only, not be a folder) and backed up to <.env>.bak, before any move. Only then
+# are they moved into place; a failed move puts back every .env already replaced (from its .bak, or removes it if it
+# didn't exist) and says exactly what it restored. Services restart only after every move succeeded.
 $plans = foreach ($runner in $runners) {
     $envFile = Join-Path $runner.FullName '.env'
     $keep = @()
@@ -164,18 +166,63 @@ $plans = foreach ($runner in $runners) {
         Lines = $keep + @("PATH=$($path -join ';')", "DOTNET_INSTALL_DIR=$($runner.InstallDir)", "AGENT_BRIDGE_NUGET_SOURCE=$Mirror", 'DOTNET_CLI_TELEMETRY_OPTOUT=1') }
 }
 $staged = @()
+function Remove-Staged([string[]]$Keep = @()) {
+    foreach ($p in $staged) {
+        # Files only: a folder in the way is someone else's, never deleted here.
+        if (Test-Path -LiteralPath "$($p.File).new" -PathType Leaf) { Remove-Item -LiteralPath "$($p.File).new" -Force -ErrorAction SilentlyContinue }
+        if ($p.File -notin $Keep -and (Test-Path -LiteralPath "$($p.File).bak" -PathType Leaf)) { Remove-Item -LiteralPath "$($p.File).bak" -Force -ErrorAction SilentlyContinue }
+    }
+}
+function Get-Reason($ErrorRecord) { $e = $ErrorRecord.Exception; while ($e.InnerException) { $e = $e.InnerException }; $e.Message }
 try {
     foreach ($plan in $plans) {
         if ($PSCmdlet.ShouldProcess($plan.File, "set PATH, DOTNET_INSTALL_DIR, AGENT_BRIDGE_NUGET_SOURCE and DOTNET_CLI_TELEMETRY_OPTOUT ($($plan.Keep) other line(s) kept)")) {
-            Set-Content -LiteralPath "$($plan.File).new" -Value $plan.Lines -Encoding utf8NoBOM
             $staged += $plan
+            Set-Content -LiteralPath "$($plan.File).new" -Value $plan.Lines -Encoding utf8NoBOM
         }
     }
 } catch {
-    foreach ($plan in $staged) { Remove-Item -LiteralPath "$($plan.File).new" -Force -ErrorAction SilentlyContinue }
-    throw "Refusing, nothing changed: a .env couldn't be written ($($_.Exception.Message))."
+    Remove-Staged
+    throw "Refusing, nothing changed: a .env couldn't be written ($(Get-Reason $_))."
 }
-foreach ($plan in $staged) { Move-Item -LiteralPath "$($plan.File).new" -Destination $plan.File -Force; Write-Host "Wrote $($plan.File)" }
+$blocked = @(foreach ($plan in $staged) {
+        if (-not (Test-Path -LiteralPath $plan.File)) { continue }
+        try {
+            ([IO.File]::Open($plan.File, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)).Dispose()
+            if ((Get-Item -LiteralPath $plan.File -Force).Attributes -band [IO.FileAttributes]::ReadOnly) { "$($plan.File) is read-only" }
+        } catch { "$($plan.File) can't be replaced: $(Get-Reason $_)" }
+    })
+if ($blocked) { Remove-Staged; throw "Refusing, nothing changed:`n  $($blocked -join "`n  ")" }
+try {
+    foreach ($plan in $staged) {
+        $plan | Add-Member Existed (Test-Path -LiteralPath $plan.File) -Force
+        if ($plan.Existed) { Copy-Item -LiteralPath $plan.File -Destination "$($plan.File).bak" -Force }
+    }
+} catch { Remove-Staged; throw "Refusing, nothing changed: a .env couldn't be backed up ($(Get-Reason $_))." }
+$moved = @()
+try {
+    foreach ($plan in $staged) {
+        # The seam can fail one move, so the restore below is tested.
+        if ($testMode -and $env:AGENT_BRIDGE_ABCI_TEST_FAIL_MOVE -eq $plan.Runner.Name) { throw "test: the move for runner $($plan.Runner.Name) fails" }
+        [IO.File]::Move("$($plan.File).new", $plan.File, $true)
+        $moved += $plan
+    }
+} catch {
+    $why = Get-Reason $_
+    $restored = @(); $lost = @()
+    foreach ($plan in $moved) {
+        try {
+            if ($plan.Existed) { Copy-Item -LiteralPath "$($plan.File).bak" -Destination $plan.File -Force; $restored += "$($plan.File) (from its .bak)" }
+            else { Remove-Item -LiteralPath $plan.File -Force; $restored += "$($plan.File) (removed: it didn't exist before)" }
+        } catch { $lost += $plan.File }
+    }
+    Remove-Staged -Keep $lost
+    $report = if ($restored) { "Restored: $($restored -join '; ')." } else { 'No .env had been replaced.' }
+    if ($lost) { $report += " NOT restored (the old content is in its .bak): $($lost -join '; ')." }
+    throw "Refusing: a .env couldn't be moved into place ($why). $report No service was restarted."
+}
+Remove-Staged
+foreach ($plan in $staged) { Write-Host "Wrote $($plan.File)" }
 
 $busy = @()
 # Under -WhatIf nothing was staged: show the restarts the plan would make.

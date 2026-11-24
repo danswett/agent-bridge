@@ -220,6 +220,70 @@ public class AbCiEnvScriptTests
         }
     }
 
+    // R8b P1 (#4214): every target is probed before any move. Runner 2's .env held open with no delete share refuses
+    // the run with runner 1's .env byte-identical and nothing staged left behind.
+    [Fact]
+    public void A_held_env_refuses_before_any_move_and_leaves_every_env_as_it_was()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 2);
+            var (one, two) = (Path.Combine(root, "1", ".env"), Path.Combine(root, "2", ".env"));
+            File.WriteAllText(one, "LANG=C\nPATH=C:\\old\n");
+            File.WriteAllText(two, "PATH=C:\\old\n");
+            var before = File.ReadAllBytes(one);
+
+            (int Exit, string Output) result;
+            using (new FileStream(two, FileMode.Open, FileAccess.Read, FileShare.Read)) { result = Run(root); }
+
+            Assert.NotEqual(0, result.Exit);
+            Assert.Contains("Refusing, nothing changed", result.Output);
+            Assert.Contains("can't be replaced", result.Output);
+            Assert.DoesNotContain("Restarted", result.Output);
+            Assert.Equal(before, File.ReadAllBytes(one));
+            Assert.Equal("PATH=C:\\old\n", File.ReadAllText(two));
+            Assert.DoesNotContain(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories), p => Path.GetFileName(p) is ".env.new" or ".env.bak");
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
+    // A move that still fails (the seam fails runner 2's) puts back every .env already replaced and says what it did.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_failed_move_restores_every_env_already_replaced(bool oneExisted)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var folder = TempFolder();
+        try
+        {
+            var root = Tree(folder, "root", 2);
+            var (one, two) = (Path.Combine(root, "1", ".env"), Path.Combine(root, "2", ".env"));
+            if (oneExisted) { File.WriteAllText(one, "LANG=C\nPATH=C:\\old\n"); }
+            File.WriteAllText(two, "PATH=C:\\old\n");
+            var before = oneExisted ? File.ReadAllBytes(one) : null;
+
+            var (exit, output) = Run(root, failMove: "2");
+
+            Assert.NotEqual(0, exit);
+            Assert.Contains("a .env couldn't be moved into place (test: the move for runner 2 fails)", output);
+            Assert.Contains(oneExisted ? $"Restored: {one} (from its .bak)" : $"Restored: {one} (removed: it didn't exist before)", output);
+            Assert.DoesNotContain("Restarted", output);
+            if (oneExisted) { Assert.Equal(before, File.ReadAllBytes(one)); } else { Assert.False(File.Exists(one)); }
+            Assert.Equal("PATH=C:\\old\n", File.ReadAllText(two));
+            Assert.DoesNotContain(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories), p => Path.GetFileName(p) is ".env.new" or ".env.bak");
+        }
+        finally
+        {
+            Fixture.Delete(folder);
+        }
+    }
+
     static string TempFolder() => Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "abci-env-test-" + Guid.NewGuid().ToString("N"))).FullName;
 
     // A junction needs no privilege (a symbolic link does).
@@ -255,13 +319,14 @@ public class AbCiEnvScriptTests
         dir.SetAccessControl(acl);
     }
 
-    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true, bool elevated = true)
+    static (int Exit, string Output) Run(string root, string arg = "", string value = "", bool testFlag = true, bool elevated = true, string failMove = "")
     {
         var script = Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "setup", "fix-abci-env.ps1");
         var start = new ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true };
         if (testFlag) { start.Environment["AGENT_BRIDGE_ABCI_TEST"] = "1"; }
         start.Environment["AGENT_BRIDGE_ABCI_TEST_ACCOUNT"] = Runner;
         start.Environment["AGENT_BRIDGE_ABCI_TEST_ELEVATED"] = elevated ? "1" : "0";
+        start.Environment["AGENT_BRIDGE_ABCI_TEST_FAIL_MOVE"] = failMove;
         start.Environment["AGENT_BRIDGE_ABCI_TEST_PATH"] = "C:\\Windows";
         start.Environment["NO_COLOR"] = "1";
         start.Environment["TERM"] = "dumb";
