@@ -148,7 +148,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
-        }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
+        }, log: Log, attachments: attachments, credentials: credentials, account: account);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -1593,6 +1593,9 @@ public abstract partial class LaunchFlowFixture
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
+    // RED stub (#4229): the launch service's log, and a wait for one of its lines. Replaced by the real ones in the next commit.
+    private protected void Log(string line) => logged.Enqueue(line);
+    private protected Task WaitForLogAsync(string fragment, TimeSpan? backstop = null) => Task.CompletedTask;
     private protected static async Task WaitAsync(Func<Task<bool>> done)
     {
         var until = DateTime.UtcNow + Patience;
