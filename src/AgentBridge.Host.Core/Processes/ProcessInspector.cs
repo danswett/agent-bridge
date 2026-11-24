@@ -21,6 +21,12 @@ public interface IProcessInspector
     // empty elsewhere or when it cannot be read. Only ever asked, never acted on.
     IReadOnlyList<int> FileHolders(string path) => [];
 
+    // For a process that is one of Codex's own helper programs (Codex 0.172's codex-code-mode-host, which
+    // holds a session's thread lock for the terminal it runs under, #3644): the processes above it, nearest
+    // first, as far as each started no later than the one below. Empty for any other process, or where it
+    // cannot be read. Only ever asked, never acted on.
+    IReadOnlyList<int> CodexHelperAncestors(int pid) => [];
+
     // The same, and whether the list is known to be complete. Discovery can live with a
     // process it could not identify; deleting a worktree cannot, so the reclaimer asks this.
     AgentProcessObservation Observe(AgentKind agent) => new(GetAgentProcesses(agent), true);
@@ -66,6 +72,23 @@ public sealed class SystemProcessInspector : IProcessInspector
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => Scan(agent).Processes;
 
     public AgentProcessObservation Observe(AgentKind agent) => Scan(agent);
+
+    // Codex's own helper programs, which are named codex-* but are not the codex executable the host lists.
+    internal static bool IsCodexHelper(string? processName) =>
+        string.Equals(processName, "codex-code-mode-host", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(processName, "codex-windows-sandbox-setup", StringComparison.OrdinalIgnoreCase);
+
+    public IReadOnlyList<int> CodexHelperAncestors(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            if (!IsCodexHelper(process.ProcessName)) { return []; }
+            var started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            return AgentBridge.Hooks.Ancestry.ParentOf(pid) is { } parent ? Ancestors(parent, started, AgentBridge.Hooks.Ancestry.ParentOf, StartOf) : [];
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException) { return []; }
+    }
 
     public bool IsOwnChild(AgentProcess process) =>
         HostStarted.Value is { } started && StartedBy(process, Environment.ProcessId, started, AgentBridge.Hooks.Ancestry.ParentOf);

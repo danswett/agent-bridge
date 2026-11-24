@@ -100,13 +100,6 @@ main_green:
     - product
     - ha-integration
     - light
-    - pwa-ui (chromium 1/3)
-    - pwa-ui (chromium 2/3)
-    - pwa-ui (chromium 3/3)
-    - pwa-ui (webkit 1/3)
-    - pwa-ui (webkit 2/3)
-    - pwa-ui (webkit 3/3)
-    - pwa-e2e
     - app (win-x64)
     - app (win-arm64)
   # Exact job or matrix-family name -> case-sensitive step globs. Never list tests or builds, or
@@ -132,16 +125,18 @@ main_green:
       - Post Run actions/checkout@*
       - Run actions/setup-node@*
       - .NET for the installer input quality harness
-    pwa-ui: &browser_infra
+    # The jobs split out of light (#4340): the same setup and teardown steps, never the checks themselves.
+    design-gen:
       - Set up job
       - Complete job
       - Run actions/checkout@*
       - Post Run actions/checkout@*
       - Run actions/setup-node@*
-      - Run actions/setup-dotnet@*
-      - Playwright's browsers from main's cache
-      - Save Playwright's browsers to main's cache
-    pwa-e2e: *browser_infra
+    playwright-apt:
+      - Set up job
+      - Complete job
+      - Run actions/checkout@*
+      - Post Run actions/checkout@*
 
 # The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
 # never block a merge; the independent-review receipts are the gate. A pull request needs a success

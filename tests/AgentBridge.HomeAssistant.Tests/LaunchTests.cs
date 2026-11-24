@@ -18,6 +18,43 @@ public sealed class LaunchTests : IDisposable
     static readonly Lazy<JsonObject> Loaded = new(() =>
         (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-launch.json")))!);
 
+    // #1901 (#841): a refused launch names what this machine offers and never the rejected value, which may itself be a path: not in the card's note, not
+    // in the request's outcome, not in anything published or logged. The note is the same closed sentence whatever was asked.
+    const string PrivateWorkspace = @"C:\synthetic-private-workspace";
+    const string UnknownWorkspaceNote = "Unknown workspace - this machine has agent-bridge, scratch";
+
+    // What the connector says: the card's note, and its own log (the request the caller wrote, and the card's offered options, are theirs already).
+    void NoTraceOfTheRejectedWorkspace()
+    {
+        Assert.Equal(UnknownWorkspaceNote, Note);
+        Assert.DoesNotContain(log, l => l.Contains("synthetic-private", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task An_agents_request_for_a_workspace_that_is_not_offered_is_refused_without_echoing_it()
+    {
+        await using var c = await Ready();
+        Payload(new JsonObject { ["text"] = "go", ["request"] = "req-0200-abcd", ["settings"] = new JsonObject { ["workspace"] = PrivateWorkspace } });
+        await Launch(c, AgentUser);
+
+        Assert.Empty(launched);
+        Assert.Equal(("refused", UnknownWorkspaceNote), (Outcome()["outcome"]!.GetValue<string>(), Outcome()["note"]!.GetValue<string>()));
+        NoTraceOfTheRejectedWorkspace();
+    }
+
+    [Fact]
+    public async Task A_persons_press_with_a_workspace_that_is_not_offered_is_refused_without_echoing_it()
+    {
+        // The card's select holds a workspace the machine no longer offers (a path, say): Home Assistant would not let a person choose it, but a select keeps what it had.
+        await using var c = await Ready();
+        ha.Force(Entity("select", "new_workspace"), PrivateWorkspace);
+        Payload(new JsonObject { ["text"] = "go" });
+        await Launch(c);
+
+        Assert.Empty(launched);
+        NoTraceOfTheRejectedWorkspace();
+    }
+
     readonly string folder = Path.Combine(Path.GetTempPath(), "abhl-" + Guid.NewGuid().ToString("N"));
     readonly FakeHomeAssistant ha = new();
     readonly FakeSessions sessions = new();
@@ -344,10 +381,13 @@ public sealed class LaunchTests : IDisposable
         await Launch(c, AgentUser);
         if (recorded["refused"]!.GetValue<bool>())
         {
+            // The one departure from the daemon's recorded words (#1901): it echoed the rejected workspace, this connector does not. The fixture stays as
+            // the daemon recorded it (the parity check compares it with agent-ha-bridge), so this refusal is checked against the closed sentence instead.
+            var expected = name == "unknownWorkspace" ? UnknownWorkspaceNote : recorded["note"]!.GetValue<string>();
             Assert.Empty(launched);
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Note);
+            Assert.Equal(expected, Note);
             Assert.Equal("refused", Outcome()["outcome"]!.GetValue<string>());
-            Assert.Equal(recorded["note"]!.GetValue<string>(), Outcome()["note"]!.GetValue<string>());
+            Assert.Equal(expected, Outcome()["note"]!.GetValue<string>());
         }
         else
         {

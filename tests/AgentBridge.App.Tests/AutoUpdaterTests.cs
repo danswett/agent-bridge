@@ -32,7 +32,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     readonly FakeTimeProvider held = new(Make.T0);
     readonly List<string> log = [];
     readonly string app = Path.Combine(Path.GetTempPath(), "abu-" + Guid.NewGuid().ToString("N")[..8]);
-    AppPreferences prefs = new();
+    // An update window open all day (#4468): these tests are of what happens inside it, at Make.T0 (21:00 Pacific, outside
+    // the default 02:00-05:00). The window's own tests set the default back (DefaultWindow).
+    AppPreferences prefs = new() { InstallWindowStart = "00:00", InstallWindowEnd = "00:00" };
     HostConnection connection = null!;
     HostManager manager = null!;
     AutoUpdater auto = null!;
@@ -1467,6 +1469,141 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(log, l => l.StartsWith("auto-update: installing 0.2.0, as it installs between turns", StringComparison.Ordinal));
     }
 
+    // #4468 (owner, Nov 24 ~08:15 PT: "Window 02:00-05:00 PT"): what installs unasked, Install between turns (its gap and its
+    // backstop) and the host's heal, goes only inside the update window, 02:00-05:00 Pacific Time by default. Outside it a
+    // ready release waits, and says why. A person's press is never held: Restart to update here, a device's Install.
+    void DefaultWindow() => prefs = prefs with { InstallWindowStart = null, InstallWindowEnd = null, InstallWindowZone = null };
+
+    // Make.T0, 2026-10-28 04:00 UTC, is 21:00 PDT the evening before; the window opens at 09:00 UTC (02:00 PDT) and closes
+    // at 12:00 UTC (05:00 PDT).
+    static readonly DateTimeOffset WindowOpens = new(2026, 10, 28, 9, 0, 0, TimeSpan.Zero);
+
+    void AdvanceTo(DateTimeOffset at) => time.Advance(at - time.GetUtcNow());
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_a_release_outside_the_update_window_waits_for_it_says_so_and_installs_inside_it()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        await StartAsync();
+        await QuietTicksAsync(3);
+
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal((UpdatePhase.Waiting, true), (auto.State.Phase, auto.State.Automatic));
+        Assert.Contains("waits for the update window 02:00-05:00 Pacific Time", auto.State.Waiting);
+
+        AdvanceTo(WindowOpens);
+        await QuietTicksAsync(2);
+        await Wait.UntilAsync(() => updater.Applied, "the install inside the window", TimeSpan.FromSeconds(5));
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_the_backstop_over_a_turn_running_waits_for_the_update_window_too()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        // Past WaitAtMost from T0, but after the window has closed (13:00 UTC is 06:00 PDT): the backstop would install
+        // over the turn now, and the window holds it.
+        AdvanceTo(WindowOpens.AddHours(4));
+        Assert.True(time.GetUtcNow() - Make.T0 > AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains("waits for the update window 02:00-05:00 Pacific Time", auto.State.Waiting);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_outside_the_update_window_installs_at_once()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+
+        Assert.True(updater.Applied);
+        Assert.True(time.GetUtcNow() < WindowOpens);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_devices_Install_outside_the_update_window_installs_as_it_does_inside_it()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Install);
+        await TwoIdleTicksAsync();
+
+        await Wait.UntilAsync(() => updater.Applied, "the device's Install outside the window", TimeSpan.FromSeconds(5));
+        Assert.True(time.GetUtcNow() < WindowOpens);
+    }
+
+    // #4509's review (P2): the gap path itself, outside the window. A session goes idle and the gap settles: unasked, nothing installs.
+    // The settle timer's posted tick is kept (Recording), so the ticks here are the ones that act, not one racing the asserts.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_a_settled_gap_outside_the_update_window_installs_nothing()
+    {
+        InstallBetweenTurns();
+        DefaultWindow();
+        updaterUi = new Recording([]);
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        await auto.TickAsync();
+        await GoIdleAsync("s1");
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await auto.TickAsync();
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains("waits for the update window 02:00-05:00 Pacific Time", auto.State.Waiting);
+    }
+
+    // #4509's review (P3): Update now is a person's press, and goes outside the window as inside it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_outside_the_update_window_installs_at_once()
+    {
+        DefaultWindow();
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(Committed);
+
+        await NowAsync(accept: OneTurn);
+
+        Assert.True(updater.Applied);
+        Assert.True(time.GetUtcNow() < WindowOpens);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task The_host_restart_onto_the_apps_installed_files_waits_for_the_update_window_in_either_mode(bool betweenTurns)
+    {
+        DefaultWindow();
+        await StartOldHostAsync(betweenTurns);
+        await QuietTicksAsync(3);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        AdvanceTo(WindowOpens);
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
     // #3307: unasked, nothing installs over bad-release protection this machine could not check
     // (stale or unreadable); it holds and says why. A fresh policy installs as before.
     [Theory]

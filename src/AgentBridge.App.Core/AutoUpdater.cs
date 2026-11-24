@@ -17,7 +17,8 @@ namespace AgentBridge.App.Core;
 //   goes quiet installs anyway after WaitAtMost (and ReturnGrace after the machine last stopped
 //   refusing), over a turn running, but never while a question waits or whether one does cannot
 //   be told: the update stops the host, and the question must not be stranded (Product's rule).
-//   It says "Needs you" instead.
+//   It says "Needs you" instead. All of it only inside the update window, 02:00-05:00 Pacific Time by default (#4468),
+//   as the host's heal (HealHostAsync); a person's press is never held by the window.
 // "Download updates automatically", on by default, per profile beside "Include pre-releases",
 // checks on start and every half hour; a release it finds is downloaded at once. A download that fails is tried again in the background, more rarely each time
 // (ObservedUpdater.HoldAfter), and never ends the app. A release that has waited longer than
@@ -433,7 +434,7 @@ public sealed class AutoUpdater
 
     string? Skipping(DateTimeOffset now) =>
         BetweenTurns && Asked(UpdateAskKind.Install) is null && Ready is not null && lastWhyNot is null && foundAt is not null
-            && now >= ForcedAt(now) && BackstopHeld() == QuestionWaits ? QuestionLine : null;
+            && now >= ForcedAt(now) && InUpdateWindow(now) && BackstopHeld() == QuestionWaits ? QuestionLine : null;
 
     string Busyness()
     {
@@ -442,8 +443,9 @@ public sealed class AutoUpdater
             return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet"
                 : "a session on this machine has a turn running or a question waiting";
         }
-        // Install between turns: the gap settling, or the backstop's time.
+        // Install between turns: the update window, the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
+        if (!InUpdateWindow(now)) { return $"it waits for the update window {Window.Label}"; }
         if (FailedRetryAt(now) is not null) { return "update failed; trying again soon, or at Restart to update"; }
         if (PolicyUnchecked) { return PolicyHold; }
         var at = ForcedAt(now);
@@ -454,6 +456,12 @@ public sealed class AutoUpdater
 
     // Set to Install between turns (Settings' "When an update is ready").
     bool BetweenTurns => prefs().WhenReady == UpdateWhenReady.InstallBetweenTurns;
+
+    // The update window (#4468; owner, Nov 24 ~08:15 PT: "Window 02:00-05:00 PT"): what installs unasked, Install between
+    // turns (its gap and its backstop) and the host's heal, goes only inside it; outside it a ready release waits and the
+    // state says so. A person's press (Restart to update, a device's Install, Update now) never waits for it.
+    InstallWindow Window => InstallWindow.Of(prefs());
+    bool InUpdateWindow(DateTimeOffset now) => Window.IsOpen(now);
 
     // When the backstop may install over a turn running: WaitAtMost from WaitFrom, and no sooner
     // than ReturnGrace after the machine last stopped refusing it.
@@ -511,7 +519,7 @@ public sealed class AutoUpdater
             if (Asked(UpdateAskKind.Install) is not null) { return lastProbe ?? Busyness(); }
             // Install between turns: only the backstop held by a question (or not knowing) keeps
             // it; until then it installs at the first gap, or at ForcedAt.
-            if (BetweenTurns) { return now >= ForcedAt(now) ? BackstopHeld() : null; }
+            if (BetweenTurns) { return now >= ForcedAt(now) && InUpdateWindow(now) ? BackstopHeld() : null; }
             return WaitsForRestart;
         }
         // Not offered: a newer release found since, whose download keeps failing, is the reason,
@@ -706,7 +714,7 @@ public sealed class AutoUpdater
         // so the host idle for IdleFor, never a settled gap or the backstop (Copilot, r4488279902).
         // Install between turns governs only what installs unasked.
         if (asked) { return Due(now) ? $"another device asked for it and no session has been busy for {IdleFor.TotalMinutes:0} minutes" : null; }
-        if (!BetweenTurns || InstallFailedLately(now) || PolicyUnchecked) { return null; }
+        if (!BetweenTurns || InstallFailedLately(now) || PolicyUnchecked || !InUpdateWindow(now)) { return null; }
         if (IdleSince(now, SettleFor)) { return "it installs between turns and no session here has a turn running or a question waiting"; }
         if (now >= ForcedAt(now) && BackstopHeld() is null) { return $"it installs between turns and has waited {WaitAtMost.TotalHours:0} hours with a turn always running"; }
         if (idleSince is not null) { Arm(now); }
@@ -830,6 +838,8 @@ public sealed class AutoUpdater
             if (Pending is not null || manager.UpdateUnderWay || Volatile.Read(ref claimed) == 1) { return; }
             // "Download updates automatically" off: nothing happens unasked, and this is unasked.
             if (!prefs().AutoUpdate) { return; }
+            // Unasked, so only inside the update window (#4468), as an install between turns.
+            if (!InUpdateWindow(now)) { return; }
             if (updater.InstalledVersion is not { } app || host.State != LinkState.Connected || host.Status?.Version is not { } running) { return; }
             if (healApp != app) { (healApp, healSentFor, healSentAt, healLast, healFailures, healSaid) = (app, null, null, null, 0, false); }
             var identity = UpdateVersions.Identity(app);

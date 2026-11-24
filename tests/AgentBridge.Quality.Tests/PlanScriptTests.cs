@@ -105,7 +105,7 @@ public class PlanScriptTests
                     platforms: [linux-x64, win-x64, win-arm64]
                     runner: hosted
                     command: see ci.yml
-                    where: ci.yml product, ha-integration, light, pwa-ui, pwa-e2e
+                    where: ci.yml product, ha-integration, light
                     status: exists
                   - id: docs
                     validation_plan: native
@@ -200,7 +200,8 @@ public class PlanScriptTests
                              function global:gh {
                                  $global:LASTEXITCODE = if ($env:CI_PLAN_TEST_RUNS -eq 'unreadable') { 1 } else { 0 }
                                  if ($env:CI_PLAN_TEST_RUNS -eq 'release-debt') {
-                                     if ($args[1] -like '*actions/workflows/*') { git rev-parse HEAD^1 }
+                                     if ($args[1] -like '*actions/workflows/*') { "1`t$(git rev-parse HEAD^1)" }
+                                     elseif ($args[1] -like '*/jobs?*' -or $args[1] -like '*/annotations?*') { }
                                      elseif ($args[1] -like '*releases?*') { 'v0.1.1' }
                                      else { throw "Unexpected offline gh call: $($args -join ' ')" }
                                  }
@@ -230,7 +231,7 @@ public class PlanScriptTests
             var expected = packages ? "true" : "false";
             Assert.Equal($"app={expected}\napp-installer={expected}",
                 $"app={outputs["app"]}\napp-installer={outputs["app-installer"]}");
-            foreach (var job in new[] { "product", "ha-integration", "pwa-ui", "pwa-e2e" })
+            foreach (var job in new[] { "product", "ha-integration" })
                 Assert.Equal(job == "product" && eventName == "push" && changed.StartsWith("tests/", StringComparison.Ordinal)
                     && !wholeRing && anotherFile is null && !unpaidApp && changed != "tests/Example.Tests/Shared.cs" ? "false"
                     : wholeRing || unpaidApp || changed != "docs/guide.md" ? "true" : "false", outputs[job]);
