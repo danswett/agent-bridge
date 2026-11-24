@@ -1,11 +1,27 @@
+using System.Text.Json.Serialization;
 using AgentBridge.Host.Fleet.Grants;
 
 namespace AgentBridge.Host;
 
 public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Sequence, string Phase, string Path,
     string ActorKind, Guid Incarnation, string ReasonCode, Guid? Question = null, string? LaunchBinding = null, string? GrantBinding = null,
-    ProcessInstance? LaunchProcess = null)
+    ProcessInstance? LaunchProcess = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientKind = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientPlatform = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Generation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PayloadDigest = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] GrantCaps? Caps = null,
+    // CLIENT-REPORTED, evidence only (owner decision on #4044): the session id the answering card showed. Written as received once it has this plain
+    // shape, on person-client answer rows; read by no gate, grant, policy or projection (pinned by ClientReportedCardTargetPinTests).
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ClientReportedCardTarget = null)
 {
+    internal static bool CardTargetShape(string value) => value.Length is >= 1 and <= Protocol.Limits.CardTarget && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
+    // The client the host's verified roster says the principal device is (ha-audit-client-field.md): both or neither, from closed sets,
+    // only on a relay person-client answer or stop. Omitted when absent, so a row written without it keeps its exact bytes and chain hash.
+    static readonly HashSet<string> ClientKinds = new(["app", "pwa", "phone"], StringComparer.Ordinal);
+    static readonly HashSet<string> ClientPlatforms = new(["windows", "macos", "linux", "ios", "ipados", "android"], StringComparer.Ordinal);
+    bool ClientValid(string action) => ClientKind is null && ClientPlatform is null || ActorKind == "person-client" && Path == "relay" && Phase != "control"
+        && action is "session.answer" or "session.stop" && ClientKind is { } kind && ClientKinds.Contains(kind) && ClientPlatform is { } platform && ClientPlatforms.Contains(platform);
     internal bool Valid(string action, string? target, string outcome) =>
         V == 1 && Operation != Guid.Empty && (Run != Guid.Empty || action is ("session.launch" or "session.answer" or "session.stop" or "grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && Phase != "control") && Sequence > 0
         && Phase is "intent" or "terminal" or "control" && Path is "relay" or "local" or "legacy-ha"
@@ -15,6 +31,14 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
             && target is { } session && GrantValidator.Target(new(session, LaunchProcess)))
         && (GrantBinding is null ? action is not ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update")
             : action is ("grant.issue" or "grant.revoke" or "grant.reserve" or "grant.update") && GrantBinding.Length == 64 && GrantBinding.All(char.IsAsciiHexDigit))
+        && ClientValid(action)
+        // Stop rows may also record the grant generation, the request payload digest and the caps in force, all
+        // three or none. Rows written before they existed carry none and stay valid; a reader that does not know
+        // the fields ignores them (the line hash covers the raw line, not the parsed row).
+        && (Generation is null && PayloadDigest is null && Caps is null
+            || action == "session.stop" && Phase is "intent" or "terminal" && Generation is > 0
+            && PayloadDigest is { Length: 64 } digest && digest.All(char.IsAsciiHexDigit) && GrantValidator.Positive(Caps))
+        && (ClientReportedCardTarget is null || action == "session.answer" && ActorKind == "person-client" && Phase != "control" && CardTargetShape(ClientReportedCardTarget))
         && ReasonCode is "none" or "refused" or "failed" or "unconfirmed" or "busy" or "cancelled" or "forced"
         && (Phase == "control" ? target == "profile" && (action is "gate.start" or "gate.pause" or "gate.reset" or "gate.seal")
             && (outcome is "prepared" or "paused" or "reset" or "sealed" or "invalidated")
@@ -24,8 +48,11 @@ public sealed record GateAuditMetadata(int V, Guid Operation, Guid Run, long Seq
             && (action == "session.answer" ? Question is { } question && question != Guid.Empty : Question is null));
 }
 
+internal sealed record ClientIdentity(string Kind, string Platform);
+
 internal sealed record GateAuditTotal(string Action, string Path, string ActorKind, int Successes);
-internal sealed record GateAuditReport(IReadOnlyList<GateAuditTotal> Totals, IReadOnlyList<string> IncompleteReasons, bool Invalidated);
+internal sealed record GateAuditReport(IReadOnlyList<GateAuditTotal> Totals, IReadOnlyList<string> IncompleteReasons, bool Invalidated,
+    int LegacyHaDispatches = 0);
 
 internal static class GateAuditProjection
 {
@@ -56,21 +83,58 @@ internal static class GateAuditProjection
         return Project(rows, complete && !adopted, run, coverage: coverage || retained > 0, retainedThrough: retained);
     }
 
-    internal static GateAuditReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, Guid run, Guid? onlyOperation = null, bool coverage = false, long retainedThrough = 0)
+    // The retirement counters over a time window (owner decision, Nov 22): every operation whose first row is at or
+    // after `since`, whatever its run. A restart is a new start date. Evidence trimmed by retention makes the answer
+    // INCOMPLETE only when a stream's retained gate rows begin after the window start (TrimmedIntoWindow), because only then
+    // could rows in the window have been lost.
+    // Whether trimming could have removed evidence inside the window. Launches live in launches-*.jsonl and every other
+    // action in agents-*.jsonl, each with its own head and retained floor, so each stream is judged only from its own gate
+    // rows: a stream trimmed to a floor above zero whose oldest retained gate row begins after the window start (or that
+    // has none) may have lost rows from the window. An old row in the other stream proves nothing about this one.
+    internal static bool TrimmedIntoWindow(IReadOnlyList<AuditCommands.Row> rows, long agentsRetained, long launchesRetained, DateTimeOffset since)
+    {
+        static bool Stream(IEnumerable<AuditCommands.Row> gateRows, long retained, DateTimeOffset since) =>
+            retained > 0 && (!gateRows.Any() || gateRows.Min(r => r.At) > since);
+        var gate = rows.Where(r => r.Gate is not null).ToArray();
+        return Stream(gate.Where(r => r.Action != "session.launch"), agentsRetained, since)
+            || Stream(gate.Where(r => r.Action == "session.launch"), launchesRetained, since);
+    }
+    internal static GateAuditReport ReadWindow(string profile, DateTimeOffset since)
+    {
+        var coverage = false;
+        var adopted = false;
+        long retained = 0;
+        var (rows, complete) = Load(profile, fault => coverage |= fault == "coverage-break",
+            boundary: (floor, unproven) => { retained = floor; adopted = unproven; });
+        // No audit folder, or no durable heads yet, means nothing was trimmed: read the launches head only when it exists.
+        var auditFolder = Path.Combine(profile, AgentAuditLog.FolderName);
+        var launchesRetained = Directory.Exists(auditFolder) && AgentAuditLog.HasHeads(auditFolder) ? AgentAuditLog.RetainedThrough(auditFolder, launch: true) : 0;
+        var trimmedIntoWindow = TrimmedIntoWindow(rows, retained, launchesRetained, since);
+        var report = Project(rows, complete && !adopted, Guid.Empty, coverage: coverage, retainedThrough: retained, since: since);
+        // Trimmed evidence is missing evidence, not a proven break: INCOMPLETE. A coverage-break fault the heads report stays a FAIL.
+        return trimmedIntoWindow ? report with { IncompleteReasons = [.. report.IncompleteReasons, "retention-trimmed-into-window"] } : report;
+    }
+
+    internal static GateAuditReport Project(IReadOnlyList<AuditCommands.Row> rows, bool complete, Guid run, Guid? onlyOperation = null, bool coverage = false, long retainedThrough = 0,
+        DateTimeOffset? since = null)
     {
         var reasons = new HashSet<string>();
-        if (run == Guid.Empty) { reasons.Add("missing-run-context"); }
+        if (run == Guid.Empty && since is null) { reasons.Add("missing-run-context"); }
         if (!complete) { reasons.Add("audit-incomplete"); }
         if (coverage) { reasons.Add("coverage-break"); }
         var sequences = rows.Where(r => r.Gate is not null).Select(r => r.Gate!.Sequence).Order().ToArray();
         if (sequences.Distinct().Count() != sequences.Length
             || sequences.Where(s => s > retainedThrough).Where((s, i) => s != retainedThrough + i + 1L).Any()) { reasons.Add("sequence-break"); }
-        var selected = rows.Where(r => r.Gate is { } g && g.Run == run && g.Phase != "control"
-            && (onlyOperation is null || g.Operation == onlyOperation)).OrderBy(r => r.Gate!.Sequence).ToArray();
-        if (selected.Length == 0) { reasons.Add("missing-run-evidence"); }
+        // The window counts launches, approvals and stops only: grant.* rows are not credit, and repeat reserves share an identity.
+        var pool = rows.Where(r => r.Gate is { } g && g.Phase != "control" && (since is not null ? !r.Action.StartsWith("grant.", StringComparison.Ordinal) : g.Run == run)
+            && (onlyOperation is null || g.Operation == onlyOperation));
+        if (since is { } start) { pool = pool.GroupBy(r => r.Gate!.Operation).Where(o => o.Min(r => r.At) >= start).SelectMany(o => o); }
+        var selected = pool.OrderBy(r => r.Gate!.Sequence).ToArray();
+        if (selected.Length == 0) { reasons.Add(since is null ? "missing-run-evidence" : "missing-window-evidence"); }
         var totals = new Dictionary<(string Action, string Path, string ActorKind), int>();
         var identities = new HashSet<(string Action, string? Target, Guid Incarnation, Guid? Question)>();
         var invalidated = coverage;
+        var haDispatches = 0;
         foreach (var operation in selected.GroupBy(r => r.Gate!.Operation))
         {
             var first = operation.First();
@@ -85,21 +149,29 @@ internal static class GateAuditProjection
                 || r.Target != first.Target && (!binding || r.Gate?.Phase != "terminal") || r.Gate is not { } other || other.Path != gate.Path
                 || other.ActorKind != gate.ActorKind || other.Incarnation != gate.Incarnation || other.Question != gate.Question
                 || other.LaunchBinding != gate.LaunchBinding)
-                || rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
+                || since is null && rows.Any(r => r.Gate is { } other && other.Operation == gate.Operation && other.Run != run)
                 || terminals.Select(r => (r.Outcome, r.Gate!.ReasonCode, r.Target, r.Gate.LaunchProcess)).Distinct().Count() > 1)
             { invalidated = true; continue; }
             if (gate.Phase == "terminal" && operation.All(r => r.Gate is { Phase: "terminal" }
                 && (first.Action == "session.answer" && r.Gate.ReasonCode == "refused" && r.Outcome == "refused"
                     || first.Action == "session.stop" && r.Outcome is "refused" or "busy" or "failed"))) { continue; }
+            // Any operation that reached dispatch through the HA connector is a fallback, whether or not it succeeded.
+            if (gate.Path == "legacy-ha") { haDispatches++; }
             if (gate.Phase != "intent" || terminals.Length == 0 || terminals[0].Outcome is "attempted" or "reserved" or "unconfirmed")
             { reasons.Add("unresolved-intent"); continue; }
-            if (terminals[0].Outcome == SuccessFor(first.Action) && run != Guid.Empty)
+            if (terminals[0].Outcome == SuccessFor(first.Action) && (run != Guid.Empty || since is not null))
             {
                 if (!identities.Add((first.Action, terminals[0].Target, launch ? Guid.Empty : gate.Incarnation, gate.Question))) { invalidated = true; continue; }
                 totals[key]++;
             }
         }
+        // Each audit_write_failed row is HA actions performed with no audit row (the write failed): an unaudited HA dispatch, so a FAIL.
+        if (since is { } window)
+        {
+            haDispatches += rows.Where(r => r.Action == "audit_write_failed" && r.At >= window)
+                .Sum(r => int.TryParse(r.Target, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : 1);
+        }
         return new(totals.Select(p => new GateAuditTotal(p.Key.Action, p.Key.Path, p.Key.ActorKind, p.Value)).ToArray(),
-            reasons.Order(StringComparer.Ordinal).ToArray(), invalidated);
+            reasons.Order(StringComparer.Ordinal).ToArray(), invalidated, haDispatches);
     }
 }

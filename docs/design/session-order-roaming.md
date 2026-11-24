@@ -36,7 +36,11 @@ Rules:
 1. Before sync is on, group 1 shows only **Your order**, labelled and named "on this device". This
    is all slice S1 ships. "This device's order" appears when sync is switched on.
 2. This device's order starts as a copy of Your order at that moment, pins included, then
-   changes only on this device. It is never sent anywhere.
+   changes only on this device. It is never sent anywhere. The one exception is not the order: a
+   device that has notification filters on sends the **set** of its pinned session ids (no order,
+   no groups, no unpinned rows) to its own account's hosts inside `push.subscribe`, so a host can
+   filter pushes by pin (owner decision, recorded in
+   [v1-sessions.md](../protocol/v1-sessions.md#pushsubscribe)).
 3. Pins belong to an order. Pinning in one order does not pin in the other.
 4. A session an order has never placed goes to the top of Sessions once, newest first when
    several arrive together. It then stays.

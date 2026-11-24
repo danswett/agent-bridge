@@ -239,7 +239,19 @@ public sealed partial class ReplyService : ISessionReplier
             owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
     }
 
+    // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
+    sealed class KeyTrack { public bool MayHaveBeenSent; }
+
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
+    {
+        var track = new KeyTrack();
+        var result = await DeliverCoreAsync(request, key, peer, timeline, track);
+        // NoKeysSent only where the code proves no key went: every return before a typing attempt, and an attempt that reports KeysWent false. An
+        // exception inside an attempt leaves it MayHaveBeenSent. Never inferred from the refusal or its reason.
+        return result with { KeyDisposition = track.MayHaveBeenSent ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
+    }
+
+    async Task<ReplyResult> DeliverCoreAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline, KeyTrack track)
     {
         Typed typed;
         IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
@@ -278,10 +290,12 @@ public sealed partial class ReplyService : ISessionReplier
                     (claim, var problem) = attachments!.Claim(peer, refs);
                     if (problem is not null) { return Refused(problem); }
                 }
+                track.MayHaveBeenSent = true;   // from here a key could go; an attempt that reports KeysWent false narrows it again
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing, request.RequireEmptyBox);
                 keysWent = outcome.KeysWent;
+                track.MayHaveBeenSent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
                 if (claim is not null && session.Agent is AgentKind.Copilot or AgentKind.Claude)
@@ -664,9 +678,9 @@ public sealed partial class ReplyService : ISessionReplier
         catch (Exception e)
         {
             log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
-            return Active() ? null : FirstReplyWords.WaitingToStart;
+            return Active() ? null : FirstReplyWords.ScreenUnreadable;
         }
-        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.WaitingToStart; }
+        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.ScreenUnreadable; }
         switch (StartupQuestions.Read(rows))
         {
             case StartupQuestion.None: break;
@@ -675,7 +689,7 @@ public sealed partial class ReplyService : ISessionReplier
         }
         // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
         // is named by the check that types, which comes next.
-        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.WaitingToStart;
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.NoInputBox;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
@@ -697,7 +711,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null, bool requireEmptyBox = false)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -766,6 +780,8 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt in an empty box, which a screen read cannot tell from typed words, so its
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
+            // claudeBusyQueue (#3828, slice C): Claude's suggestion cannot be told from typed words, so the box must be positively empty or show exactly the known hint.
+            if (agent == AgentKind.Claude && requireEmptyBox && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine, or it shows words that cannot be told from a draft; send or clear it there first") with { Refusal = ReplyRefusal.Occupied }); }
             if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
             // A box whose words start with / or ! holds a command waiting for Enter, and a reply
             // typed after it would send it, with whatever the reply adds. Claude Code drops
@@ -781,8 +797,9 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
-            foreach (var send in plan.Sends)
+            for (var next = 0; next < plan.Sends.Count;)
             {
+                var send = plan.Sends[next];
                 if (send.After is { } after)
                 {
                     try { box = await AwaitBoxAsync(agent, pid, after); }
@@ -797,7 +814,11 @@ public sealed partial class ReplyService : ISessionReplier
                         return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
-                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
+                // The sends that follow with no wait for the box (a long Claude reply's chunks) go to the worker as one plan,
+                // each attached, typed and paused in turn, the screen check on the first only: nothing has changed it but its own keys.
+                var group = new List<KeySend> { AgentReply.Key(send, box.Rows) };
+                for (next++; next < plan.Sends.Count && plan.Sends[next].After is null; next++) { group.Add(AgentReply.Key(plan.Sends[next], null)); }
+                var keys = new KeyPlan(group) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
                 // Once, with the typing slot held and every fence passed, just before the first key (the Copilot path's call).
@@ -946,7 +967,8 @@ public sealed partial class ReplyService : ISessionReplier
                 if (plan.Attached(prompt))
                 {
                     timeline.Confirmed();
-                    return new ReplyResult(AnswerOutcome.Delivered);
+                    // Confirmed by an enqueue row: accepted into the agent's queue, not yet taken (docs/message-delivery.md, #3856).
+                    return new ReplyResult(AnswerOutcome.Delivered) { Stage = prompt.Queued ? ReplyStage.Queued : null };
                 }
                 // Codex records its images with the prompt: missing then is missing for good.
                 if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it"); }

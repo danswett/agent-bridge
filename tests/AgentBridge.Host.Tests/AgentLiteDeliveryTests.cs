@@ -19,7 +19,7 @@ public sealed class AgentLiteDeliveryTests
     sealed class Fixture : ISessionSource, ISessionReplier, IConsoleInjector
     {
         public SessionStatus Status = SessionStatus.Idle;
-        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets;
+        public bool Exists = true, FlipAfterFirstGet, AllowAllTargets, BusyQueue, BusyQueueThrows, Asking;
         public bool FenceCurrent = true, ProcessKnown = true;
         public bool ForbidDiscovery;
         public int ProcessId = 42;
@@ -35,12 +35,14 @@ public sealed class AgentLiteDeliveryTests
         public Action? OnSnapshot, OnReadScreen, OnReply;
         // KeysGo: the keys would go (a refusal before them leaves it false); OnWait: what the owner does while the typing slot is awaited.
         public bool KeysGo = true;
+        public bool InjectorStops;   // the replier ran KeysGoing, then the injector's own fence or screen check stopped before any key (ReplyService AgentAsync)
         public Action<string>? OnWait;
         public Action? AfterKeys;
         public Exception? ThrowAfterKeys;
         public DiscoveryHeld? Held { get; set; }
         public AnswerOutcome Outcome = AnswerOutcome.Delivered;
         public ReplyRefusal Refusal;
+        public ReplyStage? Stage;
         public readonly TaskCompletionSource ReplyScreenRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Action<KeyPlan>? OnInject;
         public readonly List<KeyPlan> Plans = [];
@@ -49,6 +51,8 @@ public sealed class AgentLiteDeliveryTests
         public readonly FakeTimeProvider Clock = new(); public readonly LiteLaunchLog Launches;
         public DateTimeOffset ProcessAt = DateTimeOffset.UnixEpoch;
         public SessionDrivers? Drivers;
+        BusyQueueStore? busyStore;
+        public BusyQueueStore Store => busyStore ??= new(Clock);
         public Fixture() => Launches = new(id => id == Target && Exists ? new SessionProcess(ProcessId, ProcessAt) : null);
         public LiteDeliver Build(DeliveryLaneScheduler? lane = null, LaneComposition? composition = null) => new([
             new ForcedAskGate(Launches),
@@ -63,7 +67,7 @@ public sealed class AgentLiteDeliveryTests
             var launch = Launches.Capture(id);
             return () => FenceCurrent && launch is not null && Launches.Capture(id) == launch;
         },
-            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers };
+            account: lane is null && composition is null ? null : () => Account) { Lane = lane, Composition = composition, Drivers = Drivers, ClaudeBusyQueue = () => BusyQueueThrows ? throw new InvalidOperationException("settings") : BusyQueue, BusyStore = Store };
         public void Launch(string permissions) => Launches.Launched(Target, new LaunchedWith { Agent = "copilot", Permissions = permissions });
         public long Revision => 0; public SessionList List(string? cursor = null) => new([], 0);
         public event EventHandler<SessionChange>? Changed { add { } remove { } }
@@ -83,7 +87,7 @@ public sealed class AgentLiteDeliveryTests
             OnSnapshot?.Invoke();
             return listed;
         }
-        Session Live(string id, int pid) => new() { Id = id, Agent = Agent, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity() };
+        Session Live(string id, int pid) => new() { Id = id, Agent = Agent, Status = Status, StatusSince = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, ProcessId = pid, Activity = new Activity(), Question = Asking ? new Question { Id = "q", Kind = QuestionKind.Approval, Message = "Run it?", AskedAt = DateTimeOffset.UnixEpoch } : null };
         public SessionSubscription Subscribe() => throw new NotSupportedException();
         public Task RefreshAsync(CancellationToken ct = default) => Task.CompletedTask; public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask; public bool Available => true;
@@ -92,10 +96,11 @@ public sealed class AgentLiteDeliveryTests
             // As ReplyService: the fence is run once the typing slot is held, and a stale one types nothing.
             OnReply?.Invoke();
             OnWait?.Invoke(request.Text!);
-            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed")); }
+            if (request.StillCurrent?.Invoke() == false) { return Task.FromResult(new ReplyResult(AnswerOutcome.Stale, "changed") { KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
             if (request.HandoffText is { } handoff) { request = request with { Text = handoff() }; }
             if (KeysGo) { request.KeysGoing?.Invoke(); AfterKeys?.Invoke(); if (ThrowAfterKeys is not null) { Typed.Add(request); throw ThrowAfterKeys; } }
-            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal });
+            if (InjectorStops) { Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, KeyDisposition = ReplyKeyDisposition.NoKeysSent }); }
+            Typed.Add(request); return Task.FromResult(new ReplyResult(Outcome, "reason") { Refusal = Refusal, Stage = Stage, KeyDisposition = KeysGo ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent });
         }
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken ct = default)
         {
@@ -519,6 +524,52 @@ public sealed class AgentLiteDeliveryTests
         Assert.Equal(hold ? new LiteDelivery(false, "sessionResolutionIncomplete") : new LiteDelivery(false, "noSuchSession"), await SendTo(f, Node));
         Assert.Empty(f.Typed);
     }
+    // #3933 option (b) (owner decision, Nov 23): a hold on one kind of agent no longer stops a node id that names a session
+    // of another kind. It resolves only when exactly one listed session has it, that session's agent is not held, and the hold
+    // is the same before and after the scan. Anything else is sessionResolutionIncomplete, as before.
+    static DiscoveryHeld HoldOf(params AgentKind[] agents) => new("a live session could not be read", agents);
+
+    [Fact]
+    public async Task A_node_id_naming_a_session_of_an_agent_that_is_not_held_resolves_while_another_agent_is_held()
+    {
+        var f = new Fixture { Held = HoldOf(AgentKind.Claude), Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await SendTo(f, Node)).Typed);
+        Assert.Equal(Target, Assert.Single(f.Typed).Id);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Copilot, new[] { AgentKind.Copilot })]
+    [InlineData(AgentKind.Copilot, new[] { AgentKind.Claude, AgentKind.Copilot })]
+    [InlineData(AgentKind.Claude, new[] { AgentKind.Claude })]
+    public async Task A_node_id_naming_a_session_of_a_held_agent_is_still_refused(AgentKind agent, AgentKind[] held)
+    {
+        var f = new Fixture { Held = HoldOf(held), Agent = agent }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
+    [Fact]
+    public async Task A_node_id_two_listed_sessions_share_is_refused_while_another_agent_is_held()
+    {
+        var f = new Fixture { Held = HoldOf(AgentKind.Claude), Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        f.Others.Add(Sibling);
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
+    [Theory]
+    [InlineData(null, AgentKind.Claude)]
+    [InlineData(AgentKind.Claude, null)]
+    [InlineData(AgentKind.Claude, AgentKind.Codex)]
+    [InlineData(AgentKind.Claude, AgentKind.Copilot)]
+    public async Task A_node_id_is_refused_when_the_hold_changes_while_the_snapshot_is_scanned_even_to_another_agent(AgentKind? before, AgentKind? during)
+    {
+        var f = new Fixture { Held = before is { } b ? HoldOf(b) : null, Agent = AgentKind.Copilot }; f.Launch(LaunchProtocol.Ask);
+        f.OnSnapshot = () => f.Held = during is { } d ? HoldOf(d) : null;
+        Assert.Equal(new LiteDelivery(false, "sessionResolutionIncomplete"), await SendTo(f, Node));
+        Assert.Empty(f.Typed);
+    }
+
     [Fact]
     public async Task Script_delivery_is_labelled_and_logged_as_a_script_never_an_agent()
     {
@@ -638,6 +689,235 @@ public sealed class AgentLiteDeliveryTests
         var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; f.Launch(LaunchProtocol.Ask);
         Assert.True((await Send(f, "please look at x")).Typed);
         Assert.StartsWith($"[Slipgates · from an agent on SENDER · session sess-9 · request {Req} · not typed by your user] please look at x", Assert.Single(f.Typed).Text);
+    }
+    // claudeBusyQueue (docs/message-delivery.md "Busy sends to Claude", #3828): a working Claude is typed once and Claude Code queues it.
+    [Fact]
+    public async Task With_the_flag_on_a_busy_claude_is_typed_once_and_the_replier_is_not_told_to_require_idle()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(true, null), await Send(f));
+        Assert.False(Assert.Single(f.Typed).RequireIdle);
+    }
+    [Fact]
+    public async Task With_the_flag_off_or_failing_a_busy_claude_is_refused_busy_and_an_idle_one_still_requires_idle()
+    {
+        foreach (var throws in new[] { false, true })
+        {
+            var busy = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = throws, BusyQueueThrows = throws }; busy.Launch(LaunchProtocol.Ask);
+            Assert.Equal(new LiteDelivery(false, "busy"), await Send(busy));
+            Assert.Empty(busy.Typed);
+            var idle = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, BusyQueue = throws, BusyQueueThrows = throws }; idle.Launch(LaunchProtocol.Ask);
+            Assert.True((await Send(idle)).Typed);
+            Assert.True(Assert.Single(idle.Typed).RequireIdle);
+        }
+    }
+    [Fact]
+    public async Task With_the_flag_on_a_busy_copilot_is_still_refused_and_a_claude_with_a_pending_question_is_refused_with_no_keys()
+    {
+        var copilot = new Fixture { Status = SessionStatus.Working, BusyQueue = true }; copilot.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "busy"), await Send(copilot));
+        var asking = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Asking = true }; asking.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "busy"), await Send(asking));
+        Assert.Empty(copilot.Typed.Concat(asking.Typed));
+    }
+    [Fact]
+    public async Task With_the_flag_on_the_rate_limit_and_the_composer_command_refusals_still_apply_to_a_busy_claude()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        var lite = f.Build();
+        for (var i = 0; i < LiteDeliver.MaxPerMinute; i++) { Assert.True((await SendNew(lite)).Typed); }
+        Assert.Equal(new LiteDelivery(false, "busy"), await SendNew(lite));
+        var command = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; command.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(command));
+        Assert.Empty(command.Typed);
+    }
+    // Slice C: with the flag on, a Claude box must be positively empty or show exactly the known hint; else composerNotEmpty, no keys.
+    [Theory]
+    [InlineData("> half a thought")]
+    [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
+    public async Task With_the_flag_on_a_claude_box_holding_a_draft_or_an_unknown_suggestion_is_refused_composerNotEmpty_with_no_keys(string row)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], row, .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await Send(f));
+        Assert.Empty(f.Typed);
+    }
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("> Press up to edit queued messages")]
+    public async Task With_the_flag_on_an_empty_claude_box_or_the_exact_queued_hint_is_typed_and_the_replier_must_see_an_empty_box(string row)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], row, .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f)).Typed);
+        Assert.True(Assert.Single(f.Typed).RequireEmptyBox);
+    }
+    [Fact]
+    public async Task With_the_flag_off_a_claude_box_with_text_is_typed_as_before_and_the_replier_is_not_told_to_require_an_empty_box()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> Try \"fix lint errors\"", .. ClaudeBox.Skip(2)] }; f.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(f)).Typed);
+        Assert.False(Assert.Single(f.Typed).RequireEmptyBox);
+    }
+    // D2a (#3828, #3856): an Unconfirmed replier result is not Delivered. Keys went but nothing was recorded, so the sender must be told unconfirmed.
+    [Theory]
+    [InlineData(AgentKind.Copilot)]
+    [InlineData(AgentKind.Claude)]
+    public async Task An_unconfirmed_reply_is_reported_unconfirmed_not_typed_and_delivered_stays_delivered(AgentKind agent)
+    {
+        var rows = agent == AgentKind.Claude ? ClaudeBox : EmptyBox;
+        var unconfirmed = new Fixture { Agent = agent, Rows = rows, Outcome = AnswerOutcome.Unconfirmed }; unconfirmed.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed }, await Send(unconfirmed));
+        Assert.Single(unconfirmed.Typed);
+        var delivered = new Fixture { Agent = agent, Rows = rows }; delivered.Launch(LaunchProtocol.Ask);
+        Assert.Equal(new LiteDelivery(true, null), await Send(delivered));
+    }
+    // D2b: with the flag on, a reply that only reached Claude's queue is reported queued, not delivered; flag off is unchanged.
+    [Theory]
+    [InlineData(true, ReplyStage.Queued, true)]
+    [InlineData(true, null, false)]
+    [InlineData(false, ReplyStage.Queued, false)]
+    public async Task With_the_flag_on_a_reply_confirmed_only_by_claudes_queue_is_reported_queued(bool flag, ReplyStage? stage, bool queued)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = flag ? SessionStatus.Working : SessionStatus.Idle, BusyQueue = flag, Stage = stage }; f.Launch(LaunchProtocol.Ask);
+        Assert.Equal(queued ? new LiteDelivery(false, null) { Outcome = LiteKind.Queued } : new LiteDelivery(true, null), await Send(f));
+        Assert.Single(f.Typed);
+    }
+
+    // D2b-2a (#3828, #3856): the memory-only status store and the depth cap. One relay message per session is in flight, Accepted or held; a
+    // second is refused queueHeld (never busy, which would trigger the HA fallback), and a full store is refused statusFull. Flag off: unused.
+    static Task<LiteDelivery> SendNew(LiteDeliver lite, string text = "hi") => lite.DeliverAsync(Envelope(text, Guid.NewGuid().ToString()), text, default);
+    Fixture BusyClaude(ReplyStage? stage = null, AnswerOutcome outcome = AnswerOutcome.Delivered)
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Stage = stage, Outcome = outcome }; f.Launch(LaunchProtocol.Ask);
+        return f;
+    }
+    // Option 2 (owner decision on #3866, #3828 design "Busy sends to Claude"): with laneDelivery on, a Claude target keeps the legacy
+    // busy-queue typing path while claudeBusyQueue is on; Copilot stays on the lane; nothing changes with the flag off.
+    [Fact]
+    public async Task With_the_lane_on_and_the_flag_on_a_busy_claude_is_typed_on_the_legacy_path_and_the_lane_never_sees_it()
+    {
+        var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; f.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(f);
+        Assert.Equal(new LiteDelivery(true, null), await r.Send());
+        Assert.False(Assert.Single(f.Typed).RequireIdle);
+        Assert.Empty(r.Records);
+    }
+    [Fact]
+    public async Task With_the_lane_on_and_the_flag_off_a_claude_is_still_refused_not_a_reply_target_with_no_keys()
+    {
+        foreach (var status in new[] { SessionStatus.Idle, SessionStatus.Working })
+        {
+            var f = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = status }; f.Launch(LaunchProtocol.Ask);
+            using var r = new LaneRig(f);
+            Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await r.Send());
+            Assert.Empty(f.Typed);
+            Assert.Empty(r.Records);
+        }
+    }
+    [Fact]
+    public async Task With_the_lane_on_the_flag_does_not_move_a_copilot_off_the_lane_and_a_claude_keeps_every_legacy_guard()
+    {
+        var copilot = new Fixture { Status = SessionStatus.Working, BusyQueue = true }; copilot.Launch(LaunchProtocol.Ask);
+        using var c = new LaneRig(copilot);
+        Assert.Equal(LiteKind.Pending, (await c.Send()).Outcome);
+        Assert.Empty(copilot.Typed);
+        var draft = new Fixture { Agent = AgentKind.Claude, Rows = [ClaudeBox[0], "> /clear", .. ClaudeBox.Skip(2)], Status = SessionStatus.Working, BusyQueue = true }; draft.Launch(LaunchProtocol.Ask);
+        using var d = new LaneRig(draft);
+        Assert.Equal(new LiteDelivery(false, "composerNotEmpty"), await d.Send());
+        var asking = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true, Asking = true }; asking.Launch(LaunchProtocol.Ask);
+        using var q = new LaneRig(asking);
+        Assert.Equal(new LiteDelivery(false, "busy"), await q.Send());
+        Assert.Empty(draft.Typed.Concat(asking.Typed));
+    }
+    [Fact]
+    public async Task With_the_lane_on_a_claude_is_typed_the_same_words_as_without_it()
+    {
+        const string words = "ｆｉｌｅ check"; // fullwidth letters, which the lane's journal normalisation would fold
+        var plain = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; plain.Launch(LaunchProtocol.Ask);
+        Assert.True((await Send(plain, words)).Typed);
+        var lane = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox, Status = SessionStatus.Working, BusyQueue = true }; lane.Launch(LaunchProtocol.Ask);
+        using var r = new LaneRig(lane);
+        Assert.True((await r.Send(words)).Typed);
+        Assert.Equal(Assert.Single(plain.Typed).Text, Assert.Single(lane.Typed).Text);
+    }
+    [Fact]
+    public async Task An_accepted_busy_claude_send_holds_the_slot_and_a_second_is_refused_queueHeld_with_no_keys_not_busy()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Queued, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task An_unconfirmed_busy_claude_send_keeps_the_slot_held()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Unconfirmed); var lite = f.Build();
+        Assert.Equal(LiteKind.Unconfirmed, (await SendNew(lite)).Outcome);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, "noRow", true), (held.State, held.Reason, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+        Assert.Single(f.Typed);
+    }
+    [Fact]
+    public async Task A_delivered_send_and_a_refusal_before_any_key_free_the_slot()
+    {
+        var delivered = BusyClaude(); var lite = delivered.Build();
+        Assert.True((await SendNew(lite)).Typed);
+        Assert.Equal((BusyQueueStore.Delivered, false), (delivered.Store.Records().Single().State, delivered.Store.Records().Single().Held));
+        Assert.True((await SendNew(lite)).Typed);
+        var refused = BusyClaude(outcome: AnswerOutcome.Refused); refused.KeysGo = false; var l2 = refused.Build();
+        Assert.False((await SendNew(l2)).Typed);
+        Assert.Empty(refused.Store.Records());
+        refused.Outcome = AnswerOutcome.Delivered; refused.KeysGo = true;
+        Assert.True((await SendNew(l2)).Typed);
+    }
+    // #3926 review (receipt 7110190967). P1-1: the slot is taken before the per-minute rate token is spent, so refusing a held slot never burns it
+    // and never turns into busy (which would allow the one HA fallback and bypass the cap).
+    [Fact]
+    public async Task Repeated_queueHeld_refusals_stay_queueHeld_and_never_turn_into_busy_by_spending_the_rate_window()
+    {
+        var f = BusyClaude(ReplyStage.Queued); var lite = f.Build();
+        Assert.Equal(LiteKind.Queued, (await SendNew(lite)).Outcome);
+        for (var i = 0; i < 12; i++) { Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite)); }
+        Assert.Single(f.Typed);
+    }
+    // P1-2: the replier ran KeysGoing, then its injector stopped before any key (a screen change or a failed fence). It reports NoKeysSent, so the
+    // slot is freed and no record is left, whatever KeysGoing did first.
+    [Fact]
+    public async Task A_send_the_injector_stopped_after_keys_going_types_nothing_and_leaves_no_held_slot()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); f.InjectorStops = true; var lite = f.Build();
+        Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await SendNew(lite));
+        Assert.Empty(f.Store.Records());
+        Assert.False(f.Store.SlotHeld(Target));
+        f.InjectorStops = false; f.Outcome = AnswerOutcome.Delivered;
+        Assert.True((await SendNew(lite)).Typed);
+    }
+    [Fact]
+    public async Task A_refusal_after_keys_went_is_held_unconfirmed_not_freed()
+    {
+        var f = BusyClaude(outcome: AnswerOutcome.Refused); var lite = f.Build();
+        Assert.False((await SendNew(lite)).Typed);
+        var held = Assert.Single(f.Store.Records());
+        Assert.Equal((BusyQueueStore.Unconfirmed, true), (held.State, held.Held));
+        Assert.Equal(new LiteDelivery(false, "queueHeld"), await SendNew(lite));
+    }
+    [Fact]
+    public async Task A_full_store_refuses_statusFull_before_any_key_and_the_flag_off_never_touches_the_store()
+    {
+        var f = BusyClaude(); var lite = f.Build();
+        for (var i = 0; i < BusyQueueStore.MaxRecords; i++) { f.Store.TryBegin(Guid.NewGuid().ToString(), "p", "other" + i); }
+        Assert.Equal(new LiteDelivery(false, "statusFull"), await SendNew(lite));
+        Assert.Empty(f.Typed);
+        var off = new Fixture { Agent = AgentKind.Claude, Rows = ClaudeBox }; off.Launch(LaunchProtocol.Ask); var l2 = off.Build();
+        Assert.True((await SendNew(l2)).Typed); Assert.True((await SendNew(l2)).Typed);
+        Assert.Empty(off.Store.Records());
     }
     [Fact]
     public async Task A_claude_session_is_still_refused_when_busy_or_its_input_box_is_not_on_screen_or_holds_a_command()

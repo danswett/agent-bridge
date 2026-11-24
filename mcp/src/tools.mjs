@@ -14,12 +14,13 @@ export function turnMarker(session) {
   return createHash('sha256').update(`${session?.activity?.turnCount ?? ''}|${response}`, 'utf8').digest('hex').slice(0, 16);
 }
 
+// The default list: status and metadata, without the working folder (cwd), which is a host path. title, repository and branch stay (owner
+// decision, Nov 23, 2026); the path and the latest answer and question come only with include "content".
 function typed(session) {
   return {
     id: session.id,
     agent: session.agent,
     title: session.title,
-    cwd: session.cwd,
     repository: session.repository,
     branch: session.branch,
     model: session.model,
@@ -37,7 +38,7 @@ export async function listSessions(host, { include } = {}) {
   do {
     const page = await host.request('sessions.list', cursor ? { cursor } : {});
     for (const s of page.sessions ?? []) {
-      sessions.push(include === 'content' ? { ...typed(s), activity: s.activity, question: s.question } : typed(s));
+      sessions.push(include === 'content' ? { ...typed(s), cwd: s.cwd, activity: s.activity, question: s.question } : typed(s));
     }
     discoveryHeld ||= Boolean(page.discoveryHeld);
     cursor = page.next;

@@ -16,6 +16,7 @@ public sealed partial class DeliveryJournal
 {
     readonly List<DeliveryJournalRecord> priorityRecords = [];
     bool priorityQuarantined;
+    readonly IPriorityAnchor? anchor;
     string priorityTail = "";
     // The admission callback runs after the authority and quota decision is computed. A nested priority call
     // (the lock is reentrant) could spend that quota or revoke the capability and leave the outer grant stale.
@@ -223,5 +224,6 @@ public sealed partial class DeliveryJournal
         { Uncertain = true; log($"priority journal write failed ({e.GetType().Name}); no authority granted"); throw; }
         priorityRecords.Add(record);
         priorityTail = record.Hmac;
+        SealAnchor();
     }
 }

@@ -13,6 +13,9 @@ public partial class App : Application
     public static int ExitCode { get; private set; }
 
     readonly AppOptions options;
+    // The UI thread's watchdog (#2869, a hang takes one minidump): the real app only, never the self-test or the demo.
+    UiHangWatchdog? hangWatchdog;
+    ResumeNotifier? resumeNotifier;
     readonly SingleInstance single;
     readonly bool installed;
     MainWindow? window;
@@ -61,6 +64,12 @@ public partial class App : Application
     {
         var queue = DispatcherQueue.GetForCurrentThread();
         var ui = new QueueDispatcher(queue);
+        if (options.SelfTest is null && !options.Demo)
+        {
+            hangWatchdog = new UiHangWatchdog(ui, new WindowsMiniDump(Path.Combine(Paths.DataRoot, "dumps"), TimeProvider.System), TimeProvider.System, AppLog.Write);
+            hangWatchdog.Start();
+            resumeNotifier = new ResumeNotifier(hangWatchdog.NoteResume);  // a sleep is not a hang
+        }
         // As the host reports its own: the package version, without the SDK's "+<commit>".
         var version = (typeof(App).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false).FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion.Split('+')[0] ?? "0.0.0";
 
@@ -192,13 +201,19 @@ public partial class App : Application
         {
             window.Activate();
             Action<int> finished = code => { ExitCode = code; Quit(); };
+            if (options.BadSelfTestShard is { } bad)
+            {
+                AppLog.Write($"self-test: refused: --self-test-shard {bad} is not i/n with 1 <= i <= n <= 3");
+                finished(2);
+                return;
+            }
             _ = options.LiveListReplay
                 ? SelfTest.RunLiveListAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollPreserve
                 ? SelfTest.RunHistoryScrollPreserveAsync(window, main, demo!, options.SelfTest, finished)
                 : options.HistoryScrollBudget
                 ? SelfTest.RunHistoryScrollBudgetAsync(window, main, demo!, options.SelfTest, finished)
-                : SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, finished);
+                : SelfTest.RunAsync(window, main, launch, options.SelfTest, demo!, remoteDemo!, finished, options.SelfTestShard);
             return;
         }
 

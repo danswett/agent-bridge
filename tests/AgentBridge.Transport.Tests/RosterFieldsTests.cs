@@ -488,6 +488,53 @@ public sealed class RosterFieldsTests
         Assert.Equal(2, back.GetProperty("record").GetProperty("seq").GetInt64());
     }
 
+    // Stuck-prompt evidence (owner decision A1): a host sends the evidence members only to a relay that says it takes them.
+    [Fact]
+    public async Task The_relay_advertises_that_it_takes_session_evidence_beside_the_session_id_capability()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        Assert.Contains(AgentBridge.Protocol.SessionEvidence.RelayCapability, host.Relay.Capabilities);
+        Assert.Contains(AgentBridge.Protocol.FleetSessionId.RelayCapability, host.Relay.Capabilities);
+    }
+
+    // HA retirement row 30 (cross-machine session list), HA off (#1396): every host publishes its own sessions to the relay and one read on
+    // any device of the account returns all of them, each machine's session count equal to what that host published.
+    [Fact]
+    public async Task Two_hosts_publish_and_a_reader_on_a_third_device_lists_both_machines_with_their_own_session_counts()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var hostA = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "box-a", "host");
+        await using var hostB = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "box-b", "host");
+        await using var app = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "win", "app");
+        var a = new Wirer(hostA);
+        var b = new Wirer(hostB);
+        var reader = new Wirer(app);
+
+        var recordB = Record(hostB.Id);
+        var sessions = recordB["sessions"]!.AsArray();
+        foreach (var id in new[] { "bbbbbbbbbbbbbbbb", "cccccccccccccccc" })
+        {
+            var extra = JsonNode.Parse(sessions[0]!.ToJsonString())!;
+            extra["id"] = id; extra["node"] = "agent_bridge_" + id;
+            sessions.Add(extra);
+        }
+        Assert.Null(await a.PutAsync(hostA, Record(hostA.Id)));
+        Assert.Null(await b.PutAsync(hostB, recordB));
+
+        var frames = await reader.GetAsync(app);
+
+        var machines = frames.Where(f => f.TryGetProperty("machine", out _)).ToDictionary(f => f.GetProperty("machine").GetString()!);
+        Assert.Equal(new[] { hostA.Id, hostB.Id }.Order(StringComparer.Ordinal), machines.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(1, machines[hostA.Id].GetProperty("record").GetProperty("sessions").GetArrayLength());
+        Assert.Equal(3, machines[hostB.Id].GetProperty("record").GetProperty("sessions").GetArrayLength());
+        Assert.All(machines.Values, m => Assert.True(m.GetProperty("online").GetBoolean()));
+        var known = frames.Single(f => f.TryGetProperty("known", out _)).GetProperty("known").EnumerateArray().Select(k => k.GetProperty("machine").GetString()).ToArray();
+        Assert.Contains(hostA.Id, known);
+        Assert.Contains(hostB.Id, known);
+        Assert.Equal(4, machines.Values.Sum(m => m.GetProperty("record").GetProperty("sessions").GetArrayLength()));
+    }
+
     [Fact]
     public async Task A_forgotten_machine_is_announced_removed_to_the_subscribers_of_its_own_account_only()
     {

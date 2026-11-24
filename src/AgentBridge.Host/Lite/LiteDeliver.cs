@@ -36,6 +36,10 @@ public sealed class LiteDeliver(
     internal LaneComposition? Composition { get; init; }
     // The pump that drains Composition; held so S6 can stop it. Nothing else reads it.
     internal DeliveryDispatchPump? Pump { get; init; }
+    // claudeBusyQueue (docs/message-delivery.md, #3828): read afresh per send; null or throwing means off.
+    internal Func<bool>? ClaudeBusyQueue { get; init; }
+    // Memory-only status of busy-Claude sends and the depth cap; used only with ClaudeBusyQueue on.
+    internal BusyQueueStore? BusyStore { get; init; }
     // The host's record of who drives each session; unset, a relayed prompt is not marked as the agent's.
     public SessionDrivers? Drivers { get; init; }
 
@@ -45,7 +49,7 @@ public sealed class LiteDeliver(
         var target = body.Target.Session ?? "";
         var outcome = await DecideAsync(envelope, text, target, ct);
         var sender = body.Principal.Kind == "script" ? Clean(body.Principal.SenderId) : $"{Clean(body.Principal.Machine)}/{Clean(body.Principal.Session)}";
-        log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code)}");
+        log($"lite deliver: from {sender} to {Clean(target)} request {Clean(body.Request)}: {(outcome.Typed ? "typed" : outcome.Code ?? outcome.Outcome?.ToString().ToLowerInvariant())}");
         return outcome;
     }
 
@@ -57,14 +61,16 @@ public sealed class LiteDeliver(
         ct.ThrowIfCancellationRequested();
         if (query && Lane is null && Composition?.Enabled() != true) { return Refused(LiteReceiver.Replay); }
         var body = envelope.Body;
-        string safe;        if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
+        string safe;
+        if (string.IsNullOrEmpty(text) || text.Length > MaxChars || !body.BindsData(Encoding.UTF8.GetBytes(text)) || target.Length == 0 || !Guid.TryParseExact(body.Request, "D", out _)) { return Refused(LiteCodes.NotReplyTarget); }
         var id = target;
         Session? session = null;
         var byNode = false;
+        var sawHold = false;
         void Resolve()
         {
             session = source.Get(target);
-            if (session is null && FromNodeId(target) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
+            if (session is null && FromNodeId(target, out sawHold) is { } resolved) { id = resolved; byNode = true; session = source.Get(id); }
         }
         if (Lane is null) { Resolve(); }
         // The host lane (S4) carries Copilot targets only, and only while the flag is on; a Claude send, or flag off, stays on the legacy idle-typing path.
@@ -100,13 +106,18 @@ public sealed class LiteDeliver(
             if (query) { return FromLane(prior); }
         }
         if (lane is not null) { Resolve(); }
-        if (session is null) { return Refused(UnresolvedCode(target)); }
+        if (session is null) { return Refused(UnresolvedCode(target, sawHold)); }
         var stillAllowed = targetFence?.Invoke(id);
         if (!await AllowedAsync(envelope, id)) { return Refused(LiteCodes.NotReplyTarget); }
+        // claudeBusyQueue (#3828): a working Claude is typed once and Claude Code queues it. Read once per send; a pending question still refuses.
+        var busyQueue = session.Agent == AgentKind.Claude && BusyQueueOn();
         // Copilot and Claude only; Codex and unknown stay refused. The lane's handoff is Copilot's alone (the replier refuses it for Claude).
-        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || lane is not null && session.Agent != AgentKind.Copilot)
+        if (session.Agent is not (AgentKind.Copilot or AgentKind.Claude) || session.ProcessId is not { } pid || lane is not null && session.Agent != AgentKind.Copilot && !busyQueue)
         { return Refused(LiteCodes.NotReplyTarget); }
-        if (lane is not null)
+        // Owner option 2 (#3866): with laneDelivery on, a Claude keeps this legacy busy-queue typing path, with its own legacy text, guards and replier;
+        // only Copilot goes through the lane. Without claudeBusyQueue a Claude stays refused with the lane on, as before.
+        if (lane is not null && session.Agent == AgentKind.Claude) { safe = Escape(text); }
+        if (lane is not null && session.Agent == AgentKind.Copilot)
         {
             if (stillAllowed is null) { return Refused(LiteCodes.NotReplyTarget); }
             if (session.Question is not null || session.Status is not (SessionStatus.Idle or SessionStatus.Working))
@@ -120,14 +131,27 @@ public sealed class LiteDeliver(
             if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
             return FromLane(Offer(request, id, sender, laneBody, Current, Revoked));
         }
-        if (!Idle(session)) { return Refused(LiteCodes.Busy); }
-        if (!await ComposerEmptyAsync(session.Agent, pid, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
+        if (!Ready(session, busyQueue)) { return Refused(LiteCodes.Busy); }
+        if (!await ComposerEmptyAsync(session.Agent, pid, busyQueue, ct)) { return Refused(LiteCodes.ComposerNotEmpty); }
         // Check before handing off; RequireIdle also rechecks once the replier holds the typing slot.
         // A node id is resolved again: a sibling or a hold that appeared while the composer was read
         // makes it ambiguous now, whatever it named a moment ago.
         if (source.Get(id) is not { } now || now.ProcessId != pid || (byNode && FromNodeId(target) != id)) { return Refused(byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession); }
-        if (!Idle(now)) { return Refused(LiteCodes.Busy); }
-        if (!WithinRate(id)) { return Refused(LiteCodes.Busy); }
+        if (!Ready(now, busyQueue)) { return Refused(LiteCodes.Busy); }
+        // Busy-Claude queue (#3856): one relay message per session at a time. A held slot or a full store refuses before any key, with its own code
+        // (never busy, which would allow the one HA fallback and so bypass the cap).
+        var store = busyQueue ? BusyStore : null;
+        var peer = Principal(body.Principal);
+        if (store is not null)
+        {
+            switch (store.TryBegin(body.Request, peer, id))
+            {
+                case BusyQueueStore.Begin.Held: return Refused(LiteCodes.QueueHeld);
+                case BusyQueueStore.Begin.Full: return Refused(LiteCodes.StatusFull);
+            }
+        }
+        // The slot is taken before the rate token is spent, so a held or full refusal never burns the window and so never turns into busy (receipt 7110190967 P1-1).
+        if (!WithinRate(id)) { store?.Release(body.Request, peer); return Refused(LiteCodes.Busy); }
         // ReplyService runs StillCurrent again after waiting for the shared typing slot and once more
         // just before the injector starts. The host rechecks kill, remote, current grant, process generation and account at both fences.
         var framed = Frame(body.Principal, body.Request, safe);
@@ -138,22 +162,52 @@ public sealed class LiteDeliver(
         // stays theirs; one not confirmed puts back an arm still waiting, for the same reason.
         var driver = Drivers?.For(id);
         DriverArm? armed = null;
-        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = true,
+        var keysWent = false;
+        var reply = new ReplyRequest { Id = id, Request = body.Request, Text = framed, RequireIdle = !busyQueue, RequireEmptyBox = busyQueue,
             StillCurrent = byNode || stillAllowed is not null || account is not null
                 ? () => Signed() && (!byNode || FromNodeId(target) == id) && (stillAllowed?.Invoke() ?? true) : null,
-            KeysGoing = driver is null ? null : () =>
+            KeysGoing = () =>
             {
-                var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
-                armed = new DriverArm(saved, generation);
+                if (driver is not null)
+                {
+                    var (saved, generation) = driver.ArmAgent(time.GetUtcNow(), Limits.KeepStart(Principal(body.Principal), Limits.DriverPrincipal), framed, SenderLabel(body.Principal));
+                    armed = new DriverArm(saved, generation);
+                }
+                // After arming: a failure above leaves keysWent false, so an exception that follows frees the slot instead of wedging it.
+                keysWent = true;
+                store?.KeysWent(body.Request, peer);
             } };
         void Unarm() { if (driver is not null && armed is { } arm) { driver.Restore(arm.Before, arm.Generation); } }
+        // The status record follows what the replier says: queued and unconfirmed stay held (Claude may still take the prompt); a delivered
+        // send frees the slot; a send that typed nothing frees it and leaves no record; keys that went with no clear result stay held.
+        void Record(ReplyResult? r)
+        {
+            if (store is null) { return; }
+            switch (r)
+            {
+                case { Outcome: AnswerOutcome.Delivered, Stage: ReplyStage.Queued }: store.Settle(body.Request, BusyQueueStore.Queued, null, true, peer); break;
+                case { Outcome: AnswerOutcome.Delivered }: store.Settle(body.Request, BusyQueueStore.Delivered, null, false, peer); break;
+                case { Outcome: AnswerOutcome.Unconfirmed }: store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); break;
+                default:
+                    // KeysGoing runs before the injector's own fence, so it proves nothing by itself: a result carries the replier's word (NoKeysSent frees the slot);
+                    // only a thrown exception, with no result, falls back to whether KeysGoing ran.
+                    var mayHaveBeenSent = r is null ? keysWent : r.KeyDisposition != ReplyKeyDisposition.NoKeysSent;
+                    if (mayHaveBeenSent) { store.Settle(body.Request, BusyQueueStore.Unconfirmed, "noRow", true, peer); } else { store.Release(body.Request, peer); }
+                    break;
+            }
+        }
         ReplyResult result;
         try { result = await replier.ReplyAsync(reply, null, ct); }
-        catch { Unarm(); throw; }
+        catch { Unarm(); Record(null); throw; }
         if (result.Outcome != AnswerOutcome.Delivered) { Unarm(); }
+        Record(result);
         return result.Outcome switch
         {
-            AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed => new LiteDelivery(true, null),
+            // With the flag on, a reply only the agent's own queue holds is accepted, not delivered: acked queued, and the arm stays for the prompt it will record.
+            AnswerOutcome.Delivered when busyQueue && result.Stage == ReplyStage.Queued => new LiteDelivery(false, null) { Outcome = LiteKind.Queued },
+            AnswerOutcome.Delivered => new LiteDelivery(true, null),
+            // Keys went but nothing was recorded: the sender is told unconfirmed (never delivered, never resent; docs/message-delivery.md, #3856).
+            AnswerOutcome.Unconfirmed => new LiteDelivery(false, null) { Outcome = LiteKind.Unconfirmed },
             AnswerOutcome.Busy => Refused(LiteCodes.Busy),
             AnswerOutcome.Stale => Refused(Signed() ? (byNode && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession) : LiteReceiver.NotSameAccount),
             _ => Refused(result.Refusal switch { ReplyRefusal.Asking or ReplyRefusal.Busy => LiteCodes.Busy, ReplyRefusal.ComposerUnverified or ReplyRefusal.Occupied => LiteCodes.ComposerNotEmpty, _ => LiteCodes.NotReplyTarget }),
@@ -196,30 +250,51 @@ public sealed class LiteDeliver(
     // again after scanning it, as FleetPublisher does; either refuses. Exact ids never come here.
     // A node id that did not resolve while discovery is held may name a live session the pass did not list, so the
     // sender is told to retry, not that the session does not exist (#1396).
-    string UnresolvedCode(string target) =>
-        IsNodeId(target) && source.Held is not null ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
+    string UnresolvedCode(string target, bool sawHold) =>
+        IsNodeId(target) && (sawHold || source.Held is not null) ? LiteCodes.SessionResolutionIncomplete : LiteCodes.NoSuchSession;
 
     static bool IsNodeId(string target) =>
         target.Length == "agent_bridge_".Length + 16 && target.StartsWith("agent_bridge_", StringComparison.Ordinal)
         && !target.AsSpan("agent_bridge_".Length).ContainsAnyExcept("0123456789abcdef");
 
-    string? FromNodeId(string target)
+    static bool SameHold(DiscoveryHeld? a, DiscoveryHeld? b) =>
+        a is null ? b is null : b is not null && string.Equals(a.Reason, b.Reason, StringComparison.Ordinal)
+            && a.Agents.OrderBy(x => x).SequenceEqual(b.Agents.OrderBy(x => x));
+
+    string? FromNodeId(string target) => FromNodeId(target, out _);
+
+    // sawHold: discovery was held at either read, so a refusal is "retry", even if the hold has ended since.
+    string? FromNodeId(string target, out bool sawHold)
     {
+        sawHold = false;
         const string prefix = "agent_bridge_";
         if (target.Length != prefix.Length + 16 || !target.StartsWith(prefix, StringComparison.Ordinal)
             || target.AsSpan(prefix.Length).ContainsAnyExcept("0123456789abcdef")) { return null; }
-        if (source.Held is not null) { return null; }
-        string? found = null;
+        // While discovery is held for some agents, a node id may still name a session of another agent (#3933 option b, owner
+        // decision Nov 23): only when exactly one listed session has it, its agent is not held, and the hold is the same
+        // before and after the scan. A held agent's unlisted session could share the id, so a held agent's never resolves.
+        var before = source.Held;
+        sawHold = before is not null;
+        Session? found = null;
         foreach (var s in source.Snapshot())
         {
             if (!string.Equals(HaContract.NodeId(s.Id), target, StringComparison.Ordinal)) { continue; }
-            if (found is not null && !string.Equals(found, s.Id, StringComparison.Ordinal)) { return null; }
-            found = s.Id;
+            if (found is not null && !string.Equals(found.Id, s.Id, StringComparison.Ordinal)) { return null; }
+            found = s;
         }
-        return source.Held is null ? found : null;
+        var after = source.Held;
+        sawHold |= after is not null;
+        if (!SameHold(before, after) || found is null) { return null; }
+        return before is not null && before.Agents.Contains(found.Agent) ? null : found.Id;
     }
 
-    static bool Idle(Session s) => s.Status == SessionStatus.Idle && s.Question is null;
+    static bool Ready(Session s, bool busyQueue) => s.Question is null && (s.Status == SessionStatus.Idle || busyQueue && s.Status == SessionStatus.Working);
+
+    bool BusyQueueOn()
+    {
+        try { return ClaudeBusyQueue?.Invoke() == true; }
+        catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+    }
 
     bool WithinRate(string target)
     {
@@ -236,13 +311,13 @@ public sealed class LiteDeliver(
 
     // Claude's box is found by its rules; it shows a suggested prompt in an empty box that a screen read
     // cannot tell from typed words, so it is held to what the replier checks: on screen, no command waiting.
-    async Task<bool> ComposerEmptyAsync(AgentKind agent, int pid, CancellationToken ct)
+    async Task<bool> ComposerEmptyAsync(AgentKind agent, int pid, bool strictClaude, CancellationToken ct)
     {
         try
         {
             var screen = await injector.ReadScreenAsync(pid, ct);
             return screen.Rows is { } rows && (agent == AgentKind.Claude
-                ? ClaudeComposer.Find(rows) is { } box && !box.Content.StartsWith('/') && !box.Content.StartsWith('!')
+                ? ClaudeComposer.Find(rows) is { } box && (strictClaude ? box.Empty : !box.Content.StartsWith('/') && !box.Content.StartsWith('!'))
                 : CopilotInputBoxReader.Read(rows).Box is not null);
         }
         catch (Exception e) when (e is not OperationCanceledException) { return false; }

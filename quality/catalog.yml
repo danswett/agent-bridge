@@ -339,6 +339,24 @@ suites:
     where: ci.yml product
     status: exists
 
+  # The no-new-HA-call-sites guard (Part of #1396; slipgates-fleet #726's design). It scans every tracked text file outside the top-level
+  # tests/, docs/, design/, spikes/ and backlog/ (any bin, obj and node_modules folder, and binary types, are skipped), so the triggers
+  # name every other top-level folder, and '*' the root-level files; .github/** and quality/** already run the whole ring
+  # (global_triggers). quality-tool above is not widened.
+  - id: ha-callsite-guard
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Quality.Tests
+    triggers: [src/**, tools/**, build/**, mcp/**, pwa/**, ops/**, infra/**, apple/**, .config/**, '*', tests/AgentBridge.Quality.Tests/ha-callsite-allowlist.json, tests/AgentBridge.Quality.Tests/HaCallSiteGuardTests.cs]
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release --filter FullyQualifiedName~HaCallSiteGuardTests
+    where: ci.yml product
+    baseline: { tests: 51, seconds: 3 }
+    status: exists
+
   - id: product-crash-diagnostics
     validation_plan: native
     kind: unit
@@ -589,17 +607,47 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: ci-speed-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # How fast main's CI is (#4104): the merge-gate wall from created_at and from run_started_at, the full run, the gate's queue
+    # wait and the red rate per day, on a fixed run and job list. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/ci-speed.ps1, quality/test-ci-speed.ps1]
+    command: pwsh -NoProfile -File quality/test-ci-speed.ps1
+    where: ci.yml light
+    # planned until the ci.yml step lands (patches/ci-speed-step-4104.patch, applied by Quality): until then only a local run tests it.
+    # Flip to exists with that patch.
+    status: planned
+
   - id: arm64-waiver-script
     validation_plan: native
     kind: unit
     ring: 0
     select: affected
-    # quality-gate's time-boxed win-arm64 waiver (#2564): which failed jobs it waives, the expiry
-    # boundary, the switch, and every refusal, on fixed needs and jobs JSON. Nothing reaches GitHub.
+    # quality-gate's win-arm64 waiver (#2564, permanent since Nov 22): which failed jobs it waives, every
+    # refusal, and that the switch and date are ignored, on fixed needs and jobs JSON. Nothing reaches GitHub.
     platforms: [win-x64, linux-x64]
     runner: local
     triggers: [quality/arm64-waiver.ps1, quality/test-arm64-waiver.ps1]
     command: pwsh -NoProfile -File quality/test-arm64-waiver.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: host-shards-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The deterministic split of tests/AgentBridge.Host.Tests into class-level shards (#2454, #2225): no test
+    # lost or run twice, the same split every time, balanced by the committed per-class seconds. Offline.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/host-shards.ps1, quality/test-host-shards.ps1, quality/baselines/host-test-class-seconds.json]
+    command: pwsh -NoProfile -File quality/test-host-shards.ps1
     where: ci.yml light
     status: exists
 
@@ -627,6 +675,18 @@ suites:
     triggers: [quality/main-red.ps1, quality/test-main-red.ps1, .github/workflows/main-red.yml]
     command: pwsh -NoProfile -File quality/test-main-red.ps1
     where: ci.yml light; main-red.yml
+    status: exists
+
+  - id: merge-rule-sweep
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/merge-rule-sweep.ps1, quality/test-merge-rule-sweep.ps1, .github/workflows/merge-rule-sweep.yml]
+    command: pwsh -NoProfile -File quality/test-merge-rule-sweep.ps1
+    where: ci.yml light; merge-rule-sweep.yml sweep
     status: exists
 
   - id: revert-culprit
@@ -1064,6 +1124,45 @@ suites:
     # rollback is production's other path: an earlier image, rolled out and smoke-tested the same way.
     command: see relay.yml production and rollback
     where: relay.yml production, rollback
+    status: exists
+
+  - id: ab-ci-smoke
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand on main with use_ab_ci: proves an ab-ci runner's environment as the runner (PATH, NuGet mirror, a
+    # Release build), before AB_CI_SELF_HOSTED is set again (#4104).
+    platforms: [win-x64]
+    runner: lab
+    command: see ab-ci-smoke.yml smoke
+    where: ab-ci-smoke.yml smoke
+    status: exists
+
+  - id: release-feed-worker
+    validation_plan: native
+    kind: unit
+    ring: 4
+    select: always
+    # The release feed Worker's own tests (#927), the gate before release-feed-deploy.yml deploys it.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [infra/cloudflare/release-feed/**]
+    command: node infra/cloudflare/release-feed/worker.test.mjs
+    where: release-feed-deploy.yml test
+    status: exists
+
+  - id: release-feed-deploy
+    validation_plan: native
+    kind: e2e
+    ring: 4
+    select: always
+    # By hand, main only, after SRE approves: deploys the Worker, then purges its list URL and checks the next
+    # answer was fetched after the purge, and a 304 for its ETag (#3870, #3880).
+    platforms: [linux-x64]
+    runner: staging
+    command: see release-feed-deploy.yml deploy and purge-check
+    where: release-feed-deploy.yml deploy, purge-check
     status: exists
 
   - id: epic-dashboard-unit

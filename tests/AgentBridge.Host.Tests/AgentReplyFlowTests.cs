@@ -184,6 +184,85 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Empty(console.Plans);
     }
 
+    // Slice C of claudeBusyQueue (docs/message-delivery.md, #3828): the box must be positively empty or show exactly the known hint.
+    [Theory]
+    [InlineData("> half a thought")]
+    [InlineData("> Try \"fix lint errors\"")]
+    [InlineData("> /clear")]
+    [InlineData("> !ls")]
+    [InlineData("> Press up to edit")]
+    [InlineData("> Press up to edit queued messages now")]
+    [InlineData("> press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_refused_for_a_draft_or_an_unknown_suggestion_with_no_keys(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        var result = await (replier ??= Replier()).ReplyAsync(request, Peer);
+
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Empty(console.Plans);
+    }
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("> Press up to edit queued messages")]
+    public async Task A_Claude_reply_that_requires_an_empty_box_is_typed_into_an_empty_box_or_the_exact_queued_hint(string row)
+    {
+        console.Rows = [.. ClaudeIdle().Take(5), row, .. ClaudeIdle().Skip(6)];
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+        var request = new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireEmptyBox = true, StillCurrent = () => true };
+
+        Assert.Equal(AnswerOutcome.Delivered, (await (replier ??= Replier()).ReplyAsync(request, Peer)).Outcome);
+        Assert.Single(console.Plans);
+    }
+
+    // D2b (#3828, #3856): a Claude reply confirmed by its queue entry is accepted into Claude's queue, not yet taken; one recorded as a prompt is not marked queued.
+    [Fact]
+    public async Task A_Claude_reply_confirmed_by_its_queue_entry_reports_the_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Also add tests.");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)ReplyStage.Queued), (result.Outcome, result.Stage));
+    }
+    [Fact]
+    public async Task A_Claude_reply_recorded_as_a_prompt_reports_no_queued_stage()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Ship it");
+
+        Assert.Equal((AnswerOutcome.Delivered, (ReplyStage?)null), (result.Outcome, result.Stage));
+    }
+
+    // NoKeysSent (#3856): set only where no key could have gone; a typed reply, or an injector failing after keys, stays MayHaveBeenSent.
+    [Fact]
+    public async Task A_Claude_reply_stopped_before_any_key_is_NoKeysSent_whatever_stopped_it()
+    {
+        console.Rows = ClaudeIdle();
+        var busy = await (replier ??= Replier()).ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", RequireIdle = true, StillCurrent = () => true }, Peer);
+        Assert.Equal((AnswerOutcome.Refused, ReplyKeyDisposition.NoKeysSent), (busy.Outcome, busy.KeyDisposition));
+        var gone = await ReplyAsync("no-such-session", "Ship it");
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (gone.Outcome, gone.KeyDisposition));
+        var current = true; console.BeforeInject = () => current = false;
+        var stale = await replier.ReplyAsync(new ReplyRequest { Id = ClaudeId, Request = Guid.NewGuid().ToString(), Text = "Ship it", StillCurrent = () => current }, Peer);
+        Assert.Equal((AnswerOutcome.Stale, ReplyKeyDisposition.NoKeysSent), (stale.Outcome, stale.KeyDisposition));
+        Assert.Empty(console.Plans);
+    }
+    [Fact]
+    public async Task A_Claude_reply_that_was_typed_or_whose_injector_failed_after_keys_is_MayHaveBeenSent()
+    {
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+        var typed = await ReplyAsync(ClaudeId, "Ship it");
+        Assert.Equal((AnswerOutcome.Delivered, ReplyKeyDisposition.MayHaveBeenSent), (typed.Outcome, typed.KeyDisposition));
+        console.OnInject = _ => throw new IOException("the worker died after typing");
+        var failed = await ReplyAsync(ClaudeId, "Ship it again");
+        Assert.Equal((AnswerOutcome.Unconfirmed, ReplyKeyDisposition.MayHaveBeenSent), (failed.Outcome, failed.KeyDisposition));
+    }
     [Fact]
     public async Task A_Claude_reply_whose_fence_fails_inside_the_injector_is_stale_and_one_with_a_handoff_is_refused()
     {
@@ -392,6 +471,36 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
         Assert.Equal(2, console.Plans.Count);
         Assert.NotNull(console.Plans[1].Plan.Proceed);
+    }
+
+    // Claude Code drops the head of a burst it takes for a paste. The console here keeps only the last 300
+    // characters of any one send, as the live one did to a 4514-character reply, and records the prompt on Enter.
+    [Fact]
+    public async Task A_long_Claude_reply_arrives_whole_because_no_one_send_is_long_enough_to_be_taken_for_a_paste()
+    {
+        var words = string.Concat(Enumerable.Range(1, 90).Select(i => $"word{i:000} ")).Trim();
+        var typed = new System.Text.StringBuilder();
+        console.Rows = ClaudeIdle();
+        console.OnInject = plan =>
+        {
+            foreach (var send in plan.Sends)
+            {
+                typed.Append(send.Text.Length > 300 ? send.Text[^300..] : send.Text);
+                if (send.Enter) { Fixture.Append(claude, ClaudePrompt(typed.ToString())); }
+            }
+        };
+
+        var result = await ReplyAsync(ClaudeId, words);
+
+        Assert.Equal(AnswerOutcome.Delivered, result.Outcome);
+        var sends = console.Plans.SelectMany(p => p.Plan.Sends).ToList();
+        Assert.True(sends.Count > 1, "typed in one burst");
+        Assert.All(sends, s => Assert.True(s.Text.Length <= 100));
+        Assert.NotNull(sends[0].Expect);
+        Assert.All(sends.Skip(1), s => Assert.Null(s.Expect));
+        Assert.All(sends.SkipLast(1), s => Assert.False(s.Enter));
+        Assert.True(sends[^1].Enter);
+        Assert.Equal(words, typed.ToString().Trim());
     }
 
     [Fact]

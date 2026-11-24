@@ -1809,7 +1809,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   even before navigation first moves.
   An unrelated final scroll event cannot end that custody before the requested target is reached.
   A held scrollbar owns the view from its press until release or cancellation, before its
-  first movement as well as during the drag; history arriving meanwhile cannot restore the pin.
+  first movement as well as during the drag; history arriving meanwhile cannot restore the pin,
+  and the layout's top-block correction cannot move the view under it (#1756): a thumb drag's
+  steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
   End-following also waits while a finger is down or the pointer is over or pressed in the
   conversation, then follows the latest measured end when the last hold ends, if still pinned.
@@ -2977,6 +2979,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 |---|---|---|---|
 | Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
 | Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. "Start a session in it to confirm" |
+| Not tested yet, on a migrated profile | `idle`, Neutral | "Set up · not tested yet" | As Not tested yet. No Set up (migration re-pointed this agent's hooks, so there is nothing to set up) and no Remove (this profile has no owned record for the host to undo) |
 | Not set up | `needs` | "Not set up" | **Set up** |
 | Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
 | Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |

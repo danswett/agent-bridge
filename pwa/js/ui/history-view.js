@@ -36,10 +36,10 @@ function originView(origin, at = null) {
   const words = h('span', null, 'Show prompt');
   const toggle = h('button', { type: 'button', class: 'prompt-toggle', 'aria-expanded': 'false', 'aria-controls': full.id, 'aria-label': disclosureName(origin, false) },
     designIcon('chevron', { size: 16, cls: 'prompt-chevron' }), words);
-  const facts = h('span', { class: 'prompt-facts' });
+  const facts = h('span', { class: 'prompt-facts', title: origin.from === 'unverified' ? origin.spoken : '' });
   setFacts(facts, origin.facts);
   const root = h('div', { class: 'prompt-origin', dataset: { from: origin.from } },
-    h('p', { class: 'prompt-label' }, h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()), facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
+    h('p', { class: 'prompt-label' }, origin.icon ? h('span', { class: 'prompt-icon' }, origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge()) : null, facts, origin.by ? h('span', { class: 'prompt-by' }, origin.by) : null, timeButton(at)),
     h('p', { class: 'prompt-preview' }, origin.preview), toggle, full);
   toggle.addEventListener('click', () => {
     const open = toggle.getAttribute('aria-expanded') !== 'true';
@@ -141,9 +141,14 @@ export function shownParts(t) {
 
 export function currentReply(snapshot, session) {
   const voice = liveVoice(session);
-  if (!session.activity.responseId || !voice.response) { return voice.response ?? ''; }
+  if (!voice.response) { return ''; }
   const turn = snapshot?.turns.find((t) => t.id === session.activity.responseTurn);
-  return turn ? shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n') : voice.response;
+  if (!turn) { return voice.response; }
+  // Replies kept as parts by id read together. With no id (#3649) they read together only up to the last id-less live part the store held: a stored
+  // part after it is deferred, and a lone id-less reply is just the live words.
+  if (session.activity.responseId) { return shownParts(turn).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n'); }
+  const live = turn.parts.findLastIndex((p) => p.live);
+  return live < 0 ? voice.response : turn.parts.slice(0, live + 1).filter((p) => p.kind === 'response' && p.text).map((p) => p.text).join('\n\n');
 }
 
 export function turnView(t, inline = null) {
