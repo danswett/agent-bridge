@@ -100,6 +100,9 @@ public sealed class SessionOrder
 
     public SessionGroups Groups { get; }
 
+    // Whether a group is collapsed on this device; the view sets it. Alt+Up/Down passes over collapsed groups.
+    public Func<string, bool> GroupCollapsed { get; set; } = _ => false;
+
     public static string KeyOf(string machine, string session) => $"{machine}\n{session}";
 
     // Whether the order can be kept. When it can't, the list is Most recent.
