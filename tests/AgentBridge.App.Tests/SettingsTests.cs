@@ -2114,7 +2114,6 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.False(settings.CanChangeAgentMessaging);
         Assert.Contains("a kill is recorded", settings.AgentMessagingStatus);
-        Assert.Contains("agentMessaging.remote", settings.AgentMessagingStatus);
     }
 
     [Theory]

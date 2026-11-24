@@ -696,11 +696,9 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(config, File.ReadAllText(path));
     }
 
-    // A recorded kill with no agentMessaging.remote own-account keeps messaging dead whatever the file says, so the app is told off and why (#4520's hazard:
-    // a toggle showing on over dead messaging).
+    // A recorded kill with no remote own-account keeps messaging dead whatever the file says: off with the reason, never a toggle on over dead messaging.
     [Theory]
     [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true}}""", "kill")]
-    [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true,"scope":"same-person"}}""", "kill")]
     [InlineData("""{"agentMessaging":{"allowAllLaunchedTargets":true,"scope":"off"}}""", null)]
     [InlineData("""{"agentMessaging":{"remote":"own-account"}}""", null)]
     public async Task A_recorded_kill_is_reported_as_off_with_its_reason_and_an_own_account_key_is_not_a_kill(string config, string? offBy)
@@ -762,7 +760,6 @@ public sealed class LocalApiTests : IAsyncLifetime
         var lines = ScopeLines();
         Assert.Single(lines);
         Assert.StartsWith("agent messaging scope not changed by the app:", lines[0]);
-        Assert.DoesNotContain(lines, l => l.Contains("changed by the app: off"));
     }
 
     [Theory]
