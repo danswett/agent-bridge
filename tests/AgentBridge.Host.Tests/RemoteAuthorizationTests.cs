@@ -648,7 +648,10 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal(rows[0].Gate!.Question, rows[1].Gate!.Question);
         Assert.Equal("attempted", rows[0].Outcome);
         Assert.Equal("delivered", rows[1].Outcome);
-        Assert.True(PhoneApprovalEvidence.Read(profile, [peer.Id]).Passed);
+        // The answer alone is not a pass: the check also needs a delivered notice for the client (#2649).
+        var evidence = PhoneApprovalEvidence.Read(profile, [peer.Id]);
+        Assert.Equal((1, 0), (Assert.Single(evidence.Clients).AnsweredAway, evidence.Clients[0].Delivered));
+        Assert.False(evidence.Passed);
     }
 
     [Theory]
