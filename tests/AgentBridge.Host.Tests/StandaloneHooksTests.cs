@@ -1685,7 +1685,8 @@ public sealed class StandaloneHooksTests : IDisposable
         await Idle.InstallAsync("codex", true, dry);
         Assert.Contains($"Would rename {Legacy}", dry.ToString());
         Idle.CheckInstall("codex");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Idle.RemoveAsync("codex", false, TextWriter.Null));
+        var removal = await Assert.ThrowsAsync<InvalidOperationException>(() => Idle.RemoveAsync("codex", false, TextWriter.Null));
+        Assert.Contains("not while removing", removal.Message);
         Assert.Equal(before, Listing());
         Assert.True(Directory.Exists(Legacy));
         Assert.Empty(RetiredRecords());
