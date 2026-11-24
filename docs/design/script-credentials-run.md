@@ -1,6 +1,6 @@
 # Script credentials: how a scheduled task gets its token (`scripts run`) (#3305 slice 3b, design only)
 
-Status: DESIGN ONLY, no code. **Needs Quality's sensitive read, and the owner for Q-run-2 to Q-run-4 below.**
+Status: DESIGN ONLY, no code. **Needs Quality's sensitive read. Q-run-2, Q-run-3 and Q-run-4 below are OPEN FOR THE OWNER (Q-run-4 is the read's P2-6 point); nothing is built on a guess at any of them.**
 Part of #3305 (parent #1421); answers the OPEN item in [script-credentials.md](script-credentials.md) section 7, "How a script gets it".
 The credential format, the stored hash, the scope rules (`read+reply`, the allow-list) and the person-pressed mint, rotate and revoke are **unchanged**.
 Revised after Quality's read (receipt on #4429): the pinned program (section 4), what is a barrier and what is a rail (section 6), the token's real exposure
@@ -49,7 +49,7 @@ every accept). The host ships in `%LOCALAPPDATA%\AgentBridgeApp\current\`, a fol
   It holds only what section 2 describes. It changes rarely; when it does, a person re-pins by a press. A host (Velopack) update does **not** change it, so a host
   update never invalidates a bound credential.
 - Installing the launcher needs elevation once per machine. That is the same elevation the base doc leaves open for the task binding ("how that service is
-  elevated is #1414's design to settle"): **Q-run-3 (owner or Chief):** is a Windows consent prompt on a person's press in the app the acceptable way to install
+  elevated is #1414's design to settle"): **Q-run-3 (owner):** is a Windows consent prompt on a person's press in the app the acceptable way to install
   and re-pin it (no terminal, no PowerShell)? Until it is answered, S1 to S3 below are not started.
 
 ## 5. The token's exposure, stated honestly
@@ -107,7 +107,7 @@ Windows user that runs the host**; `SYSTEM` or another account fails closed (`re
   account decrypt it and is a **format change**, so out of scope unless the owner asks.
 - **Q-run-2 (owner):** how the task's user is registered. "Run only when the user is logged on" needs no stored password; "whether logged on or not" needs the user's
   password stored by the scheduler, which is the owner's decision and which no agent sets.
-- **Q-run-4 (owner or Chief):** who registers and edits the admin-locked task with no terminal step. Default proposed: the app's task-bound mint press creates it
+- **Q-run-4 (owner; the P2-6 point, open with Q-run-2):** who registers and edits the admin-locked task with no terminal step. Default proposed: the app's task-bound mint press creates it
   through the elevated step of Q-run-3, from what the person names in the press (task name, script, user), and shows them exactly what will run.
 
 ## 9. Slices, order and acceptance (each its own sensitive PR, each under the 400-line cap)
@@ -118,7 +118,7 @@ Windows user that runs the host**; `SYSTEM` or another account fails closed (`re
 |---|---|---|---|---|
 | 1 | S3 | The Windows `IScriptTaskReader` (engine reads, task definition, ACL and file hashes) | 300 | Fakes plus real-Windows vectors: the engine is the `script-run` process; an intermediate engine is refused; an unlocked file is refused |
 | 2 | S1 | `script-run` launcher and `scripts.admit` | 300 | An unbound credential is never admitted; a non-descendant is refused; a refused or unwritable audit stops it; a relative command, PowerShell without `-NoProfile`, and PATH lookup refused; `125` mapping; host-down fails closed; the token is in no argument, log or audit row |
-| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (needs Q-run-3, Q-run-4) | 350 | The press shows the person the task, user, program and files; a host update does not invalidate it; an unlocked program is refused at mint |
+| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (blocked until the owner answers Q-run-2, Q-run-3 and Q-run-4) | 350 | The press shows the person the task, user, program and files; a host update does not invalidate it; an unlocked program is refused at mint |
 | 4 | S4 | The canary test (profile, logs, audit, task output, a forced-crash dump folder); doc updates (section 7 of script-credentials.md, host-config.md, local-pipe.md, the fleet README); a review of the dispatcher scripts for what they hand on | 200 | The planted token is found nowhere; a script that passes its environment to an untrusted child fails the review |
 
 S2 uses the real reader of S3, so S3 comes first; S1 can be built with S3's fakes. Nothing here changes the credential format, the stored hash, the scope rules or who
