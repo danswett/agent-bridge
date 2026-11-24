@@ -48,9 +48,12 @@ function Get-RunRedReason($run) {
 # the app, i.e. is the Arm64 self-test (#4159: a red Arm64 installer must not block a release). So the Arm64 package is never optional, but its checks are.
 # No other job there may be red. A run with no FULL run yet, or one still running, cancelled or timed out, is not publishable: the train picks it up when FULL is done.
 $script:FullRequiredJobs = @('full-gate', 'app-selftest (win-x64)', 'app-pack (win-x64)', 'app-installer (win-x64)', 'app-pack (win-arm64)')
-$script:ArmJobs = @('app (win-arm64)', 'app-selftest (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
-# A waived job by name: the listed ones, and the Arm64 self-test whatever its shard suffix ('app-selftest (win-arm64) 2/3').
-function Test-ArmWaived([string]$Name) { $Name -cin $script:ArmJobs -or $Name -clike 'app-selftest (win-arm64)*' }
+# The owner's Arm64 conditions (#2454, R8b on 4220): the Arm64 PACK is required (it is in FullRequiredJobs and never here); what RUNS the app on Arm64 (its self-test,
+# its installer) and its tests are waived. The pre-split 'app (win-arm64)' job holds the pack, so it is not waived.
+$script:ArmJobs = @('app-selftest (win-arm64)', 'app-installer (win-arm64)', 'product (windows-11-arm)')
+# A waived job by name, matched WHOLE: the listed ones, and the Arm64 self-test with an optional shard suffix ('app-selftest (win-arm64) 2/3'). \z, not $: $ also
+# matches before a final newline, and [0-9], not \d, which is any Unicode digit.
+function Test-ArmWaived([string]$Name) { $Name -cin $script:ArmJobs -or $Name -cmatch '\Aapp-selftest \(win-arm64\)( [1-9][0-9]*/[1-9][0-9]*)?\z' }
 function Get-FullRedReason($run) {
     $full = $run.PSObject.Properties['Full']?.Value
     if ($null -eq $full) { return 'no FULL run for this commit yet' }
@@ -96,8 +99,10 @@ function Select-FullRunRow([string[]]$Rows, [string]$Sha) {
 function Get-FullPackages([string[]]$ArtifactNames, [int]$Number) {
     $prefix = @($ArtifactNames | ForEach-Object { if ($_ -cmatch "^agent-bridge-windows-(\d+\.\d+)\.$Number$") { $Matches[1] } }) | Select-Object -First 1
     if (-not $prefix) { return [pscustomobject]@{ Version = ''; Complete = $false; Missing = @("agent-bridge-windows-<version>.$Number") } }
-    $missing = @("agent-bridge-windows-$prefix.$Number", "agent-bridge-windows-arm64-$prefix.$Number", "sbom-win-x64-$prefix.$Number", "sbom-win-arm64-$prefix.$Number" |
-        Where-Object { $ArtifactNames -cnotcontains $_ })
+    # Both packages, both SBOMs (the Arm64 one is what attestation needs) and both installer inputs, which the train's verify downloads and checks byte for byte.
+    # The inputs are kept 7 days, the others 30, and Get-ReleaseRuns lists only unexpired artifacts: after 7 days a commit is incomplete here and is skipped.
+    $missing = @("agent-bridge-windows-$prefix.$Number", "agent-bridge-windows-arm64-$prefix.$Number", "sbom-win-x64-$prefix.$Number", "sbom-win-arm64-$prefix.$Number",
+        "agent-bridge-windows-installer-input-$prefix.$Number", "agent-bridge-windows-arm64-installer-input-$prefix.$Number" | Where-Object { $ArtifactNames -cnotcontains $_ })
     [pscustomobject]@{ Version = "$prefix.$Number"; Complete = ($missing.Count -eq 0); Missing = $missing }
 }
 
@@ -152,6 +157,37 @@ function Select-ReleaseCommit {
     $null
 }
 
+# What the train's pick job hands its other jobs (S2, #4104): the commit, the version (0.1.<the FAST run's number>), the FAST run's id and number, the FULL run's id
+# (where the packages, SBOMs and installer inputs are: the FAST run builds none of them, so a download from its id finds nothing) and the waived-Arm64 notice for
+# the publish summary ('' when nothing was waived). One line each, name=value, for the workflow to append to GITHUB_OUTPUT.
+#
+# The caller contract: $run is the run Select-ReleaseCommit returned (a run of Get-ReleaseRuns: Id, Sha, Number, Version and Full.Id). This does not judge it: FULL being
+# green and complete is the selector's job, already done. What it does is refuse a value that is not plainly what it should be, because the train appends these lines
+# as written and publishes the commit they name: the sha is exactly 40 lowercase hex characters, the version digits.digits.digits, the ids and the number digits only, and
+# the notice is printable text built only from the closed waived list (whole names) and GitHub's own conclusion words, with no newline, control character or "::".
+function Get-PickOutputs($run) {
+    function Fail([string]$why) { throw "the picked run is not safe to hand on: $why" }
+    foreach ($property in 'Id', 'Sha', 'Number', 'Version', 'Full') { if (-not $run.PSObject.Properties[$property]) { Fail "it has no $property" } }
+    $fullId = if ($run.Full -and $run.Full.PSObject.Properties['Id']) { [string]$run.Full.Id } else { '' }
+    if (-not $fullId) { throw "the picked run $($run.Sha) has no FULL run id, so there is nowhere to download its packages from" }
+    if (([string]$run.Sha) -cnotmatch '\A[0-9a-f]{40}\z') { Fail "the sha is not exactly 40 lowercase hex characters" }
+    if (([string]$run.Version) -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { Fail "the version is not digits.digits.digits" }
+    foreach ($pair in @(@('FAST run id', [string]$run.Id), @('FAST run number', [string]$run.Number), @('FULL run id', $fullId))) {
+        if ($pair[1] -cnotmatch '\A[0-9]+\z') { Fail "the $($pair[0]) is not digits only" }
+    }
+    $notice = Format-WaivedNotice $run
+    if ($notice) {
+        $prefix = 'Arm64 checks waived for this release, which was published: '
+        if (-not $notice.StartsWith($prefix, [StringComparison]::Ordinal)) { Fail 'the waived notice is not in its shape' }
+        $results = 'failure', 'timed_out', 'cancelled', 'skipped', 'neutral', 'action_required', 'startup_failure', 'stale', 'not run'
+        foreach ($entry in $notice.Substring($prefix.Length).Split('; ')) {
+            $at = $entry.LastIndexOf(': ', [StringComparison]::Ordinal)
+            if ($at -lt 1 -or -not (Test-ArmWaived $entry.Substring(0, $at)) -or $entry.Substring($at + 2) -cnotin $results) { Fail "the waived notice names '$entry', which is not a waived job and one of GitHub's results" }
+        }
+        if ($notice -cmatch '[^ -~]' -or $notice.Contains('::')) { Fail 'the waived notice has a control character or ::' }
+    }
+    "sha=$($run.Sha)", "version=$($run.Version)", "run=$($run.Id)", "number=$($run.Number)", "full-run=$fullId", "waived=$(if ($notice) { $notice } else { '' })"
+}
 # The train refuses while the app is signed: it has no sign step yet, and an unsigned release
 # where signing is on would reach every installed copy (docs/app-windows.md, "The release train").
 function Assert-TrainMayPublish([string]$AppSigning) {
