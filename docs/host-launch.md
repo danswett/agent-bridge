@@ -66,6 +66,12 @@ on any local branch that has not been pushed, a local branch with no upstream, o
 or does not finish, pipes included, inside one 5 s deadline for the whole check (the git process tree is killed, and the refusal is the answer). An open pull request is GitHub's to say and the host
 makes no GitHub call, so a caller that must not end such a session checks it first (follow-up for program C).
 
+What the check does not count, by design: files git is told to hide are the repository's own decision about what
+is work, so `.git/info/exclude`, `core.excludesFile` and `.gitignore` matches, and files marked `assume-unchanged` or
+`skip-worktree`, are not pending. Submodule changes are counted whatever `diff.ignoreSubmodules` says. The git child
+runs with no inherited `GIT_*` variable (a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the host's own would aim it
+at another repository), is pointed at the session's folder with `-C`, and its machine-readable output is NUL-separated.
+
 ## Answering `launch.options` without waiting for Agency (#1527)
 
 Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so

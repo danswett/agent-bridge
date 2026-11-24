@@ -93,6 +93,57 @@ public sealed class UnpushedWorkTests : IDisposable
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(9), $"took {clock.Elapsed}");
     }
     [Fact]
+    public void A_git_still_running_at_the_deadline_is_killed_not_left_behind()
+    {
+        // The clean filter blocks, so git itself stays alive waiting on it: past the deadline the git tree must be gone.
+        File.WriteAllText(Path.Combine(Work, ".gitattributes"), "a.txt filter=slow" + Environment.NewLine);
+        Git(Work, "config", "filter.slow.clean", "sleep 40; cat");
+        File.WriteAllText(Path.Combine(Work, "a.txt"), "b");
+        var clock = Stopwatch.StartNew();
+        Assert.True(UnpushedWork.Pending(Work));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(9), $"took {clock.Elapsed}");
+        var gone = false;
+        for (var i = 0; i < 50 && !gone; i++)
+        {
+            try { Process.GetProcessById(UnpushedWork.LastPid).Dispose(); Thread.Sleep(100); }
+            catch (ArgumentException) { gone = true; }
+        }
+        Assert.True(gone, "git was left running after the deadline");
+    }
+
+    [Fact]
+    public void A_dirty_submodule_counts_even_when_the_repository_says_to_ignore_submodules()
+    {
+        var sub = Path.Combine(root, "sub");
+        Directory.CreateDirectory(sub);
+        Git(sub, "init", "-b", "main");
+        File.WriteAllText(Path.Combine(sub, "s.txt"), "s");
+        Git(sub, "add", "s.txt"); Git(sub, "commit", "-m", "s");
+        Git(Work, "-c", "protocol.file.allow=always", "submodule", "add", sub, "sub");
+        Git(Work, "commit", "-m", "add sub"); Git(Work, "push");
+        Assert.False(UnpushedWork.Pending(Work));
+        Git(Work, "config", "diff.ignoreSubmodules", "all");
+        Git(Work, "config", "status.submoduleSummary", "false");
+        Git(Work, "config", "submodule.sub.ignore", "all");
+        File.WriteAllText(Path.Combine(Work, "sub", "s.txt"), "changed inside the submodule");
+        Assert.True(UnpushedWork.Pending(Work));
+    }
+
+    [Fact]
+    public void An_inherited_git_environment_never_points_the_check_at_another_repository()
+    {
+        // A clean, pushed repository is the real answer; a GIT_DIR naming a dirty one must not change it.
+        var other = Path.Combine(root, "other");
+        Directory.CreateDirectory(other);
+        Git(other, "init", "-b", "main");
+        File.WriteAllText(Path.Combine(other, "x.txt"), "dirty and unpushed");
+        var saved = Environment.GetEnvironmentVariable("GIT_DIR");
+        Environment.SetEnvironmentVariable("GIT_DIR", Path.Combine(other, ".git"));
+        try { Assert.False(UnpushedWork.Pending(Work)); }
+        finally { Environment.SetEnvironmentVariable("GIT_DIR", saved); }
+    }
+
+    [Fact]
     public void A_folder_git_cannot_read_is_pending_never_clean()
     {
         Assert.True(UnpushedWork.Pending(root));
