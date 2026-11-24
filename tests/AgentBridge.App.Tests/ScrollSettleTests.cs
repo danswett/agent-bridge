@@ -70,6 +70,20 @@ public sealed class ScrollSettleTests
         Assert.Contains("extent 20000 to 69000 (changed on 49 frames)", settle.Describe(), StringComparison.Ordinal);
     }
 
+    // CI 45364490020: the extent was final, the view never went back, and it sat 66 short of the end for the rest of 90 s. The artifact has no frame trace, so the verdict itself carries the last
+    // frames: parked (the same offset every frame) or still creeping, and moving or not.
+    [Fact]
+    public void A_view_that_does_not_settle_reports_its_last_frames_so_parked_can_be_told_from_creeping()
+    {
+        var settle = new ScrollSettle(high: 62000, maxFrames: 12);
+
+        for (var i = 0; i < 12; i++) { settle.Observe(i < 6 ? 62000 + i * 3 : 62059, 63125, moving: i == 11); }
+
+        var text = settle.Describe();
+        Assert.Contains("last frames 62059/63125 62059/63125 62059/63125 62059/63125 62059/63125 62059/63125+", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("62000/", text, StringComparison.Ordinal);       // only the last six
+    }
+
     [Fact]
     public void A_view_that_parks_short_of_the_end_never_settles_and_fails_when_the_frame_budget_runs_out()
     {

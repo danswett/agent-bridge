@@ -13,6 +13,7 @@ public sealed class ScrollSettle
     double lastOffset = double.NaN;
     double lastExtent = double.NaN;
     int still;
+    readonly Queue<string> tail = new();
 
     /// <param name="high">The highest offset seen so far (the notches before this).</param>
     /// <param name="worstBack">The worst fall below it seen so far.</param>
@@ -55,6 +56,8 @@ public sealed class ScrollSettle
         if (Frames == 1) { FirstExtent = extent; }
         else if (extent != lastExtent) { ExtentChanges++; }
         Extent = extent;
+        tail.Enqueue($"{offset:0.#}/{extent:0.#}{(moving ? "+" : "")}");
+        if (tail.Count > 6) { tail.Dequeue(); }
         var unchanged = offset == lastOffset && extent == lastExtent;
         still = Gap <= tolerance && !moving && unchanged ? still + 1 : 0;
         (lastOffset, lastExtent) = (offset, extent);
@@ -62,5 +65,5 @@ public sealed class ScrollSettle
 
     public string Describe() => Settled
         ? $"settled at the end after {Frames} frames, worst back {WorstBack:0.#}"
-        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames)";
+        : $"did not settle in {Frames} frames: {Gap:0.#} from the end, {still} of {stillFrames} still frames, worst back {WorstBack:0.#}, extent {FirstExtent:0} to {Extent:0} (changed on {ExtentChanges} frames), last frames {string.Join(' ', tail)} (offset/extent, + while moving)";
 }

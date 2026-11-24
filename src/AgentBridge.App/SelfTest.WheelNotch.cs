@@ -110,7 +110,7 @@ static partial class SelfTest
             var (settleFrom, giveUp) = (clock.Elapsed, clock.Elapsed + TimeSpan.FromSeconds(90));
             while (!settle.Done && clock.Elapsed < giveUp) { await Frame(); settle.Observe(scroll.VerticalOffset, scroll.ScrollableHeight, moving); }
             check(settle.Passed,
-                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}, {(clock.Elapsed - settleFrom).TotalSeconds:0.#} s; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
+                $"wheel down to the end: never moves back up and stays at the end ({settle.Describe()}, {(clock.Elapsed - settleFrom).TotalSeconds:0.#} s, end pin {(view.FollowsConversationEnd ? "engaged" : "released")}; offsets {string.Join(", ", offsets)}; end {scroll.ScrollableHeight:0.#})");
         }
         finally
         {
