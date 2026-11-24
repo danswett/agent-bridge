@@ -1,6 +1,6 @@
-From 365ebe0ef6b113882a3d9fa0155b5f092a0b276a Mon Sep 17 00:00:00 2001
+From b1cf45c698105203cc61ab3d19a85921fa44e6d6 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 22:22:01 -0800
+Date: Mon, 23 Nov 2026 22:32:44 -0800
 Subject: [PATCH] s 6a2
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH] s 6a2
  3 files changed, 89 insertions(+), 5 deletions(-)
 
 diff --git a/.github/workflows/full.yml b/.github/workflows/full.yml
-index ce1863d7e..ca16cb8cc 100644
+index 7da19ddd3..b055617a8 100644
 --- a/.github/workflows/full.yml
 +++ b/.github/workflows/full.yml
 @@ -517,11 +517,65 @@ jobs:
@@ -99,7 +99,7 @@ index 6e06c26d4..cce9db049 100644
      status: exists
    # ---------------------------------------------------------------- live, on disposable machines
 diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
-index 408d84a53..a48142fdb 100644
+index 0b2f595c2..127825537 100644
 --- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 +++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
 @@ -28,7 +28,7 @@ public class FullWorkflowTests
@@ -120,7 +120,7 @@ index 408d84a53..a48142fdb 100644
              Assert.Equal("needs.trigger.outputs.ok == 'true'", Expression(Scalar(job, "if")));
          }
          foreach (var (id, job) in jobs.Children)
-@@ -236,4 +236,34 @@ public class FullWorkflowTests
+@@ -240,4 +240,34 @@ public class FullWorkflowTests
          Assert.DoesNotContain("github.run_number", AllText(job), StringComparison.Ordinal);
          Assert.Contains("-Commit $env:SHA -RunId '${{ github.run_id }}'", AllText(job), StringComparison.Ordinal);
      }
