@@ -1,53 +1,48 @@
 using System.Reflection;
-using System.Text.RegularExpressions;
 using Xunit;
-using Xunit.Sdk;
 
 namespace AgentBridge.App.Tests;
 
-// The quarantine list for this assembly (fixes-main, Part of #4104): a test that holds main red and is not being fixed
-// this hour stays in the source and runs nowhere, skipped with a reason that names the tracking issue and an expiry
-// (the quality README, Flakes). Each entry is a skip whose reason starts "quarantined"; this list is the only place that
-// says which, and it stays small: adding an entry is a change to this file, reviewed as one.
+// The suspected causes of the App.Tests test-host hang (fixes-main, Part of #4104). They stay in the suite and keep their
+// coverage, but run ALONE: xunit runs a collection defined with DisableParallelization after the parallel ones have finished,
+// so a real MiniDumpWriteDump of this process (which suspends its threads, and Microsoft warns can deadlock) never happens
+// while other tests run, and RunCompletionTests (which sets a process-wide environment variable and compiles with Roslyn behind a
+// static lazy) never overlaps them. This removes suspected causes; the root cause of the hang is not known to be among them.
+// This list is the only place that says which, and it stays small: adding a class is a change to this file, reviewed as one.
 public sealed class QuarantineTests
 {
-    // Method names (class.method), each with the rows or cases skipped. Expiry is in the reason, not checked against the clock:
-    // a quarantine that lapses must not turn main red by itself.
-    // Every WindowsMiniDumpTests test that calls MiniDumpWriteDump on the test process itself, which Microsoft warns can
-    // deadlock while other threads run, and hangs the test host: the real dump, the keep-newest one, the low-disk rows that write.
-    static readonly string[] Expected =
-    [
-        "WindowsMiniDumpTests.A_dump_is_a_real_minidump_named_for_its_time_and_process_and_far_smaller_than_a_full_one",
-        "WindowsMiniDumpTests.Only_the_newest_few_dumps_are_kept",
-        "WindowsMiniDumpTests.With_less_than_a_gigabyte_of_free_disk_no_dump_is_written_and_the_reason_is_said",
-    ];
+    static readonly string[] Expected = ["RunCompletionTests", "WindowsMiniDumpTests"];
     const int Largest = 3;
 
-    static List<(string Test, string Reason)> Quarantined() =>
-        typeof(QuarantineTests).Assembly.GetTypes()
-            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
-            .SelectMany(m => m.GetCustomAttributes(true).Select(a => a switch { FactAttribute f => f.Skip, DataAttribute d => d.Skip, _ => null })
-                .Where(skip => skip is not null && skip.StartsWith("quarantined", StringComparison.Ordinal))
-                .Select(skip => (Test: $"{m.DeclaringType!.Name}.{m.Name}", Reason: skip!)))
-            .ToList();
-
-    [Fact]
-    public void The_quarantine_list_is_the_declared_tests_and_stays_small()
+    static List<string> RunningAlone()
     {
-        var found = Quarantined();
-        Assert.Equal(Expected.Order(StringComparer.Ordinal), found.Select(q => q.Test).Distinct().Order(StringComparer.Ordinal));
-        Assert.InRange(found.Select(q => q.Test).Distinct().Count(), 1, Largest);
+        var types = typeof(QuarantineTests).Assembly.GetTypes();
+        var alone = types.Select(t => t.GetCustomAttribute<CollectionDefinitionAttribute>())
+            .Where(d => d is { DisableParallelization: true })
+            .Select(d => d!.Name)
+            .ToHashSet();
+        return types.Where(t => t.GetCustomAttribute<CollectionAttribute>() is { } c && alone.Contains(c.Name))
+            .Select(t => t.Name).Order(StringComparer.Ordinal).ToList();
     }
 
     [Fact]
-    public void Each_quarantine_names_its_tracking_issue_and_an_expiry()
+    public void The_suspected_hang_causes_run_alone_and_nothing_else_does()
     {
-        var found = Quarantined();
-        Assert.NotEmpty(found);
-        Assert.All(found, q =>
-        {
-            Assert.Contains("#4104", q.Reason, StringComparison.Ordinal);
-            Assert.Matches(new Regex(@"until 20\d\d-\d\d-\d\d"), q.Reason);
-        });
+        var found = RunningAlone();
+        Assert.Equal(Expected, found);
+        Assert.InRange(found.Count, 1, Largest);
+    }
+
+    // Kept in the suite, not skipped: a skipped test is coverage lost.
+    [Fact]
+    public void Nothing_in_the_assembly_is_skipped_as_quarantined()
+    {
+        var skipped = typeof(QuarantineTests).Assembly.GetTypes()
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            .SelectMany(m => m.GetCustomAttributes(true).Select(a => a switch { FactAttribute f => f.Skip, Xunit.Sdk.DataAttribute d => d.Skip, _ => null })
+                .Where(skip => skip is not null && skip.StartsWith("quarantined", StringComparison.Ordinal))
+                .Select(_ => $"{m.DeclaringType!.Name}.{m.Name}"))
+            .Distinct().ToList();
+        Assert.Empty(skipped);
     }
 }
