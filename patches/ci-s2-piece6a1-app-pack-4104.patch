@@ -1,7 +1,7 @@
-From 90a3d4d3367b06a7ffe43ffadcd47a6caa8fc116 Mon Sep 17 00:00:00 2001
+From 06dd3d441a7617c94f74cb129cc660a070484564 Mon Sep 17 00:00:00 2001
 From: SG Quality Lead R8 <danswett@users.noreply.github.com>
-Date: Mon, 23 Nov 2026 21:33:11 -0800
-Subject: [PATCH] scratch 6a1
+Date: Mon, 23 Nov 2026 21:37:27 -0800
+Subject: [PATCH] scratch p6a1-new
 
 ---
  .github/workflows/full.yml                    | 102 +++++++++++++++++-
@@ -134,10 +134,10 @@ index dcaca6ade..3f61e9c13 100644
      runs-on: ubuntu-latest
      timeout-minutes: 5
 diff --git a/quality/catalog.yml b/quality/catalog.yml
-index d1f5c80df..075cca234 100644
+index a17bb9dbc..6e06c26d4 100644
 --- a/quality/catalog.yml
 +++ b/quality/catalog.yml
-@@ -1224,6 +1224,19 @@ suites:
+@@ -1252,6 +1252,19 @@ suites:
      lane: full
      status: exists
  
