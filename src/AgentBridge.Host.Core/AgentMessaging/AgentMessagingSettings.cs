@@ -10,16 +10,22 @@ namespace AgentBridge.Host.Core.AgentMessaging;
 // sends, receives or signs.
 //
 //   remote           "own-account" (the default when the key is absent or null) or "off"
+//   scope            "same-person" (the default when absent or null) or "off": the same switch under the name a person sees
+//                    (docs/design/beta-messaging.md). Off from either key wins; an unknown value is off and reported. An explicit
+//                    "same-person" is an explicit on for the flags below, but after a recorded kill only remote "own-account" turns
+//                    messaging back on (RemoteKeyOn; LiteKill.On). If a key appears twice in the file, the last one wins, as for
+//                    every setting here (MessagingScopeTests); a null scope reads as absent.
 //   allowAllTargets  false (the default) or true: whether own-agent text may enter an allow-all
-//                    session. Counts only while remote is explicitly "own-account", so the default
-//                    never opens one; otherwise such a target falls back to Home Assistant.
+//                    session. Counts only while messaging is explicitly on (remote "own-account" or scope "same-person"), so the
+//                    default never opens one; otherwise such a target falls back to Home Assistant.
 //   allowAllTargetSessions [] (default): exact session ids allowed with allowAllTargets on; names and wildcards grant nothing.
 //   allowAllLaunchedTargets false (default): all live allow-all launches here, independently of the list path.
-//   laneDelivery     false (default): the owner-gated lane delivery path (docs/message-delivery.md). Counts only while remote is
-//                    explicitly "own-account"; a consumer must also AND it with liteKill.On. Nothing reads it yet.
+//   laneDelivery     false (default): the owner-gated lane delivery path (docs/message-delivery.md). Counts only while messaging is
+//                    explicitly on; a consumer must also AND it with liteKill.On. Nothing reads it yet. The Scope property has no
+//                    consumer yet either: PR4's Settings control (docs/design/beta-messaging.md) is the first.
 //
 // Only a clean absent key is on. An explicit "off" (which the kill writes), an unknown value, a
-// section that is not an object, any problem in a section without remote, or a file that cannot
+// section that is not an object, any problem in a section without remote or scope, or a file that cannot
 // be read (Closed) is off. Invalid list entries are ignored. Installs/upgrades never write these keys.
 //
 // A change needs no restart: HostSettings.CurrentAgentMessaging(folder) is called per message, which reads
