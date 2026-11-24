@@ -547,3 +547,12 @@ That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 pat
 - **No prefix.** The same escaping applies, and a leading digit or letter gets one leading space so it cannot answer an option prompt.
 
 This is hygiene, not a security boundary: a model may ignore the marker, and a sender's words may still persuade (design/agent-principals.md §6.4).
+
+### What a refused reply shows (#804 slice 2)
+
+A reply refused because a complete, non-shell Copilot box holds words (refusal `Occupied`)
+also returns `input`: the box as the host shows it (hidden characters escaped, host `marks`),
+capped at 500 characters, `truncated`, `mode: "text"`, the SHA-256 `digest` of the whole
+escaped box, and `clearable`. Only a reply classified as a person's (the same `Steer` provenance the clear requires) gets `input` and the draft in `reason`; an agent, an MCP child or an unclassified sender gets the reason with the draft's length only (`ReplyReasons.Shared`). **Lite never shows the box:** the Lite refusal stays the content-free `composerNotEmpty`, because the box may hold a person's draft that an agent must not read; it may later say only that a person can clear it. This cut only shows: `clearable` is always `false`, no key is
+sent, and nothing is cleared. A cut never splits an escape or a surrogate pair. Shell mode,
+Claude and Codex boxes carry no `input` yet. The signed clear and policy follow in later slices.

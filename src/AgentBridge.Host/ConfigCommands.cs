@@ -36,7 +36,7 @@ public static class ConfigCommands
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
-        "agentMessaging.remote", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "agentMessaging.laneDelivery", "agentMessaging.claudeBusyQueue", "security.roster",
+        "agentMessaging.remote", "agentMessaging.scope", "agentMessaging.allowAllTargets", "agentMessaging.allowAllTargetSessions", "agentMessaging.allowAllLaunchedTargets", "agentMessaging.laneDelivery", "agentMessaging.claudeBusyQueue", "security.roster",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];
@@ -126,6 +126,8 @@ public static class ConfigCommands
             WorkspaceApproval.NotGit => $"{added.Path} is not in a git repository, so its sessions cannot have worktrees of their own; add it without --isolate",
             WorkspaceApproval.AlreadyApproved => $"{added.Path} is already approved, as '{added.Label}'",
             WorkspaceApproval.LabelInUse => $"another workspace is already labelled '{added.Label}'; choose one with --label",
+            WorkspaceApproval.NotLocal => $"{added.Path} is not on a fixed drive of this machine; only folders on its own drives can be approved",
+            WorkspaceApproval.Busy => "config.json is being changed by another process; try again",
             WorkspaceApproval.TooMany => $"at most {AgentBridge.Protocol.LaunchProtocol.MaxWorkspaces} workspaces can be approved; remove one first",
             _ => added.Detail,
         };

@@ -31,6 +31,8 @@ public sealed record AgentPolicy
     public AgentInboundPolicy InboundRemote { get; init; } = AgentInboundPolicy.Off;
     public IReadOnlyList<string> ExcludedSessions { get; init; } = [];
     public IReadOnlyList<string> ExcludedWorkspaces { get; init; } = [];
+    // The role names that count as coordinators for resume (#4318), set only by the person; empty means resume is off.
+    public IReadOnlyList<string> ResumeRoles { get; init; } = [];
     public AgentPolicyLimits Limits { get; init; } = AgentPolicyLimits.Default;
 
     // "prefix" or "none"; the design forces the prefix for cross-account, so prefix is the default.
@@ -113,6 +115,16 @@ public sealed record AgentPolicy
                             }
                         }
                         else { Unknown($"agents.inbound.{i.Name}", problems); }
+                    }
+                    break;
+                case "resume":
+                    if (!Object(p.Value, "agents.resume", problems, out var resume)) { return Denied(problems); }
+                    foreach (var r in resume.EnumerateObject())
+                    {
+                        if (r.Name != "roles") { Unknown($"agents.resume.{r.Name}", problems); continue; }
+                        var roles = Strings(r.Value, "agents.resume.roles", problems);
+                        if (roles is not null && roles.All(role => System.Text.RegularExpressions.Regex.IsMatch(role, "^[A-Za-z0-9-]{1,64}$"))) { policy = policy with { ResumeRoles = roles }; }
+                        else if (roles is not null) { problems.Add("agents.resume.roles: a role is letters, digits and hyphens, up to 64"); }
                     }
                     break;
                 case "limits":

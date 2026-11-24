@@ -8,6 +8,10 @@ using Xunit;
 namespace AgentBridge.App.Tests;
 
 // Execute the actual platform method bodies against offline window/installer contracts.
+// In flight in two of the three App.Tests host hangs on CI, and it sets a process-wide environment variable and compiles with Roslyn
+// behind a static lazy: so it runs ALONE, in a collection with no parallelism, and keeps its coverage (QuarantineTests lists it).
+// That removes a suspected cause of the hang; the root cause is not known to be this.
+[Collection(nameof(RunCompletionTests))]
 public sealed class RunCompletionTests : IDisposable
 {
     static readonly Lazy<MethodInfo> run = new(Compile);
@@ -187,3 +191,6 @@ public sealed class RunCompletionTests : IDisposable
         return Assembly.Load(output.ToArray()).GetType("AgentBridge.App.Harness")!.GetMethod("Run")!;
     }
 }
+
+[CollectionDefinition(nameof(RunCompletionTests), DisableParallelization = true)]
+public sealed class RunCompletionCollection;
