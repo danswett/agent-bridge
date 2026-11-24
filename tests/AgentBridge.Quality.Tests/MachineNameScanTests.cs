@@ -48,4 +48,20 @@ public class MachineNameScanTests
 
         Assert.Empty(named);
     }
+
+    // The exporter takes its machines as mandatory parameters (none is written in it), and the drift check, which the daily workflow runs, records with
+    // it: every mandatory parameter of the exporter must be handed over by the drift check, or the check stops with "could not record" every day.
+    [Fact]
+    public void The_drift_check_hands_the_exporter_every_parameter_it_requires()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var exporter = File.ReadAllText(Path.Combine(root, "tools", "ha-contract", "Export-HaContract.ps1"));
+        var drift = File.ReadAllText(Path.Combine(root, "tools", "ha-contract", "Test-HaContractDrift.ps1"));
+
+        var required = Regex.Matches(exporter, @"\[Parameter\(Mandatory\)\]\[string\]\$(\w+)").Select(m => m.Groups[1].Value).ToList();
+        var missing = required.Where(name => !Regex.IsMatch(drift, "-" + name + "(?![A-Za-z0-9])")).ToList();
+
+        Assert.Contains("Machine", required);
+        Assert.Empty(missing);
+    }
 }
