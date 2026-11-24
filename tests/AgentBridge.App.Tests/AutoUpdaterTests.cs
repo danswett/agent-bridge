@@ -2247,8 +2247,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             : Task.FromException<LocalChannel>(new HostNotRunningException("stopped"));
         await StartAsync();
         await auto.TickAsync();
-        await host.StopAsync();
+        // The flag first: from here a connect attempt is the one this test wants (never reaching, or hanging for, a host that has just
+        // stopped). Set after the stop, an attempt the connection made in between hit a host that was gone and on Linux, where its socket is
+        // simply absent, failed at once with NotRunning; the later attempts then hung and the state never moved to Connecting (a 15 s wait).
         disconnected = true;
+        await host.StopAsync();
         connection.Reconnect();
         await Wait.UntilAsync(() => connection.State == (reconnecting ? LinkState.Connecting : LinkState.NotRunning), "the disconnected host");
         var warnings = 0;
