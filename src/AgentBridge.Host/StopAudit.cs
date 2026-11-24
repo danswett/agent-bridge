@@ -10,11 +10,13 @@ namespace AgentBridge.Host;
 internal static class StopAudit
 {
     internal static async Task<StopResult> StopAsync(StopService stops, ISessionSource source, AgentAuditLog audit,
-        StopRequest request, string path, string principal, CancellationToken ct = default)
+        StopRequest request, string path, string principal, CancellationToken ct = default, ClientIdentity? client = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key) || !Guid.TryParseExact(request.Id, "D", out var target)
             || target == Guid.Empty) { return Refused("the stop needs valid request and session UUIDs"); }
         var (rows, complete) = GateAuditProjection.Load(audit.Profile);
+        // Owner decision (b): an HA stop is still performed when its audit cannot be read or written; the failure is recorded and counted.
+        if (!complete && path == "legacy-ha") { audit.RecordUnauditedHa("stop", request.Id); return await stops.StopAsync(request, ct); }
         if (!complete) { return Refused("the stop audit is incomplete; check at the machine"); }
         var prior = rows.Where(r => r.Action == Ops.SessionStop && r.Request == key.ToString()).ToArray();
         if (prior.Any(r => r.Target != target.ToString() || r.Principal != principal || r.Gate is null))
@@ -36,7 +38,8 @@ internal static class StopAudit
         AgentAuditEntry Entry(Guid identity, string phase, string outcome, string reason) =>
             new(path == "relay" ? "in" : "local", key.ToString(), principal, [], Ops.SessionStop, target.ToString(), outcome,
                 Gate: new GateAuditMetadata(1, Guid.NewGuid(), Guid.Empty, 0, phase, path,
-                    path == "legacy-ha" ? "ha-component" : "person-client", identity, reason));
+                    path == "legacy-ha" ? "ha-component" : "person-client", identity, reason,
+                    ClientKind: path == "relay" ? client?.Kind : null, ClientPlatform: path == "relay" ? client?.Platform : null));
         bool Prepare(int pid, DateTimeOffset at)
         {
             attempted = true;
@@ -45,7 +48,9 @@ internal static class StopAudit
             intent = Entry(Identity(target, pid, at), "intent", "attempted", "none");
             if (audit.Append(intent)) { return true; }
             intent = null;
-            return false;
+            if (path != "legacy-ha") { return false; }
+            audit.RecordUnauditedHa("stop", request.Id);
+            return true;
         }
         var result = await stops.StopAuditedAsync(request, Prepare, ct,
             principal: principal, onConflict: () => conflict = true, onReplay: () => replayed = true);
@@ -62,7 +67,7 @@ internal static class StopAudit
         return result;
     }
 
-    static Guid Identity(Guid session, int pid, DateTimeOffset started) =>
+    internal static Guid Identity(Guid session, int pid, DateTimeOffset started) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture,
             $"stop/1/{session}/{pid}/{started.UtcTicks}"))).AsSpan(0, 16));
 

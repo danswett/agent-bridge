@@ -10,6 +10,16 @@ made. It builds on the signed device roster proposed for #55 in PR #391,
 (revision 2, head `ed9ca862`, not yet merged). In this note, "#391 §n" means a section of that
 note, and a bare "§n" means a section of this one.
 
+**Current addressing (ID-first).** [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code),
+updated by [PR 3606](https://github.com/danswett/agent-bridge/pull/3606), owns the addressing
+contract: sends target a session ID or role ID; names are display only and never route.
+A stale or unknown ID fails loudly and holds, naming the target ID, with no name, substring
+or HA fallback. A role ID requires exactly one verified live holder; none or two refuses.
+Role-ID code, claims and succession remain paused under [role-ids.md](role-ids.md);
+this design note claims no implemented role routing. Legacy lookup reconciliation is tracked
+in [issue 3607](https://github.com/danswett/agent-bridge/issues/3607). Protocol fields and
+authorization, account, kill-switch and final-effect fences are unchanged by this clarification.
+
 §8 covers the owner-requested overlap with connectors: Home Assistant as the first client of the
 third-party connector API, and #388's headless identity. That section is the one place where
 the three principal kinds (agents, connectors and cross-account peers) are set against each
@@ -195,8 +205,9 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
 
 **Script caller slice (#2346, Windows).** A registered script uses the same hashed token store
 but authenticates as `script:<machine>/<name>`, without a session/process binding. Its complete,
-traceable ancestry must contain no named or host-known agent process. Only `fleet.list` and
-`fleet.find` are enabled, with the host's own account scope; unsigned results stay `unverified`.
+traceable ancestry must contain no named or host-known agent process. #2763 permits only
+`fleet.list`, `fleet.find` and `agent.send` with `read+reply` scope, on the host's own account;
+unsigned lookup results stay `unverified`. Launch still requires a separate person-set fleet grant.
 The connection retains its script restriction after expiry, record removal or a store fault,
 so it never falls back to person authority. See [script-credentials.md](script-credentials.md)
 for protected files, expiry and successful-read rotation. Session binding below is unchanged.
@@ -214,9 +225,9 @@ The host accepts it only if all of these hold:
 2. **The caller is positively inside that session**, or the request is refused. It fails closed:
    * **Windows:** the pipe's ancestry read (local-pipe.md:101-112) finds the credential's bound
      process (`rootPid` with `rootStartUtc`) among the caller's ancestors, read **in full**.
-     Alternatively, and better, the caller's process is in the **Job object** the host created for
-     that launch (`IsProcessInJob`), without breakaway. That holds even for a process started
-     detached from its parent, which ancestry can't follow.
+     Or the caller's process is a member of the **session job** the host made for that launch (see
+     *Session job* below): that holds for a shell whose parent has exited, which ancestry can't follow.
+     The ancestor rule is unchanged, and membership is only ever a second way in for the same credential.
    * **An ancestry read only in part is a refusal**, not a fallback. `AGENT_BRIDGE_SESSION` is
      never proof: any process of the user can set it. It only *names* the session the caller
      claims, which step 2 then has to prove.
@@ -284,6 +295,34 @@ local-pipe.md:93-98).
   other acting op.
 * This is a protocol change, shipped in AP8.
 
+**Session job (Windows).** *Why:* the ancestor rule needs the session's root process in the caller's parent-pid chain. Windows records
+a process's parent id and nothing more, so once an intermediate parent has exited the walk ends there ("parent gone") and a valid
+credential is refused with `credential presented from outside its session`. A long-lived tool shell host, or any detached or orphaned
+shell, loses fleet messaging until the session is relaunched, with an error that does not say why.
+
+*What:* when the host binds a credential to a launch's root process (`Bind`) it puts that process in a Job object, and `Check`
+accepts a caller that is a member of that job when the chain does not reach the root. Children inherit membership, so an orphan stays in.
+* **No name, no DACL to get wrong.** The job is unnamed and the host keeps the only handle, in memory, keyed by the credential's hash. A
+  named job vanishes from its namespace when the last handle closes (a host restart), and any process of the user can open, squat or
+  guess a name. With no name there is nothing another session can open, join or trust; the only ways in are this handle and inheriting
+  membership from a process already in the job. A job is never believed by name.
+* **Believed only with the recorded root in it.** `Contains` asks about this credential's own job and requires the recorded root
+  (`rootPid` with `rootStartUtc`) to be in it, and the caller by pid *and* start time, and neither to have exited. A recycled id, a
+  missing start time, a partial ancestry read, a dead root, or another credential's job each refuse. A job never overrides step 2's
+  "read in full" rule or the root-alive check; it replaces only "the root is among the ancestors".
+* **Limits.** Only permission to break away: never kill-on-close, so a host restart cannot end a session. A child that breaks away
+  still starts, outside the job, and has the ancestor rule alone (it is a foreign caller as far as the job is concerned).
+* **Nested jobs.** The agent CLI may already run its children in a job of its own. Windows 8 and later nest jobs, so our job is made
+  the root's job as well, and `IsProcessInJob` is true for the root and for anything in a descendant job. If the root cannot be enrolled
+  (access denied, a job that does not nest, a process that has gone) nothing fails: the launch is still bound and the ancestor rule alone
+  applies; one line says so, never the token.
+* **Restart.** Handles die with the host, and a job with no handle and no name cannot be reached again. At start the host enrols each
+  live bound root again in a new job, so what that session starts from then on is a member. Shells that were already running before
+  the restart, and sessions launched before this shipped, keep the ancestor rule alone until the session is resumed or relaunched.
+  The handle is let go when the credential is removed (ended, revoked, replaced by a resume, expired); the job itself lives on while
+  its processes do and nothing is ended.
+* **Foreign callers.** A process in neither the chain nor the job is refused exactly as before, with the same log line. Another
+  session's job does not admit a caller to this one. Adopted sessions and macOS/Linux are unchanged (no job, ancestor rule).
 **macOS and Linux.** See step 2: no agent credentials there until peer identification and
 ancestry exist. That is a prerequisite for launched and adopted sessions alike.
 
@@ -738,7 +777,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
 | `links` | `[]` | Federation (§7). Must be empty in v1 |
-| `agentMessaging.remote`, `agentMessaging.allowAllTargets` | `"off"` \| `"own-account"`; `false` \| `true` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"off"` and `false`**; an unknown value is off. `allowAllTargets` counts only while `remote` is `"own-account"`; `false` sends allow-all targets to Home Assistant. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
+| `agentMessaging.remote`, `agentMessaging.allowAllTargets`, `agentMessaging.allowAllTargetSessions` | `"off"` \| `"own-account"`; `false` \| `true`; `[]` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"own-account"` (owner decision 2026-11-19; acts only for a signed-in host with a present same-account peer, and an explicit `"off"` or any kill keeps it off), `false` and `[]`**; an unknown value is off. `allowAllTargets` is only a master switch: an allow-all session also needs its exact id in `allowAllTargetSessions`. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,
@@ -762,7 +801,7 @@ are listed separately, off, each with its warning. Until a host is in roster
 | `session.answer`: an approval (Copilot permission, Claude permission, Codex approval) | **Never** | Not in the action set (§4.3), and refused on the pipe for agent connections (`LocalApi.cs:44-47`'s rule kept) |
 | `session.answer`: an `ask_user` or `AskUserQuestion` form | **No in v1** (Q3) | As above. Decision 1 lists read, reply and launch only |
 | `launch.trust.answer` (folder trust, Bypass Permissions warning) | **Never** | Relay person-device only (v1-launch.md:216-219), and not in the action set |
-| `session.stop` | **No in v1** (Q12) | Not in the action set |
+| `session.stop` | **No**; `fleet.end` only for an agent-launched session (Q12, #2741) | Not in the action set; the launch record decides |
 | `attachment.*` | **No in v1** | Not in the action set |
 | `update.*`, `push.*`, `host.*`, `machine.forget`, `pairing.*`, roster ops, settings | **Never** | Not in the action set. Pipe management ops are already refused inside agent sessions |
 
@@ -1731,9 +1770,11 @@ Nothing is built before #55 and AP5 (AP11, §11.2).
 * **Attribution (M6).** A message delivered under the grant sets the additive
   `driverFrom.grant: "group:<id>@<gen>"` (§6.1), only from the verified grant, and is audited per
   message (§5.6). After a restart the driver shows as unknown or agent, never as the person.
-* **The HA route (M7).** Once a member's machine runs the grant, members aren't driven over HA.
-  Product sets the order HA is retired per machine. The HA route stays as the fallback until the
-  grant ships, and gains no authority from this.
+* **The HA route (M7), historical.** Product sets the order HA is retired per machine.
+  This historical retirement sequence does not authorize HA fallback for ID-first messaging.
+  [Message delivery](../message-delivery.md#overlap-and-dependencies-named-before-any-code)
+  owns current addressing and refusal behavior; a missing target never becomes a name lookup
+  or a retry over HA. The grant gains no authority from a transport.
 * **Expiry.** 8 hours by default, 4 or 24 hours otherwise, and 24 hours at most (owner decision
   (a)). Renewal is in the app only, never pushed (c): the expiry item and **Approve again** are
   never pushed and never ride the hourly aggregate.
@@ -2071,6 +2112,28 @@ unchanged. Only the principal and its source change.
 * The receiving host sets `driver`, `driverFrom` and `userMessageFrom` from the **verified
   principal** (step 5) and its **own roster** (machine name). The envelope's free text and the
   reply's words can't set them.
+* **Relay delivery arms the prompt (AP6, #3732, #3740).** `LiteDeliver` arms the session's driver
+  with the exact framed words it types and a `userMessageLabel` of `"<session> on <machine>"` (or
+  `"script <id>"`), built only from the verified envelope principal (the machine as its envelope
+  names it, until a roster name is wired in), cleaned of brackets, `·` and hidden characters and cut
+  to 64 bytes. The arm is made only once the typing slot is held and the keys are about to go
+  (`ReplyRequest.KeysGoing`), so a delivery that is refused, busy, stale or answered without typing
+  (a signed resend of a request already delivered) never arms, and owner text typed while the slot
+  is awaited is not marked. The prompt is marked `userMessageFrom=agent` (live `activity` and
+  `session.history` `prompt.from`/`label`) only when the transcript's prompt is those exact words
+  inside the arm window. An arm still waiting when the delivery ends other than Delivered (including
+  Unconfirmed or an exception) is put back, but only while it is still the arm that delivery made (a
+  generation check under the driver lock), so an owner who types the same words later is still the
+  owner and a newer arm is never overwritten. Lane deliveries (the queueable lane) are not armed:
+  their prompts show as typed. Nothing in the text sets or clears the mark, and the prompt's text is
+  kept as typed, header included. Clients use the host's `from`/`label` for the agent-coloured
+  sender chip, never the text's claimed sender. Explicit person or untrusted provenance leaves the
+  owner's text unchanged. With both fields absent, only a strict legacy envelope gets a neutral chip
+  explicitly labelled **unverified** (including tooltip and accessible name); its full original text,
+  header included, remains available. That hint is never identity, an agent colour, or an input to
+  scheduling or notification decisions. The mark is held in memory with the session's turns, as for
+  Home Assistant replies: after a host restart, earlier relayed prompts carry no mark and can show
+  only this unverified hint, not verified attribution.
 * **Which display fields are trusted.** Only names from a verified source are shown as identity:
   * the machine name from the receiving host's own roster;
   * for another account, the **GitHub login verified by T2** (§7.11.3), or the **name the
@@ -3757,8 +3820,10 @@ Each has a recommendation. None is decided by this note.
 11. **Q11. Use the trusted-peer floor (#407) as an interim for cross-machine agent messaging?**
     **Recommended: no.** Decision 4 says wait for the roster, and the floor is for disposable
     evaluation (host-config.md:145-148). It may host AP5's tests on disposable hosts only.
-12. **Q12. May an agent stop a session?** **Recommended: not in v1** (decision 1). Revisit
-    allowing a session to stop sessions *it launched*, which is the useful case.
+12. **Q12. May an agent stop a session?** **Corrected (#2741, owner Nov 16):** yes, but only a
+    session the host's own launch record shows an agent started through the fleet launch route
+    (`fleet.end`, docs/host-launch.md), never a person-started one, and fail closed with no record.
+    `session.stop` itself stays person-only.
 13. **Q13. Read scope within the account.** **Recommended:** the same `Session` a person's device
     gets (decision 2: "any session"), minus `inbound.exclude`. Cross-account uses the projection
     (§7.4).

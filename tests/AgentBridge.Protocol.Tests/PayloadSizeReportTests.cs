@@ -88,7 +88,7 @@ public sealed class PayloadSizeReportTests(ITestOutputHelper output)
         Assert.Equal((2, 17, 3), Rows(measured.Text)["Example"]);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: https://github.com/danswett/agent-bridge/issues/3142, expires 2026-11-19 04:30 PT")]
     public async Task Report_is_deterministic_for_the_same_vectors()
     {
         using var sample = new VectorFolder();

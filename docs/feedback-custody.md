@@ -16,7 +16,7 @@ sections. This is the single custody document for
 of SRE's isolated Azure worker plan: West US 2, resource group
 `rg-agent-bridge-feedback`, a dedicated Container Apps environment and a small
 scheduled job with no public inbound access. Estimated cost is $3 to $7 per
-month, not a billed amount. The worker uses managed identity; the VM3
+month, not a billed amount. The worker uses managed identity; the staging VM
 certificate remains staging-only and must not be used for production. Prove
 that the supervisor cannot retrieve worker secrets, debug or modify the worker,
 or redirect plaintext. Record actual deployment, administrative access, review
@@ -44,7 +44,7 @@ publish private-key values. Managed identity is not the feedback decryption key.
 The Windows production recipient key is a reviewed, compiled-in public constant,
 not a value learned from the relay ready message. Its matching private key must
 be the Customer Feedback worker's production key in the dedicated vault. Do not
-generate a separate sender-only key, reuse the staging key or use the VM3
+generate a separate sender-only key, reuse the staging key or use the staging VM
 certificate as production custody. Until the evidence below is complete, the
 production defaults remain empty and sending remains unavailable; staging
 configuration must not supply a production fallback.

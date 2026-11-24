@@ -29,6 +29,88 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
     });
 
     [Fact]
+    public async Task An_HA_launch_through_the_connectors_composed_delegate_is_attributed_to_the_connector_and_counted_by_the_gate()
+    {
+        var launch = HaRunning.LaunchDelegate(Launcher(Config()), new AgentAuditLog(GateProfile, clock, logged.Enqueue));
+        var request = JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!;
+
+        Assert.Equal(LaunchOutcome.Started, (await launch(request, CancellationToken.None)).Outcome);
+
+        var rows = LaunchAuditRows();
+        Assert.Equal(["intent", "terminal"], rows.Select(r => r.GetProperty("gate").GetProperty("phase").GetString()));
+        Assert.All(rows, r =>
+        {
+            Assert.Equal(("legacy-ha", "ha-component"), (r.GetProperty("gate").GetProperty("path").GetString(), r.GetProperty("gate").GetProperty("actorKind").GetString()));
+            Assert.Equal("ha:connector", r.GetProperty("principal").GetString());
+        });
+        // The windowed gate counts this very launch as an HA dispatch, through the operator command as well as the projection.
+        Assert.Equal(1, GateAuditProjection.ReadWindow(GateProfile, clock.GetUtcNow().AddHours(-1)).LegacyHaDispatches);
+        var output = new StringWriter();
+        Assert.Equal(1, AuditCommands.Run(["audit", "gate", "--profile", "profile", "--since", "1999-12-31T00:00:00Z", "--host", "host-a", "--json"], f.Root, output, new StringWriter()));
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(("fail", 1), (json.RootElement.GetProperty("kind").GetString(), json.RootElement.GetProperty("legacyHaDispatches").GetInt32()));
+    }
+
+    [Fact]
+    public async Task With_no_audit_log_the_HA_launch_delegate_still_starts()
+    {
+        var request = JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!;
+
+        Assert.Equal(LaunchOutcome.Started, (await HaRunning.LaunchDelegate(Launcher(Config()), null)(request, CancellationToken.None)).Outcome);
+
+        Assert.NotEmpty(starter.Specs);
+    }
+
+    // The audit is readable but refuses the intent (its launches file is read-only): the launch is still started and recorded as unaudited.
+    [Fact]
+    public async Task An_HA_launch_is_still_started_when_the_audit_is_readable_but_refuses_the_intent()
+    {
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var launch = HaRunning.LaunchDelegate(Launcher(Config()), audit);
+        Assert.Equal(LaunchOutcome.Started, (await launch(JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!, CancellationToken.None)).Outcome);
+        var file = Directory.GetFiles(Path.Combine(GateProfile, AgentAuditLog.FolderName), "launches-*.jsonl").Single();
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+        try
+        {
+            var specs = starter.Specs.Count;
+
+            Assert.Equal(LaunchOutcome.Started, (await launch(JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!, CancellationToken.None)).Outcome);
+
+            Assert.True(starter.Specs.Count > specs);
+            Assert.Contains(logged, l => l.StartsWith("audit_write_failed kind=launch ", StringComparison.Ordinal));
+            Assert.True(audit.PendingUnauditedHa >= 1);
+        }
+        finally { File.SetAttributes(file, FileAttributes.Normal); }
+    }
+
+    // OWNER DECISION (b): an HA launch is still started when its audit row cannot be written; audit_write_failed is logged and the
+    // count is flushed once at the next successful audit write, which the gate counts as an unaudited HA dispatch (FAIL).
+    [Fact]
+    public async Task An_HA_launch_is_still_started_when_the_audit_cannot_be_written_and_counted_once_when_it_next_writes()
+    {
+        Directory.CreateDirectory(GateProfile);
+        var blocker = Path.Combine(GateProfile, AgentAuditLog.FolderName);
+        File.WriteAllText(blocker, "not a folder");
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var launch = HaRunning.LaunchDelegate(Launcher(Config()), audit);
+        var request = JsonSerializer.Deserialize<LaunchRequest>(GateLaunch(Guid.NewGuid()), ProtocolJson.Options)!;
+
+        Assert.Equal(LaunchOutcome.Started, (await launch(request, CancellationToken.None)).Outcome);
+
+        Assert.NotEmpty(starter.Specs);
+        var line = Assert.Single(logged, l => l.StartsWith("audit_write_failed", StringComparison.Ordinal));
+        Assert.Matches(@"^audit_write_failed kind=launch session=[A-Za-z0-9._-]{1,64} at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$", line);
+        Assert.Equal(1, audit.PendingUnauditedHa);
+        File.Delete(blocker);
+        Assert.True(audit.Append(new AgentAuditEntry("local", "r1", "someone", [], "agent.note", "x", "ok")));
+        Assert.True(audit.Append(new AgentAuditEntry("local", "r2", "someone", [], "agent.note", "x", "ok")));
+        Assert.Equal("1", Assert.Single(GateAuditProjection.Load(GateProfile).Rows, r => r.Action == "audit_write_failed").Target);
+        var report = GateAuditProjection.ReadWindow(GateProfile, clock.GetUtcNow().AddHours(-1));
+        Assert.Equal(1, report.LegacyHaDispatches);
+        Assert.Equal(GateVerdictKind.Fail, GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0)).Kind);
+    }
+
+    [Fact]
     public async Task A_fresh_launch_records_intent_before_start_and_one_confirmed_terminal()
     {
         JsonElement[] beforeStart = [];
@@ -142,6 +224,60 @@ public sealed class LaunchGateAuditTests : LaunchFlowFixture
         Assert.Equal("intent", Assert.Single(LaunchAuditRows()).GetProperty("gate").GetProperty("phase").GetString());
         Assert.Contains("unresolved-intent", GateAuditProjection.Read(GateProfile, Guid.Empty).IncompleteReasons);
         Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
+    }
+
+    // HA deletion gate E4(f) (docs/design/ha-gate-counters.md; Part of #1396): an HA launch whose terminal audit write fails AFTER dispatch
+    // leaves only its intent row. The windowed gate must read it as an HA dispatch with an unresolved intent: FAIL ha-fallback, never PASS.
+    [Fact]
+    public async Task A_failed_HA_launch_terminal_write_reaches_the_window_gate_as_an_ha_fallback_with_an_unresolved_intent()
+    {
+        var since = clock.GetUtcNow().AddMinutes(-1);
+        var held = GateFolder + ".held";
+        starter.BeforeStart = () => { Directory.Move(GateFolder, held); File.WriteAllText(GateFolder, "blocked"); };
+        var launcher = Launcher(Config());
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App", Permissions = "ask" };
+        var ingress = new GateLaunchIngress("legacy-ha", "ha-component", "ha-component:local", null);
+        LaunchResult result;
+        try { result = await GateLaunchAudit.LaunchAsync(launcher, request, "home-assistant", audit, ingress); }
+        finally
+        {
+            if (File.Exists(GateFolder)) { File.Delete(GateFolder); Directory.Move(held, GateFolder); }
+        }
+        Assert.Equal(LaunchOutcome.Started, result.Outcome);
+        Assert.Single(starter.Specs);
+        Assert.Contains(logged, line => line.Contains("agent audit log could not write", StringComparison.Ordinal));
+        var intent = Assert.Single(LaunchAuditRows()).GetProperty("gate");
+        Assert.Equal(("intent", "legacy-ha", "ha-component"), (intent.GetProperty("phase").GetString(), intent.GetProperty("path").GetString(), intent.GetProperty("actorKind").GetString()));
+
+        var report = GateAuditProjection.ReadWindow(GateProfile, since);
+        Assert.Equal(1, report.LegacyHaDispatches);
+        Assert.Contains("unresolved-intent", report.IncompleteReasons);
+        var verdict = GateVerdict.Evaluate(report, new GateMessageEvidence(500, 0));
+        Assert.Equal(GateVerdictKind.Fail, verdict.Kind);
+        Assert.Contains("ha-fallback: 1 legacy-ha dispatches", verdict.Reasons);
+    }
+
+    [Fact]
+    public async Task A_grant_replay_without_a_terminal_does_not_trust_the_launchers_started_cache()
+    {
+        var held = GateFolder + ".held";
+        starter.BeforeStart = () => { Directory.Move(GateFolder, held); File.WriteAllText(GateFolder, "blocked"); };
+        var launcher = Launcher(Config());
+        var audit = new AgentAuditLog(GateProfile, clock, logged.Enqueue);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = "copilot", Workspace = "App", Permissions = "ask" };
+        var ingress = new GateLaunchIngress("local", "agent", "fixture", null, Guid.NewGuid().ToString("D"));
+        LaunchResult first;
+        try { first = await GateLaunchAudit.LaunchAsync(launcher, request, ingress.Principal, audit, ingress); }
+        finally
+        {
+            if (File.Exists(GateFolder)) { File.Delete(GateFolder); Directory.Move(held, GateFolder); }
+        }
+        Assert.True(first.Outcome == LaunchOutcome.Unconfirmed, first.Reason);
+        var replay = await GateLaunchAudit.LaunchAsync(launcher, request, ingress.Principal, audit, ingress);
+        Assert.Equal(LaunchOutcome.Unconfirmed, replay.Outcome);
+        Assert.Single(starter.Specs);
+        Assert.Equal("intent", Assert.Single(LaunchAuditRows()).GetProperty("gate").GetProperty("phase").GetString());
     }
 
     sealed class GateAuditChannel : IProtocolChannel

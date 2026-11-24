@@ -29,6 +29,8 @@
     <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
     <!-- How the app downloads its updates, tried here against Velopack (the app itself builds only on Windows). -->
     <Compile Include="..\..\src\AgentBridge.App\AppPackages.cs" Link="AppPackages.cs" />
+    <!-- The app's same-PC pin offer (#3450), tried here against the host's handoff. -->
+    <Compile Include="..\..\src\AgentBridge.App.Core\SamePcPin.cs" Link="SamePcPin.cs" />
   </ItemGroup>
 
   <ItemGroup>

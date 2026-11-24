@@ -206,9 +206,9 @@ public sealed class HookRunnerTests : IDisposable
         finally
         {
             pipe.Close_();
-            Assert.True(run.Wait(TimeSpan.FromSeconds(10)));
+            await run.WaitAsync(TimeSpan.FromSeconds(10));
         }
-        Assert.Equal(0, run.Result);
+        Assert.Equal(0, await run);
         Assert.Single(SpoolFiles());
 
         // And done long before the 30 s any other hook would wait.
@@ -217,14 +217,13 @@ public sealed class HookRunnerTests : IDisposable
         var bounded = Started(open, boundedOutput, Env(inputWait: TimeSpan.FromSeconds(30)), "copilot", "ask_user");
         try
         {
-            Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
-            Assert.Equal(0, bounded.Result);
+            Assert.Equal(0, await bounded.WaitAsync(TimeSpan.FromSeconds(10)));
             Assert.Equal("{\"permissionDecision\":\"allow\"}\n", await boundedOutput.Reply.WaitAsync(TimeSpan.FromSeconds(10)));
         }
         finally
         {
             open.Close_();
-            Assert.True(bounded.Wait(TimeSpan.FromSeconds(10)), "the hook did not finish during cleanup");
+            await bounded.WaitAsync(TimeSpan.FromSeconds(10));
         }
     }
 
@@ -529,27 +528,27 @@ public sealed class HookRunnerTests : IDisposable
     }
 
     [Fact]
-    public void The_fallback_replies_at_once_even_when_stdin_never_closes()
+    public async Task The_fallback_replies_at_once_even_when_stdin_never_closes()
     {
         var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
         var (run, output) = Started(pipe, Env(drain: TimeSpan.FromMilliseconds(100)), "--fallback", "copilot", "agent_stop");
 
-        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the fallback waited on stdin");
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(10));
         pipe.Close_();
-        Assert.Equal(0, run.Result);
+        Assert.Equal(0, exit);
         Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
     }
 
     [Fact]
-    public void Ask_user_is_let_through_in_bounded_time_when_its_agent_never_closes_stdin()
+    public async Task Ask_user_is_let_through_in_bounded_time_when_its_agent_never_closes_stdin()
     {
         Heartbeat(TimeSpan.Zero);
         var pipe = new OpenPipe("{\"toolName\":\"ask_user\"}"u8.ToArray());
         var (run, output) = Started(pipe, Env(inputWait: TimeSpan.FromMilliseconds(200)), "copilot", "ask_user");
 
-        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the hook waited on stdin");
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(10));
         pipe.Close_();
-        Assert.Equal(0, run.Result);
+        Assert.Equal(0, exit);
         Assert.Equal("{\"permissionDecision\":\"allow\"}\n", Encoding.UTF8.GetString(output.ToArray()));
         // Possibly not all of it: never spooled.
         Assert.Empty(SpoolFiles());
@@ -557,7 +556,7 @@ public sealed class HookRunnerTests : IDisposable
     }
 
     [Fact]
-    public void An_event_that_fills_the_budget_gets_the_fixed_reply_without_waiting_for_more()
+    public async Task An_event_that_fills_the_budget_gets_the_fixed_reply_without_waiting_for_more()
     {
         Heartbeat(TimeSpan.Zero);
         var full = new byte[SpoolContract.MaxEventBytes];
@@ -565,7 +564,7 @@ public sealed class HookRunnerTests : IDisposable
         var pipe = new OpenPipe(full);
         var (run, output) = Started(pipe, Env(), "copilot", "agent_stop");
 
-        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "the hook waited for more than its budget");
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
         pipe.Close_();
         Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
         Assert.Empty(SpoolFiles());

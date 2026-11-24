@@ -77,8 +77,28 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         if (relay is not null) { await relay.DisposeAsync(); }
         await source.DisposeAsync();
         await clock.DisposeAsync();
-        foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
+        ClearReadOnly(f.Root);
         f.Dispose();
+    }
+
+    // Every file normal, so the folder can be deleted. afterListed: what a test does between the listing and the clearing.
+    internal static void ClearReadOnly(string root, Action<string>? afterListed = null)
+    {
+        // Git may still be at work in a fixture's worktree and removes its own files (`locked`) from under this: a file or a folder
+        // that has gone is already as clear as it can be, so it is skipped, and a listing cut short by one is taken again.
+        var files = new List<string>();
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try { files = [.. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)]; break; }
+            catch (DirectoryNotFoundException) { files = []; }
+        }
+        foreach (var file in files)
+        {
+            afterListed?.Invoke(file);
+            try { File.SetAttributes(file, FileAttributes.Normal); }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+        }
     }
 
     private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
@@ -92,7 +112,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     }
 
     private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null, IDiagnosticsJournal? journal = null,
-        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null)
+        Func<WorkspaceConfig, WorktreeResult, string, string?>? agentWorktreeCheck = null, Func<Guid, string, string, bool>? agentWorktreeRefusalAudit = null, ISessionSource? discovery = null,
+        string? statusFolder = null, TimeSpan? rememberFor = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -122,10 +143,12 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
             ProvenanceFile = Path.Combine(f.Root, "profile", "launch-provenance.json"),
+            StatusFolder = statusFolder,
+            RememberFor = rememberFor ?? TimeSpan.FromMinutes(25),
             Journal = journal,
             AgentWorktreeCheck = agentWorktreeCheck,
             AgentWorktreeRefusalAudit = agentWorktreeRefusalAudit,
-        }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
+        }, log: Log, attachments: attachments, credentials: credentials, account: account);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -721,17 +744,17 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait for its own transcript activity", StringComparison.Ordinal))));
         Assert.NotNull(launcher.HeldForReply(Id));
 
         Fixture.Append(Path.Combine(f.CopilotHome, "session-state", Id, "events.jsonl"),
-            Copilot.User("trusted it, then this", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
+            Copilot.User("trusted it, then this", 1).Replace(Copilot.At(1), DateTimeOffset.UtcNow.ToString("O")), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4));
         await source.RefreshAsync();
         Assert.Null(launcher.HeldForReply(Id));
     }
 
     // #855 L1: a new CLI's session.resume ends the killed turn, which counts a turn, with nobody having
-    // typed: replies stay held. Only a prompt of the person's after the launch lets them through.
+    // typed: replies stay held. Activity after this process started lets them through.
     [Fact]
     public async Task A_resume_that_ends_a_killed_turn_does_not_lift_the_hold_but_a_prompt_typed_at_the_machine_does()
     {
@@ -743,13 +766,13 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var launcher = Launcher(Config(), follow: TimeSpan.FromSeconds(1));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, (await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal))).Outcome);
-        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait until a prompt is typed at the machine", StringComparison.Ordinal))));
+        await WaitWhileClockRunsAsync(() => Task.FromResult(logged.Any(l => l.Contains("wait for its own transcript activity", StringComparison.Ordinal))));
         Fixture.Append(events, Copilot.Event("session.resume", new { }, 30));
         await source.RefreshAsync();
         Assert.NotNull(launcher.HeldForReply(Id));
 
         // A prompt and the turn it starts, not yet ended: the turn count is the same as before.
-        Fixture.Append(events, Copilot.User("trusted it, then this", 40), Copilot.TurnStart(41));
+        Fixture.Append(events, Copilot.User("trusted it, then this", 40).Replace(Copilot.At(40), DateTimeOffset.UtcNow.ToString("O")), Copilot.TurnStart(41));
         await source.RefreshAsync();
         Assert.Null(launcher.HeldForReply(Id));
     }
@@ -1077,6 +1100,10 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await LaunchAsync(ch, new { workspace = "App" });
 
         Assert.Equal("unconfirmed", o.Outcome_);
+        // Under load the clock can run out the registration wait before the host's first look, so the
+        // outcome returns first and the session is told to the restore record when that look sees it.
+        await source.RefreshAsync();
+        await WaitAsync(() => { lock (told) { return Task.FromResult(told.Count > 0); } });
         lock (told) { Assert.Equal([o.Session!], told); }
     }
     [Fact]
@@ -1566,6 +1593,41 @@ public abstract partial class LaunchFlowFixture
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
+    // The launch service's log, as the host's log would have it, and a wait for one of its lines (#4229). The wait is driven by the line being logged,
+    // not polled on the wall clock: the host logs it from the launch's follow, which a loaded machine can be slow to get round to, and a 10 s poll could
+    // run out before it did. The backstop only ends a wait that can never be answered, and the failure says what the host did log.
+    readonly List<(string Fragment, TaskCompletionSource Done)> logWaits = [];
+    static readonly TimeSpan LogBackstop = TimeSpan.FromSeconds(60);
+
+    private protected void Log(string line)
+    {
+        logged.Enqueue(line);
+        lock (logWaits)
+        {
+            foreach (var wait in logWaits.Where(w => line.Contains(w.Fragment, StringComparison.Ordinal)).ToList())
+            {
+                wait.Done.TrySetResult();
+                logWaits.Remove(wait);
+            }
+        }
+    }
+
+    private protected async Task WaitForLogAsync(string fragment, TimeSpan? backstop = null)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (logWaits)
+        {
+            // Checked and registered together with Log's look at the waiters, so a line logged in between is never missed.
+            if (logged.Any(l => l.Contains(fragment, StringComparison.Ordinal))) { return; }
+            logWaits.Add((fragment, done));
+        }
+        try { await done.Task.WaitAsync(backstop ?? LogBackstop); }
+        catch (TimeoutException)
+        {
+            lock (logWaits) { logWaits.RemoveAll(w => w.Done == done); }
+            Assert.Fail($"the host never logged \"{fragment}\"; it logged: {string.Join(" | ", logged)}");
+        }
+    }
     private protected static async Task WaitAsync(Func<Task<bool>> done)
     {
         var until = DateTime.UtcNow + Patience;
@@ -1611,6 +1673,12 @@ public abstract partial class LaunchFlowFixture
         public readonly List<int> Typed = [];
         public readonly List<KeyPlan> Plans = [];
         public int Reads;
+        public readonly List<(int Process, DateTimeOffset Created, int Columns)> Sizes = [];
+        public Task<ConsoleWidth> SizeForLaunchAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+        {
+            lock (Sizes) { Sizes.Add((processId, createdAt, columns)); }
+            return Task.FromResult(new ConsoleWidth(columns, null, false));
+        }
         // What the agent does with keys that reached it (a folder-trust answer).
         public Action<KeyPlan>? OnTyped;
         public InjectionResult? Fails;

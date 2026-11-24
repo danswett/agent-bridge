@@ -1,5 +1,23 @@
 # How the host launches sessions
 
+## Host CLI: read launch status
+
+`agent-bridge-host launches status --request <guid> [--json] [--profile <name>]` reads
+one request; `launches list [--since <minutes>] [--json] [--profile <name>]` lists retained
+results (default 15 minutes; range 0-43200). Both use the same-user local pipe, never act.
+Fields: `request`, `outcome`, `session` (16 lowercase hex or null), `permissions`
+(`ask`, `allowAll` or null), `registered` (live full-ID match, never name), `time`.
+Status exits: 0 started/registered; 3 unknown; 5 refused/failed; 6 unavailable/invalid
+(stderr stage/reason); 7 accepted but not confirmed registered, including busy; bad args 2.
+List exits 0 on a valid list. The private, atomic `launch-status/results.json` retains
+128 content-free results and the HA caller UUID mapping through late registration.
+Unexpired outcomes are never evicted: capacity rejects the new row with a host-log warning;
+only rows at least 15 minutes old expire. Records are principal/request keyed; an ambiguous
+UUID query returns unknown. Invalid status records are logged, never abort launch completion.
+Corruption reads empty with a log warning. Deduplication, provenance and authorization
+are unchanged; unknown never authorizes a relaunch.
+The launch ledger retains used request IDs for 30 days (4096 entries); at capacity it refuses new IDs rather than evicting unexpired ones.
+
 `session.launch` and `launch.options` ([contract](protocol/v1-launch.md)) start or resume an
 agent session from another device, the way agent-ha-bridge's launch card does. A session from
 another machine is a launch too: [host-transfer.md](host-transfer.md). So is a press of Launch on
@@ -17,6 +35,42 @@ when settings validation disabled the connector. Credential-issuance and process
 errors log only the exception type, never its potentially credential-bearing message.
 Non-HA launches and all credential handling stay unchanged;
 providing this URL does not itself establish that an HA agent credential is available.
+
+## Fleet launch provenance
+
+The host's fleet launch route persists `grant: "fleet"` in `launch-provenance.json`
+before dispatch, then binds it to the discovered session and exact process/start time.
+Ordinary launches and older unattributed records never acquire that grant. Origin
+proof survives reopening the store, but conflicting person/process records, unfinished
+launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
+This reconciles the predecessor provenance work for
+[agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
+host-owned fleet grant; it does not itself enable fleet launch admission.
+
+Stopping (#2741): `fleet.end` with the all-zero grant id ends a session with no grant, only when
+`IsFleetWorker` holds, that is, this launch record shows an agent started this exact process through the
+fleet route. A person-started session, no record, an unfinished or unreadable record, a derived (16-hex)
+or unknown id, a held host, a kill switch or an excluded workspace refuses (`scope`, `policy`,
+`kill-switch`) before anything is typed. The same gates apply as for a grant: one press, never
+`person-required` confirmation, audited under the agent's principal. The plain `session.stop` stays
+person-only.
+
+Who may call: the caller must be a live agent session credential with `read+reply+launch` scope at depth 0
+and not adopted (the same subject check as a granted launch). Any such session may end any agent-launched
+session on this host (owner, Nov 16 on #2741): the record keeps no launcher principal, so a stop is not
+limited to the sessions that caller started. It cannot end its own session.
+
+Work is never ended over: the host reads git in the session's folder, once per request, and refuses with
+`policy` on uncommitted or untracked files (whatever `status.showUntrackedFiles` says), a stash, a commit
+on any local branch that has not been pushed, a local branch with no upstream, or git that cannot be read
+or does not finish, pipes included, inside one 5 s deadline for the whole check (the git process tree is killed, and the refusal is the answer). An open pull request is GitHub's to say and the host
+makes no GitHub call, so a caller that must not end such a session checks it first (follow-up for program C).
+
+What the check does not count, by design: files git is told to hide are the repository's own decision about what
+is work, so `.git/info/exclude`, `core.excludesFile` and `.gitignore` matches, and files marked `assume-unchanged` or
+`skip-worktree`, are not pending. Submodule changes are counted whatever `diff.ignoreSubmodules` says. The git child
+runs with no inherited `GIT_*` variable (a `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE` of the host's own would aim it
+at another repository), is pointed at the session's folder with `-C`, and its machine-readable output is NUL-separated.
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 
@@ -90,7 +144,7 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   so the agent's console is a normal window on the person's desktop. No window title is set
   on Windows.
 * **Width.** The host's launches (Windows) open the agent's console in a normal window, shown
-  as any program started from the desktop is, and set no width. When Windows Terminal is the
+  as any program started from the desktop is. When Windows Terminal is the
   default terminal it takes the console over (tabs, scrollbars, a live title), and the person
   can type into it at the machine; otherwise the console host shows it. The width is whatever
   that window gives. #1160 made the host start every launch minimized and widen its console to
@@ -100,7 +154,17 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   into it. That promise of 250 columns is given up. Where a form's tab bar (the console's width
   less four) is too wide for the window, Copilot draws a windowed bar and the host checks
   the labels it shows, answering the form field by field (host-answers.md, #1554).
-  The injector still has `--widen` (host-answers.md), which no launch calls.
+  Copilot launches (including Agency) now request a modest minimum of 100 columns and
+  30 visible rows through the injector's `--launch-size` mode. It grows the buffer before
+  growing the visible window, preserves larger dimensions, and verifies both afterwards.
+  One attempt runs immediately after launch and one when the host first reads the screen;
+  neither retries, including on failure. Both bind the PID to its exact creation time.
+  This may visibly enlarge a narrow window, but does not minimize it or change terminal
+  settings. A terminal or display that refuses the resize is logged; later manual resizes
+  are not overridden. Screen reads still use the full buffer width, and reply checks still
+  refuse a narrow working box or an unknown, shell or vim-normal mode
+  ([related issue](https://github.com/danswett/agent-bridge/issues/1013)).
+  The buffer-only `--widen` (host-answers.md) remains unchanged and no launch calls it.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)
@@ -142,6 +206,7 @@ differences, each deliberate:
 | Models | Discovered by starting each agent headless (Copilot's JSON-RPC, Claude's SDK, Codex's app-server) | Not discovered: the configured list, else built-in plus live-session models; the configured default is also offered. The [account-scoped discovery design](design/launch-model-discovery.md) specifies event-driven asks, labeled fallback and missing capture evidence; it does not enable probes. An effort a model does not take is not moved to one it does |
 | `auto` | The installed agent used most recently, then signed in | The first installed, in order (Agency, Copilot, Claude, Codex) |
 | Codex without a prompt | Opened, then a first message offered from the card | Refused: Codex creates its session only on a first message, so a launch must carry one |
+| Codex with no hook setup record on this profile (CHANGE, owner-approved Nov 22, #3644) | Started; the legacy hooks reported it | Refused `codexHooksMissing`: a migrated profile never had a Codex registration (#3648), so a launched session could not report. The reason says to run Set up for Codex on this machine, then approve Codex's hook trust prompt once. The record is read from the host's cached readiness scan (`agent-bridge-owner.json` in the Codex home, absent), never from the Codex home at launch. An unknown or incomplete record, and the trust prompt itself (unreadable), refuse nothing; Claude and Copilot are not asked |
 | Attachments | No | Copilot and Agency: files sent first (as for a reply) are staged privately and the prompt mentions each as `@path` |
 | The agent token variable | Set in the child's environment, so a launched agent drives the bridge as itself | No agent principal yet (#45). The agent gets the host's environment plus `AGENT_BRIDGE_SESSION` (its session id, or `launched` for Codex), which everything it runs inherits, however detached; the host's own command line refuses to change its config or sign in when it is set ([local-pipe.md](protocol/local-pipe.md#who-may-manage-the-host)) |
 | Where the host runs | A logon task, always on the desktop | Wherever it was started. Launching is offered only when the host is unelevated, interactive, in a logon session with a desktop (`WinSta0`); elevated, as a service or over SSH it is not, since the agent would be an administrator's, or on no screen |
@@ -376,7 +441,10 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else
-`crash`. A Copilot session a person closed while the host was down, with nothing its agent records, reads
+`crash`. That legacy wire name means an unexpected stop, not a confirmed crash: an external stop
+or the launcher's job closing leaves the same record. Continue says "the host stopping unexpectedly";
+an unrecognized in-memory cause uses "an interruption", never a guessed crash.
+A Copilot session a person closed while the host was down, with nothing its agent records, reads
 as died: it is offered, never typed into. A Claude or Codex one whose registration is gone reads as
 uncertain (above): not offered, its folder kept.
 

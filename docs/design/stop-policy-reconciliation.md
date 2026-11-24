@@ -142,7 +142,8 @@ PID/start-time identity, transcript and host log for each case. Prove no input w
 submitted to a question and no unrelated process was affected. Missing evidence,
 unsupported surfaces and source/ruling mismatches remain explicit, never green.
 
-The continuous-run evidence is **20 stops across all four Windows machines**,
+The continuous-run evidence is **20 stops across all active hosts in the approved
+fleet roster, pinned at run start**,
 with correct targets, idle one-press behavior and confirmed non-idle behavior;
 zero wrong targets. Working first presses must not end anything, but a valid
 second press is not expected to be refused. Retain all-client repetitions as

@@ -17,6 +17,7 @@ Do not hand-edit `sessions.json`: the generator-equality test would reject it.
 | File | Records |
 |---|---|
 | `sessions.json` | `hello`, sessions and their parts, `sessions.list`, `sessions.subscribe` and its events (`session.patch` included), answers, replies, `session.stop` |
+| `delivery.json` | Local `DeliverySender`, `DeliveryHeader` and `DeliveryEntry` helpers from [message delivery](../../message-delivery.md); not channel requests or wire sender authority |
 | `attachments.json` | `attachment.start`, `attachment.chunk`, `attachment.discard` and their results |
 | `push.json` | `push.subscribe`, `push.unsubscribe`, `push.list` and the notice a push carries |
 | `launch.json` | `launch.options`, `session.launch`, folder-trust questions and `launch.trust.answer` |
@@ -32,7 +33,7 @@ Do not hand-edit `sessions.json`: the generator-equality test would reject it.
 | `fleet-registry-signing.json` | Fixed canonical/framed bytes and public-only hostSign signatures, signed-field mutations and refusal cases (#2370). `FleetRecordSigningTests.cs` replays it in C#; host reader #2371 and PWA #2379 consume the same oracle. The old-sequence signature is authentic but stale, not a cryptographic failure |
 | `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
-| `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions and enrollment values. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
+| `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions, enrollment values, and the v3 (capSign) genesis bytes, T3 transcript and key collisions. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
 | `roster-state.json` | Not records: the roster's acceptance rule and state ([devices.md](../devices.md), #55): the §10 scenarios as entries offered in order, each verdict and refusal code, and the state a verifier then applies. `RosterStateVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-state.test.mjs` replays it through the PWA's port of the rule |
 | `roster-commands.json` | Not records: the roster's vetoes, person commands and head attestations ([devices.md](../devices.md), #55): each case's parser refusal or check code against one roster, and an attestation's key, message and MAC beside a signed command's under the same key. `RosterCommandTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-commands.test.mjs` replays it |
 
@@ -70,6 +71,9 @@ read as written: any required field missing or field of the wrong type refuses i
 
 A vector that needs more than its record names a `context`, which the file's `contexts` holds
 once. For example, the question an answer answers. A vector is named `<Record>/<name>`.
+
+`"direction": "local"` covers in-memory delivery helpers, read strictly by C# rather than as
+host channel records. Their JSON examples do not expose `ReplyRequest.Sender` on the wire.
 
 `knownDifferences` lists each place where an implementation does not yet do what a vector says,
 with the issue that decides which side moves:

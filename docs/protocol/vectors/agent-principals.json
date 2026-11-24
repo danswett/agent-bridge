@@ -190,6 +190,59 @@
         }
       ],
       "refused": []
+    },
+    "SamePcPinRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "roster-root",
+          "json": {
+            "account": "owner@example",
+            "generation": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "genesis": "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ",
+            "heads": [
+              "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"
+            ],
+            "device": "53d1997f0a1b2c3d4e5f60718293a4b5"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-account",
+          "json": {
+            "account": 42,
+            "generation": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "genesis": "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ",
+            "heads": [
+              "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"
+            ],
+            "device": "53d1997f0a1b2c3d4e5f60718293a4b5"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "SamePcPinResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "pinned",
+          "json": {
+            "state": "pinned"
+          }
+        },
+        {
+          "name": "wrong-type-state",
+          "json": {
+            "state": 42
+          },
+          "reads": {
+            "state": ""
+          }
+        }
+      ],
+      "refused": []
     }
   },
   "knownDifferences": []

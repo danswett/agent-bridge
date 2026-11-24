@@ -376,6 +376,24 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Empty(host.Sent(Ops.SessionAnswer));
     }
 
+    // Owner decision (Nov 23): a required multi-select needs at least one choice, for every agent.
+    [Fact]
+    public void A_required_multi_with_nothing_ticked_is_not_sent_and_names_the_field_and_one_ticked_is_built()
+    {
+        var q = Question(Make.Form(new Field { Name = "toppings", Title = "toppings", Type = FieldType.Multi, Options = [new Option("x"), new Option("y")], Required = true }));
+
+        q.Send();
+
+        Assert.Equal("\"toppings\" needs an answer.", q.Error);
+        Assert.True(q.Fields[0].Invalid);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+
+        q.Fields[0].Options[1].IsSelected = true;
+        var (answer, problem, _) = q.Build();
+        Assert.Null(problem);
+        Assert.Equal("""["y"]""", answer.Fields!["toppings"].GetRawText());
+    }
+
     [Fact]
     public void A_form_builds_each_type_of_field_as_the_contract_says()
     {
@@ -402,6 +420,62 @@ public sealed class CardTests : IAsyncLifetime
             new Field { Name = "ok", Type = FieldType.Boolean },
             new Field { Name = "n", Type = FieldType.Number },
             new Field { Name = "untouched", Type = FieldType.Multi, Options = [new Option("x")] }), answer));
+    }
+
+    // HA retirement row 17: the same five-type form the host checks (Protocol.Tests, AnswerTests) and the PWA builds
+    // (pwa/test/unit/answers.test.mjs), built by the Windows form: every field by name, as one answer the host accepts.
+    static AgentBridge.Protocol.Question FiveTypes() => Make.Form(
+        new Field { Name = "colour", Title = "colour", Type = FieldType.Choice, Options = [new Option("red"), new Option("green")], Required = true },
+        new Field { Name = "toppings", Title = "toppings", Type = FieldType.Multi, Options = [new Option("x"), new Option("y"), new Option("z")], Required = true },
+        new Field { Name = "enabled", Title = "enabled", Type = FieldType.Boolean, Required = true },
+        new Field { Name = "notes", Title = "notes", Type = FieldType.Text, Required = true },
+        new Field { Name = "count", Title = "count", Type = FieldType.Number, Required = true });
+
+    const string Notes = "héllo – 日本語 ✓";
+
+    static void FillFive(QuestionViewModel q, string? skip = null)
+    {
+        if (skip != "colour") { q.Fields[0].Options[0].IsSelected = true; }
+        if (skip != "toppings") { q.Fields[1].Options[2].IsSelected = true; q.Fields[1].Options[0].IsSelected = true; }
+        if (skip != "enabled") { q.Fields[2].ToggleBool(true); }
+        if (skip != "notes") { q.Fields[3].Text = Notes; }
+        if (skip != "count") { q.Fields[4].Text = "3"; }
+    }
+
+    [Fact]
+    public void A_form_with_one_field_of_each_of_the_five_types_builds_one_answer_by_name_that_the_host_accepts()
+    {
+        var form = FiveTypes();
+        var q = Question(form);
+        FillFive(q);
+
+        var (answer, problem, _) = q.Build();
+
+        Assert.Null(problem);
+        Assert.Equal(["colour", "count", "enabled", "notes", "toppings"], answer.Fields!.Keys.Order());
+        Assert.Equal("red", answer.Fields["colour"].GetString());
+        Assert.Equal("""["x","z"]""", answer.Fields["toppings"].GetRawText());
+        Assert.True(answer.Fields["enabled"].GetBoolean());
+        Assert.Equal(Notes, answer.Fields["notes"].GetString());
+        Assert.Equal(3, answer.Fields["count"].GetDouble());
+        Assert.Null(Answers.Check(form, answer));
+    }
+
+    [Theory]
+    [InlineData("colour")]
+    [InlineData("enabled")]
+    [InlineData("notes")]
+    [InlineData("count")]
+    public void A_five_type_form_with_one_required_field_left_out_is_not_sent_and_names_it(string skip)
+    {
+        var q = Question(FiveTypes());
+        FillFive(q, skip);
+
+        q.Send();
+
+        Assert.NotNull(q.Error);
+        Assert.Contains($"\"{skip}\"", q.Error);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
     }
 
     [Fact]
@@ -1520,6 +1594,55 @@ public sealed class CardTests : IAsyncLifetime
         card.RefreshTimes();
         Assert.Equal(Words.Age(Make.T0, now), card.AgeText);
         Assert.DoesNotContain("Not responding since", card.Details.Select(d => d.Label));
+    }
+
+    [Theory]
+    [InlineData("a", "Synthesizing")]
+    [InlineData("b", "Deliberating")]
+    [InlineData("6f1c2b7e-claude-example", "Cogitating")]
+    public void A_working_card_shows_the_original_verb_stably_per_session_id(string id, string verb)
+    {
+        var session = Make.Session(id, status: SessionStatus.Working);
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            Assert.Equal(verb, card.HeaderStatusText);
+            Assert.Equal("Working", card.StatusText);
+            Assert.Equal("Working", card.Details.Single(d => d.Label == "Status").Value);
+            Assert.Equal(StatusGlyph.Working, card.Glyph);
+            card.Update(session with { Title = "Renamed" });
+            card.RefreshTimes();
+            Assert.Equal(verb, card.HeaderStatusText);
+            card.Update(Make.Session(id));
+            Assert.Equal("Idle", card.HeaderStatusText);
+            card.Update(session);
+            Assert.Equal(verb, card.HeaderStatusText);
+        }
+        finally { card.Detach(); }
+    }
+
+    [Theory]
+    [InlineData(null, "Waiting on you")]
+    [InlineData(0, "Waiting on you")]
+    [InlineData(1, "Waiting on you · compacted once")]
+    [InlineData(3, "Waiting on you · compacted 3 times")]
+    public void Compactions_use_the_same_words_in_the_header_and_Details_and_are_absent_at_zero_or_unknown(int? count, string expected)
+    {
+        var session = Make.Session(question: Make.Choice());
+        var card = new SessionCardViewModel(session, Context());
+        try
+        {
+            card.Update(session with { Activity = session.Activity with { Compactions = count } });
+            Assert.Equal(expected, card.HeaderStatusText);
+            Assert.Equal("Waiting on you", card.StatusText);
+            Assert.Equal(count > 0, card.Details.Any(d => d.Label == "Compactions"));
+            if (count > 0)
+            {
+                Assert.Equal(expected.Split(" · ")[1], card.Details.Single(d => d.Label == "Compactions").Value);
+            }
+            Assert.DoesNotContain("compaction", card.Facts, StringComparison.Ordinal);
+        }
+        finally { card.Detach(); }
     }
 
     [Fact]

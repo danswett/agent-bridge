@@ -28,6 +28,44 @@ has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.Guide
 only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
 shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
+## Local crash evidence
+
+The existing `AppLog` always writes redacted diagnostics to `Paths.AppData`'s `app.log`,
+rolling to `app.log.1` after 1 MB. Transcript text is not diagnostic input. `CrashLog`
+keeps exception types and frames, not messages or source paths, in `crash.log` and the
+existing diagnostics journal. Neither submits anything. Each exception's type is followed by its HResult
+(a number, never its message), because a native XAML failure carries no managed frames.
+A UI-thread exception is written there first; then, outside self-tests, the app keeps running (the
+exception is marked handled and `app.log` says so), unless more than three arrive within 10 seconds,
+when it ends as before. A handled exception still leaves its evidence in the run marker.
+The marker and `crash.log` include nested/aggregate exception types and frames,
+bounded to 16 exceptions and 8192 characters total; no exception messages are retained.
+Each profile keeps owned `runs/<profile>/run-marker.<id>.json` records under `Paths.AppData`
+(the demo uses `runs/demo`). A per-record lifetime file lease spans Windows sessions;
+startup captures only the latest abandoned run in `RunMarker.Previous`, never a running
+copy's evidence. All abandoned records are reclaimed only after the new marker is durable.
+Recovery leases span selection, replacement and cleanup. Cleanup failures are returned
+as `RecoveryWarnings` and written to `app.log`; the new marker stays owned and usable.
+Empty/corrupt records count as unclean. Marker writes flush a
+same-directory temporary file before atomically replacing the old marker; failed writes
+preserve the old marker and remove the temporary file. Only an actual exit,
+not hiding to the tray, calls `Complete()`, including tray Quit and a successful update
+handoff immediately before exit. Crash evidence survives closing; a teardown
+crash restores the marker. Self-tests leave markers alone.
+
+**A hung UI thread leaves a minidump (the hang watchdog, #2869).** In the real app (not a self-test or the demo) `UiHangWatchdog` runs a
+background thread that posts a no-op to the UI dispatcher every 3 seconds. A no-op unanswered for more than 15 seconds means the UI thread is
+blocked (the owner's app once froze with its list still scrolling and left nothing behind), and `WindowsMiniDump` writes ONE minidump for that
+freeze, from the watchdog's own thread, which the blocked one cannot do: `MiniDumpNormal`, thread stacks and the module list only, no heap, so far
+less of what the app was handling than a full dump (a stack can still hold the value of a local). The UI thread answering again ends the freeze,
+says so in `app.log` and re-arms the watchdog: the next freeze is dumped too, and a freeze that goes on is dumped once. Everything the watchdog does, the beats
+and the dump, runs on its own background thread: the UI thread only ever runs the no-op. A pause of more than 9 seconds between beats, and Windows' own resume
+notice (`ResumeNotifier`, a system callback with no window, so it works while the UI thread is blocked), discard the ping in flight and give the UI a full window
+again, and a debugger attached never dumps. A disk with less than 1 GB free gets no dump, and `app.log` says why. Dumps are `%LOCALAPPDATA%\AgentBridge\dumps\AgentBridge-hang-yyyyMMdd-HHmmss-<pid>.dmp`,
+the newest three kept, and `app.log` names the path or says plainly that the dump was not written. A dump stays on the machine: nothing uploads it, and
+the watchdog never touches the host. `RecordHang` (the run marker's own hang evidence: a thread id and a redacted log tail) is not called by this
+slice; recovery UI and the existing feedback submission remain separate work.
+
 ## Decisions
 
 Settings' **Reply box** group offers **Return key in replies**: **New line** (the
@@ -35,6 +73,25 @@ unchanged default, Ctrl+Enter sends) or **Send** (Enter sends, Shift+Enter makes
 new line, Ctrl+Enter still sends). The choice is local to this device/profile and
 applies immediately, including the Send tooltip and accessible description.
 Enter during IME composition is left to the text control and never sends a reply.
+
+The last selected session and conversation scroll anchor are saved on change in the
+profile's `*-reading.json` beside the other app stores. Startup restores that selection
+and reading position; a missing or stale session falls back to the first available session.
+The record contains only opaque session/turn keys and scroll geometry, not transcript text.
+This recovery is independent of crash reporting and sends nothing.
+The corrections that follow a conversation layout pass (restoring the reading position, keeping the anchor,
+following the pinned end) are skipped once 60 of them have moved the view within a second. Passes that correct
+nothing do not count, so ordinary streaming (up to about 95 passes a second in the CI self-test) never trips it,
+and `app.log` records the first skipped correction of a storm with its count (#3842). The guard keeps at most 60 stamps however dense the burst, and a skipped
+pass while a saved reading position still waits schedules one retry after the window, so a finite burst cannot leave
+the restore undone (#3811). They also run once, at low priority,
+after the layout event rather than in it, because setting the panel's scroll mode or the scroll offset there starts the next
+layout pass; layout that a correction itself causes runs it at most once more in that turn (#3782, the suspect named in
+#3716's anchoring, not yet a proven fix).
+
+Scrolling upward releases the conversation's end pin and resumes drawing undrawn cached
+turns even while the pointer remains over the conversation. Older drawing still waits for
+the latest exchange's first frame and pauses during active navigation or scrolling.
 
 Sent person-message bubbles recognise host-staged attachment references, including earlier
 turns. Images available on a local disk show thumbnails that open a named image viewer;
@@ -361,6 +418,16 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   yet find it, stands). A host that looks for the marker once its pipe is open and finds it
   exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
   restore it starts resumes no agent until that look has passed (#986).
+* A call to the host over the local pipe is answered by its answer, not by a late failure of its own write (#2558). A host that answers
+  and hangs up at once (Stop answers, then exits) can have the app read the answer and the end of the stream, and close its end, while the
+  app's own write of the request is still completing; that write then fails with "Cannot access a closed pipe" although the host served the
+  request. The request's answer, when it is already in, is the outcome. A request with no answer in still fails with the write's failure
+  (`LocalChannel.RequestOrderedAsync`).
+  On the host's end (#4134), the action a client asked for and the host accepted (Stop, Restart, a remote restart's Leave: a `ChannelReply` marked
+  `RunsIfUnsent`) runs once the request is accepted, whether or not the answer reached the client: a client that reads the answer and hangs up
+  at once, or is gone before it is sent, no longer leaves a host that said "stopping" running. The send failure is logged
+  (`local pipe: the reply to host.stop could not be sent ... its action runs anyway`); a follow-up that is not such an action (a subscribe's
+  snapshot) still needs its answer on the wire first. Stop's lease on deliveries is therefore not given back when its answer fails.
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
@@ -372,9 +439,33 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
 
 ### Updates: Velopack, one version for app and host
 
+**Completion evidence** ([updater follow-up](https://github.com/danswett/agent-bridge/issues/2869)):
+`UpdateApplyCompletion` is a platform-neutral observer seam, not yet wired to apply or
+respawn. Its adapter must track the actual apply operation, including delegated workers,
+and freshly read the active installation's normalized version. A launcher exit, target
+files appearing, or a cached locator version does not establish worker completion.
+Each run supplies a new operation generation; evidence with another (or no) generation
+is `Unknown`. Adapters must bind it to that operation's actual process, never re-tag a
+cached snapshot, and sample the active manifest after completion. Release identity
+uses the shared `UpdateVersions` normalizer (whitespace, one optional `v`, metadata
+ignored; case-insensitive comparison; `0.0.0` unknown).
+Only authoritative worker completion, a known zero apply exit code, and the matching
+active version produce `Completed`. A known nonzero worker exit produces `Failed`.
+Missing evidence, unreadable state, a timeout or a version mismatch stays `Unknown`;
+none authorizes a retry or claims app/host convergence. Any result arriving at or after
+the observation window is `Unknown`, even success. Cancellation stops observation,
+not the updater. The asynchronous probe must return promptly and cancel only its wait.
+Results retain the operation step, target/observed versions, actual exit/native error
+code when available, offset-bearing observation time and monotonic elapsed time,
+without copying exception messages or inventing holder PID/path evidence.
+
 The Velopack package holds the app, the host, its launcher, the injector and the agents'
 hook (`agent-bridge-host-hook`, docs/host-hooks.md), published
-into one folder with one version. An app update is a host update, so they never skew.
+into one folder with one version. An app update is a host update, so they skew mostly when an
+update did not finish: the app restarted onto the new release while the host kept running the old one (or
+the reverse). The app restarts its own host onto files already installed once the machine is quiet
+(the host restart, below); any other skew is said, not repaired by itself (the version-skew banner,
+under Ready, below).
 
 The host updater contract (`IHostUpdates` and `UpdateRelease`) lives in
 `AgentBridge.Host.Core.Updates`, independent of the HA adapter. The existing HA update
@@ -492,6 +583,15 @@ controls consume that same contract; this extraction does not disable or remove 
   `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
   the plain reason it wasn't used, never an exception's text.
 
+  **An old relay copy may offer a newer release but never says "up to date"** (`ReleaseDiscovery.CdnFreshFor`, 10 minutes, the check
+  interval). A copy up to an hour old (`CdnOldest`) is still used, but once it is older than `CdnFreshFor` it counts only if it names a
+  release newer than the one installed: an offer meets the halt and digest checks as any does. A copy that shows nothing newer is "unknown",
+  because it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed): it is refused like an over-age
+  copy, so the check fails with words, GitHub is asked or its backoff says when, and the next check tries again. The copy kept here is judged
+  the same way by its true age on every check, and the log says why (`its copy was N minutes old and names nothing newer ...`). The halt
+  rules, `CdnOldest` and the 72 hour cap are unchanged. The log's fallback line says GitHub is asked first and the relay is the fallback
+  if GitHub refuses, which is what happens.
+
   **GitHub is revalidated every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
   relay says how old its copy is, so a compromised relay could serve an old but valid list with
   `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
@@ -562,6 +662,29 @@ controls consume that same contract; this extraction does not disable or remove 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **The host restarted onto its installed files** (#2869; owner decision, 2026-11-23, "Yes, at a quiet
+    moment": it changes G2's "banner only" for this one case): an update can leave the app on a new
+    release with its own host still running the old one (four test machines ran app 0.1.7845 over hosts on
+    0.1.7684, and "Check for updates" said up to date). When the host is older than the app, the host files
+    for the app's release are already installed beside it (the version of `current\agent-bridge-host.exe`,
+    read at the time, and exactly the app's own release: files newer than the app are not restarted onto), no
+    release is waiting to install, the halt policy allows it (a stale policy, or the app's release halted,
+    holds it), "Download updates automatically" is on (off, nothing happens unasked), and the machine is
+    quiet (no turn running and no question or approval waiting, over a whole snapshot settled for
+    `SettleFor`, 5 seconds, as for Install between turns), the app asks the
+    host to restart (`host.restart`: it ends with code 75 once fully stopped, and the launcher starts the
+    replacement from `current\`). **Not an install,** and in either mode: nothing is downloaded, and
+    Restart to update is unchanged. Only this machine's own host, over its own pipe, is ever restarted,
+    never a remote one. `VersionSkewHeal.Decide` decides (the installed files as the release it needs),
+    once for a release: a restart that fails backs off (an hour at most) and is given up on after three; one
+    the host answers that leaves it old is not asked again until the app restarts (what is remembered is
+    the run's). A skew it does not heal (the files missing or not the app's release, the host newer) is only
+    said, in the banner. **Quiet is decided at the moment of the ask,** as for Stop and an install between
+    turns: the host then settles its usage probes and holds its delivery gate (up to 15 seconds) before it
+    exits, so a delivery or typing in progress is waited for, but a turn or question that begins in that
+    window is not looked for again. That is acceptable for the same reason it is for those: the agents'
+    consoles are separate processes and keep running, and what the host was carrying (a question or
+    approval) is the cost the restart warning already names.
   * **Update now, from another device** (#1159; design in
     [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
     the clients' buttons not yet): the
@@ -595,10 +718,11 @@ controls consume that same contract; this extraction does not disable or remove 
     of their words said once (ready, restarting, failed; a release that became ready while
     Settings was busy, once it is idle), and Settings' own download at most every quarter
     (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
-    *Product* will try again at *time*.", or "The update didn't install because another bridge
-    profile is running from this installation.", its reason a kind (another profile running, the
-    installer's error, a newer update downloaded meanwhile, the host not answering), never a
-    process id, a path or an error's own words, which go to the log. A failed install is a
+    *Product* will try again at *time*.", or "The update didn't install because bridge
+    profile 'work' host (pid 4242) runs from this installation." Profile blockers name the
+    profile and PID (or explicitly say the profile is unknown); other reasons stay a kind
+    (the installer's error, a newer download, the host not answering), never a path or an error's
+    own words. A failed install is a
     warning bar whose button reads **Try again**; while restarting, the button shows its progress
     ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
     rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
@@ -618,6 +742,20 @@ controls consume that same contract; this extraction does not disable or remove 
     offered offline or while the feed refuses (#530), but only if it came from the feed and
     pre-release choice selected now and is still the bytes verified for it
     (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Version skew** (#2869, #2833; owner, 2026-11-23: banner only, but for the one case in the bullet above): the app and
+    its host on different releases is said in this same banner, in the slot Ready has, one banner at a time, over every page
+    (`AppUpdateViewModel`, `SkewNote`): a ready release's banner first, since its Restart to update is
+    the person's press for this too. With no release ready it is words only, no button: "The bridge host
+    is on version *h* and this app on *a*. Restart the host in Settings to bring it to *a*." (the host
+    older), or "... Check for updates in Settings to bring the app to *h*." (the app older); Settings' host
+    card keeps its own Restart advice. **The banner only shows it:** nothing is installed because of a skew, in
+    either mode, and the one thing done unasked is the host restart in the bullet above (the host's files
+    for the app's release installed, the machine quiet); every other skew is only shown, and the person's
+    press is the only action, Restart to update when a release is ready, or Settings' host Restart.
+    What counts as skew is `VersionSkewHeal.Decide` (a version that
+    is missing, 0.0.0, a prerelease or not a release number is unknown, never skew); it is said once to a
+    screen reader, and goes when the two agree. `AutoUpdater.Versions` is what it reads: the updater's
+    installed release and the connected host's.
   * **Every package is checked against its release** (`DownloadMark`, Engineering's
     second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
     folder under the release's file name for the release without checking its bytes, so one
@@ -634,20 +772,25 @@ controls consume that same contract; this extraction does not disable or remove 
     writes, and which is private to this user as the attachment folder is: a protected DACL
     granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
     the same checksum again from a handle that keeps it open, read-only to everyone else, until
-    the app exits. The app then starts `Update.exe` itself,
-    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --rootDir …`), but with
-    `--package` naming the copy, and silent (#1167), so Velopack's own "Installing Update" window
+    the app exits. The app then hands the install to a copy of itself (#3343, `InPlaceHandoff`):
+    it copies its `current` folder to `<profile>\app-update-helper`, outside the installation,
+    where Velopack's rename of `current` and its stop of the installation's processes don't reach,
+    starts that copy with `--inplace-apply`, the package copy, its checksum and the app's PID and
+    start time, and exits. The app and the helper each ask `LifecycleGuard` first (#67): inside an
+    agent session nothing is copied, installed or started (the helper exits 4). The helper waits for
+    the app (that PID with that start time, so a reused PID is not mistaken for it), holds the copy
+    and checks it again, then runs `Update.exe` as Velopack's `ApplyUpdatesAndRestart` would
+    (`--silent apply --rootDir …`), but with `--package` naming the copy, `--norestart`, and silent
+    (#1167), so Velopack's own "Installing Update" window
     never shows: the app's Updating screen stands in for it (below); `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
-    install over each other. **Wait for the app** (#1173): the app launches `Update.exe` directly
-    (Velopack's `DefaultProcessImpl`, `Process.Start`) with `--wait`, so the installer waits for its
-    parent, this app. Velopack 1.2.161's `--waitPid` opens a synchronization-only handle, then queries
-    its exit code without query rights, logging "Access is denied" even after a successful wait.
-    Its parent-wait path requests limited-query rights too and checks creation times against PID
-    reuse. An isolated run of the real updater confirmed both paths wait until parent exit; only
-    the PID path then warns. This is not evidence that the earlier updates installed before exit.
-    Velopack's existing 60-second wait limit and continue-on-wait-error behavior are unchanged;
-    no elevation, process ACL change or extra helper is introduced.
+    install over each other. Only when that apply fails while another process holds a file in
+    `current` does the helper install the same checked package in place (`InPlaceApply`), holding
+    that lock throughout; a package without its manifest or its app, or naming a link or a path
+    outside, is refused first. Either way the helper then starts the app again. **Wait for the
+    app** (#1173): the helper does the waiting, so `Update.exe` gets neither `--wait`, whose parent
+    is now the helper, nor `--waitPid`, which in Velopack 1.2.161 logs "Access is denied" after a
+    successful wait.
     The copy goes at the app's next start. What remains: `Update.exe`
     checks nothing itself when it opens the copy (it takes no checksum), so a process running as
     this same Windows user could still change the copy after the app exits; such a process could as
@@ -698,10 +841,33 @@ controls consume that same contract; this extraction does not disable or remove 
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.
-  * **Files held by Windows** (#2345, #2353): before stopping the host, wait at most two minutes
-    for Restart Manager's holders to release, with checks backing off to ten seconds.
+  * **Files held by Windows** (#2345, #2353, [timeout fix](https://github.com/danswett/agent-bridge/issues/2866)):
+    before stopping the host, check only locked installation files (any type, including `.pri`)
+    with Restart Manager. A completed clear scan serves only the duplicate checks right after the
+    wait and as the stop begins (cheap
+    file checks invalidate it if the locked-file set changes); the last check before the host stops,
+    after any confirmation or departure, always scans again, since an outside process can take an
+    image the app already holds without changing which files are locked. A last scan runs after the
+    stop's probe and other-profile waits, right before the handoff; a holder found then is named,
+    the host is started again and the install refused.
+    The cheap check opens each file exclusively for an instant, so a lazy assembly load in that
+    instant could see a sharing violation; a shared open would miss holders that allow writes.
+    Each scan has its own two-minute deadline, independent of the two-minute release wait
+    (checks back off to ten seconds). A scan started within that wait may finish afterwards.
     An unreadable/changing holder list is unknown, never permission to install. A SYSTEM service
-    is named even when its image is unreadable. Waiting carries no Installing credit; timeout
+    is named even when its image is unreadable; refusals include process/service name and PID,
+    never the absolute image path. Verify a confirmed external holder's association with one installation file
+    before naming that relative path ([holder diagnostics](https://github.com/danswett/agent-bridge/issues/2858));
+    the aggregate registered-file list is not proof of which file a process holds. A holder that
+    releases between queries or changes creation time is unknown, never a guessed filename; holders
+    already confirmed in the same check stay named beside it.
+    Match PID plus creation time throughout. Include non-executable resources such as `.pri`
+    files, not only DLLs and executables. A scan timeout names Restart Manager and 120 s, never
+    claiming a confirmed holder. Quit and the two-minute deadline stop a scan between Restart Manager
+    calls, so it neither bisects further nor names a file (unknown); a call already in flight
+    finishes on its own thread holding the scan, so scans never overlap. The first start after an
+    update that did not take names holders within the same two-minute budget.
+    Waiting carries no Installing credit; timeout
     keeps the old install intact with recovery text and the existing 10/20/40/60-minute backoff.
     This path never stops a service or self-elevates; it does not replace the later slot design.
   * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
@@ -718,7 +884,13 @@ controls consume that same contract; this extraction does not disable or remove 
     waited for the same way, since Velopack ends them too, each held again every round and once
     more just before the hand-over, with the package looked at again once they are done (a host
     started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
-    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    reaches, stops the update before anything is stopped. A host of the package that starts during
+    the last file scan, after those holds, or one not confirmed as held by its start time, refuses
+    the update and this host is started again. Each held host's start time is read when it is
+    first held, through its own pipe, and checked once the holds are done: a host that took the pid
+    of one that ended while another was waited for is held in turn (another profile's) or refuses
+    the update (this profile's, already stopped) rather than being taken for the held one.
+    Quitting gives up those waits, never a
     probe, so a host already stopped for the update is started again within Quit's 25 s.
   * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
     by default, a second start that only shows the window included, stopping every process in the
@@ -733,7 +905,13 @@ controls consume that same contract; this extraction does not disable or remove 
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile). An Install pressed on
+    stops every process in the package and restarts only this profile). Running apps, hosts and
+    host launchers are identified by a held process handle, creation time, executable folder and
+    command-line profile, never a cached host PID alone: this
+    profile's host/launcher pair is not another profile, even without a connected host PID.
+    Leftover profile markers alone never block; unreadable process identity still refuses.
+    A demo app is a separate blocking instance, even when it names the updating profile.
+    An Install pressed on
     another device also waits while the host is not running or its sessions are not yet read in
     full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
     host it asks again: `host.status` from the host itself, and the processes running from the
@@ -791,6 +969,21 @@ controls consume that same contract; this extraction does not disable or remove 
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
+  * **A download or an install under way finishes, whatever newer release appears** (owner, Nov 23:
+    an install on one machine failed 8040 to 8050 when 8051 landed minutes later; `ObservedUpdater`, `AutoUpdaterTests`).
+    VelopackUpdater's check drops the package it holds when it finds a newer release, so a check
+    from Settings or a tick while a download ran, or while the host stopped for an install, left
+    nothing to apply and the install aborted. From the start of a download, and from the moment an
+    install is claimed (Restart to update, a device's Install, or the tick's) to its end,
+    `ObservedUpdater` answers a check with what was last found and puts it off
+    (`CheckDeferred`), and fetches nothing else. A check already running finishes first, and an
+    install begins only if the release it chose is still the one ready (nothing is stopped
+    otherwise, as above). When the download or install has ended (an applied one exits the app,
+    and the new version checks at its start; a failed one leaves the old release running), the
+    next tick checks at once, not after the 30 minutes, and the newer release is downloaded and
+    offered. A release downloaded and waiting, with no install claimed, is still replaced by the
+    next check's newer one, as before. The host restart onto its installed files (#4107) and the
+    bounded apply retry (#4093) are unchanged.
   * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: a second
     Restart to update, or a device's Install, while one installs is refused): an install that
     fails starts it again and waits for the next check; quitting the app while the host is
@@ -856,6 +1049,14 @@ controls consume that same contract; this extraction does not disable or remove 
 
 ### Releases and updates: every merge to main is a pre-release
 
+**Planned change (owner decision, Nov 23, as Eng R8b ruled; proposed, not yet built).** Main is green on build and test only.
+Packing, the installer check, `sign`, `attest` and `vpk` stay in `ci.yml` as non-required jobs, so they hold neither main nor
+a merge. The release train never rebuilds; #3769 (merged) is only its commit selector, which requires both architectures'
+package artifacts (the Arm64 jobs may be red). **Proposed, a separate change:** the train installs and self-tests those exact
+bytes before it publishes, and a failure publishes nothing and raises an alert, so a bad installer blocks the release, not a
+merge. `publish` is then the train's, and release order is the train's. Until that is built, what follows is what runs. The speed plan and the main concurrency
+change (one group per commit, nothing cancelled) are in quality/README.md, "CI: speed, runners and what gates main".
+
 CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
 app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
 select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
@@ -880,18 +1081,38 @@ connector's Install button on a machine the dashboard drives.
   uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
   `publish-prerelease`), and publishes each version once, never one older than any already
   out and never from a commit that doesn't hold the latest release's commit, so release order
-  doesn't rest on the order main's CI runs go in (first attempts share
-  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, unless main's head has since
-  changed the app (main's own selector, under the lock, says so; main's later run publishes
-  both, where publishing this first could leave that one's lower version refused), and
-  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  doesn't rest on the order main's CI runs go in (each push has a group of its
+  own, `ci-main-<sha>`, and GitHub promises no order between them): a run publishes even after `main` has moved on, app changes
+  or not, as long as its commit is on main's line as `publish` reads it under the lock; main's later run then publishes its own
+  higher version over it (#4104: standing aside whenever main had since changed the app left every 40-60 minute run stale while
+  merges kept coming). The trade (#938): when GitHub numbered a descendant's run lower, that version is refused once this one is
+  out, and its app change waits for main's next run, which plans from the latest release: delayed, not lost. Releases are
+  spaced 15 minutes apart (**Spacing**, below). And one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
   start in is not promised, which is why the checks above keep the order. With signing on, the
   `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
   once `sign` has succeeded, so it never falls back to the unsigned packages.
+* **Spacing** (owner decision, Nov 23, relayed by Eng R8b; it supersedes "As often as green", Nov 23 ~13:30 PT via Chief
+  S18): a green run publishes only if the newest published release, of any version or kind, is at least 15 minutes old,
+  its age read from the API's `published_at` under the publish lock (`build/release-spacing.ps1`). A run inside that, or
+  one that can't read a release's time or finds it in the future, publishes nothing, warns, and sets the step output
+  `deferred=true`; it leaves no release, draft or tag. Its changes are never dropped, even when main goes idle: every 5
+  minutes `publish-pending.yml` runs `build/publish-pending.ps1`, which takes main's newest finished CI run whose
+  `quality-gate` and `publish` jobs succeeded (a run red only by the waived Arm64 leg counts) and, once no newer run is
+  still going (a run going 3 hours is stuck and holds nothing), that run's version is above every release and untagged,
+  its commit follows the latest release's and the window is open, re-runs its `publish` job, at most 4 times. So a release
+  at T and a green run at T+5 with no push after it publishes at about T+15 (the next tick).
+  A read that fails there re-runs nothing and is tried on the next tick. A run that does pass later publishes them first
+  (CI's release debt). Every publish, a re-run or a dispatch's too, is a `publish` job in the one `publish-prerelease`
+  group, so two never run at once. Only the spacing is held: every other check above runs first. **Critical fix:**
+  `-SkipSpacing -SkipSpacingReason <why>` publishes inside the 15 minutes, with a warning and a line in the release notes
+  naming the override, who ran it and why; no reason, no publish. CI passes them from a `workflow_dispatch` on `main`, its
+  `critical-release` box and `critical-reason` text, which only someone with write access can run (never a label or
+  anything a pull request sets); the plan job lets it through only on `main` with a reason, at once, before any build.
+  Only Quality runs it, on an owner or Chief call. (The workflow parts are Quality's to apply; until then there is no
+  override, and a deferred run waits for main's next run that passes.)
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -1018,6 +1239,62 @@ From then on it downloads the newest pre-release by itself ("Download updates au
 offers **Restart to update**, or Settings, **Check for updates**, then **Restart to update**,
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
+
+### The release train (#2225)
+
+**Design, not yet built here:** `.github/workflows/release-train.yml` has never existed on `main`; what exists is the commit selector,
+`build/select-release-commit.ps1`, and its fixtures. The train is to be a second way to publish, apart from merging: it is to run hourly
+(and by hand, `workflow_dispatch`) and publish the newest `main` commit whose FAST lane and FULL lane both passed (below).
+Merging is never to wait for it, and it is never to block a merge. Everything below is that design unless it says the selector does it.
+
+**Why.** Each push to `main` used to cancel the run waiting before it (the shared group `ci-main`), and a
+superseded run that went green published nothing when `main`'s head had since changed the
+app. While merges arrive faster than the app's CI finishes, nothing was released: none was from
+15:36 PT on Nov 22. The train is to publish what was verified, whatever has merged since. Per-commit groups
+(`ci-main-<sha>`, above) stopped the cancelling, and since #4104 `ci.yml`'s `publish` no longer stands aside
+for a later app change either, so a green run publishes its own commit without waiting for the train.
+
+* **Which commit** (`build/select-release-commit.ps1`, fixtures in
+  `build/test-select-release-commit.ps1`). `main`'s push runs, newest first, each as its latest
+  attempt (a successful re-run counts). The first that has all of these:
+  - **FAST:** `quality-gate` and the x64 `app` job succeeded; a cancelled or superseded run counts only if those
+    both did. **And FULL**, once `full.yml` exists (S2, #4104; not built yet, see quality/README.md; the selector already requires it): the
+    same commit's FULL run, found by its `head_sha`, finished with `full-gate` (the aggregate, which fails when a lane it selected was skipped),
+    the x64 self-test, pack and installer, and the **Arm64 pack** succeeded, and no other job red. **What runs the app on Arm64 is waived**: its
+    self-test and tests, and its installer (it installs and starts the app: the Arm64 self-test, #4159), **recorded, never silent**: the publish summary lists
+    each waived Arm64 result, and a red one also opens the full-red alert (to be written) while publish continues. **x64 is strict**: its self-test, pack, installer and
+    SBOM are all required, and an absent or skipped x64 job is no pass. The Arm64 package is never optional, and its SBOM must be there. A commit with no FULL run yet is not publishable; the train
+    is to dispatch one, and a later hourly run picks it up. **Arm64 does not gate** the self-test (owner decision, applying the Nov 18 tiered gating, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7091772336); relay receipt [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546)): its self-test, tests and installer (the Arm64 `app` self-test, the
+    Arm64 `app-installer`, and `product` on Windows on Arm) still run and report, but a run that is red only for those is
+    publishable (its Arm64 pack must still have succeeded), but **no other job may have failed or timed out** (nor, in a failed run, been
+    cancelled), since quality-gate leaves relay-image-sarif, sign, publish and attest out; the selector
+    reads every job's latest-attempt conclusion for this. A timed-out or unfinished run never counts;
+  - **what it relied on is green too** (#2454, item A). A run's plan job records which in-flight parent run it relied on to test only
+    its own change (`plan-base: base=<sha> relied-parent=<sha|none>`). Such a run counts only if that parent, and the parent it relied
+    on, back to a run that relied on none, passed these same checks and did not end cancelled (a cancelled parent never tested its
+    change): the commit holds the parent's change, which the run never tested. A parent still running, or not among the runs read, does
+    not count either, so the train waits for a later run that covers it. A run with no record relied on nothing;
+  - its commit follows the latest release's commit;
+  - its run number, the version's last part, is above every published version;
+  - the **packages and the SBOMs** of both architectures (x64 and Arm64) are all there, unexpired (that commit's FULL run builds them and keeps them 30 days), under the FAST run's number (never FULL's own run number); the version is read from their names. The FULL run is the one for that commit's head_sha, started by a push or a workflow_run on main: a run found any other way, or by branch, does not count.
+
+  One that fails a rule is skipped for the next newest. If the first one found is already
+  released, nothing is published and the run does nothing, so an hourly run with nothing new is
+  a no-op.
+
+  **Policy (owner decision relayed by Chief, recorded at [#2454](https://github.com/danswett/agent-bridge/issues/2454#issuecomment-7092103546); it replaces Chief's strict-selector ruling of the same evening):** Arm64 jobs no longer gate merge-rule, quality-gate, publish-gate or the train. A train release still needs both architectures' package artifacts, so an Arm64 job that produced no package is skipped for the next newest commit, not published without Arm64.
+* **How (design).** The train is to download that commit's FULL run's packages (the bytes CI built and checked, never a
+  rebuild) and runs `build/publish-prerelease.ps1` for them with `-MainHead` set to the chosen
+  commit. It is to share `ci.yml`'s `publish-prerelease` concurrency group, and the script still
+  refuses a version already out, an older one, or a commit behind the latest release, so the
+  train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
+  stands aside for a later app change any more (#4104): the train is to publish the newest verified
+  commit, and a later change is the next verified commit's to publish.
+* **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+  as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+  unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
+* **Not covered yet:** `attest` and the Beta manifest step belong to `ci.yml`'s `publish` job,
+  so a train release is to carry neither until they are added.
 
 ### Signing
 
@@ -1150,6 +1427,14 @@ claim who answered; only a confirmed local delivery says "You answered". Approva
 messages use the existing literal, escaped rendering path. The Windows view and
 closure wiring are a separate slice; this model alone does not replace the old receipt.
 
+**Sort menu** ([issue 191](https://github.com/danswett/agent-bridge/issues/191)):
+when the order file cannot be saved, the list uses Most recent and Your order is
+disabled. A later successful save enables Your order again; it stays unselected
+until the person chooses it. If the file could not be loaded, Your order stays
+disabled until the app restarts and reads it successfully; no changes overwrite
+the unread file. The menu item's tooltip distinguishes a load failure from a
+save failure.
+
 **Inline mono** ([ui.md](design/ui.md) §4.2, #215): a path, an id, a branch or a tool call on a line of text is in Slipgates Mono at that line's role's generated inline size (`AbInlineMono*`, through the app's `InlineMonoRow` and `InlineMonoMeta` styles), so its x-height is Slipgates Sans', on the role's own line height and weight; a code span in a response is scaled the same way (`AbInlineMonoScale`). Repository, machine and model names are in the text face, and separators are always text. Code standing on its own lines keeps the Code role.
 
 **The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark (its native 20 px cut, in Bridge, which is Highlight in high contrast), the product's name and a search box (Ctrl+K), beside the system caption buttons, which the app paints in its theme on the UI thread (not with the title bar's `PreferredTheme`, whose repaint from a thread-pool thread crashed the app on a high-contrast switch, #240) and leaves in the system's colours in high contrast; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.
@@ -1160,6 +1445,15 @@ closure wiring are a separate slice; this model alone does not replace the old r
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt (nor needs one for a session brought over). Where the machine takes sessions from the account's others (`sessions.transfer`), Resume also lists the ended sessions they hand on (`sessions.transfer.serve`), by machine: picking one copies it over and resumes it as a new session in the workspace picked, with a command the app signs with its own device key, as a person's device (kind `app`), for the machine the session is on ([v1-transfer.md](protocol/v1-transfer.md)); the original stays. A transfer to this machine goes to its host through the relay, as the protocol requires, not the pipe; a transfer waits up to 12 minutes for its outcome and is resent for up to 20; why the form cannot go is said beside the Launch button, apart from the last launch's outcome. A launched agent asking whether to trust its folder ([v1-launch.md](protocol/v1-launch.md#folder-trust)), listed by the machine or named in a launch's outcome (which counts only until the machine's next listing, asked for at once), is shown in full (agent, the whole folder path wrapped and selectable, the repository root it applies to, the agent's own words); where the machine allows it and has approved this app, Trust and Quit answer it with `launch.trust.answer` and a command the app signs as a person's device for that machine, question and choice, through the relay only (this machine's own host through its loopback, never the pipe). Otherwise it says to answer at the machine and why; for this machine, "Allow answering from this app" turns the setting on with this app approved. An answer that may have typed is never offered again; an error offers only that same request again. A machine that takes no launches now (agent-ha-bridge runs there) is still listed, to show such a question read-only | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), signing Copilot in again from a device the account's device roster (#55) pins as a person's here ("Let my devices sign Copilot in on this machine", `permissions.phoneSignIn`, off by default, applied when the host restarts; it says that the machine opens a browser and copies the code while it runs; under it, only while it is on, the read-only list "Devices that can sign Copilot in" from the host's status, `signInDevices`, with no Add or Remove (ui.md §6.9, #972); [host-config.md](host-config.md#phone-sign-in)), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
+
+The Windows delegate strip reserves 20 DIPs below each item and its overflow footer:
+16 for the expanded horizontal scrollbar and 4 for focus clearance
+([#398](https://github.com/danswett/agent-bridge/issues/398)). The footer stays
+unwrapped and untrimmed, with a trailing inset inside the scroll extent, so its
+last words can be scrolled fully into view. `DelegateStripLayoutTests` guards
+these XAML layout constraints without running WinUI; rendered scrollbar modes,
+themes and input still need the hosted Windows app checks. The PWA is unchanged;
+this is not evidence that its chip strip has the same defect.
 
 **Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
 for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.
@@ -1281,15 +1575,28 @@ Error Reporting entries in the launch-time window only when their faulting/emitt
 PID and executable name identify that app, not Setup or the host. An entry without
 that process attribution is not evidence of this app's cause. Event timestamps are
 Pacific. Missing stderr, absent matching events and query/read failures remain
-explicit evidence gaps; no event or cause is manufactured.
+explicit evidence gaps for a crash; no event or cause is manufactured. A self-test that
+finishes and fails checks makes the app exit normally with code 1: it leaves no stderr and
+no event, and its cause is the failed checks the app wrote to `result.json`, which the
+wrapper copies into `app-exit-cause.json` as `failedChecks`. No event found is then not a
+capture error (win-arm64, main 62c35b0a).
+When the app also wrote its bottom-bounce trace (`result.history-bottom-bounce.json`, beside the
+result), the wrapper prints a bounded summary of it and keeps it in `app-exit-cause.json` as
+`bounceTrace`: the frames sampled, the first one whose surface was not a valid one to judge a
+bounce on, which validity terms it failed (`build/app-self-test-trace.ps1`), and the first and
+last few frames. Four checks read that one sticky latch; this names its frame and term, and
+changes no assertion. The clear-button check's message says how long its hold lasted.
 
 The installer job adds one behavioral assertion against that actual wrapper
 evidence: a failed self-test must have stderr, its exit code and an app-process
-event message, with no capture errors. A missing evidence file is reported as a
-capture failure, not behavioral RED. A passing app is not RED either. The original
-self-test failure still fails the job even when cause evidence is complete.
-This diagnostic cut changes no app behavior and establishes no root cause or fix;
-only Quality-ordered hosted execution can establish actual RED.
+event message, or exit code 1 with its failed checks, and no capture errors. A missing
+evidence file is reported as a capture failure, not behavioral RED. A passing app is not
+RED either. The original self-test failure still fails the job even when cause evidence
+is complete. These diagnostics change no app behavior and establish no root cause; only
+Quality-ordered hosted execution can establish actual RED. The one self-test check that
+failed on win-arm64 (main 62c35b0a, the text box's clear button) now settles unrelated
+layout before the button appears and keeps its short look after it (`HoldProbe`), so a hold
+the button itself arms still fails; that is a fix for that check, not for the x64 failure.
 The reported x64 failure is intermittent: one green run is neither a reproduced
 failure nor proof that it is fixed. Cause capture must come from a failing run.
 
@@ -1354,6 +1661,11 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
   let a preceding update cycle finish even when the page is already idle; the self-test
   fails if that frame barrier cannot complete within 10 seconds.
+  The independent F24 canary restores focus with bring-into-view held on the focused
+  control (or a link's visual parent), below its scroller, through the next captured
+  frame; a window-root handler is too late to prevent scrolling. Missing-key diagnostics
+  retain the target sampled before each press, including a posted fallback
+  ([input-path follow-up](https://github.com/danswett/agent-bridge/issues/2540)).
   The dark page pass reopens each output PNG and checks a page-background pixel is opaque
   and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent
@@ -1364,6 +1676,12 @@ failure nor proof that it is fixed. Cause capture must come from a failing run.
   200 ms, reader content within 1.5 DIP, and blocks unselected. Client drawing only, not host reads
   or physical input. Run published `AgentBridge.exe --self-test-history-scroll <result.json>`;
   normal `--self-test` includes it on both Windows CI architectures.
+  The regular `--self-test` also records the existing Latest history-scroll checks in
+  `latestTiming`: section `begin`/`end` entries and each `check`, including failed steps,
+  with `Seconds` since the previous check (or the section's duration for `end`),
+  `SectionSeconds` and `SelfTestSeconds` from monotonic elapsed time. The same entries
+  go to the app log; a missing check record fails the self-test. This is fixture-only,
+  read-only timing evidence, not a performance threshold or a change to scrolling/input.
   The sign-in row captures run `CheckSignInRowTypography` in Light, Dark and CI high contrast:
   the status run alone uses proportional figures for words-only text, fixing the bundled face's
   wide tabular hyphen (#903); any digit keeps the whole run tabular. The check measures the drawn

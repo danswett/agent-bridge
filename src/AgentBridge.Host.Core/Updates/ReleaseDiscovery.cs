@@ -53,9 +53,16 @@ public sealed partial class ReleaseDiscovery : IDisposable
     const string AssetApiPrefix = "https://api.github.com/repos/danswett/agent-bridge/releases/assets/";
     // A relay copy older than this is not used: GitHub is asked, or its backoff says when it will be.
     public static readonly TimeSpan CdnOldest = TimeSpan.FromHours(1);
+    // A relay copy older than this can still OFFER a newer release (an offer meets the halt and digest checks as any does) but can never say there
+    // is nothing newer: it may predate a publish (a 27-minute-old copy said "up to date" while the next release existed). That is "unknown": the check
+    // fails with words and tries again, as for any refused answer. The length of the check interval: a copy kept for it is never older than twice this.
+    public static readonly TimeSpan CdnFreshFor = TimeSpan.FromMinutes(10);
     // GitHub is asked at least this often, whatever the relay says.
     public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
     public static readonly TimeSpan GithubRelayAtMost = TimeSpan.FromHours(24);
+    // The relay's verified policy extends the grace only until this long after GitHub last answered here (owner decision, Chief, Nov 23):
+    // a newer halt a relay hides is hidden at most this long.
+    public static readonly TimeSpan GithubRelayExtendedAtMost = TimeSpan.FromHours(72);
     static readonly TimeSpan CdnWait = TimeSpan.FromSeconds(10);
     // GitHub's page of ten releases is tens of KiB.
     const int CdnLargest = 4 * 1024 * 1024;
@@ -148,7 +155,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // installed: the version installed here, channel: this machine's Velopack channel (`win`,
     // `win-arm64`) and prereleases: whether they are offered, which a relay's list is judged by;
     // without a channel the relay isn't asked.
-    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null, string? channel = null, bool prereleases = true)
+    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null, string? channel = null, bool prereleases = true, bool pressed = false)
     {
         await turn.WaitAsync(cancellationToken);
         try
@@ -161,6 +168,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
             var now = time.GetUtcNow();
             T releases = default!;
             var cached = state.Url == url && state.Body is not null && Readable(state.Body, read, out releases);
+            var kept = releases;
             // A backoff first: a clock put back can make an older answer's FreshUntil future again,
             // and serving it then would say a check succeeded that GitHub has just refused. A list
             // the relay gave since GitHub refused is not GitHub's answer, and that refusal doesn't
@@ -172,27 +180,31 @@ public sealed partial class ReleaseDiscovery : IDisposable
             var askCdn = cdn && url == GitHubList && channel is not null;
             // Only GitHub's own answer moves this, so a relay can't renew its own list's welcome.
             var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
+            // A person's press (#3441) is not answered from what was kept for background checks:
+            // the relay's copy may predate the latest publish by most of CdnOldest (37 minutes, on
+            // a dev VM), so GitHub is asked, conditionally on a list it gave. Its backoff still holds.
+            var press = pressed && !holding;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
-                if (state.Source != Sources.Cdn) { return releases; }
                 // A relay's list kept here is judged for every caller as a fresh one would be: it
                 // passed for the caller that fetched it, whose channel or pre-release choice may
                 // not be this one's (a list with a pre-release above GitHub's floor and an older
                 // stable release would take a stable caller back; review 6712185589).
-                var problem = channel is null ? "this check's channel isn't known"
-                    : revalidate && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)) ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
-                    // Its age now, not when it was fetched: a copy taken at 59 minutes may not be
-                    // served for another interval past the hour (review 6712407884).
-                    : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
-                    : CdnProblem(state.Body!, channel, prereleases, floor, installed);
-                if (problem is null) { return releases; }
-                log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
-                askCdn = false;
+                var problem = state.Source != Sources.Cdn ? null : KeptCdnProblem(state, now, holding, channel, prereleases, floor, installed);
+                if (problem is null) { if (!press) { return releases; } }
+                else
+                {
+                    log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+                    askCdn = false;
+                }
             }
             Answer? rechecked = null;
-            if (cdn && url == GitHubList && channel is not null && revalidate)
+            if (cdn && url == GitHubList && channel is not null && (revalidate || press))
             {
-                log?.Invoke($"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+                // GitHub first; the CDN is the fallback if it refuses (it is asked below once GitHub has).
+                log?.Invoke(revalidate
+                    ? $"update check: GitHub is asked first, as it has not answered here in the last {Span(GithubRevalidateEvery)}, and the CDN is the fallback if it refuses; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}"
+                    : "update check: GitHub is asked first, as a person asked for this check, and the CDN is the fallback if it refuses; asking GitHub");
                 if (!holding)
                 {
                     rechecked = await AskAsync(url, cached && state.Source != Sources.Cdn ? state.ETag : null, cancellationToken);
@@ -238,7 +250,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
                     };
                     Write(state);
                     log?.Invoke($"update check: the release list came from the CDN, from its copy of {Span(a)} ago");
-                    if (revalidate && (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
+                    if (holding && state.Problem == Problems.Limited && RelayAnchor(state) is { } start) { log?.Invoke($"update check: using the relay under a grace window ending {(start + GithubRelayAtMost):O}"); }
                     return relayed;
                 }
                 log?.Invoke($"update check: the CDN's release list was not used, as {refused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
@@ -271,6 +283,13 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 if (cdn) { log?.Invoke("update check: the release list came from GitHub"); }
                 return releases;
             }
+            if (press && answer.Problem != Problems.Limited && cached && now < state.FreshUntil
+                && (state.Source != Sources.Cdn || KeptCdnProblem(state, now, holding, channel, prereleases, floor, installed) is null))
+            {
+                Write(state);
+                log?.Invoke("update check: GitHub did not answer the pressed check with a readable list; using the fresh release list kept here without starting a backoff");
+                return kept;
+            }
             state = BackedOff(state, answer, now, url);
             Write(state);
             throw Held(state);
@@ -278,11 +297,37 @@ public sealed partial class ReleaseDiscovery : IDisposable
         finally { turn.Release(); }
     }
 
+    string? KeptCdnProblem(State state, DateTimeOffset now, bool holding, string? channel, bool prereleases, string? floor, string? installed)
+    {
+        var revalidate = state.RelayExpired || state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
+        return channel is null ? "this check's channel isn't known"
+            : revalidate && (!holding || state.Problem != Problems.Limited || !RelayWindow(state, now)) ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
+            : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
+            : CdnProblem(state.Body!, channel, prereleases, floor, installed, now - copied);
+    }
+
     bool RelayWindow(State state, DateTimeOffset now)
     {
         var sane = Sane(state, now);
         if (sane != state) { Write(sane); }
-        return !unsaved && !sane.RelayExpired && (sane.GitHubAnsweredAt ?? sane.RelayBootstrapAt) is { } start && start <= now && now - start < GithubRelayAtMost;
+        return !unsaved && !sane.RelayExpired && RelayAnchor(sane) is { } start && start <= now && RelayGraceEnd(sane) is { } end && now < end;
+    }
+
+    // What the relay grace counts from: the later of when GitHub last answered here (or the rate-limit bootstrap) and when the relay last
+    // served a verified halt policy.
+    static DateTimeOffset? RelayAnchor(State state)
+    {
+        var github = state.GitHubAnsweredAt ?? state.RelayBootstrapAt;
+        return github is { } g && state.RelayVerifiedAt is { } v ? (g > v ? g : v) : github ?? state.RelayVerifiedAt;
+    }
+
+    // The end of the relay grace: 24 hours after the anchor, but never later than 72 hours after GitHub last answered here, so the relay's own
+    // verified lists cannot keep it open for ever.
+    static DateTimeOffset? RelayGraceEnd(State state)
+    {
+        if (RelayAnchor(state) is not { } anchor) { return null; }
+        var end = anchor + GithubRelayAtMost;
+        return (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } github && github + GithubRelayExtendedAtMost < end ? github + GithubRelayExtendedAtMost : end;
     }
 
     State BackedOff(State state, Answer answer, DateTimeOffset now, string url)
@@ -314,7 +359,8 @@ public sealed partial class ReleaseDiscovery : IDisposable
         NotBefore = state.NotBefore > now + LongestWait + BackoffJitter ? now : state.NotBefore,
         RelayBootstrapAt = state.RelayBootstrapAt > now || state.GitHubAnsweredAt > now ? DateTimeOffset.MinValue : state.RelayBootstrapAt,
         GitHubAnsweredAt = state.GitHubAnsweredAt > now ? null : state.GitHubAnsweredAt,
-        RelayExpired = state.RelayExpired || (state.GitHubAnsweredAt ?? state.RelayBootstrapAt) is { } start && now - start >= GithubRelayAtMost,
+        RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt,
+        RelayExpired = state.RelayExpired || RelayGraceEnd(state with { RelayVerifiedAt = state.RelayVerifiedAt > now ? null : state.RelayVerifiedAt }) is { } end && now >= end,
     };
 
     internal sealed record Quota(int Remaining, DateTimeOffset At);
@@ -352,7 +398,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
                 bytes.Write(buffer, 0, read);
             }
             var body = System.Text.Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length);
-            return CdnProblem(body, channel, prereleases, floor, installed) is { } problem ? (null, age, problem) : (body, age, null);
+            return CdnProblem(body, channel, prereleases, floor, installed, age) is { } problem ? (null, age, problem) : (body, age, null);
         }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -370,7 +416,7 @@ public sealed partial class ReleaseDiscovery : IDisposable
     // offered it (floor), nor than what is installed. Judged by that, not by the newest tag
     // anywhere in the list: a forged newer release carrying only another channel's feed would
     // otherwise pass while Velopack took an older one (review 6711939053).
-    internal static string? CdnProblem(string body, string channel, bool prereleases, string? floor, string? installed)
+    internal static string? CdnProblem(string body, string channel, bool prereleases, string? floor, string? installed, TimeSpan? age = null)
     {
         if (!IsList(body)) { return "its list could not be read"; }
         using var doc = JsonDocument.Parse(body);
@@ -397,6 +443,11 @@ public sealed partial class ReleaseDiscovery : IDisposable
         if (Selected(doc.RootElement, channel, prereleases) is not { } selected) { return "its list had nothing to install on this machine"; }
         if (floor is not null && Version.TryParse(floor, out var before) && selected < before) { return "its list was older than GitHub's last list here"; }
         if (installed is not null && Version.TryParse(installed, out var current) && selected < current) { return "its list was older than the version installed here"; }
+        // Older than CdnFreshFor, the copy is only an offer: it names a release newer than what is installed, or it says nothing about whether one exists.
+        if (age is { } old && old > CdnFreshFor && !(installed is not null && Version.TryParse(installed, out var running) && selected > running))
+        {
+            return $"its copy was {Span(old)} old and names nothing newer than what is installed, so it could predate a publish";
+        }
         return null;
     }
 
@@ -686,6 +737,9 @@ public sealed partial class ReleaseDiscovery : IDisposable
         public DateTimeOffset? GitHubAnsweredAt { get; init; }
         // Only this repository's GitHub list can start or clear the missing-answer bootstrap.
         public DateTimeOffset? RelayBootstrapAt { get; init; }
+        // When the relay last served a halt policy that passed the whole verification here (HaltPolicy.cs): it extends the relay grace as
+        // a GitHub answer does (owner decision, Chief, #2225, Nov 23). Never a GitHub answer: GitHubAnsweredAt stays GitHub's alone.
+        public DateTimeOffset? RelayVerifiedAt { get; init; }
         public bool RelayExpired { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }

@@ -34,7 +34,8 @@ internal sealed class FleetNameEnrollment(ISessionSource source, FleetNames name
         Task<FleetRosterSnapshot>? reading = null;
         try
         {
-            reading = roster.ReadScopedAsync(cancel.Token);
+            // A name-uniqueness decision never uses the shared registry read (fleet-session-registry.md, #1396).
+            using (RegistryReads.Scope(true)) { reading = roster.ReadScopedAsync(cancel.Token); }
             var completed = await Task.WhenAny(reading, deadline, closed);
             if (closed.IsCompleted) { throw new OperationCanceledException("session.rename: caller disconnected"); }
             if (completed != reading || time.GetElapsedTime(started) >= limit)

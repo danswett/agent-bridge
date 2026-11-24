@@ -6,11 +6,276 @@ import { DemoHost } from '../../js/demo.js';
 import { HostClient } from '../../js/host-client.js';
 import { HistoryStore } from '../../js/history-store.js';
 import { readSession } from '../../js/protocol.js';
+import { currentReply, shownParts } from '../../js/ui/history-view.js';
+import { HISTORY, readHistoryResult } from '../../js/history.js';
 
 const ID = 's1';
 const turn = (n) => `${ID}-turn-${n}`;
 const nums = (snapshot) => snapshot.turns.map((t) => Number(t.id.split('-').at(-1)));
 const prompts = (snapshot) => snapshot.turns.map((t) => t.prompt?.text);
+
+test('successive assistant messages keep both replies in order and a third appends without duplicating updates', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  const say = (responseId, response) => store.live('h', readSession({
+    id: ID, agent: 'copilot', activity: { turn: turn(6), responseTurn: turn(6), responseId, response, userMessage: 'Question' },
+  }));
+  const replies = () => shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.text);
+  say('answer', 'Original answer.');
+  say('pulse', 'Scheduled pulse.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse.']);
+  say('pulse', 'Scheduled pulse, complete.');
+  say('completion', 'Background task completed.');
+  say('completion', 'Background task completed.');
+  assert.deepEqual(replies(), ['Original answer.', 'Scheduled pulse, complete.', 'Background task completed.']);
+  const current = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), responseId: 'completion', response: 'Background task completed.' } });
+  assert.equal(currentReply(store.get('h', ID), current), 'Original answer.\n\nScheduled pulse, complete.\n\nBackground task completed.');
+});
+
+// #3649: a reply with no id may update only an id-less last part; if the last reply part has an id, it starts a new part. The live card
+// (currentReply) and the history parts must agree.
+const saySession = (responseId, response) => readSession({
+  id: ID, agent: 'claude', activity: { turn: turn(6), responseTurn: turn(6), ...(responseId ? { responseId } : {}), response, userMessage: 'Question' },
+});
+const replyTexts = (store) => shownParts(store.get('h', ID).turns.at(-1)).filter((p) => p.kind === 'response').map((p) => p.text);
+
+test('an id-less reply after an identified one is a new part, never a rewrite of it, and the live card agrees', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('answer', 'First reply.'));
+  const second = saySession(null, 'Second reply.');
+  store.live('h', second);
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+  assert.equal(currentReply(store.get('h', ID), second), 'First reply.\n\nSecond reply.');
+});
+
+test('id-less streaming updates stay in one part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession(null, 'Par'));
+  const last = saySession(null, 'Partial answer');
+  store.live('h', last);
+  assert.deepEqual(replyTexts(store), ['Partial answer']);
+  assert.equal(currentReply(store.get('h', ID), last), 'Partial answer');
+});
+
+test('the same id updates one part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'one'));
+  store.live('h', saySession('a', 'one two'));
+  assert.deepEqual(replyTexts(store), ['one two']);
+});
+
+test('an id-less reply then an identified one keeps both, and a later id-less reply is a third part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession(null, 'First reply.'));
+  store.live('h', saySession('b', 'Second reply.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+  store.live('h', saySession(null, 'Third reply.'));
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.', 'Third reply.']);
+});
+
+test('an id-less restatement of the last stored reply is that reply, not a new part', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'Same words.'));
+  store.live('h', saySession(null, 'Same words.'));
+  assert.deepEqual(replyTexts(store), ['Same words.']);
+});
+test('a stored part that follows an id-less live reply stays deferred in the live card', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const live = saySession(null, 'Live words.');
+  store.live('h', live);
+  page = [{ id: turn(6), at: '2026-11-21T22:00:00Z', parts: [{ id: 'replacement', kind: 'response', text: 'Stored replacement must remain deferred' }] }];
+  await store.open('h', ID);
+  assert.equal(currentReply(store.get('h', ID), live), 'Live words.');
+});
+test('a stored page replaces the id-less live parts without duplicating them', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  store.live('h', saySession('a', 'First reply.'));
+  store.live('h', saySession(null, 'Second reply.'));
+  page = [{ id: turn(6), at: '2026-11-21T22:00:00Z', parts: [['a', 'First reply.'], ['b', 'Second reply.']].map(([id, text]) => ({
+    id, kind: 'response', text, at: '2026-11-21T22:00:01Z',
+  })) }];
+  await store.open('h', ID);
+  assert.deepEqual(replyTexts(store), ['First reply.', 'Second reply.']);
+});
+test('an old hosts missing reply identity keeps the legacy single streaming slot', async (t) => {
+  const { store } = await setup(t);
+  await store.open('h', ID);
+  let session;
+  for (const response of ['Partial', 'Complete answer']) {
+    session = readSession({ id: ID, activity: { turn: turn(6), responseTurn: turn(6), response } });
+    store.live('h', session);
+  }
+  const snapshot = store.get('h', ID);
+  assert.equal(currentReply(snapshot, session), 'Complete answer');
+  assert.deepEqual(shownParts(snapshot.turns.at(-1)).map((p) => p.text), ['Complete answer']);
+});
+
+test('finished history parts replace live slots by identity without duplicating equal replies', async () => {
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: {
+    capabilities: [HISTORY.capability],
+    history: async () => readHistoryResult({ turns: page }),
+  } }) });
+  await store.open('h', ID);
+  const session = (responseId) => readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId, response: 'Same answer' } });
+  store.live('h', session('first'));
+  store.live('h', session('second'));
+  page = [{ id: 'owner', at: '2026-11-21T22:00:00Z', parts: ['first', 'second'].map((id) => ({
+    id, kind: 'response', text: 'Same answer', at: '2026-11-21T22:00:01Z',
+  })) }];
+  await store.open('h', ID);
+  store.live('h', session('second'));
+  const snapshot = store.get('h', ID);
+  assert.deepEqual(snapshot.turns[0].parts.map((p) => p.id), ['first', 'second']);
+  assert.equal(currentReply(snapshot, session('second')), 'Same answer\n\nSame answer');
+  assert.ok(snapshot.turns[0].parts.every((p) => p.at === '2026-11-21T22:00:01Z'));
+  const stale = session('second');
+  store.live('h', { ...stale, activity: { ...stale.activity, response: 'Stale partial', responseTruncated: true } });
+  assert.equal(currentReply(store.get('h', ID), stale), 'Same answer\n\nSame answer');
+  page = [{ ...page[0], parts: [page[0].parts[0]] }];
+  await store.open('h', ID);
+  assert.equal(currentReply(store.get('h', ID), session('second')), 'Same answer\n\nSame answer');
+});
+
+test('Codex live revisions after history replace the same part without accepting stale snapshots', async () => {
+  let page = [];
+  let pending = null;
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
+  } }) });
+  await store.open('h', ID);
+  const session = (response, seconds, responseTruncated = false) => readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated } });
+  store.live('h', session('Partial answer', 0));
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Partial answer', at: '2026-11-22T11:00:00Z' }] }];
+  await store.open('h', ID);
+  store.live('h', session('Complete answer', 2));
+  assert.equal(currentReply(store.get('h', ID), session('Complete answer', 2)), 'Complete answer');
+  store.live('h', session('Partial answer', 1));
+  assert.equal(currentReply(store.get('h', ID), session('Partial answer', 1)), 'Complete answer');
+  store.live('h', session('Cut', 3, true));
+  assert.equal(currentReply(store.get('h', ID), session('Cut', 3, true)), 'Complete answer');
+  assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['answer']);
+  let release;
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  store.live('h', session('Complete revised answer', 4));
+  release();
+  await loading;
+  assert.equal(currentReply(store.get('h', ID), session('Complete revised answer', 4)), 'Complete revised answer');
+});
+
+for (const [reviseSecond, budget] of [[false, false], [true, false], [false, true], [true, true]]) {
+  test(`Codex delayed pages preserve each revised item: second revised ${reviseSecond}, budget ${budget}`, async () => {
+    let pending = null;
+    const page = { id: 'owner', at: '2026-11-22T11:00:00Z', parts: ['first', 'second'].map((id) => ({
+      id, kind: 'response', at: '2026-11-22T11:00:00Z', text: id === 'first' ? 'First old' : 'Second old',
+    })) };
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [
+        budget && pending ? { ...page, parts: [page.parts[1]], truncated: true, partsMore: 1 } : page,
+      ] }); },
+    } }) });
+    await store.open('h', ID);
+    const say = (responseId, response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+      updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner', responseId, response } }));
+    say('first', 'First old', 0);
+    say('second', 'Second old', 1);
+    let release;
+    pending = new Promise((resolve) => { release = resolve; });
+    const loading = store.open('h', ID);
+    await new Promise(setImmediate);
+    say('first', 'First new', 2);
+    say('second', reviseSecond ? 'Second new' : 'Second old', 3);
+    release();
+    await loading;
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.text), ['First new', reviseSecond ? 'Second new' : 'Second old']);
+    assert.deepEqual(store.get('h', ID).turns[0].parts.map((p) => p.id), ['first', 'second']);
+  });
+}
+
+for (const stale of [false, true]) {
+  test(`a rejected Codex reply still updates reasoning and tools: stale ${stale}`, async (t) => {
+    const { store } = await setup(t);
+    await store.open('h', ID);
+    const session = readSession({ id: ID, agent: 'codex', updatedAt: '2026-11-22T11:00:02Z',
+      activity: { turn: turn(6), responseTurn: turn(6), responseId: 'answer', response: 'Full answer', reasoning: 'Before' } });
+    store.live('h', session);
+    store.live('h', { ...session, updatedAt: stale ? '2026-11-22T11:00:01Z' : '2026-11-22T11:00:03Z',
+      activity: { ...session.activity, response: 'Cut', responseTruncated: !stale,
+        reasoning: 'After', currentTool: { id: 'tool', name: 'shell', status: 'running' } } });
+    const held = store.get('h', ID).turns.at(-1);
+    assert.equal(held.parts[0].text, 'Full answer');
+    assert.equal(held.live.reasoning, 'After');
+    assert.equal(held.live.currentTool.name, 'shell');
+  });
+}
+
+test('an accepted truncated Codex revision survives an older full page', async () => {
+  let release;
+  let pending = null;
+  let page = [];
+  const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+    history: async () => { await pending; return readHistoryResult({ turns: page }); },
+  } }) });
+  await store.open('h', ID);
+  const say = (response, seconds) => store.live('h', readSession({ id: ID, agent: 'codex',
+    updatedAt: `2026-11-22T11:00:0${seconds}Z`, activity: { turn: 'owner', responseTurn: 'owner',
+      responseId: 'answer', response, responseTruncated: true } }));
+  say('Partial old', 1);
+  page = [{ id: 'owner', at: '2026-11-22T11:00:00Z',
+    parts: [{ id: 'answer', kind: 'response', text: 'Older full answer', at: '2026-11-22T11:00:00Z' }] }];
+  pending = new Promise((resolve) => { release = resolve; });
+  const loading = store.open('h', ID);
+  await new Promise(setImmediate);
+  say('Partial new', 2);
+  release();
+  await loading;
+  assert.equal(store.get('h', ID).turns[0].parts[0].text, 'Partial new');
+  assert.equal(store.get('h', ID).turns[0].parts[0].truncated, true);
+});
+
+for (const cut of [{ truncated: true }, { partsMore: 1 }]) {
+  test(`a late budgeted page cannot hide the current identified streaming reply: ${JSON.stringify(cut)}`, async () => {
+    const page = { id: 'owner', at: '2026-11-21T22:00:00Z', ...cut,
+      parts: [{ id: 'answer', kind: 'response', text: 'Original answer', at: '2026-11-21T22:00:01Z' }] };
+    let release;
+    let pending = null;
+    const store = new HistoryStore({ current: () => ({ client: { capabilities: [HISTORY.capability],
+      history: async () => { await pending; return readHistoryResult({ turns: [page] }); },
+    } }) });
+    await store.open('h', ID);
+    pending = new Promise((resolve) => { release = resolve; });
+    const fetch = store.open('h', ID);
+    await new Promise(setImmediate);
+    const session = readSession({ id: ID, activity: { turn: 'owner', responseTurn: 'owner', responseId: 'pulse', response: 'Scheduled pulse' } });
+    store.live('h', session);
+    release();
+    await fetch;
+    assert.equal(currentReply(store.get('h', ID), session), 'Original answer\n\nScheduled pulse');
+    store.live('h', readSession({ id: ID, activity: { turn: 'next', userMessage: 'Next question' } }));
+    assert.deepEqual(shownParts(store.get('h', ID).turns[0]).filter((p) => p.kind === 'response').map((p) => p.text),
+      ['Original answer', 'Scheduled pulse']);
+  });
+}
 
 async function setup(t, { count = 5, ...options } = {}) {
   const host = new DemoHost({ sessions: [{ id: ID, agent: 'copilot', status: 'idle', updatedAt: new Date().toISOString(), activity: { turnCount: count } }] }, { answerDelayMs: 0, history: true });

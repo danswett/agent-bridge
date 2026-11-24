@@ -21,6 +21,16 @@ public static class HostOps
     public const string AgentSignInCapability = "host.agents.signIn";
     public const string AgentsSignIn = "host.agents.signIn";
 
+    // The person's script credentials (HA retirement row 1): the app lists, mints, rotates, revokes and ticks launch:fleet,
+    // each press with the host's confirmation for that action. In hello only for the app, on Windows.
+    public const string ScriptCredentialsCapability = "host.scripts";
+    public const string ScriptList = "scripts.list";
+    public const string ScriptConfirm = "scripts.confirm";
+    public const string ScriptAdd = "scripts.add";
+    public const string ScriptRevoke = "scripts.revoke";
+    public const string ScriptGrantFleet = "scripts.grant-fleet";
+    public const string ScriptRevokeFleet = "scripts.revoke-fleet";
+
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
     public const string Subscribe = "host.subscribe";
@@ -52,6 +62,13 @@ public static class HostOps
     // lane owns: wired here, minimally, to the contract the design gives it. An older host answers
     // "unknown op", and the press ends refused.
     public const string UpdateDepart = "host.update.depart";
+    // Approve-gesture enrollment (#3450, brief 184): this host's v1 enrollment descriptor and the
+    // state of its one open attempt. For the app alone, like every management op; never the relay's.
+    public const string EnrollDescribe = "host.enroll.describe";
+    public const string EnrollStatus = "host.enroll.status";
+    // Code 2 as the person typed it here, and the pin once the approver's add is in the chain (brief 184b).
+    public const string EnrollCode = "host.enroll.code";
+    public const string EnrollFinish = "host.enroll.finish";
 }
 
 // host.update.depart's request: the press (an Update now's request) the app is carrying.

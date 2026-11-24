@@ -770,7 +770,7 @@ public sealed partial class TranscriptEvidence(string path)
     // offset; since that start, no end the host takes (so it still runs) and none the daemon has
     // read (an end after the start drops it for another reason), and no shutdown, which ends every
     // shell on the host. Other starts for the id since (a quoted line, a subagent's) the host
-    // ignores, and any the daemon took in a later batch would have listed it again. Seen on DEV-VM1
+    // ignores, and any the daemon took in a later batch would have listed it again. Seen in shadow
     // (#40): a pr-watch watcher completed and was restarted 40 s later, with the daemon listing
     // nothing from then on while its process ran (agent-ha-bridge#276).
     // A shell the host counts as running: a start of the session's own that it takes, after the last

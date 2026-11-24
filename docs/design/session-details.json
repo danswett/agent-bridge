@@ -73,7 +73,7 @@
         { "row": "Updated", "value": "2m ago" },
         { "row": "Background", "value": "2 background agents \u00b7 1 background command" },
         { "row": "Turns", "value": "12 turns" },
-        { "row": "Compactions", "value": "3 compactions" },
+        { "row": "Compactions", "value": "compacted 3 times" },
         { "row": "Process", "value": "pid 4312" },
         { "row": "ID", "value": "5d0c7e52-4a3b-4f8e-9c11-2b6a8e41d7f3" }
       ]

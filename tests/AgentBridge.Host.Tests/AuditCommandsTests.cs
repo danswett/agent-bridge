@@ -88,7 +88,7 @@ public sealed class AuditCommandsTests : IDisposable
     [InlineData("--profile", "..")]
     [InlineData("--outcome")]
     [InlineData("--unknown", "value")]
-    [InlineData("archive")]
+    [InlineData("archive", "--action", "agent.send")]
     [InlineData("--action", "agent.send", "--action", "session.launch")]
     public void Invalid_arguments_are_refused_before_any_profile_is_created(params string[] args)
     {

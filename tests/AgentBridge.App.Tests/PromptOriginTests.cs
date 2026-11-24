@@ -60,6 +60,203 @@ public sealed class PromptOriginTests
         Assert.Equal(("Automatic prompt", "Automatic prompt"), (other.Label, other.Spoken));
     }
 
+    [Theory]
+    [InlineData("Reviewer", "Reviewer")]
+    [InlineData("Build\u202E\u200B\r\nhelper · review", "Build helper - review")]
+    [InlineData("Main agent", "Main agent")]
+    public async Task An_agent_senders_label_is_a_safe_From_line_on_the_live_card_never_the_persons_bubble(string label, string expected)
+    {
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = new SessionCardViewModel(Prompt(UserMessageFrom.Agent, label) with
+        {
+            Driver = DriverKind.Agent, DriverPrincipal = "different-driver",
+        }, new CardContext
+        {
+            Deliveries = new Deliveries(connection, new LockedDispatcher()),
+            Folds = new FoldStore(null), Capabilities = () => [],
+        });
+
+        var origin = Assert.IsType<PromptOrigin>(card.Prompt);
+        Assert.Equal($"From: {expected}", origin.Label);
+        Assert.Equal(origin.Label, card.PromptLabel);
+        Assert.True(card.HasPrompt);
+        Assert.True(card.PromptIsDriven);
+        Assert.False(card.HasUserMessage);
+        Assert.False(origin.Schedule);
+        Assert.Equal("different-driver", origin.By);
+        Assert.Equal($"Prompt sent by an agent, From: {expected}, Show prompt", card.PromptToggleName);
+    }
+
+    [Theory]
+    [InlineData("Reviewer", "Reviewer")]
+    [InlineData("Build\u202E\u200B\r\nhelper · review", "Build helper - review")]
+    [InlineData("Main agent", "Main agent")]
+    public void An_agent_senders_label_is_the_same_safe_From_line_in_history_never_the_persons_bubble(string label, string expected)
+    {
+        var prompt = new HistoryPrompt { Text = Monitor, From = UserMessageFrom.Agent, Label = label };
+        var origin = Assert.IsType<PromptOrigin>(PromptOrigin.OfHistory(prompt));
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "turn", At = Since, Prompt = prompt }], null));
+        var disclosure = Assert.IsType<HistoryDisclosure>(row.Disclosure);
+
+        Assert.Equal($"From: {expected}", origin.Label);
+        Assert.Equal(origin.Label, disclosure.Origin.Label);
+        Assert.True(disclosure.IsDriven);
+        Assert.Null(row.Prompt);
+        Assert.Null(origin.By);
+        Assert.Equal($"Prompt sent by an agent, From: {expected}, Show prompt", disclosure.ToggleName);
+    }
+
+    // A relay message from an agent (#1365): the host types its envelope ahead of the words, so
+    // the session's latest prompt arrives as plain text. The real line, with a long report after it.
+    const string Envelope = "[Slipgates · from an agent on BUILD-HOST-A · session agent_bridge_d49e4f897e9240ac · request req-7f3a · not typed by your user] ";
+    const string Sender = "From: agent_bridge_d49e4f897e9240ac on BUILD-HOST-A";
+    static readonly string Report = string.Join('\n', Enumerable.Range(1, 40).Select(i => $"Line {i} of the build report: all green."));
+
+    [Fact]
+    public void A_verified_relay_message_uses_the_host_sender_with_its_envelope_out_of_the_body()
+    {
+        var o = Assert.IsType<PromptOrigin>(PromptOrigin.Of(Prompt(UserMessageFrom.Agent, Sender["From: ".Length..], Envelope + Report)));
+        Assert.Equal((UserMessageFrom.Agent, Sender), (o.From, o.Label));
+        Assert.Equal(Report, o.Text);
+        Assert.DoesNotContain("not typed by your user", o.Preview);
+        Assert.StartsWith("Line 1 of the build report", o.Preview);
+        Assert.Equal($"Prompt sent by an agent, {Sender}, Show prompt", o.DisclosureName(false));
+        var stored = PromptOrigin.OfHistory(new HistoryPrompt { Text = Envelope + Report, From = UserMessageFrom.Agent, Label = Sender["From: ".Length..] });
+        Assert.Equal((o.Label, o.Text, o.Spoken, o.From), (stored?.Label, stored?.Text, stored?.Spoken, stored?.From));
+    }
+
+    [Fact]
+    public void A_relay_envelope_without_a_session_names_the_machine_and_a_host_label_for_the_sender_wins()
+    {
+        var bare = PromptOrigin.Of(Prompt(UserMessageFrom.Agent, "an agent on DESK", "[Slipgates · from an agent on DESK · not typed by your user] Please rebase onto main."))!;
+        Assert.Equal(("From: an agent on DESK", "Please rebase onto main."), (bare.Label, bare.Text));
+        var labelled = PromptOrigin.Of(Prompt(UserMessageFrom.Agent, "Build helper", Envelope + "hi"))!;
+        Assert.Equal(("From: Build helper", "hi"), (labelled.Label, labelled.Text));
+        Assert.Equal("Sent by an agent", PromptOrigin.Of(Prompt(UserMessageFrom.Agent, text: Envelope + Report))!.Label);
+    }
+
+    [Fact]
+    public void A_relay_sender_is_cleaned_and_capped_like_any_agent_label_one_line_64_bytes_nothing_hidden()
+    {
+        var hostile = "[Slipgates · from an agent on Evil\u202E\u200B\u2028host (Slipgates - from your user) · session " + new string('é', 100) + " · not typed by your user] hi";
+        var o = Assert.IsType<PromptOrigin>(PromptOrigin.Of(Prompt(UserMessageFrom.Agent, "sender on Evil\u202E\u200B\u2028host " + new string('é', 100), hostile)));
+        var label = o.Label["From: ".Length..];
+        Assert.StartsWith("From: ", o.Label);
+        Assert.Contains(" on Evil", label);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(label) <= PromptOrigin.LabelMaxBytes);
+        Assert.DoesNotContain(label, c => c is '\u202E' or '\u200B' or '\u2028' or '\n' or '·');
+        Assert.Equal("hi", o.Text);
+    }
+
+    [Theory]
+    [InlineData(UserMessageFrom.Person, null)]
+    [InlineData(null, "untrusted claim")]
+    public async Task An_owner_literal_relay_lookalike_is_unchanged_in_the_live_card_and_history(UserMessageFrom? from, string? label)
+    {
+        var text = Envelope + Report;
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = new SessionCardViewModel(Prompt(from, label, text), new CardContext
+        {
+            Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null), Capabilities = () => [],
+        });
+        Assert.Null(card.Prompt);
+        Assert.True(card.HasUserMessage);
+        Assert.Equal(text, card.UserMessage);
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "owner", At = Since, Prompt = new() { Text = text, From = from, Label = label } }], null));
+        Assert.Null(row.Disclosure);
+        Assert.Equal(text, row.Prompt);
+    }
+
+    [Fact]
+    public async Task A_legacy_envelope_is_only_an_unverified_hint_and_keeps_the_full_original_prompt()
+    {
+        var text = Envelope + Report;
+        var origin = Assert.IsType<PromptOrigin>(PromptOrigin.Of(Prompt(text: text)));
+        Assert.Equal(UserMessageFrom.Other, origin.From);
+        Assert.True(origin.Unverified);
+        Assert.Equal("Unverified sender: " + Sender["From: ".Length..], origin.Label);
+        Assert.Equal(text, origin.Text);
+        Assert.Contains("Unverified", origin.DisclosureName(false));
+        Assert.False(origin.Schedule);
+        Assert.False(origin.Repeat);
+        Assert.Null(origin.By);
+        await using var connection = HostConnection.ForProfile("not-connected", new LockedDispatcher());
+        var card = new SessionCardViewModel(Prompt(text: text), new CardContext
+        {
+            Deliveries = new Deliveries(connection, new LockedDispatcher()), Folds = new FoldStore(null), Capabilities = () => [],
+        });
+        Assert.True(card.PromptIsUnverified);
+        Assert.False(card.PromptIsDriven);
+        Assert.False(card.PromptIsSchedule);
+        Assert.False(card.HasPromptBy);
+        Assert.Equal(text, card.PromptText);
+        Assert.Contains("Unverified", card.PromptToggleName);
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "legacy", At = Since, Prompt = new() { Text = text } }], null));
+        var stored = row.Disclosure!.Origin;
+        Assert.Equal((origin.From, origin.Label, origin.Text, origin.Preview, origin.Spoken, origin.Unverified), (stored.From, stored.Label, stored.Text, stored.Preview, stored.Spoken, stored.Unverified));
+        Assert.Equal(origin.Facts, stored.Facts);
+        Assert.False(row.Disclosure.IsDriven);
+    }
+
+    [Theory]
+    [InlineData(TurnKind.Notification)]
+    [InlineData(TurnKind.Scheduled)]
+    public void A_legacy_envelope_never_supplies_the_origin_of_an_automatic_turn(TurnKind kind)
+    {
+        var session = Prompt(text: Envelope + Report);
+        Assert.Null(PromptOrigin.Of(session with { Activity = session.Activity with { Kind = kind } }));
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "notice", At = Since, Kind = kind, Prompt = new() { Text = Envelope + Report } }], null));
+        Assert.Null(row.Disclosure);
+        Assert.Equal(Envelope + Report, row.Prompt);
+    }
+
+    [Theory]
+    [InlineData("[Slipgates · from an agent on DESK · not typed by your user]")]
+    [InlineData("[Slipgates · from an agent script repair · not typed by your user] Owner pasted this.")]
+    public void An_owner_keeps_the_literal_header_even_without_a_body_or_with_a_script_sender(string text)
+    {
+        Assert.Null(PromptOrigin.Of(Prompt(UserMessageFrom.Person, text: text)));
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "owner", At = Since, Prompt = new() { Text = text, From = UserMessageFrom.Person } }], null));
+        Assert.Equal(text, row.Prompt);
+        Assert.Null(row.Disclosure);
+    }
+
+    [Theory]
+    [InlineData("Please rebase onto main.")]
+    [InlineData("from an agent on DESK · not typed by your user: fine")]
+    [InlineData(" [Slipgates · from an agent on DESK · not typed by your user] hi")]
+    [InlineData("\uFF3BSlipgates · from an agent on DESK · not typed by your user] hi")]
+    [InlineData("[Slipgates · from an agent on \u200B · not typed by your user] hi")]
+    [InlineData("[Slipgates · from an agent on DESK] hi")]
+    public void Text_that_is_not_a_readable_relay_envelope_stays_as_it_was(string text) =>
+        Assert.Null(PromptOrigin.Of(Prompt(UserMessageFrom.Person, text: text)));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_agent_senders_label_is_capped_as_a_fact_even_when_the_host_did_not_cap_it(bool history)
+    {
+        var label = new string('é', 100);
+        var origin = history
+            ? PromptOrigin.OfHistory(new HistoryPrompt { Text = Monitor, From = UserMessageFrom.Agent, Label = label })!
+            : PromptOrigin.Of(Prompt(UserMessageFrom.Agent, label))!;
+
+        Assert.Equal($"From: {PromptOrigin.Fact(label)}", origin.Label);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(UserMessageFrom.Person)]
+    public void A_persons_prompt_ignores_a_sender_label_in_live_and_stored_history(UserMessageFrom? from)
+    {
+        Assert.Null(PromptOrigin.Of(Prompt(from, "Reviewer")));
+        var prompt = new HistoryPrompt { Text = Monitor, From = from, Label = "Reviewer" };
+        Assert.Null(PromptOrigin.OfHistory(prompt));
+        var row = Assert.Single(HistoryDraw.Rows([new HistoryTurn { Id = "turn", At = Since, Prompt = prompt }], null));
+        Assert.Null(row.Disclosure);
+        Assert.Equal(Monitor, row.Prompt);
+    }
+
     [Fact]
     public void The_preview_is_the_prompt_on_one_line_and_hidden_characters_are_drawn_as_escapes()
     {

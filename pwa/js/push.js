@@ -11,8 +11,10 @@
 // the subscription is told it is gone (410) by the push service on its next push.
 import { Capabilities, Ops } from './protocol.js';
 import { NOTIFICATIONS_BLOCKED } from './brand.js';
+import { FILTER_DEFAULTS, readFilters } from './push-filters.js';
 
 const SETTING = 'agent-bridge.app.notify';
+const FILTERS = 'agent-bridge.app.notify-filters';
 
 export function isIos(nav = globalThis.navigator) {
   const ua = nav?.userAgent ?? '';
@@ -70,8 +72,25 @@ export class PushRegistrar {
   busy = '';
   error = '';
 
-  constructor({ win = globalThis, storage = globalThis.localStorage, registration, fetchKey, appUrl, device }) {
-    Object.assign(this, { win, storage, registration, fetchKey, appUrl, device });
+  #filters;
+
+  // pins(client): the session ids this device has pinned on that machine, sent with its registration.
+  constructor({ win = globalThis, storage = globalThis.localStorage, registration, fetchKey, appUrl, device, pins = () => [] }) {
+    Object.assign(this, { win, storage, registration, fetchKey, appUrl, device, pins });
+    this.#filters = readFilters(this.#read(FILTERS));
+  }
+
+  // This device's notification filters (push-filters.js), kept here and sent to every machine.
+  get filters() { return { ...this.#filters }; }
+
+  // Changes the filters given (booleans for known names only). The caller registers again with the machines shown.
+  setFilters(patch) {
+    const next = { ...this.#filters };
+    for (const k of Object.keys(FILTER_DEFAULTS)) { if (typeof patch?.[k] === 'boolean') { next[k] = patch[k]; } }
+    if (Object.keys(next).every((k) => next[k] === this.#filters[k])) { return; }
+    this.#filters = next;
+    this.#write(JSON.stringify(next), FILTERS);
+    this.#emit();
   }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
@@ -184,6 +203,7 @@ export class PushRegistrar {
       keys: { p256dh: json.keys?.p256dh, auth: json.keys?.auth },
       app: this.appUrl,
       device: this.device,
+      notify: { ...this.#filters, pinnedSessions: this.#pinsFor(client) },
     });
   }
 
@@ -219,11 +239,20 @@ export class PushRegistrar {
     return sub;
   }
 
-  #setting() { try { return this.storage?.getItem(SETTING) ?? null; } catch { return null; } }
-
-  #write(v) {
+  #pinsFor(client) {
     try {
-      if (v === null) { this.storage?.removeItem(SETTING); } else { this.storage?.setItem(SETTING, v); }
+      const ids = this.pins(client);
+      return Array.isArray(ids) ? ids : [];
+    } catch { return []; }
+  }
+
+  #read(name) { try { return this.storage?.getItem(name) ?? null; } catch { return null; } }
+
+  #setting() { return this.#read(SETTING); }
+
+  #write(v, name = SETTING) {
+    try {
+      if (v === null) { this.storage?.removeItem(name); } else { this.storage?.setItem(name, v); }
     } catch { /* a nicety */ }
   }
 }

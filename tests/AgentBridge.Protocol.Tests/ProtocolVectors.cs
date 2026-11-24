@@ -133,8 +133,23 @@ public static class ProtocolVectors
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         Diagnostics(catalog.File("diagnostics.json", "v1-diagnostics.md", "Diagnosing a machine from a person's device: its health and its content-free journal (#737)."));
         AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
+        DeliveryRecords(catalog.File("delivery.json", "../message-delivery.md", "Local delivery envelope helpers, not channel requests or sender authority."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
+    }
+
+    static void DeliveryRecords(VectorFileBuilder f)
+    {
+        var sender = new DeliverySender("ha-person", "Person", true);
+        var (header, body) = DeliveryEnvelope.Prepare(new(sender.From, Request, "q1", T0, "normal", 0), "hello");
+        f.Record<DeliverySender>("local")
+            .Valid("authenticated-principal", sender)
+            .Valid("unknown-agent", new("unknown"));
+        f.Record<DeliveryHeader>("local").Valid("prepared-handoff", header);
+        f.Record<DeliveryEntry>("local")
+            .Valid("verified-delivery", new(body, header))
+            .Valid("unverified-console", new("console"))
+            .Valid("length-mismatch", new("console", LengthMismatch: true));
     }
 
     static void MachineLoadRecords(VectorFileBuilder f)
@@ -414,6 +429,7 @@ public static class ProtocolVectors
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
+            .Valid("host-roster-with-unknown-outcomes", MinimalSession with { Machine = MachineId, Owner = new(), Pr = new(), Finished = new(), StartedAt = null })
             .Valid("transcript-file-size", MinimalSession with { TranscriptBytes = 52_428_801, TranscriptObservation = transcriptObservation })
             .Valid("transcript-unavailable", MinimalSession with { TranscriptBytesUnavailable = "not-found", TranscriptObservation = transcriptObservation })
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
@@ -627,6 +643,11 @@ public static class ProtocolVectors
             Id = FileA, Ref = @"@C:\bridge\attachments\0123456789abcdef0123456789abcdef-shot.png",
         };
         f.Record<ReplyAttachmentBinding>(Host).Valid("a-staged-reference", binding);
+        // A guarded clear's escrow (#804): the whole draft escaped as the host shows it, spaces kept.
+        var hidden = ShownText.RevealMarked("rerun the build\u202E gol", rightToLeft: true);
+        f.Record<ClearedComposer>(Host)
+            .Valid("a-plain-draft", new ClearedComposer("  rerun the tests ", []))
+            .Valid("an-escaped-draft", new ClearedComposer(hidden.Shown, [.. hidden.Marks.Select(m => (IReadOnlyList<int>)[m.Start, m.Length])]));
         f.Record<ReplyResult>(Host)
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("delivered-with-bindings", new ReplyResult(AnswerOutcome.Delivered) { Attachments = [binding] })
@@ -729,8 +750,14 @@ public static class ProtocolVectors
         var keys = new PushKeys("BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48", Attachments.Base64Url([.. Enumerable.Range(16, 16).Select(i => (byte)i)]));
         f.Record<PushSubscribeRequest>(Client)
             .Valid("full", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Device = "iPhone · Agent Bridge" })
-            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" });
+            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" })
+            .Valid("with-notify-filters", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { PinnedSessions = [SessionId] } })
+            .Valid("notify-every-turn-no-questions", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Notify = new PushNotify { Questions = false, All = true } });
         f.Record<PushKeys>(Client).Valid("keys", keys);
+        f.Record<PushNotify>(Client)
+            .Valid("defaults", new PushNotify())
+            .Valid("pinned-set", new PushNotify { PinnedSessions = [SessionId] })
+            .Reads("only-the-flags-sent", """{"all":true}""");
         f.Record<PushSubscribeResult>(Host).Valid("subscribed", new PushSubscribeResult(true, 2));
         f.Record<PushUnsubscribeRequest>(Client)
             .Valid("this-device", new PushUnsubscribeRequest())
@@ -748,6 +775,7 @@ public static class ProtocolVectors
             .Valid("sign-in", SignInData)
             .Valid("a-reminder", data with { Reminder = true })
             .Valid("group", GroupData)
+            .Valid("failures", FailuresData)
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
@@ -766,6 +794,11 @@ public static class ProtocolVectors
             {
                 Title = "Needs you", Body = "node-a · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
                 Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
+            })
+            .Valid("failures", new PushNotification
+            {
+                Title = "Messages not delivered", Body = "node-a · 3 messages not delivered", Tag = PushNotice.Tag(MachineId, PushNotice.FailuresKey), Data = FailuresData,
+                Navigate = PushNotice.NavigateMachine("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
@@ -774,6 +807,9 @@ public static class ProtocolVectors
 
     // #913 rule 3: three questions of the machine's sessions within 30 s, as one notice.
     static PushNoticeData GroupData => new() { Kind = NoticeKind.Group, Machine = MachineId, Session = "", Sessions = 3, Class = NotificationClass.NeedsYou, At = T0 };
+
+    // A count of messages the machine's delivery lane could not deliver, over one window: no session, id or text.
+    static PushNoticeData FailuresData => new() { Kind = NoticeKind.Failures, Machine = MachineId, Session = "", Failures = 3, At = T0 };
 
     // ---- launching ----
 
@@ -1170,6 +1206,8 @@ public static class ProtocolVectors
             .Valid("revoked", new AgentRevokeResult("session-1", true));
         f.Record<AgentCredentialResult>(Host)
             .Valid("a-credential", new AgentCredentialResult(AgentProtocol.TokenPrefix + Repeat('A', 43), "agent:machine1/session-1", AgentProtocol.ScopeRead, T0));
+        f.Record<SamePcPinRequest>(Client).Valid("roster-root", new SamePcPinRequest("owner@example", MachineId, Sha, [Sha], MachineId));
+        f.Record<SamePcPinResult>(Host).Valid("pinned", new SamePcPinResult(SamePcPinProtocol.Pinned));
     }
 
     // ---- diagnostics ----

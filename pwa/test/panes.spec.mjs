@@ -612,7 +612,7 @@ test('a row is two lines: the title, then the status and the repository, never t
   expect(main.height).toBeLessThanOrEqual(title.height + facts.height + 16 + 1);
   // The header carries one meta line: status, machine, repository; the rest is in Details.
   const v = view(page, COPILOT);
-  await expect(v.locator('.status-line')).toHaveText('Waiting on you · Demo machine · danswett/agent-ha-bridge');
+  await expect(v.locator('.status-line')).toHaveText('Waiting on you · compacted once · Demo machine · danswett/agent-ha-bridge');
   await expect(v.locator('.fact-model dd')).toHaveText('claude-opus-5.5');
   await expect(v.locator('.fact-branch dd')).toHaveText('detached@5e59309');
   await expect(v.locator('.fact-pid dd')).toHaveText('pid 39844');
@@ -632,6 +632,7 @@ test('Details lists the shared table\'s rows in its order: Status, how long, Age
   await expect(facts.locator('.fact-since dd')).toHaveText(/^for \d/);
   await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
   await expect(facts.locator('.fact-turns dd')).toHaveText('412 turns');
+  await expect(facts.locator('.fact-compactions dd')).toHaveText('compacted once');
   await expect(facts.locator('.fact-id dd .mono')).toHaveText('02d9e5d5-6b35-49bd-b083-39572fbff648');
   // A tick or an update that changes only the clocks leaves the other rows' nodes where they are,
   // so a selection in the ID or the folder survives it.
@@ -639,6 +640,8 @@ test('Details lists the shared table\'s rows in its order: Status, how long, Age
   await upsert(page, COPILOT, { updatedAt: later() });
   await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
   expect(await id.evaluate((n) => n.isConnected)).toBe(true);
+  await upsert(page, COPILOT, { activity: { compactions: 0 } });
+  await expect(facts.locator('.fact-compactions')).toHaveCount(0);
 });
 
 test('Details\' Started gains its date when the clock passes local midnight, in the same <time> with its tooltip', async ({ page }) => {

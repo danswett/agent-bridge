@@ -348,9 +348,27 @@ test('a merged line says how it ended: failed, ended, or reported back from a de
   const said = (fields) => lines([{ id: 'a', name: 'Lint the PWA', startedAt: minsAgo(15), endedAt: minsAgo(14), ...fields }]).map((l) => [l.glyph, words(l)]);
   assert.deepEqual(said({ status: 'ended', outcome: 'failed' }), [['failed', 'Delegate Lint the PWA · ran 1m, failed · 14m']]);
   assert.deepEqual(said({ status: 'ended' }), [['ended', 'Delegate Lint the PWA · ran 1m, ended · 14m']]);
-  assert.deepEqual(said({ status: 'idle' }), [['idle', 'Delegate Lint the PWA · ran 1m, reported back · 14m']]);
+  assert.deepEqual(said({ status: 'idle' }), [['idle', 'Delegate Lint the PWA · ran 1m, ended · 14m']]);
+  assert.deepEqual(said({ status: 'idle', outcome: 'done' }), [['done', 'Delegate Lint the PWA · ran 1m, reported back · 14m']]);
+  assert.deepEqual(said({ status: 'idle', outcome: 'failed' }), [['failed', 'Delegate Lint the PWA · ran 1m, failed · 14m']]);
   // Ended with no time the host knows, it hasn't reported back yet.
   assert.deepEqual(said({ status: 'ended', endedAt: undefined }), [[null, 'Started delegate Lint the PWA · 15m']]);
+});
+
+test('a stopped delegate with no outcome says ended in its merged line and fold, with or without a start time', () => {
+  for (const status of ['idle', 'ended']) {
+    const events = lines([
+      { id: 'a', name: 'With start', status, startedAt: minsAgo(15), endedAt: minsAgo(14) },
+      { id: 'b', name: 'No start', status, endedAt: minsAgo(13) },
+    ]);
+    assert.deepEqual(events.map((l) => [l.kind, l.glyph, words(l), l.states]), [
+      ['merged', status, 'Delegate With start · ran 1m, ended · 14m', ['ended']],
+      ['merged', status, 'Delegate No start · ended · 13m', ['ended']],
+    ]);
+    assert.equal(delegateFold(events).button, '2 delegates · 2 ended');
+    assert.match(events[0].tip, /, ended /);
+    assert.match(events[1].tip, /^Ended /);
+  }
 });
 
 test('delegates started within a minute of each other share a line, naming two and then "and N more", which expands to name the rest (D3)', () => {

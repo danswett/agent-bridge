@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -7,7 +8,8 @@ namespace AgentBridge.App.Core;
 // A prompt the person didn't type (#489, ui.md §6.4): a schedule's, another agent's, or one the
 // host knows only as not the person's (activity.userMessageFrom). It is never drawn as the
 // person's bubble, but as a line of its own in agent colour, collapsed; the person's own prompt,
-// and every prompt from a host that doesn't send the field, is unchanged. The PWA's
+// is unchanged. A strict old envelope without provenance is only a neutral, unverified hint.
+// The PWA's
 // pwa/js/prompt-origin.js follows the same rules, case for case.
 //   Schedule: a clock, then the label line's facts ("Scheduled prompt", "#4", "same as last time").
 //   Driven: the driven-badge diamond (an agent's, or other).
@@ -23,6 +25,7 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
     public const int LabelMaxBytes = 64;
 
     public bool Schedule => From == UserMessageFrom.Schedule;
+    public bool Unverified { get; init; }
     public string Label => string.Join(" · ", Facts);
 
     // The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled prompt 4,
@@ -32,20 +35,51 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
 
     // The prompt of a turn in the stored conversation, drawn as the live one is (#1611); the
     // session's driver isn't known of an earlier turn, so no "by".
-    public static PromptOrigin? OfHistory(HistoryPrompt? prompt) => prompt is { Text.Length: > 0 }
-        ? Build(prompt.From ?? UserMessageFrom.Person, prompt.Text, prompt.Label, null, false)
+    public static PromptOrigin? OfHistory(HistoryPrompt? prompt, bool allowLegacy = true) => prompt is { Text.Length: > 0 }
+        ? Build(prompt.From ?? UserMessageFrom.Person, prompt.Text, prompt.Label, null, false, allowLegacy && prompt.From is null && prompt.Label is null)
         : null;
 
     public static PromptOrigin? Of(Session s, bool repeat = false)
     {
         var a = s.Activity;
         var by = s.Driver == DriverKind.Agent ? s.DriverPrincipal : null;
-        return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat);
+        return string.IsNullOrEmpty(a.UserMessage) ? null : Build(a.UserMessageFrom ?? UserMessageFrom.Person, a.UserMessage, a.UserMessageLabel, by, repeat, a.UserMessageFrom is null && a.UserMessageLabel is null && a.Kind is not (TurnKind.Notification or TurnKind.Scheduled));
     }
 
-    static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat)
+    // The line the host types ahead of another agent's message (LiteDeliver.Frame):
+    //   [Slipgates · from an agent on DESK · session s-9 · request r-1 · not typed by your user] words
+    // The session and request are optional. The host strips brackets and middle dots from the
+    // fields and neutralises a second "[Slipgates" in the words, so only the first line can be it.
+    static readonly Regex Envelope = new(
+        $@"^\[{Regex.Escape(Product.Name)} · from an agent on ([^\]·]+)(?: · session ([^\]·]+))?(?: · request [^\]·]+)? · not typed by your user\] ?(.*)\z",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline);
+    const int SessionMaxBytes = 32;
+    const int MachineMaxBytes = 28;
+
+    // The sender, as "<session> on <machine>" ("an agent on <machine>" with no session), and the
+    // words of a relayed message; null for text without a readable envelope (the person's own, or
+    // one naming no machine). Each part is cleaned and capped like any agent label.
+    internal static (string Label, string Body)? Relay(string message)
     {
+        if (Envelope.Match(message) is not { Success: true } m) { return null; }
+        var machine = Fact(m.Groups[1].Value, MachineMaxBytes);
+        if (machine.Length == 0) { return null; }
+        var session = m.Groups[2].Success ? Fact(m.Groups[2].Value, SessionMaxBytes) : "";
+        return (Fact($"{(session.Length == 0 ? "an agent" : session)} on {machine}"), m.Groups[3].Value);
+    }
+
+    static PromptOrigin? Build(UserMessageFrom from, string message, string? label, string? driver, bool repeat, bool legacy)
+    {
+        var relay = from == UserMessageFrom.Agent || legacy ? Relay(message) : null;
+        if (legacy && relay is { } hint)
+        {
+            var original = HiddenText.Reveal(message);
+            var claim = $"Unverified sender: {hint.Label}";
+            return new(UserMessageFrom.Other, [claim], null, DelegateLabel.Aloud(claim), false, original,
+                string.Join(' ', original.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))) { Unverified = true };
+        }
         if (from == UserMessageFrom.Person) { return null; }
+        if (relay is { } verified) { message = verified.Body; }
         var text = HiddenText.Reveal(message);
         var preview = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         switch (from)
@@ -58,7 +92,10 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
                 return new(from, facts, null, DelegateLabel.Aloud(name is null ? "Scheduled prompt" : $"Scheduled prompt {name.TrimStart('#')}"), repeat, text, preview);
             case UserMessageFrom.Agent:
                 var by = driver is not null && Fact(driver, 128) is { Length: > 0 } p ? p : null;
-                return new(from, ["Sent by an agent"], by, "Prompt sent by an agent", false, text, preview);
+                var sender = Fact(label);
+                var agentLabel = sender.Length == 0 ? "Sent by an agent" : $"From: {sender}";
+                var spoken = sender.Length == 0 ? "Prompt sent by an agent" : $"Prompt sent by an agent, From: {DelegateLabel.Aloud(sender)}";
+                return new(from, [agentLabel], by, spoken, false, text, preview);
             default:
                 return new(UserMessageFrom.Other, ["Automatic prompt"], null, "Automatic prompt", false, text, preview);
         }

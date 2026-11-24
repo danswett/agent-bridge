@@ -3,7 +3,76 @@
 // nothing moves as the app starts; a tap during a motion still lands; and a question that
 // arrives is scrolled to only while the conversation is read to its end.
 import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { go, open, row, view } from './nav.mjs';
+
+test('CSS motion timings and easings come only from generated motion tokens', async () => {
+  const css = (await readFile(new URL('../app.css', import.meta.url), 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '');
+  const generated = await readFile(new URL('../design/tokens.css', import.meta.url), 'utf8');
+  const defined = new Set([...generated.matchAll(/(--ab-motion-[\w-]+)\s*:/g)].map((m) => m[1]));
+  const declarations = [...css.matchAll(/(?:^|[;{}])\s*((?:transition|animation)(?:-(?:duration|delay|timing-function))?)\s*:\s*([^;}]+)/g)];
+  expect(declarations.length).toBeGreaterThan(0);
+  for (const [, property, value] of declarations) {
+    const rest = value.replace(/var\((--ab-motion-[\w-]+)\)/g, (_, token) => {
+      expect(defined, `${property}: ${value}`).toContain(token);
+      return '';
+    });
+    expect(rest, `${property}: ${value}`).not.toMatch(/(?:\d*\.?\d+)(?:ms|s)\b|\b(?:linear|ease(?:-in-out|-in|-out)?|cubic-bezier|steps)\b/);
+  }
+});
+
+for (const theme of [
+  { colorScheme: 'light', forcedColors: 'none' },
+  { colorScheme: 'dark', forcedColors: 'none' },
+  { colorScheme: 'light', forcedColors: 'active' },
+]) {
+  test(`token cleanup preserves CSS motion and layout in ${theme.forcedColors === 'active' ? 'forced colors' : theme.colorScheme}`, async ({ page }) => {
+    await page.emulateMedia({ ...theme, reducedMotion: 'no-preference' });
+    await page.setContent(`
+      <div class="feedback-dialog"><details><summary>Details</summary>Content</details></div>
+      <span class="glyph"><span class="glyph-spin"></span><span class="glyph-orbit"></span></span>
+      <div class="reply"><button class="button send" aria-busy="true">Send</button></div>
+      <dialog class="sent-image-viewer"><p>Image</p></dialog>`);
+    await page.addStyleTag({ content: await readFile(new URL('../design/tokens.css', import.meta.url), 'utf8') });
+    await page.addStyleTag({ content: await readFile(new URL('../app.css', import.meta.url), 'utf8') });
+    const inspect = () => page.evaluate(() => {
+      const style = (selector, pseudo) => getComputedStyle(document.querySelector(selector), pseudo);
+      const feedback = style('summary', '::after');
+      const viewer = style('dialog');
+      return {
+        feedback: [feedback.transitionDuration, feedback.transitionTimingFunction],
+        viewer: [viewer.animationDuration, viewer.animationTimingFunction],
+        loops: [
+          style('.glyph-spin').animationDuration,
+          style('.glyph-orbit').animationDuration,
+          style('button', '::after').animationDuration,
+        ],
+        running: [style('.glyph-spin').animationName, style('.glyph-orbit').animationName, style('button', '::after').animationName, viewer.animationName],
+      };
+    });
+    await page.locator('dialog').evaluate((dialog) => {
+      dialog.showModal();
+      dialog.getAnimations()[0].pause();
+    });
+    expect(await inspect()).toMatchObject({
+      feedback: ['0.12s', 'ease'],
+      viewer: ['0.2s', 'ease-out'],
+      loops: ['1.2s', '8s', '1s'],
+    });
+    const layout = () => page.locator('dialog').evaluate((dialog) => [dialog.offsetLeft, dialog.offsetTop, dialog.offsetWidth, dialog.offsetHeight]);
+    const before = await layout();
+    await page.locator('dialog').evaluate((dialog) => {
+      const animation = dialog.getAnimations()[0];
+      animation.pause();
+      animation.currentTime = 100;
+    });
+    expect(await layout()).toEqual(before);
+    await page.emulateMedia({ ...theme, reducedMotion: 'reduce' });
+    expect((await inspect()).running).toEqual(['none', 'none', 'none', 'none']);
+    expect((await inspect()).feedback[0]).toBe('0s');
+    expect(await layout()).toEqual(before);
+  });
+}
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';

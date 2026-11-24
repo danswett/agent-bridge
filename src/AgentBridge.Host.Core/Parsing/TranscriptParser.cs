@@ -51,7 +51,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     // An unreadable turn boundary makes reply ownership unknown until a readable boundary
     // establishes it. History gives an unreadable prompt its own id, never the last prompt's.
-    void Unreadable(ReadOnlySpan<byte> line)
+    protected virtual void Unreadable(ReadOnlySpan<byte> line)
     {
         if (MayStartTurn(line)) { UnreadableTurn(); }
     }

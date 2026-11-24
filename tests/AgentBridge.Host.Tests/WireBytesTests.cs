@@ -24,9 +24,11 @@ public sealed class WireBytesTests : IAsyncLifetime
     const string Focused = "88888888-8888-4888-8888-888888888888";
 
     // Handles (#2323) cut the unchanged #2171 workload from 10,155 to 9,606 bytes.
-    // The 10,600-byte budget adds 994 bytes (10.3%); the 5 KB goal remains unmet.
+    // The then-10,600-byte budget added 994 bytes (10.3%); the 5 KB goal remains unmet.
+    // #3581 (owner-approved Nov 21 14:34 PT) added a per-reply responseId to each patch: 9,606 -> 10,983..11,012 bytes;
+    // the budget is now 11,400 (3.5% over the highest measured 11,012).
     const int Goal = 5 * 1024;
-    const int Budget = 10_600;
+    const int Budget = 11_400;
 
     // What each event costs beyond its (deflated) JSON: the AEAD tag, the channel header and the
     // relay's data frame (type byte and the peer id).
@@ -38,6 +40,7 @@ public sealed class WireBytesTests : IAsyncLifetime
     TestRelay relay = null!;
     SessionSource source = null!;
     SessionService service = null!;
+    SessionService.Feed? feed;
     Device host = null!;
     Device client = null!;
     string focused = "";
@@ -56,7 +59,8 @@ public sealed class WireBytesTests : IAsyncLifetime
         source = new SessionSource(f.Options(), f.Processes, time);
         await source.RefreshAsync();
         service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0") { Instance = "wire-test-run" }) { Time = time };
-        relay = await TestRelay.StartAsync();
+        service.FeedCreated += created => feed = (SessionService.Feed)created;
+        relay =await TestRelay.StartAsync();
         var token = relay.TokenFor(1, "octo");
         host = await relay.ConnectAsync(token, "Test host", "host");
         host.Hub.JsonOptions = ProtocolJson.Options;
@@ -76,6 +80,25 @@ public sealed class WireBytesTests : IAsyncLifetime
         using var cts = new CancellationTokenSource(Patience);
         return await ch.Events.ReadAsync(cts.Token);
     }
+
+    // Until the feed has dealt with everything the source has written to it. The feed reads the clock as it
+    // holds or releases a change, so one running behind on a loaded runner read a later time than the change
+    // was made at, and a release due before 40 s went after it (#2343). A refocus that changes nothing goes in
+    // behind the rest; the feed takes it only once it is done with what came before, and it releases nothing
+    // and reads no clock.
+    async Task CaughtUpAsync()
+    {
+        var current = feed!;
+        current.Refocus();
+        await HostWait.UntilAsync(() => current.Subscription.Events.Count == 0, "the feed to catch up with the source", Patience);
+    }
+
+    // The patch that says the focused session's response is `response`: the last thing the host sends in this workload.
+    static bool IsFocusedPatch(ChannelEvent e, int handle, string response) =>
+        e.Name == Events.SessionPatch
+        && e.Data.TryGetProperty("handle", out var h) && h.GetInt32() == handle
+        && e.Data.TryGetProperty("set", out var set) && set.TryGetProperty("activity", out var activity)
+        && activity.TryGetProperty("response", out var text) && text.GetString() == response;
 
     // What the host's SecureChannel sent for one event: the envelope it serialises, deflated as
     // MessageDeflate.Pack does for a peer that said it inflates, plus the overhead.
@@ -133,18 +156,34 @@ public sealed class WireBytesTests : IAsyncLifetime
             }
             if (n % 4 == 0) { Fixture.Append(focused, Copilot.Assistant($"focused change {n / 4}", 4 + n)); }
             await source.RefreshAsync();
+            await CaughtUpAsync();
             time.Advance(Step);
         }
-        // What the quiet interval was still holding at the 40 s mark is not counted: the next
-        // release is after it.
-        await Task.Delay(200);
+        await CaughtUpAsync();
+        // What the quiet interval was still holding at the 40 s mark is not counted: the next release is after
+        // it. The feed sends one event after another, and they reach this channel in that order, but on a loaded
+        // runner they can still be on their way: a guessed 200 ms once found none of them (#2343). The last it
+        // sends is the focused session's last change (the quiet releases ended at 36 s), so waiting for that patch
+        // is waiting for all of them. The watchdog is the file's 10 s: never getting there reads "no patch was sent".
+        var arrived = new List<ChannelEvent>();
+        var lastFocusedChange = $"focused change {Seconds - 1}";
+        var focusedHandle = handles[Focused];
+        try
+        {
+            do { arrived.Add(await NextAsync(ch)); } while (!IsFocusedPatch(arrived[^1], focusedHandle, lastFocusedChange));
+        }
+        catch (OperationCanceledException) { Assert.Fail($"no patch was sent: the focused session's last change did not arrive within {Patience.TotalSeconds:0} s ({arrived.Count} events did)"); }
+        while (ch.Events.TryRead(out var more)) { arrived.Add(more); }
 
         var wire = new SortedDictionary<string, (int Count, int Bytes)>();
+        var patches = new Dictionary<int, int>();
         var total = 0;
-        while (ch.Events.TryRead(out var e))
+        foreach (var e in arrived)
         {
             Assert.False(e.Data.TryGetProperty("id", out _));
-            Assert.Contains(e.Data.GetProperty("handle").GetInt32(), handles.Values);
+            var handle = e.Data.GetProperty("handle").GetInt32();
+            Assert.Contains(handle, handles.Values);
+            if (e.Name == Events.SessionPatch) { patches[handle] = patches.GetValueOrDefault(handle) + 1; }
             var bytes = WireBytes(e);
             total += bytes;
             wire.TryGetValue(e.Name, out var so);
@@ -155,6 +194,14 @@ public sealed class WireBytesTests : IAsyncLifetime
         // Not passing by sending nothing: changes arrived, as patches, and none as a whole upsert.
         Assert.True(wire.GetValueOrDefault(Events.SessionPatch).Count > 0, "no patch was sent");
         Assert.False(wire.ContainsKey(Events.SessionUpsert), "a whole upsert was sent after the snapshot");
+        // Nor by measuring less than the workload: each quiet session changes all the time, so every quiet
+        // interval that ends before the 40 s mark releases a change of each (#2343).
+        var releases = (int)(TimeSpan.FromSeconds(Seconds) / service.QuietInterval);
+        for (var i = 0; i < QuietSessions; i++)
+        {
+            var sent = patches.GetValueOrDefault(handles[QuietId(i)]);
+            Assert.True(sent >= releases, $"quiet session {i} was sent {sent} patches in {Seconds} s, fewer than its {releases} quiet releases");
+        }
         Assert.True(total <= Budget, $"{total} bytes on the wire in {Seconds} s is over the {Budget}-byte budget");
     }
 }

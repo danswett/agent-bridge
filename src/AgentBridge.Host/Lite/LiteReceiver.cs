@@ -17,11 +17,20 @@ public sealed record LiteAck(
     [property: JsonPropertyName("killEpoch")] long KillEpoch);
 
 // What the receiver needs to know about the channel a request came in on (read from the SecureChannel and the relay).
-public sealed record LiteChannel(string PeerId, string PeerKind, byte[]? PeerStatic, string Self, string Account, bool InPresence);
+public sealed record LiteChannel(string PeerId, string PeerKind, byte[]? PeerStatic, string Self, string Account, bool InPresence)
+{
+    public static LiteChannel Of(SecureChannel c) => new(c.PeerId, c.PeerKind, c.PeerStatic, c.Relay.DeviceId, c.Relay.AccountId,
+        c.Relay.Presence.Any(p => p.Id == c.PeerId && p.Kind == "host"));
+
+    // The one trust rule for lite sends and kills (owner, Nov 19): a host the relay lists as present on this signed-in account,
+    // whose channel static key hashes to its device id. No pin. Null when trusted, else the refusal code.
+    public string? Untrusted => PeerKind != "host" || !InPresence || string.IsNullOrEmpty(Account) ? LiteReceiver.NotSameAccount
+        : PeerStatic is not { } s || Wire.DeviceId(s) != PeerId ? LiteReceiver.NotPeer : null;
+}
 
 // AP5-lite L4 (#728): serves agent.lite.send. Refuses in a fixed order, each with its own code, and answers
 // delivered only when the delivery interface says it typed the text. Types nothing itself.
-public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver deliver, TimeProvider? time = null)
+public sealed class LiteReceiver(ILiteMode mode, ILiteDeliver deliver, TimeProvider? time = null)
 {
     public const string Op = "agent.lite.send";
     public const int MaxText = 4096;
@@ -34,43 +43,61 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
 
     public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct)
     {
-        var seen = new LiteChannel(channel.PeerId, channel.PeerKind, channel.PeerStatic, channel.Relay.DeviceId, channel.Relay.AccountId,
-            channel.Relay.Presence.Any(p => p.Id == channel.PeerId && p.Kind == "host"));
+        var seen = LiteChannel.Of(channel);
         return await ReceiveAsync(seen, data, ct);
     }
 
     public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct)
     {
         if (!mode.On) { return new LiteAck("refused", Off, "", mode.KillEpoch); }
-        if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount); }
-        if (!peers.TryFind(channel.PeerId, out var peer) || channel.PeerStatic is not { } staticKey
-            || Wire.DeviceId(staticKey) != channel.PeerId) { return Refuse(NotPeer); }
+        if (channel.Untrusted is { } untrusted) { return Refuse(untrusted); }
+        var staticKey = channel.PeerStatic!;
+        // L6: the sender's kill epoch rides unsigned, believed only from this authenticated present host, and only turns off.
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("killEpoch", out var k) && k.ValueKind == JsonValueKind.Number
+            && k.TryGetInt64(out var killEpoch) && killEpoch > mode.KillEpoch)
+        {
+            mode.RaiseEpoch(killEpoch);
+            if (!mode.On) { return Refuse(Off); }
+        }
 
+        // signPoint is the sender's agent signing key. It is believed only because it arrived on this channel, which the
+        // sender's device static key authenticates, and the envelope it verifies must still name that device and key.
         string? text; UnverifiedEnvelope envelope;
         if (data.ValueKind != JsonValueKind.Object
             || !data.TryGetProperty("envelope", out var e) || e.ValueKind != JsonValueKind.String
             || !data.TryGetProperty("text", out var t) || t.ValueKind != JsonValueKind.String
+            || !data.TryGetProperty("signPoint", out var p) || p.ValueKind != JsonValueKind.String
             || (text = t.GetString()) is null || text.Length > MaxText
-            || !Codec.TryBase64Url(e.GetString()!, out var bytes)) { return Refuse(Malformed); }
+            || !Codec.TryBase64Url(e.GetString()!, out var bytes) || !Codec.TryBase64Url(p.GetString()!, out var signPoint)) { return Refuse(Malformed); }
         try { envelope = Envelope.Parse(bytes); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
-        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, peer.SignPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
+        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, signPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
         catch (EnvelopeException x) { return Refuse(x.Code); }
 
         var body = verified.Body; // trusted now: must name this channel's peer and this machine
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, body.Request); }
         if (body.Target.Machine != channel.Self) { return Refuse(Target, body.Request); }
+        var query = deliver as ILiteReplayQuery;
+        var replay = false;
         switch (Replays.Add(channel.PeerId + "/" + body.Request))
         {
-            case ReplayStore.Result.Seen: return Refuse(Replay, body.Request);
+            case ReplayStore.Result.Seen:
+                if (query is null) { return Refuse(Replay, body.Request); }
+                replay = true; break;
             case ReplayStore.Result.Full: return Refuse(Busy, body.Request);
         }
-        if (!Rates.Allow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session)) { return Refuse(Rate, body.Request); }
-        LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
+        long rateToken = 0;
+        if (!replay && !Rates.TryAllow(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, out rateToken)) { return Refuse(Rate, body.Request); }
+        LiteDelivery result; try { result = replay ? await query!.QueryAsync(verified, text, ct) : await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, body.Request); }
-        return result.Typed
+        // The budget counts deliveries that may have typed. A plain refusal typed nothing (busy, notReplyTarget, composerNotEmpty, ...), so it gives the hit back:
+        // otherwise busy retries lock a pair out with rate (#1117). Pending, queued, unconfirmed and a thrown delivery may have typed, so they stay spent.
+        if (!replay && !result.Typed && result.Code is not null && result.Outcome is null or LiteKind.Refused) { Rates.Refund(channel.PeerId, body.Principal.SenderId + ">" + body.Target.Session, rateToken); }
+        if (!result.Typed && result.Outcome is LiteKind.Pending or LiteKind.Queued or LiteKind.Unconfirmed)
+        { return new LiteAck(result.Outcome.Value.ToString().ToLowerInvariant(), result.Code, body.Request, mode.KillEpoch); }
+        return result.Typed && result.Outcome is null or LiteKind.Delivered
             ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
             : Refuse(result.Code ?? DeliveryFailed, body.Request);
     }
@@ -109,14 +136,21 @@ public sealed class ReplayStore(TimeProvider time)
 
 // Per sending session to receiving session: 6 a minute, 60 an hour, in memory. An active pair keeps its window; only idle
 // pairs are dropped. One peer holds at most MaxPerPeer pairs, so it cannot starve the rest.
+// Every accepted hit has its own token, so a delivery that typed nothing gives back exactly the hit its own request took. Giving back
+// "the newest hit" instead would take a later, typed send's and free the budget too early (an overlapping send admits a seventh).
 public sealed class RateCap(TimeProvider time)
 {
     public const int PerMinute = 6, PerHour = 60, MaxPairs = 1024, MaxPerPeer = 64;
-    readonly Dictionary<(string Peer, string Pair), Queue<DateTimeOffset>> hits = new();
+    readonly Dictionary<(string Peer, string Pair), List<(long Id, DateTimeOffset At)>> hits = new();
     readonly object gate = new();
+    long next;
 
-    public bool Allow(string peer, string pair)
+    public bool Allow(string peer, string pair) => TryAllow(peer, pair, out _);
+
+    // token is this request's own hit, for Refund; 0 when refused.
+    public bool TryAllow(string peer, string pair, out long token)
     {
+        token = 0;
         lock (gate)
         {
             var now = time.GetUtcNow();
@@ -125,15 +159,25 @@ public sealed class RateCap(TimeProvider time)
             {
                 if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer)
                 {
-                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Last() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
+                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value[^1].At >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
                     if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer) { return false; }
                 }
                 hits[key] = q = new();
             }
-            while (q.Count > 0 && now - q.Peek() >= TimeSpan.FromHours(1)) { q.Dequeue(); }
-            if (q.Count >= PerHour || q.Count(t => now - t < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
-            q.Enqueue(now);
+            q.RemoveAll(h => now - h.At >= TimeSpan.FromHours(1));
+            if (q.Count >= PerHour || q.Count(h => now - h.At < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
+            token = ++next;
+            q.Add((token, now));
             return true;
+        }
+    }
+
+    // Gives back exactly the hit issued as token. A hit already pruned, a second refund, an unknown pair or token 0 (a replay) finds nothing and does nothing.
+    public void Refund(string peer, string pair, long token)
+    {
+        lock (gate)
+        {
+            if (token > 0 && hits.TryGetValue((peer, pair), out var q)) { q.RemoveAll(h => h.Id == token); }
         }
     }
 }

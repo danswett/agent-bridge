@@ -111,7 +111,7 @@ async function shown(message) {
     notification: {
       title: n.title, body: n.body, tag: n.tag, lang: n.lang, silent: n.silent, navigate: n.data.url,
       // A group stands for no one session: the wire says "", which the worker reads as none.
-      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (n.data.kind === 'group' ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, reminder: n.data.reminder },
+      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session ?? (['group', 'failures'].includes(n.data.kind) ? '' : undefined), question: n.data.question, class: n.data.class, sessions: n.data.sessions, failures: n.data.failures, reminder: n.data.reminder },
     },
   };
 }
@@ -454,6 +454,7 @@ const NOT_REPLAYED = {
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
+  PushNotify: 'part of PushSubscribeRequest; PushRegistrar builds it from the Settings filters and the pinned set (test/unit/push.test.mjs)',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
   PushSubscribeResult: 'the PWA does not read push.subscribe\'s result',
   PushUnsubscribeResult: 'the PWA does not read push.unsubscribe\'s result',
@@ -500,6 +501,8 @@ const NOT_REPLAYED = {
   AgentRevokeRequest: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
   AgentRevokeResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
   AgentCredentialResult: 'agent.adopt is local pipe only; no PWA or relay channel serves it (#721)',
+  SamePcPinRequest: 'host.roster.pin is same-PC app/local pipe only; no PWA or relay channel serves it (#3450)',
+  SamePcPinResult: 'host.roster.pin is same-PC app/local pipe only; no PWA or relay channel serves it (#3450)',
 
   JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
   JournalStage: 'part of JournalEntry, read by readEntry',
@@ -510,6 +513,10 @@ const NOT_REPLAYED = {
   RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
+  ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
+  DeliverySender: 'local authenticated sender helper, never accepted from the reply wire (#2568)',
+  DeliveryHeader: 'local envelope metadata; the PWA has no delivery parser yet (#2568)',
+  DeliveryEntry: 'local parser result; the PWA has no delivery parser yet (#2568)',
 };
 
 // ---- the replay ----

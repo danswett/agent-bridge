@@ -115,7 +115,7 @@ public sealed record ShadowUsage
     // asks the vendor about an account on one machine and stands down on the rest while that one's
     // readings are current (agent-ha-bridge#142's Test-BridgeUsageCovered), so this machine's sensor
     // then keeps the last figure it read itself, hours old. That is not a reading to compare: on
-    // DEV-VM1 it was 11 hours old in every sample of a day, compared all the same, and no reading
+    // one machine it was 11 hours old in every sample of a day, compared all the same, and no reading
     // was ever close enough to count (#40).
     public bool Lapsed { get; init; }
 }

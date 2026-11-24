@@ -30,7 +30,7 @@ public static partial class LiteAgentSend
         var machine = Field(data, "machine");
         var session = Field(data, "session");
         var text = Field(data, "text");
-        if (machine is null || !MachinePattern().IsMatch(machine)) { throw new ArgumentException("refused: badMachine: machine is 1 to 64 letters, digits, '.', '_' or '-'"); }
+        if (machine is null || !Wire.IsDeviceId(machine)) { throw new ArgumentException(AgentLiteSender.MachineRefusal(machine, AgentLiteSender.BadMachine, "must be an exact device ID; names never route")); }
         if (session is null || !SessionPattern().IsMatch(session)) { throw new ArgumentException("refused: badSession: session is agent_bridge_ and 16 lowercase hex digits"); }
         if (text is null || text.Length == 0) { throw new ArgumentException("refused: badText: text is required"); }
         if (text.Length > MaxText) { throw new ArgumentException($"refused: textTooLong: text is over {MaxText} characters"); }
@@ -71,17 +71,13 @@ public static partial class LiteAgentSend
     static InvalidOperationException TerminalAuditUnavailable() =>
         new("refused: auditUnwritable: the terminal agent audit outcome could not be written; the message may have been sent");
 
-    [GeneratedRegex(@"^[A-Za-z0-9._-]{1,64}\z")]
-    private static partial Regex MachinePattern();
-
     [GeneratedRegex(@"^agent_bridge_[0-9a-f]{16}\z")]
     private static partial Regex SessionPattern();
 
     static string? Field(JsonElement o, string name) =>
         o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 }
-// Stands in until L3's sender is wired: with nothing to send through the mode is off, so the
-// caller falls back to Home Assistant at once.
+// An unwired sender reports off; the host never falls back to another transport or target.
 public sealed class LiteOffSender : ILiteSender
 {
     public Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct) =>

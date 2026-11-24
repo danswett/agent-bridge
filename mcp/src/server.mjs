@@ -62,7 +62,7 @@ const NEEDS = {
 };
 
 const DESCRIPTIONS = {
-  list_agent_sessions: 'List the agent sessions on this machine (status only unless include is "content").',
+  list_agent_sessions: 'List the agent sessions on this machine: status, title, repository and branch (no working folder). include "content" adds the working folder (cwd), latest response and question of each session.',
   read_agent_session: 'Read a session\'s latest answer. Pass the since from reply_to_agent_session to never get a stale answer.',
   reply_to_agent_session: 'Send a message to another agent session on this machine.',
   launch_agent_session: 'Start (or resume) an agent session on this machine.',

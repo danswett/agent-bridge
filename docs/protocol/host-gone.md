@@ -205,7 +205,7 @@ In #815's `offline` object on a `known` entry:
 ```json
 {
   "id": "0123456789abcdef0123456789abcdef",
-  "name": "DEV-VM2",
+  "name": "Build-2",
   "kind": "host",
   "lastSeen": "2026-11-06T16:35:52Z",
   "offline": {

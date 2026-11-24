@@ -328,7 +328,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         // Nor once the host has looked again and let the launch go: it was busy again then, when
         // it took the closed agent for one that had handed its session on and was still asking
         // (#416, whenever the question above came after that look).
-        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal))));
+        await WaitForLogAsync("closed: a person declined to trust the folder");
         var later = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(later.TryGetProperty("busy", out _));
         Assert.False(later.TryGetProperty("trust", out _));
@@ -514,6 +514,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     {
         screens.Rows = CopilotAsks();
         ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        // The 500 ms budget is about the typed-but-unconfirmed step below. Run from the start, a loaded machine lets it run out
+        // before the host's first look at the window, so the launch never carries its trust question (#421).
+        clock.Freeze();
         var ch = await OpenAsync();
         var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
 
@@ -524,6 +527,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 
         // Typed, but the question stays: said so, and left for the machine.
         screens.Fails = null;
+        clock.Run();
         var request = Guid.NewGuid().ToString();
         var stuck = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key, request: request));
         Assert.Equal(("unconfirmed", "Not confirmed: answer at the machine. The question is still in Copilot's window.", null), stuck);
@@ -767,4 +771,29 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         public Task Closed => Task.Delay(Timeout.Infinite);
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
-}
+
+    // #4229: waiting for a line the host logs is driven by the line itself, not polled on the wall clock, so a slow machine cannot run a poll
+    // out before the host's follow gets round to logging it; and a miss says what the host did log.
+    [Fact]
+    public async Task Waiting_for_a_logged_line_ends_when_it_is_logged_and_not_before()
+    {
+        Log("launch a: earlier line");
+        var waiting = WaitForLogAsync("closed: a person declined");
+        Assert.False(waiting.IsCompleted);
+        Log("launch a: something else");
+        Assert.False(waiting.IsCompleted);
+        Log("launch a: Copilot in App closed: a person declined to trust the folder (from phone)");
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitForLogAsync("earlier line");   // already logged: returns at once
+    }
+
+    [Fact]
+    public async Task A_line_that_is_never_logged_fails_the_wait_and_names_the_lines_the_host_did_log()
+    {
+        Log("launch a: seen line one");
+        Log("launch a: seen line two");
+        var miss = await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() => WaitForLogAsync("never logged", TimeSpan.FromMilliseconds(200)));
+        Assert.Contains("never logged", miss.Message);
+        Assert.Contains("seen line one", miss.Message);
+        Assert.Contains("seen line two", miss.Message);
+    }}

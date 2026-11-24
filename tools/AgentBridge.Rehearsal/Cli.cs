@@ -44,6 +44,8 @@ internal static class Cli
     public static readonly CommandSpec[] Commands =
     [
         new("usage-read", Usage: "usage-read: print the host's shared usage report as one figure per allowance"),
+        new("usage-compare", Options: ["--pairs", "--interval"], Required: ["--pairs"],
+            Usage: "usage-compare --pairs <jsonl> [--interval <s>]: judge ten governor/app usage pairs per allowance (percent within 1.0, measuredAt within one read interval, default 120 s)"),
         new("conformance", Options: ["--client", "--runs", "--capabilities", "--results"],
             Required: ["--client", "--runs", "--capabilities", "--results"],
             Usage: "conformance --client <name> --runs <json> --capabilities <json> --results <jsonl>: print the named client's recorded conformance matrix; non-passing required rows exit 1"),

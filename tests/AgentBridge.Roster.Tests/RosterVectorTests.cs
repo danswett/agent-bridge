@@ -89,6 +89,53 @@ public sealed class RosterVectorTests
         return new("add-host-v2", Bytes(b), PhoneSign, null, null, null);
     }
 
+    // The v3 person descriptor (devices.md "Version and descriptor"), built by K1's writer. The
+    // name's quote, check mark and emoji pin the writer's escaping for the PWA's port.
+    static readonly TestKey PwaCap = TestKey.Named("pwa capSign");
+    static readonly TestKey AppCap = TestKey.Named("app capSign");
+    const string V3At = "2026-11-20T21:00:00Z";
+    const string V3Name = "Office \"browser\" ✓ 🖥";
+    static readonly (byte[] H, byte[] NA, byte[] NN) T3Inputs = (SHA256.HashData("v3 h"u8), SHA256.HashData("v3 nA"u8), SHA256.HashData("v3 nN"u8));
+
+    public static Signed GenesisV3()
+    {
+        var device = PersonDescriptorV3.Write(Account, Generation, Pwa.Public, PwaSign.Public, Presence.WebAuthn, ParsedCredential(), PwaCap.Public, PwaCap.Sign, "pwa", "windows", V3Name);
+        return new("genesis-v3", PersonDescriptorV3.Genesis(Account, Generation, V3At, device), PwaSign, null, null, null);
+    }
+
+    public static Signed AddV3()
+    {
+        var b = Body("add", 1, [Chain()[0].Hash], Phone, V3At);
+        b["v"] = 3;
+        b["device"] = PersonV3(App, AppSign, AppCap, "app", "windows", "Desk", Presence.Key);
+        var t3 = Enrollment.CapSignTranscript(Account, Generation, T3Inputs.H, T3Inputs.NA, T3Inputs.NN, Bytes(b["device"]!));
+        b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(t3) };
+        return new("add-v3-by-code", Bytes(b), PhoneSign, null, null, null);
+    }
+
+    // K1's collision rows (devices.md L800-802) after the same genesis and add, with roster v2 on
+    // as in K1's sibling test: each pair's second add is refused host-key, its first accepted.
+    public static IEnumerable<(string Name, World W)> Collisions()
+    {
+        World Base()
+        {
+            var w = new World();
+            w.Genesis();
+            w.Add("+A", "G", "A", "G");
+            return w;
+        }
+        var (capFirst, signFirst, capThenHost, hostThenCap) = (Base(), Base(), Base(), Base());
+        capFirst.AddV3("+P", "G", "P", "+A", World.Keys("Q").Sign);
+        capFirst.Add("+Q", "G", "Q", "+P");
+        signFirst.Add("+Q", "G", "Q", "+A");
+        signFirst.AddV3("+P", "G", "P", "+Q", World.Keys("Q").Sign);
+        capThenHost.AddV3("+P", "G", "P", "+A", World.Keys("H").Sign);
+        capThenHost.AddHostV2("+H", "G", "H", "+P");
+        hostThenCap.AddHostV2("+H", "G", "H", "+A");
+        hostThenCap.AddV3("+P", "G", "P", "+H", World.Keys("H").Sign);
+        return [("capSign-then-ancestor-sign", capFirst), ("sign-then-descendant-capSign", signFirst), ("capSign-then-hostSign", capThenHost), ("hostSign-then-capSign", hostThenCap)];
+    }
+
     static byte[] Transcript(int i) => SHA256.HashData(Encoding.UTF8.GetBytes($"transcript {i}"));
 
     // Size boundaries: a body padded through an assertion's client data until the entry's fixed
@@ -116,7 +163,7 @@ public sealed class RosterVectorTests
     public static IReadOnlyList<Signed> Valid()
     {
         var chain = Chain();
-        return [.. chain, HostV2Add(), Padded("add-at-8-kib", chain[2], Entry.MaxBytes), Padded("remove-at-46-kib", chain[7], Entry.MaxRemoveBytes)];
+        return [.. chain, HostV2Add(), GenesisV3(), AddV3(), Padded("add-at-8-kib", chain[2], Entry.MaxBytes), Padded("remove-at-46-kib", chain[7], Entry.MaxRemoveBytes)];
     }
 
     public sealed record Refused(string Name, byte[] Wrapper, string Code);
@@ -362,6 +409,20 @@ public sealed class RosterVectorTests
             b["device"]!["hostSign"] = Codec.Base64Url(Host1Sign.Public);
         });
         Edit("host-with-host-sign-needs-v-2", Refusal.Unknown, addHostV2, b => b["v"] = 1);
+
+        // The v3 person descriptor: capSign's own-key collisions before its proof, then the proof.
+        var (genesisV3, addV3) = (GenesisV3(), AddV3());
+        void V3(string name, string code, Action<JsonObject> change) => Edit(name, code, genesisV3, b => change(b["device"]!.AsObject()));
+        V3("cap-sign-is-its-sign", Refusal.Device, d => d["capSign"] = Codec.Base64Url(PwaSign.Public));
+        V3("cap-sign-off-curve", Refusal.Point, d => d["capSign"] = Codec.Base64Url(OffCurve(PwaCap.Public)));
+        V3("cap-sign-wrong-length", Refusal.Length, d => d["capSign"] = Codec.Base64Url(PwaCap.Public[..64]));
+        V3("cap-sign-alg-unknown", Refusal.Value, d => d["capSignAlg"] = "ES256");
+        V3("cap-proof-by-the-sign-key", Refusal.CapProof, d => d["capSignProof"] = Codec.Base64Url(PwaSign.Sign(CapSignKey.Binding(Account, Generation, Pwa.Public))));
+        V3("cap-proof-high-s", Refusal.HighS, d => d["capSignProof"] = Codec.Base64Url(P256.Flip(Codec.FromBase64Url(d["capSignProof"]!.GetValue<string>(), "p"))));
+        V3("cap-proof-missing", Refusal.Missing, d => d.Remove("capSignProof"));
+        Edit("v-3-on-a-host", Refusal.Version, genesisV3, b => b["device"] = HostDevice(Host1, "linux", "h"));
+        Edit("person-with-cap-sign-needs-v-3", Refusal.Unknown, genesisV3, b => b["v"] = 1);
+        Edit("v-3-add-grandfathered", Refusal.Approval, addV3, b => b["approval"] = new JsonObject { ["method"] = "grandfather" });
         return list;
     }
 
@@ -639,6 +700,48 @@ public sealed class RosterVectorTests
             ["entries"] = new JsonObject { ["valid"] = valid, ["refused"] = refused },
             ["assertions"] = assertions,
             ["enrollment"] = new JsonObject { ["exchanges"] = exchanges, ["typed"] = typed, ["qr"] = qr },
+            ["v3"] = V3Vectors(),
         };
     }
+
+    static JsonObject V3Vectors()
+    {
+        var (genesis, add) = (GenesisV3(), AddV3());
+        var device = EntryBody.DeviceBytes(add.Body);
+        var collisions = new JsonArray();
+        string[]? shared = null;
+        foreach (var (name, w) in Collisions())
+        {
+            var outcomes = w.Feed(new RosterVerifier(Account, Generation, () => w.Now) { AcceptHostSign = true }, [.. w.Labels]);
+            Assert.All(outcomes.SkipLast(1), o => Assert.Equal(Verdict.Accepted, o.Verdict));
+            Assert.Equal(Invalid.HostKey, outcomes[^1].Reason);
+            var wires = w.Labels.Select(l => w[l].Wire).ToArray();
+            shared ??= wires[..2];
+            Assert.Equal(shared, wires[..2]);
+            collisions.Add(new JsonObject { ["name"] = name, ["wrappers"] = new JsonArray([.. wires[2..].Select(s => (JsonNode)s)]) });
+        }
+        return new JsonObject
+        {
+            ["genesis"] = new JsonObject
+            {
+                ["at"] = V3At,
+                ["name"] = V3Name,
+                ["capSign"] = Codec.Base64Url(PwaCap.Public),
+                ["binding"] = CapSignKey.Binding(Account, Generation, Pwa.Public).ToHex(),
+                ["capSignProof"] = Codec.Base64Url(EntryBody.Parse(genesis.Body).Device!.CapSignProof!),
+                ["body"] = Codec.Base64Url(genesis.Body),
+            },
+            ["t3"] = new JsonObject
+            {
+                ["h"] = T3Inputs.H.ToHex(),
+                ["nA"] = T3Inputs.NA.ToHex(),
+                ["nN"] = T3Inputs.NN.ToHex(),
+                ["device"] = Codec.Base64Url(device),
+                ["transcript"] = Enrollment.CapSignTranscript(Account, Generation, T3Inputs.H, T3Inputs.NA, T3Inputs.NN, device).ToHex(),
+            },
+            ["collisionBase"] = new JsonArray([.. shared!.Select(s => (JsonNode)s)]),
+            ["collisions"] = collisions,
+        };
+    }
+
 }

@@ -9,6 +9,7 @@ export const REFUSAL = Object.freeze({
   value: 'value',
   version: 'version',
   hostProof: 'host-proof',
+  capProof: 'cap-proof',
   seq: 'seq',
   id: 'id',
   base64: 'base64',

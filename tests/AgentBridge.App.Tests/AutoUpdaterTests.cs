@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
+using AgentBridge.App;
 using AgentBridge.App.Core;
+using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -47,6 +49,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     Func<string?>? preflight;
     // What the updater reads of the window as an install begins (#1167): open, or hidden in the tray.
     bool windowOpen;
+    // The release of the host files installed beside the app (current\), when a test says (#2869).
+    string? hostFiles;
     sealed class Updater : IUpdater
     {
         public int Checks;
@@ -72,7 +76,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public bool ReportsDownloadFacts { get; set; }
         public Action<Action<int>, Action<long, long?>>? DownloadWithBytes;
         public TaskCompletionSource? DownloadGate;
+        // As Velopack's: a download completes the release it began with, whatever a check finds while it runs.
+        public bool DownloadsWhatItBeganWith;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public HaltPolicySnapshot? HaltPolicy { get; set; }
         public DateTimeOffset? DiscoveredAt { get; set; }
         public string? CheckSource { get; set; }
         public int? GitHubRemaining { get; set; }
@@ -91,12 +98,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public async Task DownloadAsync(Action<int> progress, Action<long, long?> bytes)
         {
             Downloads++;
+            var began = Found;
             OnDownload?.Invoke();
             DownloadWithBytes?.Invoke(progress, bytes);
             if (DownloadGate is { } gate) { await gate.Task; }
             if (DownloadFails is { } e) { throw e; }
             progress(100);
-            Ready = Found;
+            Ready = DownloadsWhatItBeganWith ? began : Found;
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
@@ -127,7 +135,346 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    // #2869 G2 (owner: banner only): the app and the host on different releases is said, never acted on. With no
+    // release downloaded, nothing installs and the host is never stopped, in either mode, however long it waits.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_host_on_another_release_than_the_app_installs_nothing_in_either_mode(bool betweenTurns)
+    {
+        if (betweenTurns) { InstallBetweenTurns(); }
+        updater.InstalledVersion = "0.1.7684";
+        updater.Found = null;
+        await StartAsync(FakeHost.StatusOf() with { Version = "0.1.7522" });
+
+        for (var i = 0; i < 6; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.WaitAtMost);
+        }
+
+        // An install stops the host before it applies, so the Stop assertion is the one that would fail first;
+        // Applied alone could not (it is only set after the stop), and is here for what it says.
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(("0.1.7684", "0.1.7522"), auto.Versions);
+    }
+
     // The host as it is when the app starts: its status and sessions, then connected.
+    // #2869 (owner, "Yes, at a quiet moment"): the app newer than its OWN host, whose files for the app's release are
+    // already installed beside it (the old host outlived an update), restarts that host onto them once quiet. Not an
+    // install: no release, no Stop, and Restart to update is unchanged. The host restart is the host's own (exit 75, the
+    // launcher starts the replacement).
+    const string AppRelease = "0.1.7845", OldHost = "0.1.7684";
+
+    async Task StartOldHostAsync(bool betweenTurns = false, string? files = AppRelease, string? hostRelease = OldHost, params Session[] sessions)
+    {
+        if (betweenTurns) { InstallBetweenTurns(); }
+        updater.InstalledVersion = AppRelease;
+        updater.Found = null;
+        hostFiles = files;
+        host.On(HostOps.Restart, _ => new { });
+        await StartAsync(FakeHost.StatusOf() with { Version = hostRelease! }, sessions);
+    }
+
+    async Task QuietTicksAsync(int times = 2)
+    {
+        for (var i = 0; i < times; i++)
+        {
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.SettleFor);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task An_app_newer_than_its_host_restarts_the_host_onto_its_installed_files_once_quiet_in_either_mode(bool betweenTurns)
+    {
+        await StartOldHostAsync(betweenTurns);
+
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        // Not an install: nothing applied, no Stop, no release.
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+        Assert.Contains(log, l => l.Contains("restarting the host onto", StringComparison.Ordinal));
+    }
+
+    // #3002: an install is refused while another host runs from the installation, and that probe takes the host
+    // that is still exiting for another profile's. The restart here is the host's own (host.restart), over its own
+    // pipe, and touches no other profile: it never asks that probe, so an old host still exiting (or any other
+    // host from the same installation) does not stop it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_restart_is_not_blocked_by_another_host_from_the_same_installation_such_as_its_own_exiting_one()
+    {
+        await StartOldHostAsync();
+        othersProbe = () => "another bridge host (pid 4242) runs from this installation";
+
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        // The install path's gate was never consulted.
+        Assert.Null(othersAskedFor);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task It_is_asked_at_most_once_for_a_version_though_the_host_still_reports_the_old_one()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync();
+
+        for (var i = 0; i < 12; i++) { await QuietTicksAsync(1); time.Advance(TimeSpan.FromMinutes(1)); }
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task It_waits_for_a_quiet_moment_a_turn_running_or_a_question_waiting_is_not_one()
+    {
+        await StartOldHostAsync(false, AppRelease, OldHost, Make.Session("s1", SessionStatus.Working), Make.Session("s2", SessionStatus.Waiting));
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        await GoIdleAsync("s1");
+        await GoIdleAsync("s2");
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    // A question or an approval waiting is not a quiet moment whatever its session's status says: the host carries it,
+    // and a restart would take it from the devices it is waiting on (the owner's "quiet", not only "no turn running").
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_question_or_an_approval_waiting_is_not_a_quiet_moment_even_with_no_turn_running()
+    {
+        await StartOldHostAsync(false, AppRelease, OldHost, Make.Session("s1") with { Status = SessionStatus.Idle, Question = Make.Approval() });
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        await GoIdleAsync("s1");
+        // The session was idle already: wait for its question to be gone from what the app reads.
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Question is null, "the question answered");
+        await QuietTicksAsync();
+
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    [Theory]
+    [InlineData("0.1.7684", "0.1.7684", "the files installed are the host's own old ones: there is nothing newer to run")]
+    [InlineData(null, "0.1.7684", "the version of the files can't be read")]
+    [InlineData("0.1.7845", "0.1.7845", "the host already runs the app's release")]
+    [InlineData("0.1.7845", "0.1.7900", "the host is newer than the app: it is the app that is behind")]
+    [InlineData("0.1.7845", "0.0.0", "the host's release is not known")]
+    [InlineData("0.1.7845-dev", "0.1.7684", "a prerelease is not a release it can order")]
+    [Trait("Category", "Network")]
+    public async Task Nothing_restarts_unless_the_host_is_older_and_the_apps_files_are_installed(string? files, string hostRelease, string because)
+    {
+        await StartOldHostAsync(false, files, hostRelease);
+
+        await QuietTicksAsync(4);
+
+        Assert.True(host.Sent(HostOps.Restart).Count == 0, because);
+    }
+
+    // The files must be the APP's own release, not merely newer than the host: files newer than the app are a
+    // release nothing here has chosen to run (it may be a halted one), so the host is not restarted onto them.
+    [Theory]
+    [InlineData("0.1.7900", false)]
+    [InlineData("0.1.7900", true)]
+    [Trait("Category", "Network")]
+    public async Task The_host_is_not_restarted_onto_files_newer_than_the_app_halted_or_not(string files, bool halted)
+    {
+        await StartOldHostAsync(false, files);
+        if (halted) { updater.HaltPolicy = new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", [files]), time.GetUtcNow(), Fresh: true); }
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    // Settings' own install (it downloaded the release itself) goes through the host manager and holds no lock of the
+    // tick's: while it is under way, with the host still up for a usage probe to finish, no restart is sent over it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_sent_while_an_update_is_under_way_through_the_host_manager()
+    {
+        await StartOldHostAsync();
+        var probing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(probing, probing ? "a usage probe is finishing" : null));
+        var update = Task.Run(() => manager.StopAndApplyAsync(() => { }, () => { }, null, waitForFiles: false));
+        await Wait.UntilAsync(() => manager.UpdateUnderWay, "the update under way");
+        Assert.Equal(LinkState.Connected, connection.State);
+
+        await QuietTicksAsync(4);
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        probing = false;
+        await update;
+    }
+
+    // A press of Restart to update claims the install while the tick is still looking: the tick's host restart, which
+    // follows its look, does not go ahead over that claim (and goes ahead once the claim is gone).
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_sent_while_a_press_of_Restart_to_update_holds_the_install_claim()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync(1);
+        // The next look is a check that takes its time, with the tick holding its lock.
+        updater.CheckGate = new TaskCompletionSource();
+        time.Advance(AutoUpdater.CheckEvery);
+        var tick = auto.TickAsync();
+        await Wait.UntilAsync(() => updater.Checks > 1, "the check under way");
+        // The press claims the install, then waits for the tick's lock.
+        var press = auto.RestartToUpdateAsync();
+        updater.CheckGate.SetResult();
+        await tick;
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+        await press;
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+    }
+
+    // Not connected: nothing is asked of a host that cannot answer, and nothing is counted against it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_restart_is_asked_while_the_host_is_not_connected_and_none_is_counted_as_failed()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync(1);
+        await host.DisposeAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the host gone");
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.DoesNotContain(log, l => l.Contains("did not restart", StringComparison.Ordinal) || l.Contains("restarting the host onto", StringComparison.Ordinal));
+    }
+    // The quiet is the existing settle rule: idle for SettleFor without a break, not a moment sooner.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_restart_waits_for_the_settle_time_to_the_second()
+    {
+        await StartOldHostAsync();
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor - TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Empty(host.Sent(HostOps.Restart));
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+        Assert.Equal(TimeSpan.FromSeconds(5), AutoUpdater.SettleFor);
+    }
+
+    // "Download updates automatically" off is the person's word that nothing happens unasked: the host is left as it is
+    // (the banner still says the skew).
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task With_automatic_updates_turned_off_the_host_is_not_restarted()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartOldHostAsync();
+
+        await QuietTicksAsync(6);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_release_waiting_to_install_takes_the_install_path_not_this()
+    {
+        await StartOldHostAsync();
+        updater.Found = "0.1.7900";
+
+        await QuietTicksAsync(4);
+
+        Assert.Equal("0.1.7900", auto.Pending);
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Network")]
+    public async Task The_halt_policy_holds_it_a_halted_release_and_a_policy_that_is_stale(bool halted)
+    {
+        await StartOldHostAsync();
+        updater.HaltPolicy = halted
+            ? new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", [AppRelease]), time.GetUtcNow(), Fresh: true)
+            : new HaltPolicySnapshot(new VerifiedHaltPolicy(1, "body", []), time.GetUtcNow().AddDays(-3), Fresh: false);
+
+        await QuietTicksAsync(4);
+
+        Assert.Empty(host.Sent(HostOps.Restart));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_that_fails_is_not_tried_again_until_its_backoff_has_passed()
+    {
+        await StartOldHostAsync();
+        host.On(HostOps.Restart, _ => throw new InvalidOperationException("the host could not restart"));
+
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        // However often it is looked at meanwhile, not before the backoff ends.
+        for (var i = 0; i < 6; i++) { await QuietTicksAsync(1); }
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        time.Advance(UpdateBackoff.Cap);
+        await QuietTicksAsync();
+        Assert.Equal(2, host.Sent(HostOps.Restart).Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_that_keeps_failing_is_tried_three_times_for_a_release_and_then_left_to_the_person()
+    {
+        await StartOldHostAsync();
+        host.On(HostOps.Restart, _ => throw new InvalidOperationException("the host could not restart"));
+
+        // Each backoff passes in full, many times over: still only three.
+        for (var i = 0; i < 10; i++)
+        {
+            await QuietTicksAsync();
+            time.Advance(UpdateBackoff.Cap);
+        }
+
+        Assert.Equal(AutoUpdater.HealAttemptsMax, host.Sent(HostOps.Restart).Count);
+        Assert.Equal(3, AutoUpdater.HealAttemptsMax);
+        Assert.Single(log, l => l.Contains("giving up for this release", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_restart_the_host_answers_but_that_leaves_it_old_is_not_asked_again_for_that_release()
+    {
+        await StartOldHostAsync();
+        await QuietTicksAsync();
+        Assert.Single(host.Sent(HostOps.Restart));
+
+        // The host never reports the new release: said once, and not asked again, however long it goes on.
+        for (var i = 0; i < 180; i++) { time.Advance(TimeSpan.FromMinutes(1)); await QuietTicksAsync(1); }
+
+        Assert.Single(host.Sent(HostOps.Restart));
+        Assert.Single(log, l => l.Contains("not restarting it again for this release", StringComparison.Ordinal));
+    }
+
     async Task StartAsync(HostStatus? status = null, params Session[] sessions)
     {
         host.Status = status ?? FakeHost.StatusOf();
@@ -150,9 +497,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke())
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, _ => preflight?.Invoke())
         {
             WindowOpen = () => windowOpen,
+            InstalledHostVersion = () => hostFiles,
         };
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
@@ -305,12 +653,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var holds = 0;
         var holdsAtStop = -1;
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref holds) < 3, "finishing"));
-        host.On(HostOps.Stop, data =>
-        {
-            holdsAtStop = Volatile.Read(ref holds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => holdsAtStop = Volatile.Read(ref holds));
 
         await manager.StopAsync();
 
@@ -389,12 +732,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var otherHoldsAtStop = -1;
         other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref otherHolds) < 3, "finishing"));
         elsewhere.Status = FakeHost.StatusOf() with { ProcessId = 5151 };
-        host.On(HostOps.Stop, data =>
-        {
-            otherHoldsAtStop = Volatile.Read(ref otherHolds);
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked(_ => otherHoldsAtStop = Volatile.Read(ref otherHolds));
         other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
         var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], package: [4242, 6161]);
         var applied = false;
@@ -455,11 +793,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return new ProbeHoldResult(n < 4, "finishing");
         });
         late.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         var updating = Manager(others: [busy.Folder, late.Folder], packageNow: () => Volatile.Read(ref started) ? [4242, 6161, 7171] : [4242, 6161]);
         var applied = false;
 
@@ -467,6 +801,98 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.True(applied);
         Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
+    }
+
+    // #3241: a held host can end while another profile's hold is awaited and its pid go to a host
+    // never held, which the settlement took by pid. Another profile's is held before the update
+    // goes ahead; one under this profile's own pid, its host already stopped, refuses it, as it does
+    // when this profile's host's start time could not be read as the update began.
+    [Theory]
+    [InlineData(6161, true)]
+    [InlineData(4242, true)]
+    [InlineData(4242, false)]
+    [Trait("Category", "Network")]
+    public async Task A_held_hosts_pid_taken_by_another_host_before_the_holds_settle_is_not_taken_for_the_held_one(int reused, bool ownStartKnown)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        if (ownStartKnown) { processes.StartTimes[4242] = Make.T0; }
+        processes.StartTimes[6161] = processes.StartTimes[7171] = Make.T0;
+        await using var first = new FakeHost();
+        await using var last = new FakeHost();
+        first.Start();
+        last.Start();
+        first.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        last.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        first.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        var holdsAtReuse = -1;
+        last.On(HostOps.ProbeHold, _ =>
+        {
+            // The last round's first hold is answered; then that host ends and its pid is taken.
+            if (host.Sent(HostOps.Stop).Count > 0 && holdsAtReuse < 0)
+            {
+                holdsAtReuse = first.Sent(HostOps.ProbeHold).Count;
+                processes.StartTimes[reused] = Make.T0.AddSeconds(5);
+            }
+            return new ProbeHoldResult(false);
+        });
+        host.StopsWhenAsked();
+        var updating = Manager(others: [first.Folder, last.Folder], package: [4242, 6161, 7171], startsKnown: false);
+        var applied = false;
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
+        if (reused == 6161)
+        {
+            await update;
+            Assert.True(applied);
+            Assert.True(first.Sent(HostOps.ProbeHold).Count > holdsAtReuse, "the host under the reused pid was never held");
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains("pid 4242", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(processes.Started);
+    }
+
+    // #2884 review: a host started from the installation during the scan after the stop's waits was
+    // never held, and that scan passes the package's own processes; the update would end it mid-probe.
+    // One whose pid was reused, or whose start time could not be read when held, is not confirmed.
+    [Theory]
+    [InlineData("none", 0)]
+    [InlineData("arrives", 7171)]
+    [InlineData("restarted", 4242)]
+    [InlineData("unknown", 4242)]
+    [Trait("Category", "Network")]
+    public async Task A_host_started_from_the_installation_during_the_last_scan_refuses_the_install_and_brings_the_host_back(string change, int refusedPid)
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var started = false;
+        var updating = Manager(packageNow: () => Volatile.Read(ref started) ? [4242, 7171] : [4242], startsKnown: change != "unknown");
+        var applied = false;
+        string? Scan(CancellationToken _)
+        {
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "arrives") { Volatile.Write(ref started, true); }
+            if (host.Sent(HostOps.Stop).Count > 0 && change == "restarted") { processes.StartTimes[4242] = Make.T0.AddSeconds(5); }
+            return null;
+        }
+
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true, Scan);
+        if (change == "none")
+        {
+            await update;
+            Assert.True(applied);
+            Assert.Empty(processes.Started);
+            return;
+        }
+        var refused = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains($"pid {refusedPid}", refused.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(updating.UpdateUnderWay);
     }
 
     [Fact]
@@ -485,11 +911,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             waiting.TrySetResult();
             return new ProbeHoldResult(true, "finishing");
         });
-        host.On(HostOps.Stop, data =>
-        {
-            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
-            return new { stopping = true };
-        });
+        host.StopsWhenAsked();
         // Waits as long as a real update would for that probe.
         var updating = Manager(others: [other.Folder], package: [4242, 6161], probeWait: TimeSpan.FromMinutes(11));
         var applied = false;
@@ -578,8 +1000,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null) =>
-        new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null, bool startsKnown = true)
+    {
+        // This profile's host's start time is known when an update reads it, before the package's.
+        if (startsKnown) { processes.StartTimes.TryAdd(4242, Make.T0); }
+        return new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
@@ -590,12 +1015,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
             OtherProfiles = () => others ?? [],
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
-            PackageHosts = packageNow ?? (() => package ?? []),
+            PackageHosts = () =>
+            {
+                var hosts = packageNow?.Invoke() ?? package ?? [];
+                // Known start times, as a reachable host's are; an update refuses a host it can't confirm.
+                if (startsKnown) { foreach (var pid in hosts) { processes.StartTimes.TryAdd(pid, Make.T0); } }
+                return hosts;
+            },
             Elevated = () => false,
             // As the fixture's manager: no wait runs out under a test on a slow runner, and one a
             // test needs to run out is advanced by hand.
             Time = held,
         };
+    }
 
     // #238: the switch turned off while the host answers about its probes stops the install. Since
     // #516 that switch, "Download updates automatically", is what lets Install between turns
@@ -1035,6 +1467,97 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Contains(log, l => l.StartsWith("auto-update: installing 0.2.0, as it installs between turns", StringComparison.Ordinal));
     }
 
+    // #3307: unasked, nothing installs over bad-release protection this machine could not check
+    // (stale or unreadable); it holds and says why. A fresh policy installs as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Set_to_install_between_turns_an_install_holds_while_bad_release_protection_is_stale_or_unreadable(bool readable, bool fresh)
+    {
+        InstallBetweenTurns();
+        updater.HaltPolicy = new(readable ? new(1, """{"v":1,"halted":[]}""", []) : null, Make.T0, fresh);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (fresh) { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+    }
+
+    // #3307: the app's own policy reader (UpdaterHaltPolicy, as VelopackUpdater composes it, over
+    // the host's GitHubHaltListSource and a shared ReleaseDiscovery). Before, production said
+    // nothing (null), so an unasked install went over protection never checked. Unknown,
+    // unreadable or stale now holds it with the hold's words; Restart to update, a person's press,
+    // still installs once. A fresh policy installs unasked as before.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData("unknown")]
+    [InlineData("unreadable")]
+    [InlineData("stale")]
+    [InlineData("fresh")]
+    public async Task The_app_updaters_own_policy_reader_holds_unasked_installs_unless_fresh_while_a_persons_press_still_installs(string policy)
+    {
+        InstallBetweenTurns();
+        var halts = await HaltsAsync(policy);
+        updater.HaltPolicy = halts.Snapshot;
+        Assert.Equal(policy == "fresh", halts.Snapshot.Fresh);
+        Assert.Equal(policy is "fresh" or "stale", halts.Snapshot.Policy is not null);
+        await StartAsync();
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        if (policy == "fresh") { await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5)); return; }
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(AutoUpdater.PolicyHold, auto.State.Waiting);
+        if (policy == "unreadable") { Assert.Contains(log, l => l.StartsWith("update policy: protection could not be read (IOException)", StringComparison.Ordinal)); }
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+    }
+
+    async Task<UpdaterHaltPolicy> HaltsAsync(string policy)
+    {
+        var folder = Path.Combine(app, "policy");
+        Directory.CreateDirectory(folder);
+        // A cache generation behind its verified one: the reader throws rather than read.
+        if (policy == "unreadable") { File.WriteAllText(Path.Combine(folder, ReleaseDiscovery.FileName), """{"haltPolicy":{"notBefore":"0001-01-01T00:00:00+00:00","attempt":0,"verified":1}}"""); }
+        var body = """{"v":1,"halted":[]}"""u8.ToArray();
+        var metadata = JsonSerializer.SerializeToUtf8Bytes(new[] { new { tag_name = "v0.1.2349", draft = false, assets = new[] { new { name = "halts.json",
+            browser_download_url = "https://github.com/danswett/agent-bridge/releases/download/v0.1.2349/halts.json",
+            size = body.Length, digest = "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(body)) } } } });
+        var up = policy is "fresh" or "stale";
+        var github = new PolicyGitHub(uri => !up ? null : uri.AbsoluteUri == ReleaseDiscovery.HaltPolicyList ? metadata : body);
+        var clock = new FakeTimeProvider(Make.T0);
+        var halts = new UpdaterHaltPolicy(new GitHubHaltListSource(new HttpClient(github), new ReleaseDiscovery(folder, github, clock, random: () => 0)), log.Add, clock);
+        Assert.Equal(new HaltPolicySnapshot(null, null, false), halts.Snapshot);
+        await halts.RefreshAsync();
+        if (policy == "stale")
+        {
+            up = false;
+            Assert.True(halts.Snapshot.Fresh);
+            clock.Advance(ReleaseDiscovery.GithubRevalidateEvery);
+            // Past its six hours it is stale before any check renews it.
+            Assert.False(halts.Snapshot.Fresh);
+            await halts.RefreshAsync();
+        }
+        return halts;
+    }
+
+    sealed class PolicyGitHub(Func<Uri, byte[]?> read) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(read(request.RequestUri!) is { } bytes
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) }
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Set_to_install_between_turns_nothing_installs_while_a_turn_runs_or_a_question_waits()
@@ -1298,8 +1821,59 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("app")]
+    [InlineData("host")]
+    [InlineData("launcher")]
+    public async Task A_profile_refusal_banner_names_the_blocking_profile_and_process(string kind)
+    {
+        var refusal = $"bridge profile 'work' {kind} (pid 4242) runs from this installation";
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(refusal));
+
+        Assert.Equal(refusal, await banner.RestartAsync(null));
+
+        Assert.Equal($"The update didn't install because {refusal}.", banner.Message);
+        Assert.True(banner.Failed);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_proceeds_with_only_the_default_profiles_host_and_launcher()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(20, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile default") { StartedAt = Make.T0 },
+             new(30, "agent-bridge-hostw", Path.Combine(app, "agent-bridge-hostw.exe"), "hostw.exe serve --profile default") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+
+        Assert.Null(await auto.RestartToUpdateAsync());
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Restart_to_update_refuses_a_real_second_profile_before_stopping_anything_and_names_it()
+    {
+        await StartAsync(FakeHost.StatusOf() with { ProcessId = 20 });
+        othersProbe = () => PackageProcesses.Others(app, "default", 10, othersAskedFor,
+            [new(4242, "agent-bridge-host", Path.Combine(app, "agent-bridge-host.exe"), "host.exe serve --profile work") { StartedAt = Make.T0 }]);
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+
+        await banner.RestartAsync(null);
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal("The update didn't install because bridge profile 'work' host (pid 4242) runs from this installation.", banner.Message);
+        Assert.Equal("Try again", banner.ActionLabel);
+    }
+
+    [Theory]
     [InlineData("another profile's app (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
     [InlineData("agent-bridge-host (pid 12) runs and cannot be looked at", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile '../work' host (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
+    [InlineData("bridge profile 'work' host (pid 4242) runs from this installation\nprivate detail", "another bridge profile is running from this installation")]
     [InlineData(@"installing 0.2.0 failed: C:\Users\dana\AppData\Local\AgentBridge\Update.exe is missing", "the installer reported an error")]
     [InlineData("the host's status could not be read: pipe agent-bridge-7 broken", "the host didn't answer")]
     [InlineData("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", "a newer update was downloaded meanwhile")]
@@ -1539,7 +2113,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("final-scan")]
+    [InlineData("scan")]
     [InlineData("usage-probe")]
     [InlineData("confirm")]
     [Trait("Category", "Network")]
@@ -1556,7 +2130,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Assert.True(TestUi.Read(() => connection.Sessions.All.Any(s => s.Id == "s2")));
         }
         var scans = 0;
-        preflight = () => { if (phase == "final-scan" && ++scans == 2) { Turn(); } return null; };
+        preflight = () => { if (phase == "scan" && ++scans == 1) { Turn(); } return null; };
         host.On(HostOps.ProbeHold, _ => { if (phase == "usage-probe") { Turn(); } return new ProbeHoldResult(false); });
 
         await auto.RestartToUpdateAsync(_ => { if (phase == "confirm") { Turn(); return Task.FromResult(true); } return Task.FromResult(false); });
@@ -1634,7 +2208,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
                 return Task.FromResult(true);
             });
             Assert.Contains("held-during-dialog.dll", why, StringComparison.Ordinal);
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.Null(prefs.UpdatedFrom);
             Assert.Empty(host.Sent(HostOps.Stop));
@@ -1654,8 +2228,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             : Task.FromException<LocalChannel>(new HostNotRunningException("stopped"));
         await StartAsync();
         await auto.TickAsync();
-        await host.StopAsync();
+        // The flag first: from here a connect attempt is the one this test wants (never reaching, or hanging for, a host that has just
+        // stopped). Set after the stop, an attempt the connection made in between hit a host that was gone and on Linux, where its socket is
+        // simply absent, failed at once with NotRunning; the later attempts then hung and the state never moved to Connecting (a 15 s wait).
         disconnected = true;
+        await host.StopAsync();
         connection.Reconnect();
         await Wait.UntilAsync(() => connection.State == (reconnecting ? LinkState.Connecting : LinkState.NotRunning), "the disconnected host");
         var warnings = 0;
@@ -1739,7 +2316,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
         prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, _ => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
         Assert.Equal(time.GetUtcNow() + UpdateBackoff.First, prefs.UpdateRetryAt);
@@ -1751,6 +2328,39 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Null(prefs.UpdateFailures);
         Assert.Null(prefs.UpdateRetryAt);
+    }
+
+    // A stuck holder scan at startup once had no bound: the first start after a failed update hung.
+    [Fact]
+    public async Task A_failed_update_start_stops_a_stuck_holder_scan_at_the_two_minute_budget_on_a_ui_thread()
+    {
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        UpdateAnnouncement? said = null;
+        var ui = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new Unpumped());
+            said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time,
+                token => { entered.TrySetResult(token); release.Wait(); return null; });
+        });
+        ui.Start();
+        try
+        {
+            var scan = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            time.Advance(InstallationFiles.ReleaseWait);
+            Assert.True(ui.Join(TimeSpan.FromSeconds(5)), "startup still waiting on the holder scan");
+            Assert.True(scan.IsCancellationRequested);
+            Assert.NotNull(said);
+            Assert.Contains(log, l => l.Contains(InstallationFiles.TimedOut, StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
+        }
+        finally { release.Set(); ui.Join(TimeSpan.FromSeconds(5)); }
+    }
+
+    // A UI thread blocked on startup never runs posted continuations.
+    sealed class Unpumped : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) { }
     }
 
     [Fact]
@@ -2829,6 +3439,156 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(AppUpdateViewModel.DidNotInstall("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", again: true), banner.Message);
         await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
     }
+    // Updater robustness (owner, Nov 23: a machine failed 8040 -> 8050 when 8051 landed minutes later). A download or an
+    // apply under way completes: a newer release found meanwhile (Settings' check, a tick's) is not looked for until
+    // it has finished, so it can neither replace the package being applied nor leave the install to abort or restart.
+    // The newer one is checked for afterwards.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newer_release_found_by_Settings_while_the_host_stops_does_not_abort_the_install_being_applied()
+    {
+        shared = new ObservedUpdater(updater, time);
+        // As Velopack's: a check that finds another release drops the one downloaded.
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        var banner = AppUpdateViewModel.For(auto);
+        Assert.Equal("0.2.0", banner.Version);
+        var checks = updater.Checks;
+
+        var press = Task.Run(() => banner.RestartAsync(_ => Task.FromResult(true)));
+        await stopAsked;
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        letGo();
+        await press;
+
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(checks, updater.Checks);
+        Assert.True(updater.Applied, string.Join("\n", log));
+        Assert.Equal("0.2.0", updater.AppliedVersion);
+        Assert.DoesNotContain(log, l => l.Contains("package ready changed"));
+        // Applied, not restarted: the host stays down for the installer.
+        Assert.Empty(processes.Started);
+    }
+
+    [Fact]
+    public async Task A_download_under_way_finishes_though_a_newer_release_is_found_and_the_newer_is_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        updater.DownloadsWhatItBeganWith = true;
+        updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await StartAsync();
+
+        var tick = Task.Run(() => auto.TickAsync());
+        await Wait.UntilAsync(() => updater.Downloads == 1, "the download to begin");
+        updater.Found = "0.3.0";
+        var seen = await shared.CheckAsync();
+        Assert.Equal("0.2.0", seen);
+        Assert.Equal(1, updater.Checks);
+        updater.DownloadGate.SetResult();
+        await tick;
+
+        Assert.Equal("0.2.0", shared.Ready);
+        Assert.Equal("0.2.0", auto.Pending);
+        Assert.True(shared.CheckDeferred);
+        // Afterwards, the next tick that can asks, and the newer release is downloaded and offered.
+        updater.DownloadGate = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.False(shared.CheckDeferred);
+        Assert.Equal("0.3.0", auto.Pending);
+        Assert.Equal("0.3.0", shared.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_install_that_failed_leaves_the_newer_release_found_meanwhile_to_be_checked_for_afterwards()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        var (stopAsked, letGo) = HeldStop();
+        await auto.TickAsync();
+        updater.ApplyFails = new IOException("the installer could not start");
+
+        var press = Task.Run(() => auto.RestartToUpdateAsync());
+        await stopAsked;
+        updater.Found = "0.3.0";
+        await shared.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        letGo();
+        await press;
+
+        Assert.False(updater.Applied);
+        Assert.True(shared.CheckDeferred);
+        updater.ApplyFails = null;
+        time.Advance(AutoUpdater.CheckAgainAfter + TimeSpan.FromSeconds(1));
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "the host back");
+        await auto.TickAsync();
+        Assert.Equal(2, updater.Checks);
+        Assert.Equal("0.3.0", shared.Found);
+    }
+
+    [Fact]
+    public async Task A_hold_for_an_apply_defers_checks_and_other_downloads_until_it_ends()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        updater.CheckDropsReady = true;
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal("0.2.0", observed.Ready);
+        var (checks, downloads) = (updater.Checks, updater.Downloads);
+
+        var hold = await observed.ApplyingAsync();
+        updater.Found = "0.3.0";
+        Assert.Equal("0.2.0", await observed.CheckAsync());
+        await observed.DownloadAsync(_ => { });
+        Assert.Equal((checks, downloads), (updater.Checks, updater.Downloads));
+        Assert.Equal("0.2.0", observed.Ready);
+        Assert.True(observed.CheckDeferred);
+
+        hold.Dispose();
+        Assert.Equal("0.3.0", await observed.CheckAsync());
+        Assert.False(observed.CheckDeferred);
+        Assert.Equal(checks + 1, updater.Checks);
+    }
+
+    [Fact]
+    public async Task A_check_put_off_and_then_attempted_clears_the_deferral_even_when_it_fails()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        var hold = await observed.ApplyingAsync();
+        await observed.CheckAsync();
+        Assert.True(observed.CheckDeferred);
+        hold.Dispose();
+
+        // A failing feed is asked at the next check, not at every tick.
+        updater.CheckFails = new InvalidOperationException("the feed refused");
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.CheckAsync);
+        Assert.False(observed.CheckDeferred);
+    }
+
+    [Fact]
+    public async Task A_Changed_handler_that_throws_does_not_leave_an_install_hold_behind()
+    {
+        var observed = new ObservedUpdater(updater, time);
+        void Throws() => throw new InvalidOperationException("a handler failed");
+        observed.Changed += Throws;
+        await Assert.ThrowsAsync<InvalidOperationException>(observed.ApplyingAsync);
+        observed.Changed -= Throws;
+
+        // Nothing is held: a check goes to the feed, and is not put off.
+        await observed.CheckAsync();
+        Assert.Equal(1, updater.Checks);
+        Assert.False(observed.CheckDeferred);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
@@ -3544,7 +4304,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         try
         {
             await NowAsync();
-            Assert.True(scans >= 3);
+            Assert.Equal(2, scans);
             Assert.False(updater.Applied);
             Assert.False(prefs.UpdateHandedOver);
             Assert.Null(prefs.UpdatedFrom);
@@ -3552,6 +4312,65 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Assert.Contains("held-during-depart.dll", prefs.LastUpdate!.Reason, StringComparison.Ordinal);
         }
         finally { holder?.Dispose(); }
+    }
+
+    // #2884 review: an outside process taking an image the app already holds leaves the locked-file
+    // set unchanged, so only a fresh Restart Manager scan sees it before the host stops.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task An_outside_holder_of_an_image_the_app_already_holds_is_found_before_stop_or_handoff(bool departing)
+    {
+        if (departing) { await StartAsync(); }
+        else { await StartAsync(null, Make.Session("s1", SessionStatus.Working)); await auto.TickAsync(); }
+        var path = Path.Combine(app, "held-by-the-app.dll");
+        File.WriteAllText(path, "old install");
+        using var own = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        FileStream? outside = null;
+        var scans = 0;
+        preflight = () => { Interlocked.Increment(ref scans); return outside is null ? null : "an outside fixture (pid 42)"; };
+        void Take() => outside = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        host.On(HostOps.UpdateDepart, _ => { Take(); return Committed; });
+        try
+        {
+            string? why;
+            if (departing) { await NowAsync(); why = prefs.LastUpdate?.Reason; }
+            else { why = await auto.RestartToUpdateAsync(_ => { Take(); return Task.FromResult(true); }); }
+            Assert.Equal(2, scans);
+            Assert.Contains("pid 42", why, StringComparison.Ordinal);
+            Assert.False(updater.Applied);
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { outside?.Dispose(); }
+    }
+
+    // #2884 review: the host's stop can wait minutes on probes and other profiles after the last
+    // scan before it; a holder appearing then is found by a scan after those waits, before apply.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task A_holder_appearing_while_the_host_stops_refuses_the_install_and_brings_the_host_back(bool departing)
+    {
+        if (departing) { await StartAsync(); }
+        else { await StartAsync(null, Make.Session("s1", SessionStatus.Working)); await auto.TickAsync(); }
+        processes.OnStart = () => host.Start();
+        var taken = false;
+        preflight = () => Volatile.Read(ref taken) ? "an outside fixture (pid 42)" : null;
+        host.On(HostOps.UpdateDepart, _ => Committed);
+        host.StopsWhenAsked(_ => Volatile.Write(ref taken, true));
+
+        if (departing) { await NowAsync(); }
+        else { await auto.RestartToUpdateAsync(_ => Task.FromResult(true)); }
+
+        Assert.False(updater.Applied);
+        Assert.Equal(UpdateOutcome.Failed, prefs.LastUpdate?.Outcome);
+        Assert.Contains("pid 42", prefs.LastUpdate!.Reason, StringComparison.Ordinal);
+        Assert.NotNull(prefs.UpdateRetryAt);
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Single(processes.Started);
+        Assert.False(manager.UpdateUnderWay);
     }
 
     [Fact]
@@ -4008,7 +4827,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_new_release_found_during_a_download_has_none_of_the_old_releases_counts()
+    public async Task A_new_release_found_after_a_download_has_none_of_the_old_releases_counts()
     {
         updater.ReportsDownloadFacts = true;
         updater.DownloadGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -4018,14 +4837,18 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var downloading = observed.DownloadAsync(_ => { });
         Assert.Equal(3, observed.Bytes);
 
+        // A download under way completes first: the check is put off, so the release downloading keeps its own counts.
         updater.Found = "0.3.0";
         await observed.CheckAsync();
-        var counts = (observed.Bytes, observed.Total);
+        var during = (observed.Found, observed.Bytes, observed.Total);
         updater.DownloadGate.SetResult();
         await downloading;
+        Assert.Equal(("0.2.0", (long?)3, (long?)10), during);
 
+        // The newer release is found once it has ended, and none of the old release's counts go with it.
+        await observed.CheckAsync();
         Assert.Equal("0.3.0", observed.Found);
-        Assert.Equal(((long?)null, (long?)null), counts);
+        Assert.Equal(((long?)null, (long?)null), (observed.Bytes, observed.Total));
     }
 
     // Copilot's review of 8898ae93: a check on the old source, then Include pre-releases changed

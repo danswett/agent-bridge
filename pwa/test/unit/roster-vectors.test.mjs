@@ -9,7 +9,9 @@ import { RosterFormatError } from '../../js/roster/refusal.js';
 import { base64Url, tryBase64Url, fromBase64Url, fromHex, hex } from '../../js/roster/codec.js';
 import { frame, utf8 } from '../../js/roster/framing.js';
 import { point, checkRosterSignature, verify, fromRaw } from '../../js/roster/p256.js';
-import { parseEntry, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
+import { parseEntry, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc, capSignBinding, deviceBytes } from '../../js/roster/entry.js';
+import { writeDescriptorV3, genesisV3 } from '../../js/roster/person-v3.js';
+import { RosterVerifier } from '../../js/roster/verifier.js';
 import { checkAssertion } from '../../js/roster/webauthn.js';
 import * as enrollment from '../../js/roster/enrollment.js';
 
@@ -127,6 +129,58 @@ test('the enrollment values, codes with their leading zeros, typed codes and QR 
     assert.equal(await enrollment.inviteHint(q), v.hint);
     assert.equal(hex(await enrollment.qrJoiner(q, h)), v.joiner);
     assert.equal(hex(await enrollment.qrApprover(q, h)), v.approver);
+  }
+});
+
+// The v3 person descriptor with capSign (devices.md "Person verifier evidence"), as K1 writes it.
+const v3 = vectors.v3;
+const validNamed = (name) => vectors.entries.valid.find((v) => v.name === name);
+
+test('v3: the PWA writes the C# genesis bytes for the same inputs, capSign proving the verifier key binding', async () => {
+  const proofs = [];
+  const proveCapSign = async (message) => {
+    proofs.push(hex(message));
+    return b64(v3.genesis.capSignProof);
+  };
+  const device = await writeDescriptorV3({
+    account: vectors.account, generation: vectors.generation, dh: key('pwa-dh'), sign: key('pwa-sign'), presence: 'webauthn',
+    webauthn: credential(vectors.assertions[0].credential), capSign: b64(v3.genesis.capSign), proveCapSign, kind: 'pwa', platform: 'windows', name: v3.genesis.name,
+  });
+  const body = await genesisV3(vectors.account, vectors.generation, v3.genesis.at, device);
+  assert.equal(base64Url(body), v3.genesis.body);
+  assert.deepEqual(proofs, [v3.genesis.binding]);
+  assert.equal(hex(capSignBinding(vectors.account, vectors.generation, key('pwa-dh'))), v3.genesis.binding);
+});
+
+test('v3: a genesis carrying capSign pins it (hasCapSign); a v3 add, v2 host add and v1 genesis do not', async () => {
+  const parsed = async (name) => (await parseEntry(utf8(validNamed(name).wrapper))).body;
+  const genesis = await parsed('genesis-v3');
+  assert.ok(genesis.version === 3 && genesis.hasCapSign);
+  assert.equal(base64Url(genesis.device.capSign), v3.genesis.capSign);
+  for (const name of ['add-v3-by-code', 'add-host-v2', 'genesis']) assert.equal((await parsed(name)).hasCapSign, false, name);
+  assert.equal((await parsed('genesis')).device.capSign, null);
+});
+
+test('v3: the T3 transcript and the joiner\'s check of a returned v3 add are the library\'s', async () => {
+  const [h, nA, nN, t3] = [v3.t3.h, v3.t3.nA, v3.t3.nN, v3.t3.transcript].map(fromHex);
+  const device = b64(v3.t3.device);
+  assert.equal(hex(await enrollment.capSignTranscript(vectors.account, vectors.generation, h, nA, nN, device)), v3.t3.transcript);
+  const add = await parseEntry(utf8(validNamed('add-v3-by-code').wrapper));
+  assert.deepEqual(deviceBytes(add.bodyBytes), device);
+  const phone = vectors.keys['phone-dh'].device;
+  assert.ok(enrollment.acceptsCapSignAdd(add, phone, device, t3));
+  assert.ok(!enrollment.acceptsCapSignAdd(add, vectors.keys['pwa-dh'].device, device, t3));
+  assert.ok(!enrollment.acceptsCapSignAdd(add, phone, device.subarray(1), t3));
+  assert.ok(!enrollment.acceptsCapSignAdd(add, phone, device, new Uint8Array(32)));
+  assert.ok(!enrollment.acceptsCapSignAdd(await parseEntry(utf8(validNamed('genesis-v3').wrapper)), phone, device, t3));
+});
+
+test('v3: a capSign or hostSign that is another device\'s key is refused host-key, in both orders', async () => {
+  for (const c of v3.collisions) {
+    const verifier = new RosterVerifier(vectors.account, vectors.generation, () => 0, { acceptHostSign: true });
+    const entries = await Promise.all([...v3.collisionBase, ...c.wrappers].map((w) => parseEntry(utf8(w))));
+    const outcomes = await verifier.offer(entries);
+    assert.deepEqual(outcomes.map((o) => o.reason ?? null), [...entries.slice(1).map(() => null), 'host-key'], c.name);
   }
 });
 
