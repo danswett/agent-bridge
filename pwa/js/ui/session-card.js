@@ -740,6 +740,8 @@ export class SessionCard {
     // "Jump to latest" (ui.md §6.4 H3, #1720): in no layout (a row with no height), so it never changes what is read.
     e.jump = h('button', { type: 'button', class: 'jump-latest', hidden: true, onclick: () => this.#jump() }, jumpText({}));
     e.jumpRow = h('div', { class: 'jump-row' }, e.jump);
+    // A wheel over the pill is a wheel over the conversation behind it (the pill is a button, so it would take the wheel).
+    e.jump.addEventListener('wheel', (ev) => { ev.preventDefault(); e.scroll.scrollBy({ top: ev.deltaY * [1, 40, e.scroll.clientHeight][ev.deltaMode] }); }, { passive: false });
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
       e.scroll, e.jumpRow, e.waiting, e.reply, e.replyBar);
 

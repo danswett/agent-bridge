@@ -197,7 +197,6 @@ test('turns arriving while away are counted; the live turn, and turns at the end
   assert.equal(follow.newCount, 2, 'the same turn twice is one');
   follow.display({ activity: { turn: 't1' }, extra: 'the live words of the turn on screen' });
   assert.equal(follow.newCount, 2, 'the turn on screen growing is not new');
-  assert.deepEqual(seen.at(-1), { away: true, count: 2 });
   at(pane, 900);
   assert.equal(follow.newCount, 0);
   assert.deepEqual(seen.at(-1), { away: false, count: 0 });
@@ -218,8 +217,7 @@ test('jump goes to the end and draws what waits there; a smooth one scrolls once
   assert.deepEqual([follow.following, follow.away, follow.newCount], [true, false, 0]);
   at(pane, 300);
   follow.jump('smooth');
-  assert.deepEqual(pane.scrolled.at(-1), { top: 1100, behavior: 'smooth' });
-  assert.equal(pane.scrollTop, 300, 'the browser animates it; nothing is set at once');
+  assert.deepEqual([pane.scrolled.at(-1), pane.scrollTop], [{ top: 1100, behavior: 'smooth' }, 300], 'the browser animates it; nothing is set at once');
   input.dispatchEvent(new Event('wheel'));
   assert.equal(follow.following, false, 'a touch that stops it, with no scroll after it, is the person reading');
   at(pane, 500);

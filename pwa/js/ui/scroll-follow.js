@@ -3,7 +3,7 @@ import { HistoryView } from './history-view.js';
 import { awayFrom } from './jump-latest.js';
 
 export const BOTTOM_TOLERANCE_PX = 4;
-// A smooth jump that sends no scrollend (Safari) is over after this, wherever it stopped.
+// A smooth jump with no scrollend (Safari) is over after this.
 const JUMP_LIMIT_MS = 1500;
 const streamedTurns = new WeakMap();
 
