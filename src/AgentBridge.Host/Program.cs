@@ -946,6 +946,7 @@ async Task<int> ServeAsync(HostHandover handover)
         FleetPublication = () => fleetPublication.Status,
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
+        Disk = new ProfileDisk(serveFolder!, log: Log).StatusLine,
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
