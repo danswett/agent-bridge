@@ -9,14 +9,23 @@ on:
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
   # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
-  # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
-  # writes no cache and runs every job (the whole ring).
+  # §4.7), or as Quality's critical-fix release of main's head (critical-release with a reason, on
+  # main; docs/app-windows.md, "Spacing"); the plan job refuses anything else. Only the critical
+  # release is a release (APP_RELEASE); a run by hand writes no cache and runs every job (the whole ring).
   workflow_dispatch:
     inputs:
       force-apt-fallback:
         description: pwa-ui takes the Azure apt mirror off at once and downloads from https://archive.ubuntu.com (a branch other than main only)
         type: boolean
         default: false
+      critical-release:
+        description: Publish main's head as a critical fix inside the 15-minute release spacing (publish-prerelease.ps1 -SkipSpacing). Quality only, on an owner or Chief call; main only, with critical-reason
+        type: boolean
+        default: false
+      critical-reason:
+        description: Why this critical fix may not wait; required with critical-release, checked before the build and logged in the run and the release notes
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -46,12 +55,12 @@ env:
   # which also needs the app built here): only then is the host a release build, whose Home
   # Assistant connector may write to a real Home Assistant (design G6). Every pull request and
   # fork builds a dev host.
-  APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
+  APP_RELEASE: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
   # 'true' when this run's package is to be signed with Azure Artifact Signing (#734): the publish
   # path, once the owner has set the repository variable APP_SIGNING to 'true' (docs/app-windows.md,
   # Signing). Then a package that is not signed by the pinned publisher fails the run rather than
   # going out unsigned. Until then, and on every pull request and fork, packages are unsigned.
-  APP_SIGNING: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
+  APP_SIGNING: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true' }}
 
 jobs:
   plan:
@@ -78,8 +87,6 @@ jobs:
       whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
       product: ${{ steps.select.outputs.product }}
       ha-integration: ${{ steps.select.outputs.ha-integration }}
-      spikes: ${{ steps.select.outputs.spikes }}
-      spikes-linux: ${{ steps.select.outputs.spikes-linux }}
       app: ${{ steps.select.outputs.app }}
       app-installer: ${{ steps.select.outputs.app-installer }}
       light: ${{ steps.select.outputs.light }}
@@ -99,16 +106,26 @@ jobs:
       # publishes), at a commit that is neither main's head nor any open pull request's. Anything
       # else fails here, before checkout, and every job after the plan is skipped. Push and pull
       # request runs skip this step, so they make no API call.
-      - name: A run by hand is a fallback proof on a commit of its own
+      - name: A run by hand is a fallback proof on a commit of its own, or a critical release of main
         if: github.event_name == 'workflow_dispatch'
         env:
           FORCE: ${{ inputs.force-apt-fallback }}
+          CRITICAL: ${{ inputs.critical-release }}
+          REASON: ${{ inputs.critical-reason }}
           REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          fail() { echo "::error title=force-apt-fallback::$1"; exit 1; }
+          fail() { echo "::error title=run by hand::$1"; exit 1; }
+          if [ "$CRITICAL" = true ]; then
+            # The critical-fix override (docs/app-windows.md, "Spacing"): main's head, past the release
+            # spacing only, with a reason, checked here before anything is built.
+            [ "$REF" = refs/heads/main ] || fail "critical-release only on main, not $REF"
+            [ "$FORCE" != true ] || fail "critical-release and force-apt-fallback are separate runs"
+            [ -n "$(printf '%s' "$REASON" | tr -d '[:space:][:cntrl:]')" ] || fail "critical-release needs critical-reason: why this fix may not wait"
+            exit 0
+          fi
           [ "$FORCE" = true ] || fail "a run by hand is only for force-apt-fallback=true"
           if [ "$REF" = refs/heads/main ] || [ "${REF#refs/heads/}" = "$REF" ]; then
             fail "only on a branch other than main, not $REF"
@@ -238,7 +255,7 @@ jobs:
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
-          JOBS: product ha-integration spikes spikes-linux app app-installer light pwa-ui pwa-e2e
+          JOBS: product ha-integration app app-installer light pwa-ui pwa-e2e
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
@@ -607,61 +624,6 @@ jobs:
       - name: Home Assistant's log
         if: failure()
         run: docker logs homeassistant 2>&1 | tail -n 300
-  spikes:
-    needs: plan
-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
-        with:
-          dotnet-version: '10.0.x'
-      - name: NuGet packages from main's cache
-        id: nuget
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
-          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
-      - name: Build spike projects
-        shell: pwsh
-        run: |
-          $projects = Get-ChildItem spikes -Recurse -Filter *.csproj
-          foreach ($p in $projects) {
-            dotnet build $p.FullName -c Release --nologo
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          }
-      - name: Save NuGet packages to main's cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.nuget/packages
-          key: ${{ steps.nuget.outputs.cache-primary-key }}
-      - name: Parse spike scripts
-        shell: pwsh
-        run: |
-          $bad = 0
-          foreach ($f in Get-ChildItem spikes -Recurse -Filter *.ps1) {
-            $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
-            if ($errors) { $errors | ForEach-Object { Write-Error "$($f.Name): $_" }; $bad++ }
-          }
-          exit $bad
-      - name: S3 publish carries the compiled XAML
-        # The build output runs either way; only a published copy fails at startup when
-        # the app's .pri is missing, so check the publish folder itself.
-        shell: pwsh
-        run: |
-          dotnet publish spikes/s3-winui-velopack/App/AgentBridgeS3.csproj -c Release -o "$env:RUNNER_TEMP/s3" --nologo
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if (-not (Test-Path "$env:RUNNER_TEMP/s3/AgentBridgeS3.pri")) { Write-Error 'AgentBridgeS3.pri is missing from the publish output'; exit 1 }
-      - name: S6 device keys
-        # A runner may have no TPM; the TPM checks then report SKIP and the DPAPI ones still run.
-        shell: pwsh
-        run: dotnet spikes/s6-tpm-keys/src/S6.Check/bin/Release/net10.0-windows/s6-check.dll check
-
   app:
     # The Windows app (docs/app-windows.md): published with the host into one folder, packed
     # with Velopack, then the published copy is started in demo mode to check that it draws
@@ -981,12 +943,11 @@ jobs:
     # version older than any published, the version being this run's number, and refuses a commit
     # that doesn't hold the latest release's commit, since neither a run number nor the order
     # waiting publishes start in says anything of commit order. So a run that publishes after a
-    # newer commit's release publishes nothing, and an older commit's run that gets there first
-    # publishes nothing when main's head has since changed the app (main's selector says so):
-    # main's later run builds the app with both changes and publishes it, whatever the two runs'
-    # numbers, where publishing the older first could leave the newer one refused as an older
-    # version. Had it to be main's head instead, an app change followed by a docs-only commit
-    # would never be released.
+    # newer commit's release publishes nothing; an older commit's run that gets there first still
+    # publishes while main's head follows its commit, and main's later run publishes its own higher
+    # version over it (#4104). Releases are 15 minutes apart: a run inside that is deferred, and
+    # publish-pending.yml re-runs its publish (docs/app-windows.md, "Spacing"). A critical-release
+    # dispatch on main, with a reason, is a publish path too.
     # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
     # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -995,7 +956,7 @@ jobs:
     # if this need goes. !cancelled() replaces the default success(), so the result is checked here.
     needs: [quality-gate]
     if: >-
-      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      !cancelled() && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
       && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -1032,8 +993,8 @@ jobs:
     # Only a signing run enters the `signing` environment, the one subject the signing identity's
     # federated credential trusts (repo:danswett/agent-bridge:environment:signing), deployable from
     # main only. Without it this job's OIDC token signs in nowhere.
-    environment: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
-    runs-on: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
+    environment: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'signing' || '' }}
+    runs-on: ${{ (github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && !inputs.critical-release) && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' && vars.APP_SIGNING == 'true') && 'windows-latest' || 'ubuntu-latest' }}
     permissions:
       contents: read
       id-token: write # azure/login's OIDC sign-in, used only when APP_SIGNING is 'true'
@@ -1165,10 +1126,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
-      # publish a commit main has since changed the app past (main's later run publishes that),
-      # read with main's own selector and catalog, as that run plans. A second clone, since the
-      # first one's origin/main is this run's commit.
+      # Main's head now, under the publish lock: publish-prerelease.ps1 publishes this commit only
+      # while main's head follows it (#4104). A second clone, since the first one's origin/main is
+      # this run's commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
@@ -1197,9 +1157,14 @@ jobs:
           # Repository variables: this job has no environment, and needs no Azure sign-in; it
           # checks the signatures the sign job made, before uploading and again in the draft.
           SIGNING_EKU: ${{ vars.APP_SIGNING_IDENTITY_EKU }}
+          # Through the environment, never spliced into the script.
+          CRITICAL_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.critical-release }}
+          CRITICAL_REASON: ${{ inputs.critical-reason }}
         run: |
           $sign = @{}
           if ($env:APP_SIGNING -eq 'true') { $sign = @{ RequireSignature = $true; SignerEku = $env:SIGNING_EKU } }
+          # The critical-fix override (docs/app-windows.md, "Spacing"): a dispatch on main, with its reason.
+          if ($env:CRITICAL_RELEASE -eq 'true') { $sign.SkipSpacing = $true; $sign.SkipSpacingReason = $env:CRITICAL_REASON }
           ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head @sign
       - name: Publish the static Beta download manifest
         if: steps.publish.outputs.manifest-tag != ''
@@ -1272,99 +1237,6 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/release/win-arm64/*
           sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
-
-  spikes-linux:
-    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
-    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
-    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
-    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
-    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
-    #    Chromium and WebKit through the same relay, then the container build.
-    needs: plan
-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
-    runs-on: ubuntu-24.04
-    # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
-    # minutes the download step gives a slow apt mirror and a full download from Canonical's
-    # archive, on top of the checks.
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
-        with:
-          dotnet-version: '10.0.x'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-      - name: S2 builds and checks its vectors
-        working-directory: spikes/s2-noise-interop
-        run: |
-          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
-      - name: S2 fresh vectors from .NET, replayed in Node
-        working-directory: spikes/s2-noise-interop
-        run: |
-          dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
-          cp "$RUNNER_TEMP/vectors.json" web/vectors.json
-          node js/test-node.mjs
-      - name: S4 builds and checks the relay against a fake GitHub
-        working-directory: spikes/s4-relay
-        run: |
-          dotnet build src/S4.DevStack -c Release --nologo
-          dotnet build src/S4.Host -c Release --nologo
-          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
-          node js/test-sw.mjs
-      - name: npm ci, for both
-        run: |
-          npm ci --prefix spikes/s2-noise-interop
-          npm ci --prefix spikes/s4-relay
-      - name: Which Playwright
-        id: playwright
-        working-directory: spikes/s4-relay
-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
-      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
-      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
-      # on a miss and installs their system packages either way.
-      - name: Playwright's browsers from main's cache
-        id: browsers
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
-      # Their system packages first, so a slow apt mirror can be left (as in pwa-ui; the action's
-      # download.sh says why). The second spike's finds them downloaded while the two agree.
-      - name: Download Playwright's system packages, S2
-        uses: ./.github/actions/playwright-system-packages
-        with:
-          browsers: chromium webkit
-          working-directory: spikes/s2-noise-interop
-      - name: Download Playwright's system packages, S4
-        uses: ./.github/actions/playwright-system-packages
-        with:
-          browsers: chromium webkit
-          working-directory: spikes/s4-relay
-      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
-      # the second is quick while they agree.
-      - name: Playwright's browsers, for both
-        run: |
-          (cd spikes/s2-noise-interop && npx playwright install chromium webkit)
-          (cd spikes/s4-relay && npx playwright install chromium webkit)
-      - name: Save Playwright's browsers to main's cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.browsers.outputs.cache-primary-key }}
-      - name: S2 in Chromium and WebKit
-        working-directory: spikes/s2-noise-interop
-        run: node js/test-browsers.mjs
-      - name: S4 the PWA through the relay
-        working-directory: spikes/s4-relay
-        run: node js/test-pwa.mjs
-      - name: S4 container builds
-        working-directory: spikes
-        run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
 
   light:
     # The small Linux checks, on one runner instead of one each (#459): each step runs when its
@@ -1683,7 +1555,7 @@ jobs:
       - name: Which Playwright
         id: playwright
         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
-      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
+      # Playwright's browser from main's cache, as in full.yml's spikes-linux, keyed by browser so each leg
       # restores only the one it runs.
       - name: Playwright's browsers from main's cache
         id: browsers
@@ -1699,11 +1571,17 @@ jobs:
       # WebKit legs are the proof, so one that downloads nothing from Canonical fails. It is
       # false on every push and pull request run, which run the action exactly as before.
       - name: Download Playwright's system packages
+        id: system-packages
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: ${{ matrix.project }}
           working-directory: pwa
           force-apt-fallback: ${{ github.event_name == 'workflow_dispatch' && inputs.force-apt-fallback }}
+      - name: Save Playwright's system-package archives
+        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+        uses: ./.github/actions/playwright-system-packages-save
+        with:
+          key: ${{ steps.system-packages.outputs.cache-key }}
       - run: npx playwright install "$PROJECT"
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -1805,10 +1683,16 @@ jobs:
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       # As in pwa-ui: the system packages first, so a slow apt mirror can be left.
       - name: Download Playwright's system packages
+        id: system-packages
         uses: ./.github/actions/playwright-system-packages
         with:
           browsers: chromium webkit
           working-directory: pwa
+      - name: Save Playwright's system-package archives
+        if: always() && steps.system-packages.outputs.cache-ready == 'true'
+        uses: ./.github/actions/playwright-system-packages-save
+        with:
+          key: ${{ steps.system-packages.outputs.cache-key }}
       - run: npx playwright install chromium webkit
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
@@ -1849,7 +1733,7 @@ jobs:
     # new gate's check only once every job it needs is done; under the same name, the draft's
     # green gate would stand for the whole head until then, and a merge could go through on it.
     name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
-    needs: [plan, product, ha-integration, spikes, spikes-linux, app, app-installer, light, pwa-ui, pwa-e2e]
+    needs: [plan, product, ha-integration, app, app-installer, light, pwa-ui, pwa-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

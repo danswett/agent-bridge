@@ -113,9 +113,11 @@ public static class Limits
     // activity.background.shells (v1-sessions.md "Background"): a shell whose latest start or "still running"
     // mark is older than this stops counting, so a finished session whose shell never reported back reads idle (#1108).
     public static readonly TimeSpan BackgroundShellStale = TimeSpan.FromHours(4);
-    // Free text in an answer (session.answer's text, or a field's other), and the request.
-    public const int AnswerText = 4 * 1024;
-    public const int AnswerRequest = 16 * 1024;
+    // Free text in an answer (session.answer's text, or a field's other) is as long as a reply (#2752): a person can paste diagnostics. The request
+    // is that text plus an envelope for what is around it (the ids, the request UUID, the flags), so a maximum answer fits whole.
+    public const int AnswerText = ReplyText;
+    public const int AnswerEnvelope = 1024;
+    public const int AnswerRequest = AnswerText + AnswerEnvelope;
     // The client-reported card target (AnswerRequest.CardTarget): its own cap, outside the AnswerRequest budget above.
     public const int CardTarget = 64;
     // The text of a session.reply.
@@ -909,6 +911,24 @@ public sealed record ReplyRequest
 
 public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);
 
+// What a refused reply shows of a full Copilot box (#804): the words escaped as the host shows them, capped, and the
+// digest of the whole escaped box that a later clear confirmation must name. Clearable stays false until the signed
+// person confirmation and the policy exist, so this cut only shows; it never offers or performs a clear.
+public sealed record ComposerInput(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated, string Mode, string Digest, bool Clearable)
+{
+    public const int Cap = 500;
+    public static ComposerInput From(string content)
+    {
+        var (shown, marks) = ShownText.RevealMarked(content, rightToLeft: true);
+        var cut = Math.Min(shown.Length, Cap);
+        // A cut inside one of the host's escapes would show half of it unboxed, so it moves back to where that escape starts.
+        foreach (var m in marks) { if (m.Start < cut && m.Start + m.Length > cut) cut = m.Start; }
+        if (cut > 0 && cut < shown.Length && char.IsHighSurrogate(shown[cut - 1])) cut--;
+        return new(shown[..cut], [.. marks.Where(m => m.Start + m.Length <= cut).Select(m => (IReadOnlyList<int>)[m.Start, m.Length])],
+            cut < shown.Length, "text", EscapedApproval.Shown(shown), false);
+    }
+}
+
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
@@ -919,6 +939,7 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
     public ClearedComposer? Cleared { get; init; }
+    public ComposerInput? Input { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ReplyRefusal Refusal { get; init; }
     [JsonIgnore]

@@ -113,6 +113,58 @@ public class AgentLiteSenderTests
         Assert.Equal(0, r.Link.Opened);
     }
 
+    // #4435: the time of the FIRST request travels beside the envelope (whose signed lifetime is two minutes), so a busy retry minutes
+    // later still says when the order was first asked for. Unsigned, so the receiver believes it only within a day before issuedAt.
+    [Fact]
+    public async Task The_first_request_time_reaches_the_receiver_and_defaults_to_the_issued_time()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var asked = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 300;
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", asked), default);
+        Assert.Equal(asked, r.Deliver.Envelope!.SentAt);
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
+        Assert.Equal(r.Deliver.Envelope!.Body.IssuedAt, r.Deliver.Envelope.SentAt);
+    }
+
+    [Theory]
+    [InlineData(-90_000)]   // over a day before the envelope
+    [InlineData(300)]       // the sender clamps a future time to the envelope's own, so this one is believed only as that
+    public async Task A_first_request_time_outside_the_bounds_is_ignored_and_marked_not_given(int offset)
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var sent = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + offset;
+
+        await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello", sent), default);
+
+        var seen = r.Deliver.Envelope!;
+        if (offset < 0) { Assert.Equal((null, true), (seen.SentAt, seen.SentAtIgnored)); }
+        else { Assert.Equal((seen.Body.IssuedAt, false), (seen.SentAt, seen.SentAtIgnored)); }
+    }
+
+    [Fact]
+    public async Task A_hand_made_relay_message_with_a_future_or_malformed_time_is_ignored_not_trusted()
+    {
+        using var r = new Rig();
+        Receiving(r);
+        var real = r.Link.Reply;
+        foreach (var bad in new object[] { DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600, "soon", 1.5 })
+        {
+            r.Link.Reply = (req, ct) =>
+            {
+                var o = System.Text.Json.JsonSerializer.SerializeToNode(req)!.AsObject();
+                o["sentAt"] = System.Text.Json.JsonSerializer.SerializeToNode(bad);
+                return real(o, ct);
+            };
+            await r.Sender().SendAsync(Caller, new LiteSendInput(Other, "agent-b2", "hello"), default);
+            Assert.Null(r.Deliver.Envelope!.SentAt);
+            Assert.True(r.Deliver.Envelope.SentAtIgnored);
+        }
+    }
+
     // Answers as the real receiver does, so the sealed envelope is checked end to end rather than assumed.
     static void Receiving(Rig r, LiteDelivery? result = null, string? target = null)
     {

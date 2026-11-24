@@ -323,6 +323,19 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(CallerKind.App, true)]
+    [InlineData(CallerKind.Agent, false)]
+    [InlineData(CallerKind.Other, false)]
+    [InlineData(CallerKind.HostCli, false)]
+    public async Task Only_the_app_is_told_it_can_approve_a_folder(CallerKind kind, bool told)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+
+        Assert.Equal(told, (await ch.HelloAsync()).Capabilities.Contains(HostOps.WorkspacesCapability));
+    }
+
+    [Theory]
     [InlineData(CallerKind.Agent)]
     [InlineData(CallerKind.Other)]
     [InlineData(CallerKind.HostCli)]
