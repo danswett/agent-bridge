@@ -1813,8 +1813,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   and the layout's top-block correction cannot move the view under it (#1756): a thumb drag's
   steps are final view changes, and rows realised taller than estimated otherwise bounced the bar back up.
   Losing capture or rewatching history cancels that pointer's scrollbar custody and pressed hold even if its release happens outside the window.
+  A wheel notch owns the view from its input, before its first view change arrives, so no correction
+  cancels it in flight; a wheel that moves nothing lets go after 250 ms (#4243).
+  The person's own scroll landing on the very end (wheel, arrow, key) re-engages the pin (#4243).
   End-following also waits while a finger is down or the pointer is over or pressed in the
-  conversation, then follows the latest measured end when the last hold ends, if still pinned.
+  conversation, then follows the latest measured end when the last hold ends, if still pinned;
+  under the pointer it still undoes a layout move back from the end while pinned, which would
+  otherwise land the view a viewport short and loop as the wheel spins (#4243).
   A held end-pinned view stops the older-prepend timer until the last hold ends, so no prepend lacks its end correction.
   Opening another session still places its latest reply despite an inherited hold; subsequent
   scrolling or navigation cancels that queued placement. Unloading or replacing the session

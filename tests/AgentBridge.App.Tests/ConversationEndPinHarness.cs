@@ -209,7 +209,7 @@ namespace AgentBridge.App
         public Core.ConversationFollow FollowState => follow;
         public void ResetSessionForProbe() => ResetScrollbarGestures();
         public void Follow() => FollowPinnedEnd();
-        public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller); if (final) { anchoring = null; } }
+        public void Moved(double offset, bool final = true) { Scroller.VerticalOffset = offset; PinViewChanged(Scroller, final); if (final) { anchoring = null; } }
         public void LayoutForProbe(Action layout) => DuringConversationLayout(() => { layout(); return 0; });
         public void Scrolling(double? correction = null) { scrolling = true; anchoring = correction; }
         public void StopScrolling() { scrolling = false; CompleteNavigation(); }

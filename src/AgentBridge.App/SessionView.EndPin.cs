@@ -104,10 +104,15 @@ public sealed partial class SessionView
     // flight, so identical notches moved different distances (#4243). A wheel that cannot move the view (at an
     // edge) raises no view change, so the hold lapses on its own after WheelStart.
     bool wheelStarting;
+    // Pinned, and layout moved the view back from the end: follow the end even under the pointer (#4243).
+    bool pinCoerced;
     int wheelInputs;
     Microsoft.UI.Dispatching.DispatcherQueueTimer? wheelLapse;
     internal static readonly TimeSpan WheelStart = TimeSpan.FromMilliseconds(250);
     bool ReaderScrolling => scrolling || wheelStarting;
+
+    // The self-test's control-level notch takes the same path as the wheel handler (SelfTest.WheelNotch).
+    internal void WheelForSelfTest() => WheelInput();
 
     void WheelInput()
     {
@@ -160,7 +165,7 @@ public sealed partial class SessionView
     // UIA or a screen reader can move the view back from the end with no wheel or press: that is the
     // person's move too, or the final view change pulls it back. Growth or an anchored shrink above
     // can change both the offset and gap while the extent is remeasured or our end correction is pending.
-    void PinViewChanged(ScrollViewer scroll)
+    void PinViewChanged(ScrollViewer scroll, bool final)
     {
         // The notch's own view changes have begun: `scrolling` holds the view from here until its final one.
         wheelStarting = false;
@@ -181,6 +186,14 @@ public sealed partial class SessionView
             if (!layoutOnly && (anchoring is not { } asked || Math.Abs(offset - asked) >= 0.5)) { ReleasePin(); }
         }
         if (anchoring is { } target && Math.Abs(target - extent) <= ConversationFollow.EndFollowSlack && Math.Abs(offset - extent) <= ConversationFollow.EndFollowSlack) { SetEndPin(true); }
+        // The person's own scroll (wheel, arrow, key) landing on the very end re-engages the pin (#4243; #1756 case 5),
+        // so the last rows realising as the end comes into view are followed, not left above it.
+        if (final && !pinEnd && conversationLayoutDepth == 0 && extent > 0 && offset >= extent - 0.5
+            && scrollbarPointers.Count == 0 && !panning && navigationPending is null) { SetEndPin(true); }
+        // Still pinned after a move back: layout's, not the person's (they would have released it). Undone even
+        // under the pointer, as the hover hold is for moving what is read, and this already moved it (#4243).
+        if (pinEnd && seen is { } before && offset < before.Offset - 0.5) { pinCoerced = true; }
+        if (Math.Abs(offset - extent) <= 0.5) { pinCoerced = false; }
         if (seen is { } moved && Math.Abs(offset - moved.Offset) >= 0.5)
         {
             (stationaryRemeasure, stationaryChange) = (0, 0); stationaryFromEnd = false;
@@ -194,7 +207,7 @@ public sealed partial class SessionView
     // The person is scrolling: the view is theirs from here, and stays where they leave it.
     internal void ReleasePin([System.Runtime.CompilerServices.CallerMemberName] string by = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
     {
-        restoreReading = null; pinEnd = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
+        restoreReading = null; pinEnd = false; pinCoerced = false; navigationPending = null; anchoring = null; stationaryRemeasure = stationaryChange = 0; stationaryFromEnd = false; pinReleases++;
         RecordPin(pinReleased, $"{by}:{line} at ({ConversationScroll?.VerticalOffset}, {ConversationScroll?.ScrollableHeight}) seen={seen} layoutDepth={conversationLayoutDepth}");
         SyncConversationAnchoring();
         if (historyFirstFrame is null && history is { } stored && historyVisible < stored.Turns.Count) { historyDraw?.Start(); }
@@ -209,7 +222,7 @@ public sealed partial class SessionView
     {
         if (ConversationScroll is { } still) { RememberStillExtent(still); }
         SyncConversationAnchoring();
-        if (follow.Held || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
+        if (follow.Held && !pinCoerced || scrollbarPointers.Count > 0 || panning || ReaderScrolling && anchoring is null || keyTarget is not null || !ConversationList.IsLoaded || ConversationScroll is not { } scroll) { return; }
         if (ConversationEndPin.Correction(pinEnd, scroll.VerticalOffset, scroll.ScrollableHeight, anchoring) is { } to) { Anchoring(scroll, to); }
     }
 

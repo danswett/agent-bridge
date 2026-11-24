@@ -306,6 +306,7 @@ static partial class SelfTest
                 && timingRecords.EnumerateArray().Any(r => r.GetProperty("Kind").GetString() == "check"),
                 "latest: records Windows view check timings");
             await CheckHistoryBottomBounce(window, main, demo, Check, outFile);
+            await CheckWheelNotches(window, main, demo, Check, outFile);
             await CheckHistoryScrollPreserve(window, main, demo, Check);
             await CheckHistoryYourMessages(window, main, Check);
             await CheckMessageTimes(window, main, Check);
