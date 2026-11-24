@@ -94,9 +94,80 @@ public class ScriptTaskReaderTests
     [Fact]
     public void A_program_action_pins_its_program_first_and_the_script_it_names()
     {
-        if (!OperatingSystem.IsWindows()) { return; }
         Assert.Equal([@"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\Locked\Cycle.ps1"], ScriptTaskXml.ActionFiles(Task));
-        Assert.Equal([@"C:\Tools\run.exe"], ScriptTaskXml.ActionFiles(Task.Replace(@"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\Tools\run.exe").Replace("-File \"C:\\Locked\\Cycle.ps1\"", "/x")));
+        Assert.Equal([@"C:\Tools\run.exe"], ScriptTaskXml.ActionFiles(Task.Replace(@"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\Tools\run.exe").Replace(Args, "")));
+    }
+
+    const string Args = "<Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Locked\\Cycle.ps1\" -Quiet</Arguments>";
+    const string Pwsh = @"C:\Program Files\PowerShell\7\pwsh.exe";
+    const string WindowsPowerShell = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+
+    static IReadOnlyList<string>? Files(string program, string arguments) =>
+        ScriptTaskXml.ActionFiles(Task.Replace(Pwsh, program).Replace(Args, $"<Arguments>{arguments}</Arguments>"));
+
+    // Only the program plus -File <fully qualified script> is understood; every other way to name a script is refused, so an unpinned file is never run.
+    [Theory]
+    [InlineData(@"C:\Windows\System32\cmd.exe", @"/c C:\Users\someone\evil.cmd")]
+    [InlineData(@"C:\Windows\System32\wscript.exe", @"C:\Users\someone\evil.vbs")]
+    [InlineData(@"C:\Windows\System32\wscript.exe", @"//B C:\Users\someone\evil.vbs")]
+    [InlineData(Pwsh, @"C:\Users\someone\evil.ps1")]
+    [InlineData(Pwsh, @"-NoProfile C:\Users\someone\evil.ps1")]
+    [InlineData(Pwsh, @"-NoProfile /Command &amp; C:\Users\someone\evil.ps1")]
+    [InlineData(Pwsh, @"/c &quot;&amp; C:\Users\someone\evil.ps1&quot;")]
+    [InlineData(Pwsh, @"-WorkingDirectory C:\Users\someone -File C:\Locked\Cycle.ps1")]
+    [InlineData(Pwsh, @"-ConfigurationFile C:\Users\someone\x.pssc -File C:\Locked\Cycle.ps1")]
+    [InlineData(Pwsh, @"-NoExit -File C:\Locked\Cycle.ps1")]
+    [InlineData(Pwsh, @"-Unknown -File C:\Locked\Cycle.ps1")]
+    [InlineData(Pwsh, @"-File")]
+    [InlineData(Pwsh, @"-File -Command x")]
+    [InlineData(@"C:\Windows\System32\cmd.exe", @"-File C:\Locked\Cycle.ps1")]
+    [InlineData(@"C:\Tools\run.exe", @"-File C:\Locked\Cycle.ps1")]
+    [InlineData(@"C:\Tools\run.exe", @"/x")]
+    [InlineData(Pwsh, @"-File \\server\share\Cycle.ps1")]
+    [InlineData(Pwsh, @"-File C:\Locked\..\Users\x\Cycle.ps1")]
+    [InlineData(Pwsh, @"-File C:Cycle.ps1")]
+    [InlineData(Pwsh, @"-File /Locked/Cycle.ps1")]
+    public void Any_argument_shape_other_than_the_program_and_a_fully_qualified_file_script_pins_nothing(string program, string arguments)
+    {
+        Assert.Null(Files(program, arguments));
+    }
+
+    [Theory]
+    [InlineData(@"-File C:\Locked\Cycle.ps1", @"C:\Locked\Cycle.ps1")]
+    [InlineData(@"/File C:\Locked\Cycle.ps1", @"C:\Locked\Cycle.ps1")]
+    [InlineData(@"-f C:\Locked\Cycle.ps1", @"C:\Locked\Cycle.ps1")]
+    [InlineData(@"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;C:\Locked\My Cycle.ps1&quot; -Quiet -Mode x", @"C:\Locked\My Cycle.ps1")]
+    [InlineData(@"/NoProfile /ExecutionPolicy Bypass /File C:\Locked\Cycle.ps1", @"C:\Locked\Cycle.ps1")]
+    public void The_program_with_dash_or_slash_file_and_a_fully_qualified_script_pins_both(string arguments, string script)
+    {
+        Assert.Equal([Pwsh, script], Files(Pwsh, arguments));
+        Assert.Equal([WindowsPowerShell, script], Files(WindowsPowerShell, arguments));
+    }
+
+    [Theory]
+    [InlineData(@"\Slipgates\Counts", true)]
+    [InlineData(@"\Counts", true)]
+    [InlineData(@"Slipgates\Counts", false)]
+    [InlineData(@"\", false)]
+    [InlineData(@"\Slipgates\", false)]
+    [InlineData(@"\Slipgates\..\Other", false)]
+    [InlineData(@"\Slipgates\.\Other", false)]
+    [InlineData(@"\Slipgates\*", false)]
+    [InlineData(@"\Slip?ates\Counts", false)]
+    [InlineData("\\Slipgates\\Co\nunts", false)]
+    [InlineData(@"\Slipgates\\Counts", false)]
+    public void A_task_is_named_by_its_full_path_without_traversal_wildcards_or_control_characters(string name, bool valid)
+    {
+        Assert.Equal(valid, ScriptTaskXml.ValidTaskName(name));
+    }
+
+    [Fact]
+    public void Text_that_looks_like_markup_cannot_hash_the_same_as_real_markup()
+    {
+        var text = Task.Replace(Args, "<Arguments>&lt;b&gt;&lt;/b&gt;</Arguments>");
+        var element = Task.Replace(Args, "<Arguments><b></b></Arguments>");
+
+        Assert.NotEqual(ScriptTaskXml.Definition(text), ScriptTaskXml.Definition(element));
     }
 
     [Theory]
@@ -173,5 +244,12 @@ public class ScriptTaskReaderTests
         Assert.Null(reader.ActionFiles(none));
         Assert.Empty(reader.RunningEngines(none));
         Assert.False(reader.TaskLocked(none));
+        foreach (var bad in new[] { @"\..\Windows", @"\Microsoft\*", @"relative", @"\Slipgates\" })
+        {
+            Assert.Null(reader.Definition(bad));
+            Assert.Null(reader.ActionFiles(bad));
+            Assert.Empty(reader.RunningEngines(bad));
+            Assert.False(reader.TaskLocked(bad));
+        }
     }
 }

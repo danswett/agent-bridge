@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
@@ -28,9 +29,10 @@ internal static class ScriptTaskXml
 
     static XElement? Part(XElement task, string name) => task.Elements().FirstOrDefault(e => e.Name.LocalName == name);
 
+    // Escaped, so text that looks like markup can never hash the same as markup.
     static string Canon(XElement e) => "<" + e.Name.LocalName
-        + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{a.Value}\""))
-        + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : e.Value.Trim()) + "</" + e.Name.LocalName + ">";
+        + string.Concat(e.Attributes().Where(a => !a.IsNamespaceDeclaration).OrderBy(a => a.Name.LocalName, StringComparer.Ordinal).Select(a => $" {a.Name.LocalName}=\"{SecurityElement.Escape(a.Value)}\""))
+        + ">" + (e.HasElements ? string.Concat(e.Elements().Select(Canon)) : SecurityElement.Escape(e.Value.Trim())) + "</" + e.Name.LocalName + ">";
 
     // SHA-256 of the task's actions, principal and triggers (not its registration date or settings), or null when the XML is not a task.
     internal static string? Definition(string xml)
@@ -40,31 +42,45 @@ internal static class ScriptTaskXml
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', parts))));
     }
 
-    // The files the task's one program action runs, the program first: null when it is not exactly one program action, or names a
-    // relative path or an environment variable the user could redirect, or a command line (not a file) to run.
+    // The files the task's one program action runs, the program first. An allow-list: only a locked, fully qualified program on its own, or
+    // pwsh / powershell with plain switches and -File <fully qualified script> (a - or / prefix), is understood. Every other way to name a
+    // script (a positional one, -Command, -EncodedCommand, cmd /c, wscript, an unknown switch, a relative path or an environment variable)
+    // is null, so no file the task runs can go unpinned.
     internal static IReadOnlyList<string>? ActionFiles(string xml)
     {
         if (Root(xml) is not { } task || Part(task, "Actions")?.Elements().ToList() is not [{ } exec] || exec.Name.LocalName != "Exec") { return null; }
         var program = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim().Trim('"');
-        if (!Pinnable(program)) { return null; }
-        var files = new List<string> { program! };
+        if (program is null || !Pinnable(program)) { return null; }
         var args = Tokens(exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value ?? "");
-        // pwsh and powershell abbreviate their parameters: -f is -File; -c and -e (and longer) are a command line or an encoded one.
-        var inline = args.Any(a => Prefix(a, "-command", 2) || Prefix(a, "-encodedcommand", 3) || a.Equals("-e", StringComparison.OrdinalIgnoreCase) || a.Equals("-ec", StringComparison.OrdinalIgnoreCase));
-        if (inline) { return null; }
-        var at = args.FindIndex(a => Prefix(a, "-file", 2));
-        if (at >= 0)
+        if (args.Count == 0) { return [program]; }
+        if (!Interpreters.Contains(program[(program.LastIndexOfAny(['\\', '/']) + 1)..])) { return null; }
+        for (var i = 0; i < args.Count; i++)
         {
-            var script = at + 1 < args.Count ? args[at + 1] : null;
-            if (!Pinnable(script)) { return null; }
-            files.Add(script!);
+            if (args[i].Length < 2 || args[i][0] is not ('-' or '/')) { return null; }
+            var name = args[i][1..].ToLowerInvariant();
+            if (name.Length <= 4 && "file".StartsWith(name, StringComparison.Ordinal))
+            {
+                return i + 1 < args.Count && Pinnable(args[i + 1]) ? [program, args[i + 1]] : null;
+            }
+            if (ValuedSwitches.Contains(name)) { i++; }
+            else if (!PlainSwitches.Contains(name)) { return null; }
         }
-        return files;
+        return null;
     }
 
-    static bool Prefix(string token, string full, int min) => token.Length >= min && full.StartsWith(token, StringComparison.OrdinalIgnoreCase);
+    static readonly HashSet<string> Interpreters = new(["pwsh.exe", "powershell.exe"], StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> PlainSwitches = ["noprofile", "nologo", "noninteractive", "mta", "sta"];
+    static readonly HashSet<string> ValuedSwitches = ["executionpolicy", "windowstyle"];
 
-    static bool Pinnable(string? path) => !string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path) && !path.Contains('%') && !path.Contains('$');
+    // A Windows drive path with no environment variable, wildcard, stream, control character or relative segment. Written here, not
+    // Path.IsPathFullyQualified, so it decides the same on every platform.
+    static bool Pinnable(string? path) => !string.IsNullOrWhiteSpace(path) && path.Length is > 3 and <= 260 && char.IsAsciiLetter(path[0]) && path[1] == ':'
+        && path[2] is '\\' or '/' && path.IndexOfAny(['%', '$', '*', '?', '<', '>', '|', '"'], 2) < 0 && !path.Any(char.IsControl) && path.IndexOf(':', 2) < 0
+        && !path[3..].Split('\\', '/').Any(s => s is "." or "..");
+
+    // A task is named by its full path, such as \Folder\Task: no traversal, wildcard, control character or empty segment.
+    internal static bool ValidTaskName(string? task) => task is { Length: > 1 and <= 260 } && task[0] == '\\' && !task.EndsWith('\\')
+        && task.IndexOfAny(['*', '?', '<', '>', '|', '"', '/']) < 0 && !task.Any(char.IsControl) && !task.Split('\\').Skip(1).Any(s => s is "" or "." or "..");
 
     static List<string> Tokens(string line)
     {
@@ -96,18 +112,26 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
     public IReadOnlyList<ScriptTaskEngine> RunningEngines(string task)
     {
         var engines = new List<ScriptTaskEngine>();
+        if (!ScriptTaskXml.ValidTaskName(task)) { return engines; }
         Scheduler<object>(service =>
         {
-            foreach (var running in (IEnumerable?)Call(service, "GetRunningTasks", 1) ?? Array.Empty<object>())
+            var running = Call(service, "GetRunningTasks", 1);
+            try
             {
-                try
+                foreach (var one in (IEnumerable?)running ?? Array.Empty<object>())
                 {
-                    if (!string.Equals(Get(running, "Path") as string, task, StringComparison.OrdinalIgnoreCase)) { continue; }
-                    using var engine = Process.GetProcessById(Convert.ToInt32(Get(running, "EnginePID")));
-                    engines.Add(new(engine.Id, new DateTimeOffset(engine.StartTime.ToUniversalTime())));
+                    try
+                    {
+                        if (!string.Equals(Get(one, "Path") as string, task, StringComparison.OrdinalIgnoreCase)) { continue; }
+                        using var engine = Process.GetProcessById(Convert.ToInt32(Get(one, "EnginePID")));
+                        engines.Add(new(engine.Id, new DateTimeOffset(engine.StartTime.ToUniversalTime())));
+                    }
+                    catch (Exception e) when (e is InvalidOperationException or ArgumentException or COMException or TargetInvocationException or InvalidCastException
+                        or FormatException or OverflowException or System.ComponentModel.Win32Exception) { }
+                    finally { Release(one); }
                 }
-                catch (Exception e) when (e is InvalidOperationException or ArgumentException or COMException or TargetInvocationException or System.ComponentModel.Win32Exception) { }
             }
+            finally { Release(running); }
             return null;
         });
         return engines;
@@ -142,8 +166,9 @@ public sealed class WindowsScriptTaskReader : IScriptTaskReader
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
     }
 
+    // The name is checked here as well as by the binding: a path with traversal or a wildcard reads as no task.
     static T? Task<T>(string name, Func<object, T?> use) where T : class =>
-        Scheduler(service =>
+        !ScriptTaskXml.ValidTaskName(name) ? null : Scheduler(service =>
         {
             object? folder = null, task = null;
             try
