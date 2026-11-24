@@ -64,11 +64,11 @@ public sealed class CoordinatorHandoff
         if (json.Length > 64 * 1024) throw Bad("handoff-request-too-large.");
 
         PrivateFolder.Ensure(parent, "the coordinator handoff folder");
-        PrivateFolder.Ensure(stage, "the unique coordinator folder");
-        PrivateFolder.Ensure(extract, "the coordinator extraction folder");
         FileStream? image = null, target = null, manifest = null;
         try
         {
+            PrivateFolder.Ensure(stage, "the unique coordinator folder");
+            PrivateFolder.Ensure(extract, "the coordinator extraction folder");
             CopyNew(source, imagePath);
             image = DownloadMark.Hold(imagePath, imageDigest)
                 ?? throw new PackageMismatchException("helper-copy: staged helper differs from the retained installed image.");
@@ -92,6 +92,10 @@ public sealed class CoordinatorHandoff
             manifest?.Dispose();
             target?.Dispose();
             image?.Dispose();
+            // The stage folder is this call's own (it did not exist above): a failure leaves none behind.
+            try { if (Directory.Exists(stage)) Directory.Delete(stage, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
             throw;
         }
     }
@@ -116,6 +120,9 @@ public sealed class CoordinatorHandoff
         if (path is null) throw Bad("handoff-path-refused: paths must be fully qualified.");
         path = Plain(path);
         if (!Path.IsPathFullyQualified(path)) throw Bad("handoff-path-refused: paths must be fully qualified.");
+        // Win32 folds a trailing dot or space, so such a segment can name another folder than the one compared.
+        if (path.Split('\\', '/').Any(part => part.Length > 0 && part is not "." and not ".." && (part.EndsWith(' ') || part.EndsWith('.'))))
+            throw Bad("handoff-path-refused: a path segment ends in a dot or space.");
         var full = Path.GetFullPath(path);
         for (var part = full; !string.IsNullOrEmpty(part); part = Path.GetDirectoryName(part))
         {
@@ -150,7 +157,14 @@ public sealed class CoordinatorHandoff
             var buffer = new char[32768];
             var length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Length, 0);
             if (length == 0 || length >= buffer.Length) throw Bad("handoff-path-unresolved.");
-            canonical = Path.GetFullPath(Path.Combine(Plain(new string(buffer, 0, (int)length)), Path.GetRelativePath(ancestor, path)));
+            var final = new string(buffer, 0, (int)length);
+            var plain = Plain(final);
+            // The final path of a loopback share (\\localhost\C$, \\127.0.0.1\C$, \\?\UNC\..., \\.\UNC\...) is a UNC path
+            // that never string-matches C:\...; a volume-GUID path would become relative. The layout is local: refuse the rest.
+            if (final.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) || plain.Length < 3
+                || !char.IsAsciiLetter(plain[0]) || plain[1] != ':' || plain[2] != '\\' || GetDriveTypeW(plain[..3]) == 4)
+                throw Bad("handoff-path-refused: the updater layout must be on a local drive, not a share or volume path.");
+            canonical = Path.GetFullPath(Path.Combine(plain, Path.GetRelativePath(ancestor, path)));
             return handle;
         }
         catch { handle.Dispose(); throw; }
@@ -160,6 +174,9 @@ public sealed class CoordinatorHandoff
     static extern SafeFileHandle OpenDirectory(string path, uint access, uint share, nint security, uint creation, uint flags, nint template);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, [Out] char[] path, uint length, uint flags);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern uint GetDriveTypeW(string rootPath);
 
     static InvalidDataException Bad(string reason) => new(reason);
 

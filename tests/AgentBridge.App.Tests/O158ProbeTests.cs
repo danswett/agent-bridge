@@ -30,7 +30,9 @@ public sealed class O158ProbeTests
                 var buffer = new char[32768];
                 Assert.InRange(GetShortPathNameW(root, buffer, (uint)buffer.Length), 1u, (uint)buffer.Length - 1);
                 alias = new string(buffer).TrimEnd('\0') + @"\handoff";
-                Console.WriteLine("SHORT_ALIAS_AVAILABLE=" + !alias.Equals(root + @"\handoff", StringComparison.OrdinalIgnoreCase));
+                // No distinct 8.3 alias on this volume (short names disabled, or the path is already short): nothing is aliased,
+                // so the case would pass without testing anything. HandoffLocalPathTests always has a distinct alias (a substituted drive).
+                if (alias.Equals(root + @"\handoff", StringComparison.OrdinalIgnoreCase)) return;
             }
             Assert.Throws<InvalidDataException>(() => new CoordinatorHandoff(alias, HostwBundleTests.Target,
                 _ => "fixture host launcher [coordinator-v1]").Prepare(request, helper));
