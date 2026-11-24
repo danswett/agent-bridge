@@ -64,6 +64,14 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // so each is said once (#437).
     readonly HashSet<(string Path, DateTimeOffset? Written)> _pidlessExcused = [];
     readonly HashSet<(string Path, DateTimeOffset? Written, int Pid)> _pidlessHeldSaid = [];
+    // The process each such registration was bound to (BindToLaunches), by session id. Its hook goes on
+    // writing the file with no process after the launch has stopped being followed, so the binding
+    // is kept for as long as that process (pid and start) runs. Only on the pass, under _pass.
+    readonly Dictionary<string, (int Pid, DateTimeOffset? Started)> _pidlessBound = new(StringComparer.Ordinal);
+
+    // The Codex launches this host is still following, which a Codex registration that names no
+    // process may be the session of (#3644). Null where nothing launches (a read-only command).
+    public Func<IReadOnlyList<PendingCodexLaunch>>? PendingCodexLaunches { get; set; }
     // The most a Codex nothing accounts for keeps a registration naming no process held, from when
     // it was written: a backstop where what launched what cannot be read (macOS), so nothing
     // that only looks like a session holds discovery for good.
@@ -627,6 +635,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var ended = new Dictionary<string, Registration>(StringComparer.Ordinal);
         var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
         IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
+        if (pidless is not null) { sessions = [.. sessions, .. BindToLaunches(observed, accounted, pidless, findTranscript)]; }
         var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         var pids = sessions.Select(s => s.ProcessId).ToHashSet();
         bool AdmitNative(DiscoveredSession s)
@@ -678,6 +687,86 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);
+    }
+
+    // A Codex registration that names no process (0.172's hooks do not say which Codex ran them, and
+    // one waiting on its hooks-trust question fires them earlier still, #437) is the session of a
+    // Codex this host launched when that launch alone fits it: the launch's process runs, started when
+    // the launch says, is no server; the registration was written no earlier than the launch started
+    // (a second of slack, as for a registration's own process) and for the folder it was started in;
+    // and no other launch fits the registration, nor other registration the launch. Otherwise it is
+    // left to HoldForPidless, which only holds or carries on and could never list it: a Codex launched
+    // here never appeared (#3644). The binding is kept while that process runs, since the launch stops
+    // being followed once it has confirmed and the hook goes on writing the file with no process.
+    // Bound registrations leave `pidless`; their sessions carry the registration (status, approvals).
+    List<DiscoveredSession> BindToLaunches(AgentProcessObservation observed, HashSet<int> accounted, List<Registration> pidless, Func<string, string?> findTranscript)
+    {
+        var bound = new List<DiscoveredSession>();
+        // The same session registered under both roots: the one written last.
+        var newest = pidless.GroupBy(r => r.SessionId, StringComparer.Ordinal)
+            .Select(g => g.OrderByDescending(r => Written(r) ?? DateTimeOffset.MinValue).First()).ToList();
+        foreach (var gone in _pidlessBound.Keys.Where(k => newest.All(r => r.SessionId != k)).ToList()) { _pidlessBound.Remove(gone); }
+        if (newest.Count == 0) { return bound; }
+
+        var running = observed.Processes.GroupBy(p => p.Id).ToDictionary(g => g.Key, g => g.First());
+        var taken = new HashSet<int>();
+        void Bind(Registration r, AgentProcess process)
+        {
+            taken.Add(process.Id);
+            accounted.Add(process.Id);
+            pidless.RemoveAll(x => x.SessionId == r.SessionId);
+            var transcript = string.IsNullOrWhiteSpace(r.TranscriptPath) ? findTranscript(r.SessionId) : r.TranscriptPath;
+            bound.Add(new DiscoveredSession(r.SessionId, AgentKind.Codex, transcript, null, process.Id, r, process.StartedAt));
+        }
+
+        var unbound = new List<Registration>();
+        foreach (var r in newest)
+        {
+            if (_pidlessBound.TryGetValue(r.SessionId, out var was))
+            {
+                if (running.TryGetValue(was.Pid, out var process) && SameProcess(new AgentProcess(was.Pid, was.Started, null), process) && !taken.Contains(was.Pid) && !accounted.Contains(was.Pid)) { Bind(r, process); continue; }
+                _pidlessBound.Remove(r.SessionId);
+            }
+            unbound.Add(r);
+        }
+
+        var launches = PendingCodexLaunches?.Invoke() ?? [];
+        var fits = new List<(Registration R, PendingCodexLaunch L, AgentProcess P)>();
+        foreach (var l in launches)
+        {
+            if (l.StartedAt is not { } launchStart || string.IsNullOrWhiteSpace(l.Folder)
+                || !running.TryGetValue(l.ProcessId, out var process) || process.StartedAt is not { } processStart
+                || (processStart - launchStart).Duration() > TimeSpan.FromSeconds(2)
+                || accounted.Contains(process.Id) || taken.Contains(process.Id)
+                || (!string.IsNullOrEmpty(process.CommandLine) && !CodexLockDiscovery.IsTerminal(process.CommandLine))) { continue; }
+            foreach (var r in unbound)
+            {
+                if (Written(r) is { } at && at >= launchStart - TimeSpan.FromSeconds(1) && SameFolder(l.Folder, r.WorkingDirectory)) { fits.Add((r, l, process)); }
+            }
+        }
+        foreach (var (r, l, process) in fits)
+        {
+            if (fits.Count(x => x.R.SessionId == r.SessionId) != 1 || fits.Count(x => x.L.ProcessId == l.ProcessId) != 1) { continue; }
+            _pidlessBound[r.SessionId] = (process.Id, process.StartedAt);
+            Log($"codex registration {r.SessionId} names no process: bound to codex process {process.Id}, which this host launched in {l.Folder}");
+            Bind(r, process);
+        }
+        return bound;
+    }
+
+    // The same folder as a launch was asked for and Codex's hook recorded: Windows paths differ in
+    // case, separators, the extended-length prefix and a trailing separator, and only a launch on
+    // Windows is ever bound.
+    static bool SameFolder(string? launched, string? registered)
+    {
+        static string Plain(string? path)
+        {
+            var p = (path ?? "").Trim().Replace('/', '\\');
+            if (p.StartsWith(@"\\?\", StringComparison.Ordinal)) { p = p[4..]; }
+            return p.Length > 3 ? p.TrimEnd('\\') : p;
+        }
+        var a = Plain(launched);
+        return a.Length > 0 && string.Equals(a, Plain(registered), StringComparison.OrdinalIgnoreCase);
     }
 
     // A Codex registration naming no process: its hooks fired before they could tell which Codex

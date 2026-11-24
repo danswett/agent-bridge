@@ -41,4 +41,27 @@ public sealed partial class LaunchFlowTests
         Assert.Empty(asked);
         Assert.Single(starter.Specs);
     }
+
+    // #3644: Codex 0.172's hooks name no process, so discovery binds such a registration to the launch it
+    // fits; the launch tells it which process it started, when, and where.
+    [Fact]
+    public async Task A_Codex_launch_still_waiting_for_its_session_offers_its_process_start_and_folder_for_discovery_to_bind_to()
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        locator.Installed["claude"] = @"C:\fake\claude.cmd";
+        starter.Registers = false;
+        var launcher = LauncherWithHooks(_ => false);
+
+        var codex = launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "codex", Workspace = "App", Prompt = "test" }, "phone");
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
+        var claude = launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "claude", Workspace = "API", Prompt = "test" }, "phone");
+        await WaitAsync(() => Task.FromResult(starter.Pids.Count == 2));
+
+        var offered = Assert.Single(launcher.PendingCodexLaunches());
+        Assert.Equal(starter.Pids[0], offered.ProcessId);
+        Assert.NotNull(offered.StartedAt);
+        Assert.Equal(app, offered.Folder, ignoreCase: true);
+        GC.KeepAlive(codex);
+        GC.KeepAlive(claude);
+    }
 }

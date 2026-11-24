@@ -134,7 +134,7 @@ internal sealed class Fixture : IDisposable
 
     public string CodexTranscript(string id) => Path.Combine(CodexHome, "sessions", "2026", "10", "28", $"rollout-2026-10-28T04-00-00-{id}.jsonl");
 
-    public void CodexRegistration(string id, int pid, string? transcript, string status = "working", bool ended = false, DateTimeOffset? updated = null)
+    public void CodexRegistration(string id, int pid, string? transcript, string status = "working", bool ended = false, DateTimeOffset? updated = null, string cwd = "/work/codex")
     {
         Directory.CreateDirectory(CodexRegistrations);
         var json = new JsonObject
@@ -142,7 +142,7 @@ internal sealed class Fixture : IDisposable
             ["SessionId"] = id,
             ["ProcessId"] = pid,
             ["TranscriptPath"] = transcript ?? "",
-            ["WorkingDirectory"] = "/work/codex",
+            ["WorkingDirectory"] = cwd,
             ["Model"] = "gpt-fixture",
             ["Status"] = status,
             ["Activity"] = "",
