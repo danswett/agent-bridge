@@ -622,7 +622,7 @@ awk '
   /uses: \.\/\.github\/actions\/playwright-system-packages/ { actions++ }
   /npx playwright install / { if (actions-- <= 0) bad=1; installs++ }
   END { exit bad || installs != 4 }
-' "$here/../../workflows/ci.yml" \
+' "$here/../../workflows/ci.yml" "$here/../../workflows/full.yml" \
   || { echo "FAIL: each of the four browser installs must follow its system-package action"; failures=$((failures + 1)); }
 
 for error in '404 Not Found' 'Hash Sum mismatch' 'Unable to locate package missing'; do
