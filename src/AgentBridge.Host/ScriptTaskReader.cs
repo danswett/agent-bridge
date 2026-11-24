@@ -35,7 +35,8 @@ internal static class ScriptTaskXml
     // Whether the task runs only while its user is logged on: ONE principal with ONE LogonType, InteractiveToken. Anything else (a stored password, S4U, which also runs
     // logged off, a service account, a group, none) is false, as is anything that is not a task (the owner's Q-run-2 answer, 2026-11-24).
     internal static bool LoggedOnOnly(string xml) =>
-        Root(xml) is { } task && Part(task, "Principals")?.Elements().ToList() is [{ } principal]
+        Root(xml) is { } task && task.Elements().Where(e => e.Name.LocalName == "Principals").ToList() is [{ } principals]
+        && principals.Elements().ToList() is [{ Name.LocalName: "Principal" } principal]
         && principal.Elements().Where(e => e.Name.LocalName == "LogonType").ToList() is [{ } logon] && logon.Value.Trim() == "InteractiveToken";
 
     // SHA-256 of the task's actions, principal and triggers (not its registration date or settings), or null when the XML is not a task.

@@ -42,6 +42,28 @@ public sealed class ScriptLogonTypeTests
         Assert.False(ScriptTaskXml.LoggedOnOnly("<not a task"));
     }
 
+    // The read of #4565: only the single Principal's own LogonType counts. An InteractiveToken in Settings or in the action must not stand in for the principal's.
+    [Fact]
+    public void A_logon_type_elsewhere_in_the_task_is_a_decoy_and_the_principals_own_decides()
+    {
+        const string interactive = "<LogonType>InteractiveToken</LogonType>";
+        var password = One("Password");
+        var noLogon = One(null);
+        foreach (var principal in new[] { password, noLogon })
+        {
+            Assert.False(ScriptTaskXml.LoggedOnOnly(Xml(principal).Replace("</Task>", "<Settings>" + interactive + "</Settings></Task>")));
+            Assert.False(ScriptTaskXml.LoggedOnOnly(Xml(principal).Replace("<Command>", "<Command>" + interactive + "</Command><Arguments>").Replace("</Command></Exec>", "</Arguments></Exec>")));
+            Assert.False(ScriptTaskXml.LoggedOnOnly(Xml(principal).Replace("</Principal>", "<RunLevel>" + interactive + "</RunLevel></Principal>")));
+        }
+    }
+
+    [Fact]
+    public void Only_a_Principal_element_inside_one_Principals_element_counts()
+    {
+        Assert.False(ScriptTaskXml.LoggedOnOnly(Xml("<Other><LogonType>InteractiveToken</LogonType></Other>")));
+        Assert.False(ScriptTaskXml.LoggedOnOnly(Xml(One("InteractiveToken")).Replace("</Task>", "<Principals>" + One("Password") + "</Principals></Task>")));
+    }
+
     sealed class Tasks(bool loggedOnOnly) : IScriptTaskReader
     {
         public bool LoggedOn { get; set; } = loggedOnOnly;
