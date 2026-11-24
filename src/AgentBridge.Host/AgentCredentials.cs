@@ -100,7 +100,7 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         this.reread = reread ?? ProcessChain.Read;
         this.jobs = jobs;
         LaunchGate = new AgentLaunchGate(folder);
-        FleetGrant = new FleetLaunchGrant(folder);
+        FleetGrant = new FleetLaunchGrant(folder, new ProfileDisk(folder, log: log));
         this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;

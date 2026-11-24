@@ -606,6 +606,10 @@ host refuses to turn the fleet grant on, and refuses fleet launches, with under 
 profile's disk (`code: diskLow`), and `host.status` shows it. The runbook gets one line each for
 `diskLow`, `auditUnwritable`, `capRebuilding` and the recovery override (§5).
 
+**Built (#2771):** exactly as above: the threshold is 1 GiB free on the profile's disk, for the fleet grant and fleet launches only (not every agent
+launch), code `diskLow`, shown in `host.status`; free space that cannot be read allows the launch, says so once in the log and shows `disk unknown`.
+The runbook line is in host-launch.md.
+
 ## 12. Open questions for the owner
 
 Each has a recommended default; the summary's list is the same.
