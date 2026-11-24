@@ -1858,6 +1858,58 @@ public class MergeRuleTests
         Assert.Contains(" success merge-rule ", posted, StringComparison.Ordinal);
     }
 
+    // The depth cap: a chain of 20 relied-on parents is read to its end; a 21st is a chain too deep to trust, so main is red, never a pass.
+    [Theory]
+    [InlineData(21, " success merge-rule ")]
+    [InlineData(22, " failure merge-rule ")]
+    public void A_chain_of_reliance_deeper_than_twenty_parents_fails_closed(int runCount, string expected)
+    {
+        // Three-digit ids: Sha pads "c<id>" with zeros, so Sha(1) and Sha(10) would be the same sha and the chain would loop.
+        var first = 101;
+        var runs = MainRunsAged(MainNow, Enumerable.Range(first, runCount).Reverse().Select(id => ((long)id, "completed", (string?)"success", 1, first + runCount - id)).ToArray());
+        var plans = Enumerable.Range(first, runCount).Select(id => ((long)id, id == first ? RelyNone : Relies(id - 1))).ToArray();
+
+        var (posted, output) = Relied(runs, plans);
+
+        Assert.True(posted.Contains(expected, StringComparison.Ordinal), posted);
+        if (runCount > 21) Assert.Contains("deeper than 20", posted, StringComparison.Ordinal);
+    }
+
+    // A record that is not in the shape is an error, like unreadable jobs: never a guess that the run relied on nothing.
+    [Fact]
+    public void A_plan_record_that_is_not_in_the_shape_is_an_error()
+    {
+        var runs = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "failure", 1, 60));
+
+        var (posted, _) = Relied(runs, (8, "base=not-a-sha relied-parent=none"), (7, RelyNone));
+
+        Assert.Contains(" error merge-rule ", posted, StringComparison.Ordinal);
+        Assert.DoesNotContain(" success merge-rule ", posted, StringComparison.Ordinal);
+    }
+
+    // The parent has a run on its sha, but main's recent history (the window the judge reads) does not hold it: it cannot be judged, so it is red.
+    [Fact]
+    public void A_parent_that_is_not_in_mains_recent_runs_is_red()
+    {
+        var both = MainRunsAged(MainNow, (8, "completed", "success", 1, 20), (7, "completed", "success", 1, 60));
+        var childOnly = MainRunsAged(MainNow, (8, "completed", "success", 1, 20));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: both, mainRunPages: [childOnly],
+            planRecords: new Dictionary<long, string> { [8] = Relies(7), [7] = RelyNone });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain, utcNow: () => MainNow);
+
+            var posted = Assert.Single(github.Posted);
+            Assert.Contains(" failure merge-rule ", posted, StringComparison.Ordinal);
+            Assert.Contains("not in main's recent runs", posted, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     [Fact]
     public void A_green_main_lets_a_ready_pull_request_pass()
     {
