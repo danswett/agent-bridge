@@ -1,5 +1,5 @@
 {
-  "about": "Numerical machine and session load on the relay channel.",
+  "about": "Numerical machine and session load on authenticated channels; subscriptions are relay-only.",
   "spec": "v1-machine-load.md#1-machineload-1150",
   "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
   "contexts": {},
@@ -183,6 +183,73 @@
         }
       ]
     },
+    "MachineLoadFigures": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "fresh",
+          "json": {
+            "state": "fresh",
+            "ageMs": 100,
+            "runQueueAvg": 2.5,
+            "staleAfterMs": 15000
+          }
+        },
+        {
+          "name": "stale-no-figure",
+          "json": {
+            "state": "stale",
+            "ageMs": 16000,
+            "staleAfterMs": 15000
+          }
+        },
+        {
+          "name": "unavailable",
+          "json": {
+            "state": "unavailable"
+          }
+        },
+        {
+          "name": "unknown-state",
+          "json": {
+            "state": "future"
+          },
+          "reads": {
+            "state": "unavailable"
+          }
+        },
+        {
+          "name": "mixed-case-names",
+          "json": {
+            "STATE": "stale",
+            "AGEMs": 16000,
+            "runQUEUEavg": 2.5,
+            "sTaleAfterMS": 15000
+          },
+          "reads": {
+            "state": "stale",
+            "ageMs": 16000,
+            "runQueueAvg": 2.5,
+            "staleAfterMs": 15000
+          }
+        },
+        {
+          "name": "wrong-type-ageMs",
+          "json": {
+            "state": "fresh",
+            "ageMs": "many",
+            "runQueueAvg": 2.5,
+            "staleAfterMs": 15000
+          },
+          "reads": {
+            "state": "fresh",
+            "runQueueAvg": 2.5,
+            "staleAfterMs": 15000
+          }
+        }
+      ],
+      "refused": []
+    },
     "MachineLoad": {
       "direction": "host",
       "valid": [
@@ -191,6 +258,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -225,6 +293,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "partial",
             "staleAfterMs": 15000,
             "cpu": {
@@ -288,6 +357,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "memory": {
@@ -324,6 +394,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -1551,6 +1622,7 @@
           "reads": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": 100,
+            "runQueueAvg": 2.5,
             "state": "partial",
             "staleAfterMs": 15000,
             "cpu": {
@@ -2876,6 +2948,7 @@
           "json": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
             "ageMs": "many",
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
@@ -2906,6 +2979,7 @@
           },
           "reads": {
             "sampledAt": "2026-10-28T04:22:43.182Z",
+            "runQueueAvg": 2.5,
             "state": "fresh",
             "staleAfterMs": 15000,
             "cpu": {
