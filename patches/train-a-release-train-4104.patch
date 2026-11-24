@@ -1,0 +1,472 @@
+From bd5db1e0df693da11b65bc7b38ed02e6576b3595 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 19:05:18 -0800
+Subject: [PATCH] Release train, re-cut for the FULL lane (S2 piece C2a, Part
+ of #4104)
+
+release-train.yml: pick (the selector; the commit, version, FAST and FULL run ids and the waived notice from Get-PickOutputs), verify per
+architecture on FULL's exact bytes (package and hash required on both; the install and self-test required on x64, only recorded on Arm64,
+the owner's waiver), alert, publish (only while TRAIN_LIVE is exactly true, never on a dry run, only after verification passed; the only
+writer) and a report that says what a live run would do. Every download reads the FULL run. No WebKit stream, no signing, no attestation
+yet. The release-train catalog suite, the merge rule's exclusion list, the docs and ReleaseTrainWorkflowTests.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/release-train.yml           | 238 ++++++++++++++++++
+ docs/app-windows.md                           |   5 +
+ quality/catalog.yml                           |  14 ++
+ .../MergeRuleTests.cs                         |   3 +-
+ .../ReleaseTrainWorkflowTests.cs              | 139 ++++++++++
+ 5 files changed, 398 insertions(+), 1 deletion(-)
+ create mode 100644 .github/workflows/release-train.yml
+ create mode 100644 tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+
+diff --git a/.github/workflows/release-train.yml b/.github/workflows/release-train.yml
+new file mode 100644
+index 000000000..b853eeff0
+--- /dev/null
++++ b/.github/workflows/release-train.yml
+@@ -0,0 +1,238 @@
++name: Release train
++
++# Publishes the newest main commit whose FAST lane (ci.yml) and FULL lane (full.yml) both passed, hourly or by hand, apart from merging
++# (docs/app-windows.md, "The release train"; S2, #4104). It never rebuilds: it installs and self-tests FULL's exact packages, then publishes them. It never
++# publishes an unverified commit or one older than the latest release (build/select-release-commit.ps1 picks; build/publish-prerelease.ps1 refuses a duplicate or
++# older version, in ci.yml's publish group). Only while the repository variable TRAIN_LIVE is exactly true, and never on a dry run: otherwise it picks and
++# verifies only, so the train can soak on FULL's real packages before it is switched on.
++on:
++  schedule:
++    - cron: '17 * * * *'
++  workflow_dispatch:
++    inputs:
++      dry_run:
++        description: 'Dry run: pick, verify and report only. Nothing is published, whatever TRAIN_LIVE says'
++        type: boolean
++        default: false
++
++concurrency:
++  group: release-train
++  cancel-in-progress: false
++
++permissions:
++  contents: read
++
++env:
++  # Unset today, so the train publishes unsigned like ci.yml; once true it refuses (no sign step yet).
++  APP_SIGNING: ${{ vars.APP_SIGNING }}
++
++jobs:
++  pick:
++    name: Pick the newest verified commit
++    if: github.repository == 'danswett/agent-bridge' && github.ref == 'refs/heads/main'
++    runs-on: windows-latest
++    timeout-minutes: 15
++    permissions:
++      contents: read
++      actions: read # list main's CI and Full runs, jobs and artifacts
++    outputs:
++      sha: ${{ steps.pick.outputs.sha }}
++      version: ${{ steps.pick.outputs.version }}
++      # The FAST run's id and number (the version's last part), and the FULL run's id: FULL built the packages, so every download reads it.
++      run: ${{ steps.pick.outputs.run }}
++      number: ${{ steps.pick.outputs.number }}
++      full-run: ${{ steps.pick.outputs.full-run }}
++      # The Arm64 results the owner waived, for the publish summary; empty when nothing was waived.
++      waived: ${{ steps.pick.outputs.waived }}
++      live: ${{ vars.TRAIN_LIVE == 'true' && !inputs.dry_run }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++      - name: Pick the commit
++        id: pick
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++        run: |
++          . ./build/select-release-commit.ps1
++          Assert-TrainMayPublish $env:APP_SIGNING
++          $repo = $env:REPOSITORY
++          $latest = Invoke-ReleaseGh api "repos/$repo/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | .tag_name' |
++            Where-Object { $_ -cmatch '^v\d+\.\d+\.\d+$' } | Sort-Object { [semver]$_.Substring(1) } -Descending | Select-Object -First 1
++          $release = if ($latest) { [pscustomobject]@{ Tag = $latest; Commit = (Invoke-ReleaseGh api "repos/$repo/git/ref/tags/$latest" --jq '.object.sha') } }
++          $pick = Select-ReleaseCommit -Runs (Get-ReleaseRuns $repo) -Latest $release -IsDescendant { param($sha, $base) (Invoke-ReleaseGh api "repos/$repo/compare/$base...$sha" --jq '.status') -in 'ahead' }
++          if (-not $pick) { Write-Host 'nothing new to publish'; exit 0 }
++          Get-PickOutputs $pick | Add-Content $env:GITHUB_OUTPUT
++
++  verify:
++    name: Install and self-test the exact FULL bytes (${{ matrix.runtime }})
++    # The train publishes what FULL built, never a rebuild; before it does, each architecture's package is installed per user and the installed app
++    # self-tested, as FULL's app-installer job does. A failure that gates turns the run red and skips publish (it needs this job).
++    needs: [pick]
++    if: needs.pick.outputs.sha != ''
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - runtime: win-x64
++            runner: windows-latest
++            out: out/app
++            artifact: agent-bridge-windows
++          - runtime: win-arm64
++            runner: windows-11-arm
++            out: out/app-arm64
++            artifact: agent-bridge-windows-arm64
++    runs-on: ${{ matrix.runner }}
++    timeout-minutes: 40
++    permissions:
++      contents: read
++      actions: read # download the FULL run's artifacts
++    env:
++      APP_VERSION: ${{ needs.pick.outputs.version }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          persist-credentials: false
++      - uses: ./.github/actions/arm64-foreground
++        if: matrix.runtime == 'win-arm64'
++      - name: The FULL run's release files, byte for byte
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-${{ needs.pick.outputs.version }}
++          path: ${{ matrix.out }}/releases
++          run-id: ${{ needs.pick.outputs.full-run }}
++          github-token: ${{ github.token }}
++      - name: The FULL run's installer input
++        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: ${{ matrix.artifact }}-installer-input-${{ needs.pick.outputs.version }}
++          path: ${{ runner.temp }}/installer-input
++          run-id: ${{ needs.pick.outputs.full-run }}
++          github-token: ${{ github.token }}
++      # Required on both architectures: the package is never optional, and its hash and provenance are checked against the commit and the FULL run.
++      - name: Refuse missing, foreign or altered installer input before running it
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++          SHA: ${{ needs.pick.outputs.sha }}
++          RUN_ID: ${{ needs.pick.outputs.full-run }}
++        run: |
++          . ./build/app-installer-input.ps1
++          Assert-AppInstallerInput -InputPath "$env:RUNNER_TEMP/installer-input" -Releases "$env:OUT/releases" -Version $env:APP_VERSION -Runtime $env:RUNTIME -Commit $env:SHA -RunId $env:RUN_ID | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
++      # What RUNS the app on Arm64 is waived (owner, #2454): the install and self-test below only record there. x64's are required, as is the check above.
++      - name: The package installs per user into its own channel and the manifest is its channel's
++        id: install
++        continue-on-error: ${{ matrix.runtime == 'win-arm64' }}
++        shell: pwsh
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          OUT: ${{ matrix.out }}
++        run: |
++          . ./build/app-channels.ps1
++          $target = Get-AppChannel $env:RUNTIME
++          $setup = Join-Path "$env:OUT/releases" (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          New-Item -ItemType Directory -Force $logs | Out-Null
++          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
++          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
++          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $manifest = Get-Content "$root/current/sq.version" -Raw
++          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
++      - name: The installed app self-tests
++        id: selftest
++        continue-on-error: ${{ matrix.runtime == 'win-arm64' }}
++        shell: pwsh
++        run: |
++          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
++          $logs = "$env:RUNNER_TEMP/selftest/installed"
++          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 720
++          exit $LASTEXITCODE
++      - name: Record the install and self-test result
++        if: always() && steps.install.outcome != 'skipped'
++        shell: bash
++        env:
++          RUNTIME: ${{ matrix.runtime }}
++          INSTALL: ${{ steps.install.outcome }}
++          SELFTEST: ${{ steps.selftest.outcome }}
++        run: |
++          how="required"
++          if [ "$RUNTIME" = "win-arm64" ]; then how="recorded, not gating (waived)"; fi
++          echo "### Release train: $RUNTIME install $INSTALL, installed-app self-test $SELFTEST; $how" >> "$GITHUB_STEP_SUMMARY"
++
++  publish:
++    name: Publish the picked commit
++    # contents: write is here only, and only for a verified, live pick (APP_SIGNING true never gets here: pick fails first).
++    needs: [pick, verify]
++    if: >-
++      !cancelled() && needs.pick.outputs.sha != '' && needs.pick.outputs.live == 'true' && needs.verify.result == 'success'
++    runs-on: windows-latest
++    timeout-minutes: 30
++    permissions:
++      contents: write # create the release and its tag (the only job that writes)
++      actions: read # download the FULL run's artifacts
++    concurrency:
++      group: publish-prerelease
++      cancel-in-progress: false
++    outputs:
++      published: ${{ steps.publish.outputs.published }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          ref: ${{ needs.pick.outputs.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
++        with:
++          dotnet-version: '10.0.x'
++      - run: dotnet tool install -g vpk --version 1.2.161
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-${{ needs.pick.outputs.version }}
++          path: out/app/releases
++          run-id: ${{ needs.pick.outputs.full-run }}
++          github-token: ${{ github.token }}
++      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
++        with:
++          name: agent-bridge-windows-arm64-${{ needs.pick.outputs.version }}
++          path: out/app-arm64/releases
++          run-id: ${{ needs.pick.outputs.full-run }}
++          github-token: ${{ github.token }}
++      - name: Publish the pre-release
++        id: publish
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          VERSION: ${{ needs.pick.outputs.version }}
++          SHA: ${{ needs.pick.outputs.sha }}
++        run: |
++          # -MainHead is the chosen commit and this checkout is a clone at it. The train publishes the newest verified commit, so a later app change
++          # is the next verified commit's to publish; a duplicate, an older version or a commit behind the latest release is still refused.
++          ./build/publish-prerelease.ps1 -Version $env:VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository $env:REPOSITORY -Commit $env:SHA -MainHead $env:SHA -MainRepo .
++      - name: Say what was waived
++        if: needs.pick.outputs.waived != ''
++        shell: bash
++        env:
++          WAIVED: ${{ needs.pick.outputs.waived }}
++        run: |
++          echo "### Release train: $WAIVED" >> "$GITHUB_STEP_SUMMARY"
++          echo "::warning title=release train::$WAIVED"
++      - name: Publish the static Beta download manifest
++        # Ported from ci.yml's publish job (owner decision A): the manifest names the release this run published.
++        if: steps.publish.outputs.manifest-tag != ''
++        shell: pwsh
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPOSITORY: ${{ github.repository }}
++          MANIFEST_TAG: ${{ steps.publish.outputs.manifest-tag }}
++        run: |
++          $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
++          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
++          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
++          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
+diff --git a/docs/app-windows.md b/docs/app-windows.md
+index a41c7d106..fc6edfc3e 100644
+--- a/docs/app-windows.md
++++ b/docs/app-windows.md
+@@ -1257,6 +1257,11 @@ for a later app change either, so a green run publishes its own commit without w
+   train and `ci.yml`'s `publish` job can run side by side without publishing twice. Neither
+   stands aside for a later app change any more (#4104): the train is to publish the newest verified
+   commit, and a later change is the next verified commit's to publish.
++* **The workflow and its switch** (`release-train.yml`, written in S2 piece C and not yet applied: a patch for Quality). `pick` runs the selector and hands on the commit,
++  the version, the FAST run's id and **the FULL run's id**, which every download reads (the FAST run builds no package). `verify` installs and self-tests FULL's exact
++  bytes on each architecture; **the package and its hash are required on both, the install and self-test are required on x64 and only recorded on Arm64** (the
++  owner's waiver, said in the run's summary and in the publish summary). `publish` runs only while the repository variable `TRAIN_LIVE` is exactly `true`, never on a
++  dry run, and only after verification passed. Otherwise it picks and verifies only (red if verification fails), so the train can soak on FULL's packages.
+ * **Signing (design).** The train is to have no sign step. While `APP_SIGNING` is unset it is to publish unsigned,
+   as `ci.yml` does. When `APP_SIGNING` is anything but unset or `false` (`true` in any case, spaces ignored, or a value it does not know) it is to refuse and fail the run, never publishing
+   unsigned, until it gains the sign step (the selector's `Assert-TrainMayPublish` already does this).
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 98fe4ffe6..7cb74e314 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -1003,6 +1003,20 @@ suites:
+     where: halts-upload.yml upload
+     status: exists
+ 
++  - id: release-train
++    validation_plan: native
++    kind: packaging
++    ring: 4
++    select: affected
++    # The release train (S2, #4104; #2225): hourly and by hand it picks the newest main commit whose FAST and FULL lanes both passed, installs and self-tests FULL's exact
++    # packages on both architectures (the Arm64 install and self-test only recorded: the owner's waiver) and, only while TRAIN_LIVE is true, publishes them, never a
++    # rebuild. Its selector and the pick's outputs are tested offline by build/test-select-release-commit.ps1; the workflow's shape by ReleaseTrainWorkflowTests.
++    platforms: [win-x64, win-arm64]
++    runner: hosted
++    triggers: [.github/workflows/release-train.yml, build/select-release-commit.ps1, build/test-select-release-commit.ps1]
++    command: see release-train.yml (hourly schedule and manual dispatch from main; no build)
++    where: release-train.yml pick, verify, publish
++    status: exists
+   - id: pwa-iphone
+     validation_plan: native
+     kind: e2e
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 6777ce769..ca75f02f0 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1083,9 +1083,10 @@ public class MergeRuleTests
+     //   verdict and a finished one needn't re-judge anything, #2454),
+     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
++    //   Release train (schedule and dispatch, main only: publishes a verified commit and judges no pull request; its checks never land on a pull request's head).
+     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+     [
+-        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
++        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)", "Release train",
+         "Merge rule sweep", "Ops probe", "Pages", "Release feed deploy", "Revert culprit", "Update gap",
+     ];
+ 
+diff --git a/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+new file mode 100644
+index 000000000..465d74602
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/ReleaseTrainWorkflowTests.cs
+@@ -0,0 +1,139 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// release-train.yml (docs/app-windows.md, "The release train"; S2, #4104): publishes what the FULL lane verified, never a rebuild. It picks the newest main
++/// commit whose FAST and FULL lanes passed, installs and self-tests FULL's exact packages on both architectures, and publishes only while
++/// the repository variable TRAIN_LIVE is exactly true. Every download reads the FULL run (the FAST run builds no package), only publish writes, and the
++/// Arm64 install and self-test are recorded, not gating (the owner's waiver), while the Arm64 package and its hash stay required.
++/// </summary>
++public class ReleaseTrainWorkflowTests
++{
++    const string Text = ".github/workflows/release-train.yml";
++
++    static string Raw => File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), Text));
++
++    static YamlMappingNode Workflow()
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(Raw));
++        return (YamlMappingNode)stream.Documents[0].RootNode;
++    }
++
++    static YamlMappingNode Jobs() => (YamlMappingNode)Workflow()["jobs"];
++
++    static YamlMappingNode Job(string id) => (YamlMappingNode)Jobs()[id];
++
++    static IEnumerable<YamlMappingNode> Steps(string id) => ((YamlSequenceNode)Job(id)["steps"]).Children.OfType<YamlMappingNode>();
++
++    static string Scalar(YamlNode node, string key) => ((YamlScalarNode)((YamlMappingNode)node)[key]).Value!;
++
++    static string Expression(string value) => value.Trim().StartsWith("${{", StringComparison.Ordinal) ? value.Trim()[3..^2].Trim() : value.Trim();
++
++    [Fact]
++    public void It_runs_hourly_and_by_hand_from_one_queue_and_never_for_a_pull_request_or_a_push()
++    {
++        var on = (YamlMappingNode)Workflow()["on"];
++        var concurrency = (YamlMappingNode)Workflow()["concurrency"];
++
++        Assert.Equal(["schedule", "workflow_dispatch"], on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(("release-train", "false"), (concurrency["group"].ToString(), concurrency["cancel-in-progress"].ToString()));
++        Assert.Equal("read", ((YamlMappingNode)Workflow()["permissions"])["contents"].ToString());
++        Assert.Equal(["pick", "publish", "verify"], Jobs().Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++    }
++
++    [Fact]
++    public void Pick_uses_the_selector_refuses_signing_and_hands_on_the_FULL_run_id_the_waived_notice_and_whether_it_is_live()
++    {
++        var outputs = (YamlMappingNode)Job("pick")["outputs"];
++        var script = string.Join("\n", Steps("pick").Where(s => s.Children.ContainsKey("run")).Select(s => Scalar(s, "run")));
++
++        Assert.Equal(["full-run", "live", "number", "run", "sha", "version", "waived"], outputs.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        foreach (var call in new[] { "select-release-commit.ps1", "Assert-TrainMayPublish", "Get-ReleaseRuns", "Select-ReleaseCommit", "Get-PickOutputs" })
++            Assert.Contains(call, script, StringComparison.Ordinal);
++        var live = MergeRuleTests.IfExpression.Value(Expression(Scalar(outputs, "live")), new Dictionary<string, string?> { ["vars.TRAIN_LIVE"] = "true", ["inputs.dry_run"] = "" });
++        var dry = MergeRuleTests.IfExpression.Value(Expression(Scalar(outputs, "live")), new Dictionary<string, string?> { ["vars.TRAIN_LIVE"] = "true", ["inputs.dry_run"] = "true" });
++        var off = MergeRuleTests.IfExpression.Value(Expression(Scalar(outputs, "live")), new Dictionary<string, string?> { ["vars.TRAIN_LIVE"] = null, ["inputs.dry_run"] = "" });
++        Assert.Equal([true, false, false], [live is true, dry is true, off is true]);
++    }
++
++    [Fact]
++    public void Every_download_reads_the_FULL_run_because_the_FAST_run_builds_no_package()
++    {
++        var downloads = Jobs().Children.Keys.SelectMany(id => Steps(id.ToString()))
++            .Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/download-artifact@", StringComparison.Ordinal)).ToList();
++
++        Assert.NotEmpty(downloads);
++        Assert.All(downloads, s => Assert.Equal("${{ needs.pick.outputs.full-run }}", Scalar(s["with"], "run-id")));
++    }
++
++    [Theory]
++    [InlineData("abc", "true", "success", true)]
++    [InlineData("abc", "true", "failure", false)]
++    [InlineData("abc", "true", "skipped", false)]
++    [InlineData("abc", "false", "success", false)]
++    [InlineData("", "true", "success", false)]
++    public void Publish_runs_only_for_a_live_pick_whose_verification_passed(string sha, string live, string verify, bool publishes)
++    {
++        var condition = Expression(Scalar(Job("publish"), "if"));
++
++        var got = MergeRuleTests.IfExpression.Evaluate(condition, new Dictionary<string, string?>
++        {
++            ["needs.pick.outputs.sha"] = sha, ["needs.pick.outputs.live"] = live, ["needs.verify.result"] = verify,
++        });
++
++        Assert.Equal(publishes, got);
++    }
++
++    [Fact]
++    public void Only_publish_writes_and_nothing_signs_or_attests_here_yet()
++    {
++        foreach (var (id, job) in Jobs().Children)
++        {
++            var permissions = ((YamlMappingNode)job).Children.TryGetValue("permissions", out var p) ? ((YamlMappingNode?)p)?.Children.Select(c => $"{c.Key}: {c.Value}").ToArray() ?? [] : [];
++            Assert.Equal(id.ToString() == "publish", permissions.Contains("contents: write"));
++            Assert.DoesNotContain(permissions, x => x.StartsWith("id-token", StringComparison.Ordinal));
++        }
++        Assert.DoesNotContain("environment:", Raw, StringComparison.Ordinal);
++    }
++
++    [Theory]
++    [InlineData("win-x64", false)]
++    [InlineData("win-arm64", true)]
++    public void The_installed_app_check_gates_for_x64_and_is_only_recorded_for_Arm64(string runtime, bool recorded)
++    {
++        var gated = Steps("verify").Where(s => s.Children.ContainsKey("name")
++            && (Scalar(s, "name").Contains("installs per user", StringComparison.Ordinal) || Scalar(s, "name").Contains("self-tests", StringComparison.Ordinal))).ToList();
++
++        Assert.Equal(2, gated.Count);
++        foreach (var step in gated)
++        {
++            var value = MergeRuleTests.IfExpression.Value(Expression(Scalar(step, "continue-on-error")), new Dictionary<string, string?> { ["matrix.runtime"] = runtime });
++            Assert.Equal(recorded, value is true);
++        }
++    }
++
++    [Fact]
++    public void The_package_and_its_hash_are_required_on_both_architectures()
++    {
++        var check = Steps("verify").Single(s => s.Children.ContainsKey("name") && Scalar(s, "name").StartsWith("Refuse missing, foreign or altered", StringComparison.Ordinal));
++
++        Assert.False(check.Children.ContainsKey("continue-on-error"));
++        Assert.Contains("Assert-AppInstallerInput", Scalar(check, "run"), StringComparison.Ordinal);
++        Assert.Equal(["win-arm64", "win-x64"], ((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)Job("verify")["strategy"])["matrix"])["include"]).Children.Select(c => Scalar(c, "runtime")).Order(StringComparer.Ordinal));
++    }
++
++    [Fact]
++    public void The_stream_the_selector_made_unnecessary_is_gone_and_the_checkouts_are_the_picked_commit()
++    {
++        foreach (var gone in new[] { "webkit", "PWA_WEBKIT_OFF_PUSH", "TRAIN_ARM64_SELFTEST_GATES", "pwa-webkit" })
++            Assert.DoesNotContain(gone, Raw, StringComparison.OrdinalIgnoreCase);
++        foreach (var id in new[] { "verify", "publish" })
++            foreach (var step in Steps(id).Where(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal)))
++            {
++                Assert.Equal("${{ needs.pick.outputs.sha }}", Scalar(step["with"], "ref"));
++                Assert.Equal("false", Scalar(step["with"], "persist-credentials"));
++            }
++    }
++}
+-- 
+2.56.1.windows.1
+
