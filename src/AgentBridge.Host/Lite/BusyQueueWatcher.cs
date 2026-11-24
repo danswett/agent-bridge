@@ -29,11 +29,11 @@ public sealed class BusyQueueWatcher(BusyQueueStore store, TimeProvider time)
         {
             var now = store.Get(request, principal);
             if (now is null || !now.Held || now.State == BusyQueueStore.Delivered) { return; }
-            if (transcript is not null && Read(transcript, offset, request)) { store.Settle(request, BusyQueueStore.Delivered, null, held: false, principal: principal); return; }
+            if (transcript is not null && Read(transcript, offset, request)) { store.SettleIf(request, r => r.Held && r.State != BusyQueueStore.Delivered, BusyQueueStore.Delivered, null, held: false, principal: principal); return; }
             if (time.GetUtcNow() >= until)
             {
                 // An unconfirmed noRow send keeps its reason; a queued one is now reported watchEnded. Either stays held.
-                if (now.State == BusyQueueStore.Queued) { store.Settle(request, BusyQueueStore.Unconfirmed, "watchEnded", held: true, principal: principal); }
+                if (now.State == BusyQueueStore.Queued) { store.SettleIf(request, r => r.Held && r.State == BusyQueueStore.Queued, BusyQueueStore.Unconfirmed, "watchEnded", held: true, principal: principal); }
                 return;
             }
             try { await Task.Delay(Poll, time, ct); }

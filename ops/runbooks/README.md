@@ -35,8 +35,9 @@ az account show --subscription $sub --query name -o tsv   # signed in? If not: a
 ```
 
 **Read-only** commands (`show`, `list`, `logs`, `metrics`, queries, the probe) are safe for
-anyone, agent sessions included. **Anything that changes production** (a restart, a deploy or
-rollback, a key, DNS) is the owner's call (AGENTS.md "Relay deploys"); a runbook marks those
+anyone, agent sessions included. **Anything that changes production** (a restart, an infra apply, a key, DNS) is the owner's
+call; a `relay.yml` production deploy or rollback is approved by SRE, not the owner (owner,
+Nov 23: "Deploying never needs me"; AGENTS.md "Relay deploys"). A runbook marks the owner's
 steps **Owner**.
 
 Never paste a key, token, connection string or address into an issue or a log. If a command

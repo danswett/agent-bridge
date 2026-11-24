@@ -93,8 +93,8 @@ sealed class FakeHost : IAsyncDisposable
 
     public void On(string op, Func<JsonElement, object?> answer) => ops[op] = d => Task.FromResult(answer(d));
 
-    // Asked to stop, it stops once its answer has gone, as the real host does (HostControl), rather
-    // than a guessed 50 ms after it.
+    // Asked to stop, it stops once its answer has gone, as the real host does (HostControl), rather than a guessed 50 ms after it; and
+    // whether or not the answer could be sent (RunsIfUnsent, #4134): a client that reads it and hangs up at once must not leave it up.
     public void StopsWhenAsked() => StopsWhenAsked(_ => { });
 
     // The same, for a test that also notes what the host had seen when it was asked (the probe holds so far, say): `asked` runs as the
@@ -106,7 +106,7 @@ sealed class FakeHost : IAsyncDisposable
         {
             _ = Task.Run(StopAsync);
             return Task.CompletedTask;
-        });
+        }, RunsIfUnsent: true);
     });
 
     // A request the host takes its time over, held by awaiting. Held by blocking (.Wait, .Result,

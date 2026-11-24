@@ -45,7 +45,13 @@ mapping used to publish session nodes). Require a complete snapshot and exactly 
 match: a snapshot is complete only when `ISessionSource.Held == null`; check this
 before using its contents. Zero returns `noSuchSession`, several return
 `ambiguousSession`, and a non-null `Held` or otherwise incomplete discovery returns
-`sessionResolutionIncomplete`. Never choose an arbitrary match or fall back to
+`sessionResolutionIncomplete`. One exception (owner decision, #3933 option b): while
+`Held` names only some agents, a node id still resolves when exactly one listed session
+has it, that session's agent is not in `Held.Agents`, and `Held` is the same (reason and
+agents) before and after the scan. A held agent's own session never resolves by node id, a
+hold that appears, ends or changes during the scan refuses as `sessionResolutionIncomplete`
+(a hold seen at either read), and the node id's 16-character prefix is the only link: an
+unlisted session of another agent sharing it is the accepted residual risk. Never choose an arbitrary match or fall back to
 prefix matching. Pass the matched full `Session.Id` to gates,
 the claim store and `ReplyService`; HA resolves its raw ID to that same `Session.Id`.
 Thus both routes use one claim key.

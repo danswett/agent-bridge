@@ -567,11 +567,14 @@ async Task<int> ServeAsync(HostHandover handover)
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
     // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
     // the phones): no subscription is taken and nothing is sent.
+    var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
+    await using var phoneNotices = new PhoneNoticeRecorder(agentAudit, Log);
     await using var push = settings.Push
         ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
         : null;
     if (push is not null)
     {
+        push.NoticeOutcome += phoneNotices.Record;
         trustedPeers.Changed += push.RevalidateTrust;
         push.RevalidateTrust();
     }
@@ -636,14 +639,17 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
+    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive, jobs: new WindowsSessionJobs()) : null;
     // Made here, not beside RemoteDiagnostics, because launches record into it too (#737).
     var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
-    var agentAudit = new AgentAuditLog(identity.Folder, log: Log) { DeviceKey = identity.Key };
     // Bound to the readiness scan once that exists: a launch asks the cached scan and never reads an agent's files.
     Func<string, bool> hooksNotSetUp = static _ => false;
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials, diagnosticsJournal, machine.Name, agentAudit, id => hooksNotSetUp(id));
     launcher.SessionStarted += restore.Launched;
+    // Who launched each session, from the authenticated launch principal, for the session watch (#4262); kept 7 days past the last live look.
+    var launchOwners = new LaunchOwnerLog(identity.Folder, identity.Key, Log);
+    launchOwners.Prune(id => source.Get(id) is not null, DateTimeOffset.UtcNow);
+    launcher.SessionOwned += (session, principal) => launchOwners.Record(session, principal, DateTimeOffset.UtcNow);
     launcher.StartScanning();
     // One kill switch feeds receiving, sending and the final typing fences.
     var liteKill = new AgentBridge.Host.Lite.LiteKill(identity.Folder, Log);
@@ -778,6 +784,7 @@ async Task<int> ServeAsync(HostHandover handover)
     RelayClient? pinRelay = null;
     var samePcPin = new SamePcPinHandoff(identity.Folder, () => identity.Account?.AccountId,
         ct => Volatile.Read(ref pinRelay) is { } r ? r.GetRosterAsync(ct) : throw new InvalidOperationException("not connected"), hostRoster, HostRoster.Now, mode: () => settings.Security.Roster);
+    var rosterGate = HostRosterGate.For(hostRoster, () => identity.Account?.AccountId);
     var rosterObserve = new HostRosterObserve(hostRoster, () => settings.Security.Roster, HostRoster.Now, Log);
     var fleetTrust = new AgentBridge.Host.Fleet.FleetTrust(hostRoster, identity.Folder, () => identity.Account?.AccountId);
     var fleetPublication = new AgentBridge.Host.Fleet.FleetPublication(source, machine.Id, share: settings.FleetShare,
@@ -788,6 +795,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LoadEnabled = () => settings.LoadEnabled,
         Load = loadService,
         Drivers = drivers,
+        ClientOf = channel => PersonDevices.Client(personRoster, channel),
         FleetNames = fleetNames,
         // Said in hello so a phone shows the machine read-only and why.
         ReadOnly = OfferedReadOnly,
@@ -1080,6 +1088,8 @@ async Task<int> ServeAsync(HostHandover handover)
             var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
+                // security.roster enforce only: a device the pinned roster does not approve is told to approve this machine. Off and observe: always true.
+                RosterGate = (ch, op) => settings.Security.Roster != SecuritySettings.Enforce || rosterGate.Allows(ch.PeerId, op),
                 // The approver's enrollment steps reach only an attempt the person opened here, from a relay-asserted person (pinned while device pins are on).
                 Handler = (ch, op, data) => op.StartsWith(HostEnrollment.StepPrefix, StringComparison.Ordinal)
                     ? Task.FromResult<object?>(HostEnrollment.Remote(trustedPeers.HasRole(ch, TrustedPeerStore.Person) ? Enrollment() : null,
@@ -1091,6 +1101,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustedPeers.Attach(hub);
             hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
+            hub.Log = Log;
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
@@ -1124,7 +1135,8 @@ async Task<int> ServeAsync(HostHandover handover)
             _ = Task.Run(() => rosterObserve.ConnectedAsync(relay.GetRosterAsync, relay.AccountId, relay.Completion, current.Token));
             since.Restart();
             await liveRoster.ServeAsync(() => relay.GetRosterAsync(current.Token), () => fleetPublication.RunAsync(relay.RegistryPutAsync, relay.Completion, current.Token,
-                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability)));
+                relaySupportsSessionId: relay.Capabilities.Contains(FleetSessionId.RelayCapability),
+                relaySupportsEvidence: relay.Capabilities.Contains(SessionEvidence.RelayCapability)));
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);
             diagnosticsJournal.Record(JournalEvents.RelayClosed(endedWith, since.Elapsed, HostVersion()));
             Log($"connection ended after {since.Elapsed.TotalMinutes:F1} min: {(int?)relay.CloseStatus} {relay.CloseReason}");

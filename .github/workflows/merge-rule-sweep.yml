@@ -1,0 +1,63 @@
+name: Merge rule sweep
+
+# Cancels stuck Merge rule runs (#2454, merge-rule follow-up b; Quality's spec). merge-rule.yml's evaluate job times out
+# at 10 minutes, but only once a runner takes the job: its runs wait in one queue: max group, and a run waiting there
+# never times out (Nov 23: five, hours past that timeout, held every later run). So quality/merge-rule-sweep.ps1
+# cancels runs waiting over 30 minutes or running over 15, and never the newest run per pull request (or head). A run
+# past twice its limit, or one that refuses a plain cancel, is force-cancelled. It never deletes a run and touches no
+# other workflow's runs. It runs main's own script: nothing a pull request can change runs here.
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what would be cancelled, and cancel nothing
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One sweep at a time; a dry-run dispatch never cancels a real sweep in flight, or the reverse.
+concurrency:
+  group: merge-rule-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    if: github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # read Merge rule runs and their jobs, cancel and force-cancel them; nothing else
+      contents: read
+      pull-requests: read # one GraphQL read: is a waiting run's pull request merged, closed or moved on
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: quality
+      # Run ids GitHub answered 'never queued' (the Nov 11 ghosts), so no sweep calls them again. Written only by
+      # this workflow on main; the script reads nothing from it but run ids.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sweep/ghosts.txt
+          # No exact key: the newest saved list under the prefix is restored.
+          key: merge-rule-sweep-ghosts-
+          restore-keys: merge-rule-sweep-ghosts-
+      - name: Cancel Merge rule runs waiting over 30 minutes, judging over 15, or dead weight
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          New-Item -ItemType Directory -Force .sweep | Out-Null
+          & ./quality/merge-rule-sweep.ps1 -Repository $env:REPOSITORY -WaitingMaxMinutes 30 -RunningMaxMinutes 15 -GhostFile .sweep/ghosts.txt -DryRun:($env:DRY_RUN -eq 'true')
+      - if: always() && hashFiles('.sweep/ghosts.txt') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .sweep/ghosts.txt
+          # Keyed by the list's contents: a new cache entry only when the list changes, not one per sweep.
+          key: merge-rule-sweep-ghosts-${{ hashFiles('.sweep/ghosts.txt') }}

@@ -15,9 +15,12 @@ public sealed record FleetStopReceipt(Guid Request, Guid Grant, long Generation,
 
 public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<string?> account, string device,
     AgentCredentials credentials, SessionService sessions, ISessionSource source, StopService stops,
-    Func<int, GrantProcessObservation>? inspect = null)
+    Func<int, GrantProcessObservation>? inspect = null, Func<string, bool>? unpushed = null)
 {
     public const string Op = "fleet.end";
+    // What the stop audit records of the request instead of its content: a digest of its fields, no secret.
+    static string Digest(FleetStopInput i) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+        System.Text.Encoding.UTF8.GetBytes($"fleet.end/1|{i.Request}|{i.Grant}|{i.Session}|{i.Target}")));
     readonly GrantStore store = new(folder, key, new(folder), new([], [], [], [], [], [], [], []));
     readonly AgentAuditLog audit = new(folder);
     readonly SemaphoreSlim serial = new(1);
@@ -38,9 +41,11 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
         AgentAuditEntry Entry(string phase, string outcome, string reason) =>
             new("local", input!.Request.ToString(), principal, caller.Chain, Ops.SessionStop,
                 target?.Session ?? input.Request.ToString(), outcome, Gate: new(1, Guid.NewGuid(), Guid.Empty, 0,
-                    phase, "local", "agent", target is null ? input.Grant
+                    phase, "local", "agent", target is null ? input.Grant == Guid.Empty ? Guid.Parse(input.Session) : input.Grant
                         : StopAudit.Identity(Guid.Parse(target.Session), target.ProcessInstance.Pid, target.ProcessInstance.StartedAt),
-                    reason is "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused")) { Grant = input.Grant.ToString() };
+                    reason is "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused",
+                    Generation: grant?.Generation, PayloadDigest: grant is null ? null : Digest(input), Caps: grant?.Caps))
+            { Grant = input.Grant.ToString() };
         FleetStopReceipt Refused(string reason)
         {
             var entry = input is not null ? Entry("terminal", "refused", reason)
@@ -53,13 +58,97 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 || data.EnumerateObject().GroupBy(p => p.Name).Any(g => g.Count() != 1))
             { return Refused("bad-argument"); }
             input = data.Deserialize<FleetStopInput>(Json);
-            if (input is null || input.Version != 1 || input.Request == Guid.Empty || input.Grant == Guid.Empty
+            if (input is null || input.Version != 1 || input.Request == Guid.Empty
+                || input.Grant == Guid.Empty && !FleetSessionId.IsCanonical(input.Session)
                 || !(FleetSessionId.IsCanonical(input.Session) || input.Session is { Length: 16 }
                     && input.Session.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')))
             { input = null; return Refused("bad-argument"); }
+            // No grant: the session is ended on the host's own launch record alone (#2741), by its exact id.
+            var byRecord = input.Grant == Guid.Empty;
             var subject = FleetGrantLaunch.Subject(credentials, account() ?? "", device, caller);
+            string? Machine()
+            {
+                var (settings, problem) = HostSettings.Load(folder);
+                if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { return "policy"; }
+                return settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled ? "kill-switch" : null;
+            }
             var (rows, complete) = GateAuditProjection.Load(folder);
             if (!complete) { return Refused("audit-unavailable"); }
+            // The request id is bound by its durable intent row, so a restart (an empty in-memory memory) never
+            // dispatches it again, and a retry after the stop ended returns what was recorded instead of
+            // meeting a session that is gone. A request refused before dispatch has no intent and may be sent
+            // again; one bound to another grant, caller, session or payload refuses.
+            var request = input.Request.ToString();
+            var bound = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request
+                && r.Gate is { Phase: "intent" }).ToArray();
+            if (bound.Length != 0)
+            {
+                var digest = Digest(input);
+                if (bound.Any(r => r.Grant != input.Grant.ToString() || r.Principal != principal
+                    || r.Target is not { Length: >= 16 } at || !(at == input.Session || at.Replace("-", "")[..16] == input.Session)
+                    || r.Gate!.PayloadDigest is { } recorded && recorded != digest))
+                { return Refused("duplicate-id"); }
+                // A replay is still a use of the grant: its validity, the caller's standing and the kill-switch
+                // are rechecked now (only the session-scope part of the full check cannot apply, the session
+                // being gone), and the generation it was bound under must still be the grant's.
+                string? denied = byRecord ? Machine() : null;
+                var standing = byRecord ? new GrantStoreResult(GrantStoreProblem.None) : store.Transaction(state =>
+                {
+                    var found = store.Find(state, input.Grant, state.Grants.SingleOrDefault(g => g.Id == input.Grant)?.Generation ?? 1, checkTime: true);
+                    if (!found.Usable) { denied = FleetGrantLaunch.StoreReason(found.Problem); }
+                    else if (state.Counters is { } seen && seen.ObservedAt > DateTimeOffset.UtcNow) { denied = "grant-expired"; }
+                    else if (!found.Grant!.Subjects.Contains(subject)) { denied = "scope"; }
+                    else if (bound.Any(r => r.Gate!.Generation is { } was && was != found.Grant.Generation)) { denied = "duplicate-id"; }
+                    else { denied = Machine(); }
+                    return (null, new(GrantStoreProblem.None));
+                }, allowNew: false);
+                if (!standing.Usable || denied is not null) { return Refused(denied ?? FleetGrantLaunch.StoreReason(standing.Problem)); }
+                // The outcome is the terminal row of that very operation (the intent's Gate.Operation) under the
+                // same grant, caller and session; more than one distinct terminal cannot be trusted.
+                var session = bound[0].Target!;
+                var operations = bound.Select(r => r.Gate!.Operation).ToHashSet();
+                var terminal = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request
+                        && r.Gate is { Phase: "terminal" } g && operations.Contains(g.Operation)
+                        && r.Grant == input.Grant.ToString() && r.Principal == principal && r.Target == session)
+                    .Select(r => (r.Outcome, r.Gate!.ReasonCode)).Distinct().ToArray();
+                if (terminal is not [("ended", _)])
+                { return new(input.Request, input.Grant, bound[0].Gate!.Generation ?? 0, "unconfirmed", "duplicate-id", session); }
+                return audit.Append(new("local", request, principal, caller.Chain, "fleet.end.replay",
+                    session, "ended", "none") { Grant = input.Grant.ToString() })
+                    ? new(input.Request, input.Grant, bound[0].Gate!.Generation ?? 0, "ended", null, session)
+                    : new(input.Request, input.Grant, bound[0].Gate!.Generation ?? 0, "unconfirmed", "audit-unavailable", session);
+            }
+            // The host's own view of where the session runs: an approved workspace and a launch agent, neither excluded.
+            (string? Denied, string? Agent, WorkspaceConfig? Place) Placed(string session)
+            {
+                var (settings, _) = HostSettings.Load(folder);
+                var observed = source.GetForStop(session);
+                var agent = observed?.Agent.ToString().ToLowerInvariant();
+                var approved = observed?.Cwd is { } cwd && Path.IsPathFullyQualified(cwd)
+                    ? Folders.Exactly(settings.Launch.Workspaces, cwd) ?? Worktrees.Managed(settings.Launch.Workspaces, cwd)?.Workspace : null;
+                if (approved is null || agent is null || !LaunchProtocol.Agents.Contains(agent) || workspace is not null && workspace != approved
+                    || settings.Agents.ExcludedWorkspaces.Contains(approved.Label)) { return ("scope", null, null); }
+                workspace = approved;
+                if (settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(session)
+                    || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(session) ?? ""))
+                { return ("scope", null, null); }
+                return (null, agent, approved);
+            }
+            // One git read per request: prepare and dispatch share it.
+            bool? pending = null;
+            // No grant: the launch record must show an agent started this exact process; no record, or one that cannot be read, refuses.
+            string? ByRecord()
+            {
+                if (sessions.GrantTarget(input.Session) is not { } found || target is not null && target != found || source.Held is not null
+                    || string.Equals(found.Session, caller.Session, StringComparison.OrdinalIgnoreCase) || input.Target is not null && input.Target != device) { return "scope"; }
+                target = found;
+                if (Machine() is { } machine) { return machine; }
+                if (Placed(found.Session).Denied is { } placed) { return placed; }
+                try { if (!sessions.IsFleetWorker(found.Session)) { return "scope"; } }
+                catch (InvalidOperationException) { return "scope"; }
+                // Uncommitted or unpushed work in its folder is never ended over; an unreadable folder counts as pending.
+                return source.GetForStop(found.Session)?.Cwd is { } cwd && !(pending ??= (unpushed ?? UnpushedWork.Pending)(cwd)) ? null : "policy";
+            }
             string? Check(GrantStore.State state)
             {
                 var found = store.Find(state, input.Grant, grant?.Generation
@@ -75,54 +164,28 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 target = candidates[0];
                 if (target != sessions.GrantTarget(target.Session) || source.Held is not null || input.Target is not null && input.Target != device)
                 { return "scope"; }
-                var (settings, problem) = HostSettings.Load(folder);
-                if (problem is not null || settings.SectionProblems.Any() || !credentials.IsLive(caller)) { return "policy"; }
-                if (settings.ReadOnly || sessions.ReadOnly?.Invoke() is not null || !settings.Agents.Enabled || !settings.Launch.Enabled) { return "kill-switch"; }
-                var observed = source.GetForStop(target.Session);
-                var agent = observed?.Agent.ToString().ToLowerInvariant();
-                var approved = observed?.Cwd is { } cwd && Path.IsPathFullyQualified(cwd)
-                    ? Folders.Exactly(settings.Launch.Workspaces, cwd) ?? Worktrees.Managed(settings.Launch.Workspaces, cwd)?.Workspace : null;
-                if (approved is null || agent is null || !LaunchProtocol.Agents.Contains(agent) || workspace is not null && workspace != approved
-                    || settings.Agents.ExcludedWorkspaces.Contains(approved.Label)) { return "scope"; }
-                workspace = approved;
-                if (settings.Agents.ExcludedSessions.Contains(caller.Session) || settings.Agents.ExcludedSessions.Contains(target.Session)
-                    || settings.Agents.ExcludedSessions.Contains(sessions.FleetNames?.Get(target.Session) ?? ""))
-                { return "scope"; }
+                if (Machine() is { } machine) { return machine; }
+                var (denied, agent, approved) = Placed(target.Session);
+                if (denied is not null) { return denied; }
                 // Stop checks machine/workspace/agent; launch-only selections are inert.
-                var scope = new GrantScope([device], [approved.Label], [agent],
+                var scope = new GrantScope([device], [approved!.Label], [agent!],
                     ["default"], ["default"], ["medium"], ["default"], ["ask"]);
                 var policy = new HostPolicySnapshot(account() ?? "", new(device, Path.GetFileName(folder)), subject,
                     scope, grant.Caps, false, true, Launches: [.. own], StopTargets: [target]);
-                if (!GrantEvaluator.Evaluate(grant, policy, new(subject, "stop", device, approved.Label,
-                    agent, Target: target), DateTimeOffset.UtcNow).Allowed) { return "scope"; }
+                if (!GrantEvaluator.Evaluate(grant, policy, new(subject, "stop", device, approved!.Label,
+                    agent!, Target: target), DateTimeOffset.UtcNow).Allowed) { return "scope"; }
                 if (state.Counters?.Reservations.Any(r => r.Request == input.Request) == true) { return "duplicate-id"; }
                 return null;
             }
             string? denial = null;
-            var prepared = store.Transaction(state => { denial = Check(state); return (null, new(GrantStoreProblem.None)); }, allowNew: false);
+            var prepared = byRecord ? new GrantStoreResult(GrantStoreProblem.None) : store.Transaction(state => { denial = Check(state); return (null, new(GrantStoreProblem.None)); }, allowNew: false);
+            if (byRecord) { denial = ByRecord(); }
             if (!prepared.Usable || denial is not null) { return Refused(denial ?? FleetGrantLaunch.StoreReason(prepared.Problem)); }
-            // The request id is bound by its durable intent row, so a restart (an empty in-memory
-            // memory) never dispatches it again. A request refused before dispatch has no intent and
-            // may be sent again; one bound to another grant, caller or session refuses.
-            var request = input.Request.ToString();
-            var bound = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request
-                && r.Gate is { Phase: "intent" }).ToArray();
-            if (bound.Length != 0)
-            {
-                if (bound.Any(r => r.Grant != input.Grant.ToString() || r.Principal != principal || r.Target != target!.Session))
-                { return Refused("duplicate-id"); }
-                var terminal = rows.Where(r => r.Action == Ops.SessionStop && r.Request == request && r.Gate is { Phase: "terminal" })
-                    .Select(r => r.Outcome).Distinct().ToArray();
-                if (terminal is not ["ended"]) { return Receipt("unconfirmed", "duplicate-id"); }
-                return audit.Append(new("local", request, principal, caller.Chain, "fleet.end.replay",
-                    target!.Session, "ended", "none") { Grant = input.Grant.ToString() })
-                    ? Receipt("ended", null) : Receipt("unconfirmed", "audit-unavailable");
-            }
             bool Dispatch(int pid, DateTimeOffset at)
             {
-                var authorized = store.Transaction(state =>
+                (GrantStore.State? Next, GrantStoreResult Result) Bind(GrantStore.State? state)
                 {
-                    denial = Check(state);
+                    denial = byRecord ? ByRecord() : Check(state!);
                     if (denial is not null || target!.ProcessInstance != new ProcessInstance(pid, at)) { denial ??= "scope"; return (null, new(GrantStoreProblem.None)); }
                     if (intent is null)
                     {
@@ -130,7 +193,8 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                         if (!audit.Append(intent)) { intent = null; denial = "audit-unavailable"; }
                     }
                     return (null, new(GrantStoreProblem.None));
-                }, allowNew: false);
+                }
+                var authorized = byRecord ? Bind(null).Item2 : store.Transaction(Bind, allowNew: false);
                 if (!authorized.Usable) { denial = FleetGrantLaunch.StoreReason(authorized.Problem); }
                 return authorized.Usable && denial is null;
             }
@@ -151,6 +215,12 @@ public sealed class FleetStopCommands(string folder, P256KeyPair key, Func<strin
                 { Phase = "terminal", ReasonCode = reason == "none" ? "none" : outcome == "unconfirmed" ? "unconfirmed" : "refused" } }))
             { return Receipt("unconfirmed", "audit-unavailable"); }
             if (outcome == "refused") { return Receipt(outcome, reason); }
+            if (byRecord)
+            {
+                // Frees the launch's live slot, as the grant path's reconcile does, or repeated stops would exhaust the cap.
+                if (outcome == "ended") { credentials.LaunchGate.SessionEnded(target!.Session); }
+                return Receipt(outcome, reason == "none" ? null : reason);
+            }
             var counters = new GrantCounters(store);
             if (outcome == "ended" && !counters.Reconcile(input.Grant, _ => new(null),
                 inspect ?? FleetGrantLaunch.Observe, session => credentials.LaunchGate.SessionEnded(session)).Accepted)

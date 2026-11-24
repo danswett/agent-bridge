@@ -1059,27 +1059,104 @@ public class MergeRuleTests
         Assert.Equal(("failure", "Check native-clients ended failure on abcdef0 (+1 more)"), (verdict.State, verdict.Description));
     }
 
+    // Workflows left out of merge-rule.yml's workflow_run list because none of their runs can put a check or status on a
+    // pull request's head, and the judge reads only a head's checks and statuses (quality/merge-rule.yml: "Every check run
+    // and status on the head must pass"). EVENT TABLE, why no verdict can change when one of them starts or finishes:
+    //   Main red                    workflow_run, completed CI on main only. A workflow_run run belongs to the default
+    //                               branch's tip, never a pull request's head, and it cannot be dispatched.
+    //   Re-run known flakes         the same trigger, the same reason.
+    //   Upload release halt policy  push to main and dispatch; its one job runs only on refs/heads/main, so a dispatch
+    //                               on a pull request's branch ends skipped, which the judge counts as passing.
+    // None of them posts a commit status or a check by API (no statuses: write or checks: write). A workflow that is not
+    // here and not listed in merge-rule.yml fails A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again.
+    static readonly string[] CannotReachAPullRequestHead = ["Main red", "Re-run known flakes", "Upload release halt policy"];
+
+    // The second set: workflows with no pull_request, pull_request_target or push trigger, only schedule, workflow_call, a
+    // workflow_run of CI on main, or workflow_dispatch. Their scheduled and workflow_run runs sit on the default branch's tip,
+    // never a pull request's head. The one way onto a head is a person dispatching one by hand on a pull request's branch;
+    // for that one case a start or finish no longer re-judges at once, and the verdict catches up at the head's next event
+    // or the backstop (the named residual; each of these is an operations job, not a pull request check):
+    //   Pages (schedule every 5 min, CI-on-main workflow_run, dispatch), Revert culprit (schedule every 5 min, dispatch),
+    //   Ops probe, Flake hunt (daily schedule, dispatch), Update gap, Beta acceptance, ARM64 self-test loop (dispatch only),
+    //   Lab nightly and Lab release verification (dispatch / workflow_call; held),
+    //   Merge rule sweep (schedule every 15 min, dispatch; it only cancels stuck Merge rule runs, so its runs change no
+    //   verdict and a finished one needn't re-judge anything, #2454),
+    //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+    //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
+    //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
+    //   request; docs/app-windows.md, "Spacing").
+    static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+    [
+        "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
+    ];
+
+    static YamlMappingNode LoadWorkflow(string file)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(file)));
+        return (YamlMappingNode)stream.Documents[0].RootNode;
+    }
+
     // A workflow left out of merge-rule.yml's workflow_run list could still fail after the last
     // evaluation, and its red would never reach merge-rule until the schedule came round.
     [Fact]
     public void A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again()
     {
         var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
-        static YamlMappingNode Load(string file)
-        {
-            var stream = new YamlStream();
-            stream.Load(new StringReader(File.ReadAllText(file)));
-            return (YamlMappingNode)stream.Documents[0].RootNode;
-        }
         var names = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
-            .Select(f => Load(f).Children[new YamlScalarNode("name")].ToString())
-            .Where(n => n != "Merge rule")
+            .Select(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString())
+            .Where(n => n != "Merge rule" && !CannotReachAPullRequestHead.Contains(n) && !OnlyOnTheDefaultBranchOrByHand.Contains(n))
             .Order(StringComparer.Ordinal);
-        var on = (YamlMappingNode)Load(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
+        var on = (YamlMappingNode)LoadWorkflow(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
         var listed = ((YamlSequenceNode)((YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")])
             .Children[new YamlScalarNode("workflows")]).Children.Select(n => n.ToString()).Order(StringComparer.Ordinal);
 
         Assert.Equal(names, listed);
+    }
+
+    // The exclusions above hold only while each of those workflows still cannot reach a pull request's head.
+    [Fact]
+    public void The_workflows_left_out_of_the_list_still_cannot_put_a_check_on_a_pull_request_head()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var byName = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+            .ToDictionary(f => LoadWorkflow(f).Children[new YamlScalarNode("name")].ToString(), f => f);
+        foreach (var name in CannotReachAPullRequestHead)
+        {
+            Assert.True(byName.TryGetValue(name, out var file), $"{name} no longer exists: remove it from the exclusions");
+            var workflow = LoadWorkflow(file!);
+            var on = (YamlMappingNode)workflow.Children[new YamlScalarNode("on")];
+            var triggers = on.Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal).ToArray();
+            if (name == "Upload release halt policy")
+            {
+                Assert.All(triggers, t => Assert.Contains(t, new[] { "push", "workflow_dispatch" }));
+                var push = (YamlMappingNode)on.Children[new YamlScalarNode("push")];
+                Assert.Equal(["main"], ((YamlSequenceNode)push.Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString()));
+                var jobs = (YamlMappingNode)workflow.Children[new YamlScalarNode("jobs")];
+                Assert.All(jobs.Children.Values.Cast<YamlMappingNode>(),
+                    job => Assert.Contains("refs/heads/main", job.Children[new YamlScalarNode("if")].ToString(), StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.Equal(["workflow_run"], triggers);
+            }
+            Assert.DoesNotMatch(@"(statuses|checks):\s*write", File.ReadAllText(file!));
+        }
+        foreach (var name in OnlyOnTheDefaultBranchOrByHand)
+        {
+            Assert.True(byName.TryGetValue(name, out var file), $"{name} no longer exists: remove it from the exclusions");
+            var on = (YamlMappingNode)LoadWorkflow(file!).Children[new YamlScalarNode("on")];
+            var triggers = on.Children.Keys.Select(k => k.ToString()).ToArray();
+            // No trigger that runs on a pull request's head; workflow_run only for CI finishing on main.
+            Assert.All(triggers, t => Assert.Contains(t, new[] { "schedule", "workflow_dispatch", "workflow_call", "workflow_run" }));
+            if (on.Children.TryGetValue(new YamlScalarNode("workflow_run"), out var run))
+            {
+                var branches = ((YamlSequenceNode)((YamlMappingNode)run).Children[new YamlScalarNode("branches")]).Children.Select(n => n.ToString());
+                Assert.Equal(["main"], branches);
+            }
+            Assert.DoesNotMatch(@"(statuses|checks):\s*write", File.ReadAllText(file!));
+        }
     }
 
     [Fact]
@@ -1250,6 +1327,210 @@ public class MergeRuleTests
 
             Assert.Single(github.Posted);
             Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+    // A scoped run (a status, a check suite, a workflow run, a pull request's own event) reads the
+    // open list only to find the pull requests on its head, so it asks for the light list: a number
+    // and a head per pull request, a hundred to a page, and reads in full only those on the head.
+    // The sweep and a red main judge every open pull request, so they read each in full.
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_while_main_is_green_asks_for_the_light_open_list_and_reads_only_its_own_head(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+            var lists = github.Queries.Where(q => q.Contains("pullRequests(", StringComparison.Ordinal)).ToList();
+            Assert.NotEmpty(lists);
+            Assert.All(lists, q =>
+            {
+                Assert.Contains("headRefOid", q, StringComparison.Ordinal);
+                Assert.Contains("first: 100", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("reviews(", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("labels(", q, StringComparison.Ordinal);
+                Assert.DoesNotContain("status {", q, StringComparison.Ordinal);
+            });
+            Assert.DoesNotContain(7, github.NumbersRead);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_reads_each_other_open_pull_request_on_its_head_and_posts_the_worst_verdict(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var held = GraphQLPullRequest(Head, labels: ["hold"], number: 7);
+        var elsewhere = GraphQLPullRequest(Older, number: 9);
+        var github = new FakeGitHub(a, listed: [held, a, elsewhere], byNumber: new Dictionary<int, string> { [42] = a, [7] = held, [9] = elsewhere });
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Equal([$"{Head} failure merge-rule #7: Held by the label 'hold' "], github.Posted);
+            Assert.Contains(7, github.NumbersRead);
+            Assert.DoesNotContain(9, github.NumbersRead);
+            Assert.Contains("2 pull requests share", shown.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_scoped_run_for_a_head_no_open_pull_request_has_says_so_and_reads_none_in_full()
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var github = new FakeGitHub(a, listed: [a]);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--sha", Older, "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Empty(github.Posted);
+            Assert.Contains($"No open pull request into main has head {Older}", shown.ToString(), StringComparison.Ordinal);
+            Assert.Empty(github.NumbersRead);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData("--all")]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void The_sweep_and_any_run_while_main_is_red_still_read_every_open_pull_request_in_full(string scope)
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b },
+            mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            string[] scoped = scope == "--all" ? ["--all"] : [scope, scope == "--sha" ? Head : "42"];
+            MergeRuleCommand.Run([.. scoped, "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Contains(github.Queries, q => q.Contains("pullRequests(", StringComparison.Ordinal) && q.Contains("reviews(", StringComparison.Ordinal));
+            Assert.Equal(2, github.Posted.Count);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+    // Reading main's CI is the first thing a run does, and while newer runs are still going the
+    // newest completed evidence is several runs down. Once the newest run has not answered, the runs
+    // below it are read together, not one after another; a newest run that does answer is read alone
+    // (a quota point per read: nothing is read ahead of an answer).
+    [Fact]
+    public void Main_s_older_runs_are_read_together_once_the_newest_has_not_answered()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "in_progress", null, 1), (7, "in_progress", null, 1), (6, "in_progress", null, 1), (5, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs, overlapOf: 2, overlapOn: path => path.Contains("/jobs?", StringComparison.Ordinal) && !path.Contains("/actions/runs/9/jobs?", StringComparison.Ordinal));
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.DoesNotContain(" failure merge-rule Main is red", github.Posted[0], StringComparison.Ordinal);
+            Assert.True(github.MaxConcurrentRest > 1, $"main's runs were read one at a time: {string.Join(" ", github.RestPaths)}");
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Main's older runs are read ahead of an answer. Once the answer is found (run 8, read at once), the
+    // reads behind it (7 and 6, slow) are still in flight: they finish before the run returns, so nothing
+    // is read, counted or recorded after its verdict, and what a caller enumerates is not written under it.
+    [Fact]
+    public void Main_s_reads_ahead_are_all_finished_by_the_time_the_run_returns()
+    {
+        var runs = MainRuns((9, "in_progress", null, 1), (8, "completed", "success", 1), (7, "completed", "success", 1), (6, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs,
+            restDelayFor: path => path.Contains("/actions/runs/8/jobs?", StringComparison.Ordinal) || !path.Contains("/jobs?", StringComparison.Ordinal) ? 0 : 400);
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            var atReturn = github.RestPaths.Count;
+            Thread.Sleep(900);
+
+            Assert.Equal(atReturn, github.RestPaths.Count);
+            // What the run says it spent is every read it made.
+            Assert.Contains($"REST {atReturn} call(s)", shown.ToString(), StringComparison.Ordinal);
+            // The runs behind the answer were read (ahead), and are in the count.
+            Assert.Contains(github.RestPaths, p => p.Contains("/actions/runs/6/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+    [Fact]
+    public void Main_s_newest_run_is_read_alone_when_it_answers()
+    {
+        var runs = MainRuns((9, "completed", "success", 1), (8, "completed", "success", 1), (7, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: runs);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.RestPaths, p => p.Contains("/actions/runs/", StringComparison.Ordinal) && p.Contains("/jobs?", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // Each head's facts and files are read apart from the others', so a sweep over several heads
+    // reads them together; what is printed and posted keeps the open list's order.
+    [Fact]
+    public void A_sweep_reads_each_heads_facts_together_and_posts_in_the_open_lists_order()
+    {
+        string[] heads = [Head, Older, "1111111111111111111111111111111111111111", "2222222222222222222222222222222222222222"];
+        var prs = heads.Select((h, i) => GraphQLPullRequest(h, number: 40 + i)).ToArray();
+        var github = new FakeGitHub(prs[0], listed: prs, byNumber: prs.Select((p, i) => (n: 40 + i, p)).ToDictionary(x => x.n, x => x.p), overlapOf: 2, overlapOn: path => path.Contains("/compare/", StringComparison.Ordinal));
+        var config = WriteConfig();
+        try
+        {
+            var shown = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+
+            Assert.Equal(4, github.Posted.Count);
+            Assert.Equal(heads, github.Posted.Select(p => p.Split(' ')[0]).ToArray());
+            Assert.True(github.MaxConcurrentRest > 1, "the heads were read one after another");
+            Assert.Equal(heads.Length, github.RestPaths.Count(p => p.Contains("/compare/", StringComparison.Ordinal)));
         }
         finally
         {
@@ -1566,11 +1847,12 @@ public class MergeRuleTests
     }
 
     // CI finishing on main must re-judge every pull request, so their verdicts follow main to red
-    // and back; main's other runs still start nothing.
+    // and back; main's other runs still start nothing, and nor does CI starting on main: main's verdict
+    // is its newest COMPLETED evidence, so a start changes none (#4104, the sweep backlog).
     [Theory]
     [InlineData("workflow_run", "completed", "CI", "main", "push", "danswett/agent-bridge", null, true)]
-    [InlineData("workflow_run", "requested", "CI", "main", "push", "danswett/agent-bridge", null, true)]
-    [InlineData("workflow_run", "in_progress", "CI", "main", "push", "danswett/agent-bridge", null, true)]
+    [InlineData("workflow_run", "requested", "CI", "main", "push", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "in_progress", "CI", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "requested", "Pages", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "completed", "Pages", "main", "push", "danswett/agent-bridge", null, false)]
     [InlineData("workflow_run", "completed", "CI", "main", "workflow_dispatch", "danswett/agent-bridge", null, false)]
@@ -1615,7 +1897,7 @@ public class MergeRuleTests
         string Scalar(YamlMappingNode node, string key) => node.Children[new YamlScalarNode(key)].ToString();
         var group = Scalar(admission, "group");
         Assert.StartsWith("merge-rule-admit-${{", group, StringComparison.Ordinal);
-        Assert.False(IfExpression.Evaluate(Scalar(admission, "cancel-in-progress")[3..^2], github));
+        var cancel = Scalar(admission, "cancel-in-progress")[3..^2];
         Assert.Equal("merge-rule", Scalar(writer, "group"));
         Assert.Equal("false", Scalar(writer, "cancel-in-progress"));
         Assert.Equal("max", Scalar(writer, "queue"));
@@ -1631,6 +1913,16 @@ public class MergeRuleTests
                 : eventName == "workflow_run" && branch == "main" ? "sweep" : null;
             Assert.Equal(!runs ? "run-" + head : sweep ?? head,
                 IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+            // Only the newest run per pull request or head survives: a newer run of the same key cancels an older one,
+            // waiting or judging, and judges that key itself. A sweep never cancels; the kill switch turns it all off.
+            // A boolean for every event, not an operand: A && B || C returns B or C, and a head's sha there (#4374's P1)
+            // would be no boolean GitHub's cancel-in-progress takes.
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
+            if (runs) { Assert.Equal(sweep is null, IfExpression.Evaluate(cancel, github)); }
+            github["vars.FLEET_MERGERULE"] = "off";
+            Assert.IsType<bool>(IfExpression.Value(cancel, github));
+            Assert.False(IfExpression.Evaluate(cancel, github));
+            github["vars.FLEET_MERGERULE"] = null;
             var name = Scalar(job, "name");
             if (runs)
                 Assert.Equal(sweep is null ? "merge-rule-scoped-v1" : "merge-rule-sweep-v1",
@@ -1641,6 +1933,101 @@ public class MergeRuleTests
             IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
     }
 
+    // A status event judges again on any failure, error or pending, whatever its context, and on a success only for
+    // the contexts the verdict reads by name (the receipts, Copilot's, CodeQL's); merge-rule's own posts never.
+    // The accepted residual (#4104, the run backlog): an unlisted status going pending to success waits for the next
+    // event or sweep: a slower merge, never a wrong verdict, since every state that can hold a pull request still acts.
+    [Theory]
+    [InlineData("external-policy", "failure", true)]
+    [InlineData("external-policy", "error", true)]
+    [InlineData("external-policy", "pending", true)]
+    [InlineData("external-policy", "success", false)]
+    [InlineData("independent-review", "success", true)]
+    [InlineData("independent-review-2", "success", true)]
+    [InlineData("independent-review", "failure", true)]
+    [InlineData("Copilot code review", "success", true)]
+    [InlineData("CodeQL", "success", true)]
+    [InlineData("merge-rule", "failure", false)]
+    [InlineData("merge-rule", "success", false)]
+    public void A_status_judges_again_on_any_failure_error_or_pending_but_on_success_only_for_the_contexts_read_by_name(string context, string state, bool runs)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var document = (YamlMappingNode)stream.Documents[0].RootNode;
+        var job = (YamlMappingNode)((YamlMappingNode)document["jobs"])["evaluate"];
+        var group = ((YamlMappingNode)document["concurrency"])["group"].ToString();
+        var github = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github.event_name"] = "status", ["github.event.context"] = context, ["github.event.state"] = state,
+            ["github.event.sha"] = Head, ["github.run_id"] = "run-1",
+        };
+
+        Assert.Equal(runs, IfExpression.Evaluate(job["if"].ToString(), github));
+        // Admission agrees: a status that doesn't judge holds no head's slot, so it never cancels one that does.
+        Assert.Equal(runs ? Head : "run-1", IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], github));
+    }
+
+    // A run cancelled in progress never leaves merge-rule pending for good: the evaluator posts only verdicts (no
+    // placeholder before judging), and only a newer run of the same admission key cancels it, which judges that same
+    // pull request (--pr, its current head) or head (--sha, every open pull request on it) or sweeps all of them.
+    [Fact]
+    public void Only_a_newer_run_that_judges_the_same_pull_request_head_or_sweep_cancels_one_in_progress()
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var document = (YamlMappingNode)stream.Documents[0].RootNode;
+        var evaluate = (YamlMappingNode)((YamlMappingNode)document["jobs"])["evaluate"];
+        var script = string.Join("\n", ((YamlSequenceNode)evaluate["steps"]).Cast<YamlMappingNode>()
+            .Where(s => s.Children.ContainsKey("run")).Select(s => s["run"].ToString()));
+        Assert.Contains("pull_request_target) [ -n \"$PR_NUMBER\" ] && scope=(--pr \"$PR_NUMBER\")", script, StringComparison.Ordinal);
+        Assert.Contains("status) [ -n \"$STATUS_SHA\" ] && scope=(--sha \"$STATUS_SHA\")", script, StringComparison.Ordinal);
+        Assert.Contains("workflow_run) [ -n \"$RUN_SHA\" ] && [ \"$RUN_BRANCH\" != main ] && scope=(--sha \"$RUN_SHA\")", script, StringComparison.Ordinal);
+        Assert.Contains("check_suite) [ -n \"$SUITE_SHA\" ] && [ \"$SUITE_BRANCH\" != main ] && scope=(--sha \"$SUITE_SHA\")", script, StringComparison.Ordinal);
+        // The writer lock never cancels: a run already judging is cancelled only through admission, by a newer run
+        // that then waits for this lock and judges after it.
+        var writer = (YamlMappingNode)evaluate["concurrency"];
+        Assert.Equal("false", writer["cancel-in-progress"].ToString());
+        // One post per head, its verdict: nothing marks the head pending before judging, so a cancel mid-run leaves
+        // the last verdict standing until the newer run posts its own.
+        var github = new FakeGitHub(GraphQLPullRequest(Head));
+        var config = WriteConfig();
+        try
+        {
+            Assert.Equal(0, MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain));
+            Assert.StartsWith($"{Head} ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally { File.Delete(config); }
+    }
+    // Each sweep source has its own admission slot and none cancels (#4104): a cron run can't replace or cancel a main
+    // sweep waiting for the writer lock, nor can a dispatch; a newer main sweep replaces only the main sweep waiting.
+    [Fact]
+    public void A_waiting_main_sweep_survives_a_cron_run_and_a_dispatch()
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), ".github", "workflows", "merge-rule.yml"))));
+        var admission = (YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)["concurrency"];
+        var group = admission["group"].ToString();
+        var cancel = admission["cancel-in-progress"].ToString().Trim();
+        Dictionary<string, string?> Run(string eventName, string id) => new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github.repository"] = "danswett/agent-bridge", ["github.event_name"] = eventName, ["github.run_id"] = id,
+            ["github.event.action"] = eventName == "workflow_run" ? "completed" : null,
+            ["github.event.workflow_run.name"] = eventName == "workflow_run" ? "CI" : null,
+            ["github.event.workflow_run.event"] = eventName == "workflow_run" ? "push" : null,
+            ["github.event.workflow_run.head_branch"] = eventName == "workflow_run" ? "main" : null,
+            ["github.event.workflow_run.head_sha"] = eventName == "workflow_run" ? Head : null,
+            ["github.event.workflow_run.head_repository.full_name"] = eventName == "workflow_run" ? "danswett/agent-bridge" : null,
+        };
+        string Slot(Dictionary<string, string?> run) => (string)IfExpression.Value(group[(group.IndexOf("${{", StringComparison.Ordinal) + 3)..^2], run)!;
+        var main = Run("workflow_run", "run-main");
+        var cron = Run("schedule", "run-cron");
+        var dispatch = Run("workflow_dispatch", "run-dispatch");
+
+        Assert.Equal(["merge-rule-admit-sweep", "merge-rule-admit-backstop", "merge-rule-admit-dispatch"],
+            new[] { main, cron, dispatch }.Select(r => "merge-rule-admit-" + Slot(r)));
+        Assert.All(new[] { main, cron, dispatch }, run => Assert.False(IfExpression.Evaluate(cancel[3..^2], run)));
+        Assert.Equal(Slot(main), Slot(Run("workflow_run", "run-main-2")));
+    }
     [Theory]
     [InlineData("skipped", false, true)]
     [InlineData("skipped", true, false)]
@@ -1750,7 +2137,9 @@ public class MergeRuleTests
                 {
                     var equal = tokens[position++] == "==";
                     var right = Primary();
-                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase) : left is null && right is null;
+                    // GitHub's loose equality: a value that isn't there (null) equals '' as well as null.
+                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase)
+                        : left is null or "" && right is null or "";
                     return equal == same;
                 }
                 return left;
@@ -1777,6 +2166,16 @@ public class MergeRuleTests
                     while (tokens[position] == ",") { position++; args.Add(Or()); }
                     Assert.Equal(")", tokens[position++]);
                     return string.Format(System.Globalization.CultureInfo.InvariantCulture, format, args.ToArray());
+                }
+                if (token == "startsWith")
+                {
+                    // GitHub's startsWith ignores case, and is false for a value that isn't there.
+                    Assert.Equal("(", tokens[position++]);
+                    var text = Or();
+                    Assert.Equal(",", tokens[position++]);
+                    var prefix = Assert.IsType<string>(Or());
+                    Assert.Equal(")", tokens[position++]);
+                    return text is string s && s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
                 }
                 if (token == "cancelled")
                 {
@@ -2878,11 +3277,24 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainHead = null, string[]? mainJobPages = null, IReadOnlyDictionary<long, string>? jobsByRun = null, string[]? mainRunPages = null, string annotations = "[]", IReadOnlyDictionary<long, string>? unreadableRuns = null, IReadOnlyDictionary<long, int>? unreadableTimes = null, int restDelayMs = 0, Func<string, int>? restDelayFor = null, int overlapOf = 0, Func<string, bool>? overlapOn = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
-        public List<string> RestPaths { get; } = [];
+        // What was recorded, as a copy: a read still in flight may add to it while a test looks, and a list
+        // enumerated while it is written throws.
+        public List<string> RestPaths { get { lock (this) return [.. restPaths]; } }
+
+        readonly List<string> restPaths = [];
+
+        /// <summary>Every GraphQL query's text, and the pull request numbers asked for one at a time.</summary>
+        public List<string> Queries { get { lock (this) return [.. queries]; } }
+
+        public List<int> NumbersRead { get { lock (this) return [.. numbersRead]; } }
+
+        readonly List<string> queries = [];
+
+        readonly List<int> numbersRead = [];
 
         readonly Dictionary<long, int> unreadableSeen = [];
 
@@ -2895,12 +3307,35 @@ public class MergeRuleTests
             return seen < times;
         }
 
+        /// <summary>The most REST reads that were in flight at once, and how many were made.</summary>
+        public int MaxConcurrentRest { get; private set; }
+
+        int inFlight;
+
+        // A rendezvous, not a delay: each read that overlapOn picks (all, when null) waits until overlapOf of them
+        // are in flight at once, then they all go. Reads that really overlap pass at once however slow the machine;
+        // reads made one after another never meet, and the first fails after the safety wait (a failure path only:
+        // a pass never waits on the clock).
+        readonly ManualResetEventSlim overlapped = new(false);
+
+        int meeting;
+
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
+            lock (this)
+                return GraphQLCore(query, variables);
+        }
+
+        JsonDocument GraphQLCore(string query, IReadOnlyDictionary<string, object> variables)
+        {
+            queries.Add(query);
             if (failChecks && query.Contains("checkSuites", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             if (variables.TryGetValue("number", out var number))
+            {
+                numbersRead.Add((int)number);
                 return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
+            }
             if (listFailsAfterFirstPage && variables.ContainsKey("cursor"))
                 throw new InvalidOperationException("gh: HTTP 502");
             var nodes = (listed ?? [one]).Select(json =>
@@ -2914,7 +3349,32 @@ public class MergeRuleTests
 
         public JsonDocument Rest(string path)
         {
-            RestPaths.Add(path);
+            var now = Interlocked.Increment(ref inFlight);
+            lock (this)
+                MaxConcurrentRest = Math.Max(MaxConcurrentRest, now);
+            try
+            {
+                if (overlapOf > 0 && (overlapOn?.Invoke(path) ?? true))
+                {
+                    if (Interlocked.Increment(ref meeting) >= overlapOf) { overlapped.Set(); }
+                    if (!overlapped.Wait(TimeSpan.FromSeconds(20)))
+                        throw new InvalidOperationException($"reads were never in flight together: {path}");
+                }
+                var delay = restDelayFor?.Invoke(path) ?? restDelayMs;
+                if (delay > 0)
+                    Thread.Sleep(delay);
+                lock (this)
+                    return RestCore(path);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
+        }
+
+        JsonDocument RestCore(string path)
+        {
+            restPaths.Add(path);
             if (path.Contains("/git/ref/heads/", StringComparison.Ordinal))
             {
                 if (failMain) throw new InvalidOperationException("gh: HTTP 502");

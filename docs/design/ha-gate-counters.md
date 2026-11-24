@@ -2,7 +2,7 @@
 
 Design for [#2384](https://github.com/danswett/agent-bridge/issues/2384), S4-2 of
 [#1396](https://github.com/danswett/agent-bridge/issues/1396). Source instrumentation
-is staged; qualifying runs remain held.
+has landed in part (see "Status at main" below); a counter is not retirement evidence until the windowed verdict runs.
 This measures item 2 of fleet `docs/ha-retirement-parity.md` section 3:
 one continuous run with at least 500 messages, 50 launches, 30 approvals and
 20 stops, and zero HA fallbacks. It does not approve retirement or replace
@@ -27,7 +27,7 @@ under `src/AgentBridge.Host`, plus that commit's changes to `Program.cs`,
 `docs/host-config.md` and `tests/AgentBridge.Host.Tests/AuditCommandsTests.cs`.
 Engineering supplied the full #2384/#1401 issues and #2066 body/both receipts;
 those messages were read. No other PR review comments or unlisted source ranges
-were read. Engineering reports #2066 unmerged with both receipts on that head.
+were read. Engineering reported #2066 unmerged with both receipts on that head (it has since merged; see "Status at main").
 These are source observations, not live verification or receipt claims.
 
 #1401 supplies owner-only daily `agents-*.jsonl` and `launches-*.jsonl`,
@@ -39,20 +39,25 @@ row allow-list does not expose proposed gate fields. It is not a gate reader.
 A3 #2009 supplies chain/folder-lock verification; A4 #2010 supplies launch/stop
 wiring; A5 #2011 supplies answer/lookup wiring. A6a is #2064 / PR #2066,
 not the remaining A6 durable-head/archive/pruning work. The gate must not claim
-integrity before A3 lands. Existing hash links alone cannot prove no tail was lost.
+integrity before A3 lands (A3 has landed; see "Status at main"). Existing hash links alone cannot prove no tail was lost.
 
-### Status at main 0416b9d7b (S1 definition of the remaining #1401 and row 25 work)
+### Status at main 0416b9d7b (remaining #1401 and row 25 work)
 
-Checked against source and commit subjects only; not a live run.
+Checked against source and commit subjects only; not a live run. This status supersedes the
+older lines above and below where they disagree. Slice labels: S4 and 7b here are this design's
+own slices (table in the last section); S5, S7 and S8 mean the epic slices in fleet
+`docs/ha-retirement.md` (S5 there is Agent identity).
 
 * **#1401 dependencies landed:** A3 #2009 (#2222), A4 #2010 (#2017), A5 #2011 (#2013) and
   A6a #2064 (#2066, merged; the "unmerged" statement above is out of date). Later audit
-  work also landed: archive (#3162), person-signed rotation (#3566, #3580, #3551).
+  work also landed: archive (#3162), person-signed rotation (#3621 audit rotation core, which closed the #3566 findings, and #3580). #3551 is the
+  grant store, not rotation.
 * **Counter source in code:** `src/AgentBridge.Host/GateAudit.cs` defines the `path`
   (`relay`, `local`, `legacy-ha`), `actorKind` and control phases (`gate.start`, `gate.pause`,
   `gate.reset`, `gate.seal`); launch, approval and stop wiring exist in `GateLaunchAudit.cs`,
-  `PhoneApprovalEvidence.cs`, `StopAudit.cs` and `HaRunning.cs` (red tests #2570, #2588,
-  #2596, #2629).
+  `SessionService.cs` (`AnswerGate`, the approval wiring), `StopAudit.cs` and `HaRunning.cs`.
+  `PhoneApprovalEvidence.cs` is a read-only projection, not wiring. #2570, #2588, #2596 and #2629
+  were the red-test PRs for these slices; they are not the wiring.
 * **Landed state (source, not a live run):** present are the durable audit head and
   `AgentAuditLog.Continuity` (slice 9, with continuity and checkpoint-recovery tests),
   `GateAuditProjection.Read/Project`, used by the launch, approval and stop wiring, and,
@@ -76,9 +81,10 @@ Checked against source and commit subjects only; not a live run.
   pass, and the remedy is a later start date. A hard need for a run boundary would return only
   as a temporary op deleted with the HA connector (S7), as a new change.
 * **Row 25 gap in fleet:** fleet `ops/ha-retirement` scanned PowerShell only, so live Python
-  that talks to HA was invisible; `pump/fleet_pump/wake.py` is not an HA caller. Fleet slice S5
-  scans live `.py` too and allowlists today's live findings (24: 19 PowerShell and 5 Python),
-  defined in fleet `docs/ha-retirement.md`.
+  that talks to HA was invisible; `pump/fleet_pump/wake.py` is not an HA caller. The
+  no-new-call-site gate in fleet `docs/ha-retirement.md` (row 25) scans live `.py` too and allowlists
+  the live findings; read the counts there, since open fleet #1282 revises the inventory. Fleet's S5
+  is Agent identity and does not define this work.
 
 ## 2. Authority and path
 
@@ -179,9 +185,31 @@ precedes keys; authoritative delivery (including denial) closes it once. Questio
 identity hashes only version/backend/session UUID/native call or generation;
 permission display digests and all contents are excluded. Credentialed agents
 remain refused: one terminal/refused row for a matching host question, no dispatched
-intent and no credit or unresolved attempt. Other local callers, restart restoration,
-relay and HA context remain deferred; no automatic run provider is added.
-
+intent and no credit or unresolved attempt. Other local callers, restart restoration
+and relay context remain deferred; no automatic run provider is added.
+HA context (#1401, HA deletion gate E4(f)): an answer pressed on a Home Assistant card is audited as its
+launches and stops are: path `legacy-ha`, actorKind `ha-component`, principal `ha:connector`, the intent
+flushed before typing and a terminal after the confirmed delivery (`HaAnswerAudit`), so the windowed gate
+counts an HA approval as an HA dispatch; before this an HA approval left no row and could not read as a
+fallback.
+**Owner decision (b), via the chief: send anyway and log the failure; not fail-closed.** When the audit row cannot be written (the
+question has no gate identity, or the audit is unwritable) the HA answer is STILL typed, never refused for the audit's sake. The failure
+is recorded as an `audit_write_failed` event with the action kind (`answer`; `stop` and `launch` follow the same rule), a sanitized
+session id and the time, and nothing else: no answer text, no token, no request body. **The fallback is the host diagnostic log**
+(`AgentAuditLog`'s `log`, which the host points at its own log), never the audit file that just failed; if that log also throws, nothing
+escapes and the **in-memory count** is the last record. That count is flushed into the audit as ONE `audit_write_failed` row (target =
+the count) on the next successful audit write, taken before it is written and put back if that write fails, so it is counted once.
+**The gate counts each `audit_write_failed` as an unaudited HA dispatch**: the windowed projection adds it to `legacyHaDispatches`
+(rows at or after the window start), so the verdict is FAIL (`ha-fallback`), never PASS. While the audit stays unwritable the gate cannot
+read it at all (INCOMPLETE, never PASS), and the diagnostic log and the in-memory count are the record until it can. A process restart
+loses the in-memory count, which is why the diagnostic log line is written first.
+All three HA actions (launch, stop, answer) now carry the one principal `ha:connector`, composed in one place
+(`HaRunning`), and a test per action drives that composed delegate to its audit rows and to the gate's HA count.
+Launch rows written before this carry the principal `ha-component:local`; path `legacy-ha` and actorKind
+`ha-component` are unchanged, so those earlier rows still read as the same connector and still count.
+Old `ha-component:local` rows are still read and counted (the projection keys on path and actorKind, never on the principal; a test writes an old-format row and reads it back).
+An HA stop is two dispatches: the press that asks for confirmation and the press that confirms are two commands that reached the host over HA. A repeated confirming press is answered from its record and writes no row, so the gate does not count it twice.
+The HA files reach the answer, stop and launch services only through the three composed delegates; a source-scan test (mutation-checked) turns red on any direct call, so the press-parsing step needs no separate test. Stop and launch follow the owner decision above too: with the audit row unwritable (or no audit log at all) the action is still performed, `audit_write_failed` is recorded, and the gate counts it; the guard test allows exactly the three explicit no-audit-log lines in `HaRunning` and nothing else.
 Slice 4 wires app/host-CLI, authenticated relay and internal HA stops. Empty run
 still earns no qualifying credit. A flushed intent follows native stop guards
 and precedes confirmation arming or dispatch; refused/busy/failed pre-dispatch
@@ -220,8 +248,12 @@ Reads change no bytes; permitted appends may extend files, not rewrite pre-exist
 fault evidence. 9A detects/retains faults only: no truncation, erasure, recreation
 of missing evidence, clean suffix, automatic reset/start, new store/journal or
 repair command. Repair/reset execution remains outside 9A; reset alone does not
-restore evidence health. Archive enumeration and active-run preservation remain
-9B; neither cut completes #2524 alone or admits a qualifying run.
+restore evidence health. Active-run preservation is 9B (#2971): a run is ACTIVE when any row carries its
+run id and no `gate.seal` row for it exists (every unsealed run counts, so two overlapping runs are both kept; a row or file whose
+run or seal cannot be read counts as active). Retention and `audit archive` never delete or move a day holding rows of an active
+run, so active-run evidence stays in the live files, and the head model is unchanged: archived days are not replayed, because
+archiving already advances `Root` and `RetiringRoot`. Runs unsealed for over 7 days are counted as abandoned and the count is logged
+with the active count; nothing is expired here. Consequences stated plainly: an unparseable line (a torn write) holds its day, and retention stops at the first held day, so one old held day also pauses later days until it is repaired or its run is sealed; the first-grant rotation (`retired/`) is a separate path that copies whole days and is not changed here. Neither cut completes #2524 alone or admits a qualifying run.
 
 This explicitly clarifies previously unspecified append policy, based on section 4
 lines 119-122 / 139-146 and section 6 lines 203-204 at frozen head
@@ -327,7 +359,7 @@ send log; without it the answer is INCOMPLETE (`missing-message-evidence`), neve
 and a negative, malformed or incomplete file is refused. `--json` prints a closed schema-1 reading
 for the fleet combiner, which takes one `<host>.json` per pinned host, applies the floors to the
 fleet sums and names a host with no file INCOMPLETE: `schema`, `host` (the `--host` label, which
-`--json` requires; the command never reads an identity), `since` (UTC), `kind` (`pass`, `fail`, `incomplete`),
+`--json` requires; the command never reads an identity), `since` (UTC), `readAt` (UTC, the window end: when it was read; a start after it is refused, and the combiner compares every host's span), `kind` (`pass`, `fail`, `incomplete`),
 `reasons` (closed codes only: `invalidated-window`, `ha-fallback`, `coverage-break`,
 `retention-trimmed-into-window`, `unresolved-intent`, `audit-incomplete`, `sequence-break`,
 `missing-window-evidence`, `missing-message-evidence`, `below-floor:<launch|approval|stop|message>`),
