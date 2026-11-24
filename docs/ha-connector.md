@@ -1553,7 +1553,7 @@ into the disposable instance:
   This touches nothing outside the VM: different instance, broker, policy and fences.
 * A second Windows user on the same VM is the machine being migrated. It first runs
   agent-ha-bridge as a non-writer participant, then migrates to `agent-bridge-host` with the
-  connector (`homeAssistant.enabled`, `baseUrl`, `disposable: true`; `machineName` set to a
+  connector (`ha on` after `baseUrl` and `disposable: true` are set; `machineName` set to a
   distinct name such as `REHEARSAL-M`, since both users share the computer's name). G5 is per
   user, so the writer keeps running throughout, as the real writer will.
 

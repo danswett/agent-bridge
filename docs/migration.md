@@ -257,7 +257,7 @@ tells them apart by folder, as agent-ha-bridge did.
 #38's table lists `detailedActivity` and `homeAssistant.*` as having no equivalent. The HA
 connector (#60) has since given the first four rows above one, so they are carried. The
 connector is pointed at the same Home Assistant and **left off**. It needs a token of its own,
-given at the machine (`agent-bridge-host ha token set`), and then `homeAssistant.enabled`.
+given at the machine (`agent-bridge-host ha token set`), and then turned on at the machine with `agent-bridge-host ha on` (audited; generic `config set homeAssistant.enabled` is refused).
 
 Everything else is named in the report as not carried and stays in agent-ha-bridge's file:
 `codexStartPrompt`, `discoverWorkspaces`, `platform.*`, `usage.*`,

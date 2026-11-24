@@ -32,6 +32,47 @@ public sealed class HaConnectionControlTests
         Assert.True(HaCommands.Writes(["ha", state]));
 
     [Fact]
+    public void Token_writes_are_person_only_and_reads_are_not()
+    {
+        Assert.True(HaCommands.Writes(["ha", "token", "set"]));
+        Assert.True(HaCommands.Writes(["ha", "token", "clear"]));
+        Assert.All(new[] { "status", "inventory", "shadow" }, read => Assert.False(HaCommands.Writes(["ha", read])));
+    }
+
+    // The ha command refuses to run inside an agent session only because Program.cs asks (Refused). Program's top-level code cannot be
+    // called from a test, so this pins the call itself, before the command runs: removing it, or moving it after Run, goes red (#4472).
+    [Fact]
+    public void The_host_command_line_refuses_the_ha_writes_inside_an_agent_session_before_running_them()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!File.Exists(Path.Combine(root.FullName, "AgentBridge.slnx"))) { root = root.Parent ?? throw new IOException("repository root not found"); }
+        var program = File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "Program.cs")).ReplaceLineEndings("\n");
+        var start = program.IndexOf("    case \"ha\":\n", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var block = program[start..program.IndexOf("    case \"shadow\":", start, StringComparison.Ordinal)];
+        var guard = System.Text.RegularExpressions.Regex.Match(block, @"if \(HaCommands\.Writes\(rest\) && Refused\(""[^""]+""\)\) \{ return 4; \}");
+        Assert.True(guard.Success);
+        Assert.True(guard.Index < block.IndexOf("HaCommands.Run(rest", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_null_or_missing_enabled_reads_off_and_the_audit_rows_carry_the_old_value()
+    {
+        foreach (var (stored, was) in new[] { ("null", "off"), ("false", "off"), ("true", "on") })
+        {
+            using var fixture = new Fixture();
+            var path = Configure(fixture.Root);
+            File.WriteAllText(path, File.ReadAllText(path).Replace("\"enabled\":true", $"\"enabled\":{stored}", StringComparison.Ordinal));
+            Assert.Equal(stored == "true", HostSettings.Load(fixture.Root).Settings.HomeAssistant.Enabled);
+
+            Assert.Equal(0, Run(fixture.Root, "ha", stored == "true" ? "off" : "on").Code);
+
+            var (rows, _) = GateAuditProjection.Load(fixture.Root);
+            Assert.All(rows, row => Assert.Contains($"was {was}", row.Reason));
+        }
+    }
+
+    [Fact]
     public async Task Off_then_on_preserves_the_relay_and_credentials_and_audits_both_restart_transitions()
     {
         using var fixture = new Fixture();
