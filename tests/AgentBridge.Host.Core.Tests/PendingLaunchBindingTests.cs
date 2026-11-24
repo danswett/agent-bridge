@@ -16,9 +16,9 @@ public class PendingLaunchBindingTests
     // The reported launch 6d4c38eb, as the Chief's codex-diagnose evidence for #3644 listed it.
     const int Launched = 105844;
     const string LaunchedCommand = @"C:\Users\dswett\AppData\Local\Microsoft\WinGet\Links\codex.exe --no-daemon -c model_reasoning_summary=detailed --ask-for-approval never -- test";
-    const string LaunchFolder = @"c:\users\dswett\repos";
-    // What Codex's hook recorded for the same folder: another case, and the extended-length prefix.
-    const string RegisteredFolder = @"\\?\C:\Users\dswett\repos";
+    const string LaunchFolder = @"C:\Users\dswett\repos";
+    // What Codex's hook recorded for the same folder: the extended-length prefix and a trailing separator.
+    const string RegisteredFolder = @"\\?\C:\Users\dswett\repos\";
 
     sealed class Machine : IDisposable
     {
@@ -247,5 +247,93 @@ public class PendingLaunchBindingTests
 
         Assert.Equal(D, Assert.Single(source.Snapshot()).Id);
         Assert.Equal(Launched, source.ProcessOf(D)!.Id);
+    }
+
+    // The reader's probe: the person's other Codex (started long before) fires a hook while the launch starts, and
+    // nothing authenticates a registration but its folder and write time.
+    [Fact]
+    public async Task A_second_running_codex_that_could_have_written_the_registration_means_nothing_is_bound()
+    {
+        using var vm = new Machine();
+        vm.F.Processes.Run(AgentKind.Codex, 200, @"C:\tools\codex.exe --no-daemon", vm.Started.AddMinutes(-30));
+        // Its hook fires before the launch's own registration is written: the only registration, in the launch's folder.
+        vm.Register(D, after: TimeSpan.FromSeconds(20));
+        await using var source = vm.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.ProcessOf(D));
+    }
+
+    [Fact]
+    public async Task A_session_the_thread_locks_already_list_with_its_true_process_is_never_pointed_at_the_launch()
+    {
+        using var vm = new Machine();
+        vm.F.Processes.Run(AgentKind.Codex, 200, @"C:\tools\codex.exe --no-daemon", vm.Started.AddMinutes(-30));
+        vm.F.Processes.Holders[vm.F.CodexLock(D)] = [200];
+        vm.Register(D, after: TimeSpan.FromSeconds(20));
+        vm.Register(C, after: TimeSpan.FromSeconds(34));
+        await using var source = vm.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(200, source.ProcessOf(D)!.Id);
+        Assert.Equal(Launched, source.ProcessOf(C)!.Id);
+    }
+
+    [Fact]
+    public async Task A_binding_is_forgotten_once_its_registration_is_gone()
+    {
+        using var vm = new Machine();
+        vm.Register(C);
+        await using var source = vm.Source();
+        await source.RefreshAsync();
+        Assert.Single(source.Snapshot());
+        vm.Launches.Clear();
+        File.Delete(Path.Combine(vm.F.CodexRegistrations, C + ".json"));
+        await source.RefreshAsync();
+        vm.F.Time.Advance(Unaccounted.Grace + TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+
+        // The same id registers again, naming no process, with no launch to say whose it is.
+        vm.Register(C, after: TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Fact]
+    public async Task A_host_restarted_while_the_bound_process_runs_binds_the_session_again_from_what_it_listed()
+    {
+        using var vm = new Machine();
+        var state = Path.Combine(vm.F.Root, "profile", "sessions-listed.json");
+        vm.Register(C);
+        await using (var before = vm.F.Source(stateFile: state))
+        {
+            before.PendingCodexLaunches = () => [.. vm.Launches];
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+        vm.Launches.Clear();
+
+        await using var after = vm.F.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal(Launched, Assert.Single(after.Snapshot()).ProcessId);
+        Assert.Null(after.Held);
+    }
+
+    [Fact]
+    public async Task On_Windows_a_folder_is_the_same_whatever_its_case()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var vm = new Machine();
+        vm.Register(C, @"\\?\c:\USERS\dswett\REPOS\");
+        await using var source = vm.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(C, Assert.Single(source.Snapshot()).Id);
     }
 }
