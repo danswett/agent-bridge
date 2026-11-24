@@ -64,6 +64,7 @@ public sealed class ConversationResponseTests
                 bool pinEnd;
                 ScrollAnchor? anchor = null;
                 bool atEnd, panning, scrolling;
+                bool ReaderScrolling => scrolling;
                 double? anchoring, keyTarget;
                 string shownHistory = "probe";
                 int pinReleases, responseAnchors;
