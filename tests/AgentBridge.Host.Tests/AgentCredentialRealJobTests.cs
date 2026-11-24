@@ -51,8 +51,9 @@ public sealed class AgentCredentialRealJobTests : IDisposable
 
         for (var i = 0; i < 300 && !File.Exists(pidFile); i++) { Thread.Sleep(100); }
         Assert.True(File.Exists(pidFile), "the grandchild never started");
-        Thread.Sleep(300);
         var child = int.Parse(File.ReadAllText(pidFile).Trim());
+        // M writes the pid and then exits; the grandchild is an orphan only once M is gone (a busy machine can be slow to get there).
+        for (var i = 0; i < 150 && ProcessChain.Read(child).Processes.Any(p => p.Id == root.Id); i++) { Thread.Sleep(200); }
         stray.Add(child);
 
         var orphan = ProcessChain.Read(child);
