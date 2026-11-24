@@ -1,0 +1,47 @@
+From 34932ba705a413a8e8ff7d521e499a394e551913 Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 05:35:47 -0800
+Subject: [PATCH] CI S2: the two FullWorkflowTests that still asserted the
+ trigger's old output name now assert tested= (after the rename sha -> tested)
+
+PATCH BRANCH: sg-patch/ci-s2-fix-renamed-output-tests-4104 (danswett/agent-bridge); the file is patches/ci-s2-fix-renamed-output-tests-4104.patch.
+BASE: #4254's head 6f6f7191. APPLY WITH: git apply patches/ci-s2-fix-renamed-output-tests-4104.patch   (6 whole lines, test only)
+
+On #4254's head 6f6f7191 two tests FAIL: The_trigger_takes_a_workflow_runs_commit_only_from_the_API_read... and Only_the_trigger_reads_the_events_commit_and_hands_on_a_verified_one...
+They still look for the output line sha=<commit>, but the commit step now writes tested=<commit> (the mechanical rename). Four assertions change, nothing else.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+index 613981879..dcc1d5b84 100644
+--- a/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
++++ b/tests/AgentBridge.Quality.Tests/FullWorkflowTests.cs
+@@ -128,7 +128,7 @@ public class FullWorkflowTests
+ 
+         Assert.Equal("${{ steps.commit.outputs.tested }}", Scalar(trigger["outputs"], "tested"));
+         Assert.Equal("read", Scalar(trigger["permissions"], "actions"));
+-        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "sha=$sha\" >> \"$GITHUB_OUTPUT\"" })
++        foreach (var part in new[] { "gh api \"repos/$REPO/actions/runs/$RUN_ID\"", "head_branch", "^[0-9]+$", "^[0-9a-f]{40}$", "tested=$sha\" >> \"$GITHUB_OUTPUT\"" })
+             Assert.Contains(part, script, StringComparison.Ordinal);
+         Assert.DoesNotContain("github.event.workflow_run.head_sha", text, StringComparison.Ordinal);
+     }
+@@ -190,10 +190,10 @@ public class FullWorkflowTests
+         var badTip = RunCommitStep("workflow_dispatch", "main");
+ 
+         Assert.Equal(0, push.Code);
+-        Assert.Contains($"sha={RunSha}", push.Output, StringComparison.Ordinal);
+-        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("sha=", r.Output, StringComparison.Ordinal); });
++        Assert.Contains($"tested={RunSha}", push.Output, StringComparison.Ordinal);
++        Assert.All(new[] { elsewhere, pull, garbage, unreadable }, r => { Assert.NotEqual(0, r.Code); Assert.DoesNotContain("tested=", r.Output, StringComparison.Ordinal); });
+         Assert.Equal(0, byHand.Code);
+-        Assert.Contains($"sha={Tip}", byHand.Output, StringComparison.Ordinal);
++        Assert.Contains($"tested={Tip}", byHand.Output, StringComparison.Ordinal);
+         Assert.Equal("", byHand.Log); // a run by hand makes no API call at all: nothing to follow
+         Assert.NotEqual(0, badTip.Code);
+     }
+-- 
+2.56.1.windows.1
+
