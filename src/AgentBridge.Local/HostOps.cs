@@ -145,8 +145,11 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // while absent, when the folder-trust devices may, and only while folder trust is on.
 // PhoneSignIn: permissions.phoneSignIn, signing an agent in from a person's device (#972).
 // FleetLaunchRule: fleetNames.launchRule, on or off, read fresh for each launch; null from older hosts.
+// AgentMessagingScope: the effective agentMessaging scope (docs/design/beta-messaging.md section 3), same-person or off,
+// read fresh for each message; null from older hosts.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true, string? FleetLaunchRule = null)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false, bool FleetShare = true, string? FleetLaunchRule = null,
+    string? AgentMessagingScope = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
@@ -156,7 +159,7 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
         && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
-        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on");
+        && PhoneSignIn == other.PhoneSignIn && FleetShare == other.FleetShare && (FleetLaunchRule ?? "on") == (other.FleetLaunchRule ?? "on") && AgentMessagingScope == other.AgentMessagingScope;
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
@@ -225,8 +228,11 @@ public sealed record SignInRequest(string? Relay = null);
 // elsewhere is never approved again by a list made before. DevBoxKeepAwake: devBox.keepAwake,
 // applied at once. PhoneSignIn: permissions.phoneSignIn, at the next start.
 // FleetLaunchRule: fleetNames.launchRule, on or off, applied at the next launch without restart.
+// AgentMessagingScope: agentMessaging.scope, same-person or off, applied from the next message without restart; only a
+// person's app may send it, and a kill (agentMessaging.remote off) keeps it off, which refuses the change.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null, bool? PhoneSignIn = null, string? FleetLaunchRule = null);
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null, bool? PhoneSignIn = null, string? FleetLaunchRule = null,
+    string? AgentMessagingScope = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
 

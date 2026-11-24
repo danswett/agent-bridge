@@ -200,11 +200,11 @@ public sealed class HostControl
         return Settings(settings, HostConfigFile.ReadName(options.Folder));
     }
 
-    bool NeedsRestart(HostSettingsView now) => now != (Volatile.Read(ref running) with { FleetLaunchRule = now.FleetLaunchRule });
+    bool NeedsRestart(HostSettingsView now) => now != (Volatile.Read(ref running) with { FleetLaunchRule = now.FleetLaunchRule, AgentMessagingScope = now.AgentMessagingScope });
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare, settings.FleetLaunchRule);
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn, settings.FleetShare, settings.FleetLaunchRule, settings.AgentMessaging.Scope);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -331,15 +331,16 @@ public sealed class HostControl
         // read back as asked: a file the host rejects for another setting reads as all defaults,
         // keep-awake off, so the reply would say off while the service ran, and the next start
         // would turn it off with nothing said. Refused instead, the file as it was.
-        Action<string, string>? check = request.DevBoxKeepAwake is not null || request.FleetLaunchRule is not null ? (path, text) =>
+        Action<string, string>? check = request.DevBoxKeepAwake is not null || request.FleetLaunchRule is not null || request.AgentMessagingScope is not null ? (path, text) =>
         {
             var (saved, problem) = HostSettings.Parse(text, path);
-            var setting = request.DevBoxKeepAwake is not null ? "Dev Box keep-awake" : "Fleet launch name rule";
+            var setting = request.DevBoxKeepAwake is not null ? "Dev Box keep-awake" : request.AgentMessagingScope is not null ? "Agent messaging scope" : "Fleet launch name rule";
             if (problem is not null) { throw new InvalidOperationException($"{setting} was not changed: {problem}; fix config.json first"); }
             if (request.DevBoxKeepAwake is { } want && saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
             if (request.FleetLaunchRule is { } rule && saved.FleetLaunchRule != rule) { throw new InvalidOperationException($"Fleet launch name rule was not changed: {path} would not read back as {rule}"); }
+            if (request.AgentMessagingScope is { } scope && saved.AgentMessaging.Scope != scope) { throw new InvalidOperationException($"Agent messaging scope was not changed: {path} would not read back as {scope}; a turned-off agentMessaging.remote (a kill) keeps it off until a person turns that back on"); }
         } : null;
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn, request.FleetLaunchRule);
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn, request.FleetLaunchRule, request.AgentMessagingScope);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -361,6 +362,7 @@ public sealed class HostControl
         }
         log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.PhoneSignIn is { } p ? $"; sign-in from devices {(p ? "on" : "off")} at the next start" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         if (request.FleetLaunchRule is { } launchRule) { log($"fleet name launch rule changed by the app: {launchRule}"); }
+        if (request.AgentMessagingScope is { } messagingScope) { log($"agent messaging scope changed by the app: {messagingScope}"); }
         var now = Configured();
         Changed();
         return new SettingsResult(now, NeedsRestart(now));

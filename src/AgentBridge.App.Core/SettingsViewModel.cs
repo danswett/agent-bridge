@@ -318,6 +318,26 @@ public sealed partial class SettingsViewModel : Observable
         }
     }
 
+    // agentMessaging.scope (docs/design/beta-messaging.md section 3): on is same-person, off is off. Only this person-pressed
+    // control writes it; the host refuses any other caller, and a kill (agentMessaging.remote off) keeps it off, which the
+    // host reports as a refused change. Disabled while the host does not report a scope (an older host).
+    public bool CanChangeAgentMessaging => HostRunning && host.Can(HostOps.Capability) && !Busy && Status?.Settings.AgentMessagingScope is "same-person" or "off";
+    public bool AgentMessagingSamePerson
+    {
+        get => Status?.Settings.AgentMessagingScope == "same-person";
+        set
+        {
+            if (!CanChangeAgentMessaging || AgentMessagingSamePerson == value) { return; }
+            var scope = value ? "same-person" : "off";
+            _ = RunAsync(async () =>
+            {
+                var saved = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(AgentMessagingScope: scope));
+                if (saved.Settings.AgentMessagingScope != scope) { throw new InvalidOperationException("The host did not save the agent messaging scope."); }
+                await host.RefreshStatusAsync();
+            });
+        }
+    }
+
     // permissions.phoneSignIn (#972): a person's device may run Copilot's own device-code sign-in
     // here. Off unless turned on; applies when the host restarts.
     public bool PhoneSignIn
@@ -652,7 +672,7 @@ public sealed partial class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanChangeFleetLaunchRule)); Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanChangeFleetLaunchRule)); Raise(nameof(CanChangeAgentMessaging)); Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }

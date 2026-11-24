@@ -491,6 +491,17 @@ This is the same local-App-only `host.settings` path: agents, the host CLI and r
 cannot change it. Older hosts omit the view field; the app disables the toggle rather than
 sending an unsupported write.
 
+`host.settings` also accepts `agentMessagingScope: "same-person" | "off"`, writing the
+`agentMessaging.scope` key (docs/design/beta-messaging.md section 3). `HostSettingsView.agentMessagingScope`
+reports the effective scope (`AgentMessagingSettings.Scope`) in settings replies, `host.status` and
+subscription events. Unknown write values and an `agentMessaging` section that is not an object are
+refused before any part of the request is saved. The host checks that the proposed file reads back as
+requested, so `same-person` is refused while `agentMessaging.remote` is `"off"` (a kill keeps it off until
+a person turns that back on with `config set`). The scope is read afresh for each message, so no restart is
+needed or requested. Same local-App-only path: agents, the host CLI and relay callers cannot change it. Older
+hosts omit the view field; the app disables the control rather than sending an unsupported write. No value
+wider than `same-person` can be written.
+
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
 

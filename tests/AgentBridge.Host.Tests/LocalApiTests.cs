@@ -642,6 +642,65 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_apps_agent_messaging_scope_round_trips_keeps_other_agent_messaging_keys_and_needs_no_restart()
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, """{"agentMessaging":{"remote":"own-account","allowAllTargets":true},"permissions":{"remoteApproval":true}}""");
+        var ch = await ConnectAsync();
+        await ch.CallAsync<HostStatus>(HostOps.Subscribe);
+
+        var off = await ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "off" });
+
+        Assert.Equal("off", off.GetProperty("settings").GetProperty("agentMessagingScope").GetString());
+        Assert.False(off.GetProperty("restartRequired").GetBoolean());
+        Assert.Equal("off", (await NextAsync(ch)).Data.GetProperty("settings").GetProperty("agentMessagingScope").GetString());
+        var saved = JsonNode.Parse(File.ReadAllText(path))!;
+        Assert.Equal("off", saved["agentMessaging"]!["scope"]!.GetValue<string>());
+        Assert.True(saved["agentMessaging"]!["allowAllTargets"]!.GetValue<bool>());
+        Assert.Equal("own-account", saved["agentMessaging"]!["remote"]!.GetValue<string>());
+        Assert.True(saved["permissions"]!["remoteApproval"]!.GetValue<bool>());
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+
+        var on = await ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "same-person" });
+        Assert.Equal("same-person", on.GetProperty("settings").GetProperty("agentMessagingScope").GetString());
+        Assert.False(on.GetProperty("restartRequired").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("unknown", "{}")]
+    [InlineData("SAME-PERSON", "{}")]
+    [InlineData("own-account", "{}")]
+    [InlineData("same-person", """{"agentMessaging":false}""")]
+    [InlineData("same-person", """{"agentMessaging":{"remote":"off"}}""")]
+    public async Task An_invalid_or_killed_agent_messaging_scope_is_refused_without_writing_any_part_of_the_request(string scope, string config)
+    {
+        var path = Path.Combine(profile, "config.json");
+        File.WriteAllText(path, config);
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { agentMessagingScope = scope, name = "not saved" }));
+
+        Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task An_agent_or_other_non_app_caller_cannot_change_the_agent_messaging_scope(CallerKind kind)
+    {
+        var path = Path.Combine(profile, "config.json");
+        const string config = """{"agentMessaging":{"scope":"off"}}""";
+        File.WriteAllText(path, config);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { agentMessagingScope = "same-person" }));
+
+        Assert.Equal(config, File.ReadAllText(path));
+    }
+
+    [Fact]
     public async Task Keeping_a_Dev_Box_awake_is_turned_on_from_the_app_beside_its_interval_and_applies_at_once()
     {
         File.WriteAllText(Path.Combine(profile, "config.json"), """{ "devBox": { "intervalMinutes": 20 } }""");
