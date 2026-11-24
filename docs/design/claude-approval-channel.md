@@ -42,10 +42,14 @@ relay or at the machine. That a hook asking over the pipe is the real hook of th
 
 ## Next PRs (not started)
 
-- **B: the pipe op and the hook client.** The op `approval.wait` takes the event; **the host's caller check is the one `agent.hello` uses** (the
-  session's Windows job and the ancestor rule, #4287, extended in #4302 and #4303), reused and not a new pid walk, so orphaned shells and foreign
-  callers are treated the same in both places. The hook verifies the pipe server is the host before sending anything. Squatting the pipe name
-  or posing as the hook are the risks B must close.
+- **B (the pipe op, this change; the hook client is C): `approval.wait`.** Request `{ "event": "<the hook's raw PermissionRequest event, JSON text, at most 16 KiB>" }`;
+  reply `{ "verdict": "allow" | "deny" | "none", "reason"?: one word }`: **none means the hook shows Claude's own prompt at the machine, never an allow**. The host, not the
+  hook, derives the session, tool, input and request id (16 hex digits of SHA-256 over `session
+tool
+input`, as `ClaudeApproval.RequestId`) and builds the text shown
+  (`tool: command`, or the raw input, after `ShownText.Reveal`); the broker digests it. The caller check is `agent.hello`'s (#4287, #4302, #4303), reused, and the event's
+  `session_id` must be that credential's session. `none` reasons: `bad-event`, `caller`, `busy`, `truncated` (at once), `timeout`. Off: the op is offered only if the host is
+  handed it; nothing hands it and the setting does not exist. Still to close in C: the hook verifying the pipe server is the host.
 - **C: the listing and the surfaces.** The tracker lists the prompt as answerable (not `atMachine`) when readable and not truncated; `host-answers.md`,
   the app and push follow; the setting `permissions.claudeApproval` (default off) appears here.
 - **D: the live check** from #4277's body, then turning it on.

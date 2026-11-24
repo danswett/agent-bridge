@@ -21,13 +21,13 @@ public static class LocalApi
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,
         RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, AgentBridge.Host.Lite.ILiteSender? lite = null, AgentBridge.Host.Fleet.FleetList? fleet = null,
         AgentAuditLog? audit = null, TimeProvider? auditTime = null, AgentPipeLaunch? agentLaunch = null,         SamePcPinHandoff? samePcPin = null, AgentPipeLaunch? grantLaunch = null, FleetStopCommands? fleetStop = null,
-        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null) =>
-                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, remoteLaunch);
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch = null, ClaudeApprovalWait? approvalWait = null) =>
+                Handler(sessions, control, callers, log, authorization, credentials, lite, fleet, audit, new RefusalAudits(auditTime ?? TimeProvider.System), agentLaunch, samePcPin, grantLaunch, fleetStop, remoteLaunch, approvalWait);
 
     static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log,
         RemoteAuthorization? authorization, AgentCredentials? credentials, AgentBridge.Host.Lite.ILiteSender? lite, AgentBridge.Host.Fleet.FleetList? fleet,
         AgentAuditLog? audit, RefusalAudits refusals, AgentPipeLaunch? agentLaunch, SamePcPinHandoff? samePcPin, AgentPipeLaunch? grantLaunch, FleetStopCommands? fleetStop,
-        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch) => async (channel, op, data) =>
+        AgentBridge.Host.Lite.FleetRemoteLaunchSender? remoteLaunch, ClaudeApprovalWait? approvalWait) => async (channel, op, data) =>
     {
         try
         {
@@ -141,6 +141,11 @@ public static class LocalApi
             }
             return await sessions.RenameFleetSessionAsync(data, fleet?.WarningRoster, channel.Closed);
         }
+            if (op == ClaudeApprovalWait.Op)
+            {
+                if (approvalWait is null || credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: approval.wait isn't available on this host"); }
+                return await approvalWait.HandleAsync(credentials, callers, channel, data);
+            }
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op)
             {
                 var attempted = false;
