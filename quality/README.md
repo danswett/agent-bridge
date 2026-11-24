@@ -861,7 +861,9 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   **never holds a merge**: merges continue.
 * **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
   suites `lane: full` with their `full.yml` job names (the validators then read both workflows). The ruleset keeps requiring only
-  `quality-gate` and the merge-rule status.
+  `quality-gate` and the merge-rule status. **The merge rule's side is enforced** (piece 7b, the catalog check, `Completeness`): every job
+  `main_green.jobs` names is a `ci.yml` job, by job or display name, so naming a `full.yml` job (a FULL job never gates a merge) or one no workflow has is a
+  problem. `main-red` reads only the `CI` workflow's runs, so it is on the FAST names by construction.
 * **The release train is to gate publish on FULL** (docs/app-windows.md, "The release train"), and its selector already does
   (`build/select-release-commit.ps1`, fixtures in `build/test-select-release-commit.ps1`, piece 1 and 2): it takes the newest `main` commit whose FAST
   lane **and** FULL lane are green, and publishes FULL's packages, never rebuilding. FULL must show, all succeeded: `full-gate`; the x64 self-test, pack and installer; the
