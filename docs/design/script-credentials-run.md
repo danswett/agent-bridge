@@ -1,97 +1,130 @@
 # Script credentials: how a scheduled task gets its token (`scripts run`) (#3305 slice 3b, design only)
 
-Status: DESIGN ONLY, no code. **Needs Quality's sensitive read, and possibly the owner** (Q-run-2 below decides which Windows user a task runs as).
-Part of #3305 (parent #1421); closes the OPEN item in [script-credentials.md](script-credentials.md) section 7, "How a script gets it".
+Status: DESIGN ONLY, no code. **Needs Quality's sensitive read, and the owner for Q-run-2 to Q-run-4 below.**
+Part of #3305 (parent #1421); answers the OPEN item in [script-credentials.md](script-credentials.md) section 7, "How a script gets it".
 The credential format, the stored hash, the scope rules (`read+reply`, the allow-list) and the person-pressed mint, rotate and revoke are **unchanged**.
+Revised after Quality's read (receipt on #4429): the pinned program (section 4), what is a barrier and what is a rail (section 6), the token's real exposure
+(sections 3 and 5), and the per-slice acceptance (section 9).
 
 ## 1. The problem
 
-A scheduled task (for example the F7 dispatcher cycle) must authenticate as `script:<machine>/<name>`. Today nothing on `main` hands it its token:
-the CLI has `scripts add|revoke|grant-fleet|revoke-fleet` only, the host writes the token into an owner-only DPAPI file, and a hand-edited wrapper
-has to read that file and set `AGENT_BRIDGE_TOKEN`. The owner's rule is that nobody runs or edits PowerShell for this. The design doc
-(section 7) also says the token must not be put in a per-VM environment variable: an inherited variable reaches every child, which is how the HA token
-ended up in every session.
+A scheduled task (for example the F7 dispatcher cycle) must authenticate as `script:<machine>/<name>`. Nothing on `main` hands it its token: the CLI has
+`scripts add|revoke|grant-fleet|revoke-fleet` only, the host writes the token into an owner-only DPAPI file, and a hand-edited wrapper has to read that file
+and set `AGENT_BRIDGE_TOKEN`. The owner's rule is that nobody runs or edits PowerShell for this. Section 7 of the base doc also forbids a per-VM environment
+variable, because an inherited variable reached every session. This note must do better than that and says plainly where it only does less badly (section 5).
 
-## 2. Proposal: `agent-bridge-host scripts run <name> -- <command> [args...]`
+## 2. Proposal: a small admin-locked launcher, `script-run`, started by the task
 
-The task's one action is the host binary:
+The task's one action is a launcher with one job:
 
 ```
-agent-bridge-host.exe scripts run <name> -- pwsh.exe -File <script> ...
+"C:\Program Files\<product>\script-run.exe" <name> -- "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -NonInteractive -File "C:\<locked folder>\<script>.ps1"
 ```
 
-`scripts run` reads the script's own protected file, starts `<command>` with `AGENT_BRIDGE_TOKEN` in **that child's environment only**, waits for it,
-and exits with the child's exit code. Nothing else in the machine's environment, the task definition or any file contains the token. The script keeps
-using `AGENT_BRIDGE_TOKEN` exactly as the fleet scripts already do, so no script changes.
+`script-run` asks the host to admit it (section 7), reads the script's own protected file, starts the command with `AGENT_BRIDGE_TOKEN` in **that child's
+environment**, waits, and exits with the child's exit code. The script keeps using `AGENT_BRIDGE_TOKEN` as the fleet scripts already do. The host binary
+also exposes the same behaviour as `agent-bridge-host scripts run`, for a person testing by hand with no task binding; it is refused for a bound credential.
 
-Refusals (non-zero exit, a readable one-line reason, no token in it, one audit row): no file for `<name>`; the credential expired or revoked; the file
-unreadable; the credential is not task-bound (section 5); the caller is not that task's running engine (section 5); a `<command>` that is missing.
+## 3. What reaches the child, and what is required of the command
 
-## 3. The token never leaves the child's environment block
+- **The command is pinned.** `script-run` refuses a command that is not an absolute path to an executable in an admin-only location, refuses a relative name
+  (no PATH, current-directory or profile lookup), and for PowerShell requires `-NoProfile -NonInteractive -File <absolute script>`. The arguments are part of the
+  task definition and so are covered by the definition hash; the script file, and every file it runs, are covered only if named with `--file` at mint (the
+  existing rule), so the mint press lists them for the person.
+- **The environment is built, not inherited whole.** It is the environment the Scheduler gives the task, minus every `AGENT_BRIDGE_*` variable (so a
+  planted variable cannot shadow the real one), plus the token. A user can still edit the user-level variables a task starts with; the pin cannot cover that, and
+  the absolute-path rule is what stops a redirected PATH from choosing the program.
+- **Stdout and stderr pass straight through**; `script-run` captures and echoes nothing of the child's output. The script must not print the token, and the
+  fleet scripts already do not.
 
-- Read from the DPAPI file into one pinned byte array, built into the child's environment block, handed to `CreateProcess`, then zeroed in the
-  host process. The window is the time to start the child.
-- Never printed, never in an argument (so not in the process list or the task's history), never in the audit log or the host log, never written to disk
-  again. The audit row holds the script name, the command's file name, a hash of the full command line and the outcome.
-- Crash dumps: the child's own dump can contain its environment, as it can today when the script reads the file itself; that is the script's residual
-  and is unchanged. The host side keeps its own window short and zeroes the buffer; `scripts run` does not enable dumps and we state, rather than hide,
-  that a dump taken during that window could hold the token. A canary test (as agent-token-rotation.md section 5 requires) plants a token and scans the
-  profile, the host and audit logs, the task's output and a forced-crash dump folder of the `scripts run` process for it.
-- The child's environment is built from the task's own environment plus the one variable; nothing is inherited from a session.
+## 4. The pinned program (the P1 of the read): the host image cannot be the task's program
 
-## 4. DPAPI: who can decrypt
+The pin refuses a task unless its program and every folder above it are writable only by SYSTEM and Administrators (`ScriptTaskBinding.Pin`, re-checked at
+every accept). The host ships in `%LOCALAPPDATA%\AgentBridgeApp\current\`, a folder the user can write, and an update replaces it with a new hash. So:
 
-The file is wrapped with Windows **CurrentUser** DPAPI (section 7 of script-credentials.md): only the user who minted it, on that machine, can unprotect it.
-So the scheduled task must run **as the same Windows user that runs the host** (the "minting Windows user" the doc already says). A task that runs as
-`SYSTEM`, or as another account, cannot decrypt the file, and `scripts run` fails closed with that reason.
+- **The host image as the pinned program is rejected.** It could not pass the pin's own lock rule, so every bound credential would stay refused. Relaxing the
+  rule for the host image is also rejected: a same-user process could rename the user-writable exe, put a trojan at the task's path, let the scheduler start it
+  (it decrypts the token itself), and restore the original file before the hash check.
+- **The pinned program is `script-run.exe`, a separate tiny launcher installed in an admin-only folder** (Program Files), not in the update path of the host.
+  It holds only what section 2 describes. It changes rarely; when it does, a person re-pins by a press. A host (Velopack) update does **not** change it, so a host
+  update never invalidates a bound credential.
+- Installing the launcher needs elevation once per machine. That is the same elevation the base doc leaves open for the task binding ("how that service is
+  elevated is #1414's design to settle"): **Q-run-3 (owner or Chief):** is a Windows consent prompt on a person's press in the app the acceptable way to install
+  and re-pin it (no terminal, no PowerShell)? Until it is answered, S1 to S3 below are not started.
 
-- **Q-run-1 (design):** keep CurrentUser DPAPI (no format change; what this note assumes), or move the file to machine-scope DPAPI so a `SYSTEM` task can read it?
-  Machine scope lets every local account's code decrypt it: weaker, and a **format change**, so out of scope here unless the owner asks for it.
-- **Q-run-2 (owner, possibly):** is it acceptable that the task is registered "run as the host's user" (a task for that user, with or without a stored
-  password)? A "run only when the user is logged on" task works with no stored password; "whether logged on or not" needs the user's password stored by the
-  scheduler, which is a host-credential matter the owner decides, and no agent sets it.
+## 5. The token's exposure, stated honestly
 
-## 5. What stops another local process from using `scripts run` for a credential that is not its own
+- **Inheritance.** Every descendant of the script (git, gh, an agent CLI it starts) inherits the child's environment. This is narrower than a per-VM variable (one
+  task's process tree for the length of one run, not every session on the machine) but it is **not zero**, which is the same inheritance the base doc objects
+  to. A script that starts something it does not trust must not pass the environment on; the fleet scripts that run the dispatcher cycle are reviewed for that in S4.
+- **Same-user readers.** A process of the same user can read another process's environment (not only a dump). That is the base doc's honest residual
+  (section 6, "Rule 3 is a safety rail, not a boundary") and does not change.
+- **How the secret is held.** The DPAPI result is a byte array. It is decoded straight into a pinned UTF-16 buffer and written into an explicit environment
+  block for a native `CreateProcessW`; it is never a .NET string and never goes through `ProcessStartInfo.Environment` (its values are immutable strings that
+  cannot be zeroed). The buffers are zeroed on every exit path, including a failed start (nothing is left behind). The window is the time to start the child.
+- **Never** in an argument (so not in the process list or the task history), the audit row, the host log, a file, shell history or a notice. The audit row
+  holds the script name, the command's file name, a hash of the command line, the admission result and the child's exit code.
+- **Dumps.** A dump of the child can hold its environment, as it can when the script reads the file itself (unchanged). A dump of `script-run` during the
+  start window could hold the token; the launcher turns off its own crash-dump collection and keeps the window short, and a canary test checks it (S4).
 
-Three layers, honest about which is a barrier and which is a rail.
+## 6. Barrier versus rail (this must agree with the base doc and local-pipe.md)
 
-1. **Only a task-bound credential can be run.** `scripts run` refuses an unbound credential outright. A bound credential records the pinned task path and
-   hashes of the task definition and its files (`ScriptTaskBinding.Pin`, #3312). So there is no `scripts run` path for the unbound credentials that exist today.
-2. **`scripts run` checks the binding itself before it decrypts anything.** It reads the caller's whole ancestry; it proceeds only when a running instance of
-   the bound task, as the Task Scheduler reports it (`IScriptTaskReader.RunningEngines(task)`, same pid **and** start time), is its ancestor, and the task
-   definition, ACLs and file hashes still match the pin. A person's terminal, an agent session, an ordinary process, or a process that copies the arguments
-   fails this and never reads the file. This is the **rail** (a same-user process can still read the file directly: the existing residual, Q7).
-3. **The host is the barrier, again at `agent.hello`.** Whoever holds the token still has to be the bound task's descendant when the host reads the
-   caller's chain at `agent.hello` (section 6.3 of script-credentials.md), so a token read by another process, or from a dump, is refused as "presented from
-   outside its task". `scripts run` adds no new way to get a token past that check; it only replaces the hand-edited wrapper that read the same file.
+- **What is a boundary:** the **admin-only ACLs** on the task, `script-run.exe`, the script and its `--file`s, and the **pin** (task path, definition hash, file
+  hashes). A same-user process cannot edit those, so it cannot make the scheduler run something else with the token.
+- **What is a rail, not a boundary:** every **ancestry check**, at `script-run`'s admission and again at `agent.hello`. A same-user process that spoofs a parent,
+  or reaches into a running instance, can get past them; the base doc says so and this note does not claim otherwise. The residual is the base doc's section 6
+  "Honest residual" and agent-principals.md section 1.3 (the same-user limit), not only Q7.
+- **The worst case of a same-user thief** holding the token: scope `read+reply`; the credential's life (30 days, or less if the owner set it); revoked by one
+  Revoke press; and, **if the script's credential has the `launch:fleet` tick** (the dispatcher's does), fleet launches within the ticked workspaces and the
+  fleet caps. So the base doc's "no launch" comparison with the HA token does not hold for the dispatcher's credential, and this note does not repeat it.
+- Another local process calling `script-run`/`scripts run` for a credential that is not its own is refused at admission (section 7): an unbound credential is
+  never admitted, and a bound one is admitted only to a descendant of that task's running engine.
 
-The admin-only ACLs on the task and its files remain what hold the binding, not ancestry (section 6.3): an agent cannot edit the task or the host binary it runs.
+## 7. How `script-run` learns state: the host admits it
 
-## 6. Do the ancestry and caller checks still hold with the host as parent?
+`script-run` does not read the credential store itself. It asks the host over the local pipe for one new operation, `scripts.admit` (name to be fixed in S1),
+and the **host** decides, using the same `ScriptTaskBinding.Refusal` rule it applies at `agent.hello`: the credential is live and unexpired, it is task-bound, a
+running instance of the bound task (as the Scheduler reports it, same pid and start time) is an ancestor of the caller, and the task, its ACLs and its file
+hashes still match the pin. The host writes the audit row **before** it answers; an unwritable audit refuses ("Audit before use"). Only then does `script-run`
+read its file. During a rotation the file holds the newest token and the host says which credential is being admitted.
 
-The chain the host sees at `agent.hello` becomes: Task Scheduler engine -> `agent-bridge-host.exe scripts run` -> `<command>` (the script) -> its pipe connection.
-- The bound task's **action is the host image** (the pinned program) and the command after `--` is part of the pinned task definition and hashes, so changing
-  what the task runs changes the pin and refuses the credential.
-- The "engine" the host matches is the process the scheduler started, i.e. the `scripts run` process. It is an ancestor of the caller, read in full, same pid
-  and start time, as section 6.3 requires. The reverse rule is untouched: **no agent session may appear in the ancestry**; a partial or untraceable ancestry is
-  refused.
-- The `scripts run` process itself must be the exact installed host image (checked as the app's own guard checks the installed image), so a copied or renamed binary
-  that sets the variable for another command cannot satisfy the pin.
-- Open check for the build slice: confirm the scheduler's engine for a task whose action is the host image is reported as that process and not an intermediate
-  (`taskeng`/`taskhostw`) the existing reader already handles, and add the vector.
+- **Host not running:** refused, fail closed, exit code reserved for "host unavailable"; nothing is read.
+- **Reserved exit code:** a refusal exits `125` with one line holding only a closed code (below). A child's own exit code passes through; a child that itself
+  exits `125` is mapped to `1`, so the two never overlap the CLI's `2` and `4`.
+- **Closed set of refusal codes shown to the caller:** `refused` (any credential, binding, ancestry or file reason), `host-unavailable`, `bad-command`. The
+  precise cause goes only into the audit row, so a same-user process cannot probe which names exist or what state they are in.
+- **If the engine is not reported as the `script-run` process** (for example an intermediate `taskeng` or `taskhostw`), the credential **refuses**; the vector
+  for that is part of S3.
+- **Existing command rules.** host-config.md and local-pipe.md say the `scripts` commands are person-only and refuse when the ancestry cannot be read in full.
+  `script-run` is deliberately the opposite (its parent is the Scheduler's SYSTEM host). S1 adds that one exemption, for `scripts.admit` from a bound task's
+  descendant and nothing else, and updates both documents.
 
-## 7. Slices (each its own PR, each sensitive, each under the 400-line cap)
+## 8. DPAPI: who can decrypt
 
-| Slice | Delivers | About |
-|---|---|---|
-| S1 | `scripts run`: argument parsing, task-binding check, file read, child environment, audit row, refusals; fakes for the task reader and process start | 300 |
-| S2 | The app press that mints a **task-bound** credential: names the task (`\Folder\Task`) and any `--file` paths, shows the person the task, its user and its files, and the host service does the elevated binding (the `--task` mint press; separate because it is the elevated part, #3312's "Windows reads and `--task` follow") | 350 |
-| S3 | The Windows `IScriptTaskReader` (Task Scheduler engine reads, ACL and hash reads) and the real-host vectors | 300 |
-| S4 | The canary test across profile, logs, audit, task output and a forced-crash dump folder; docs: update section 7 of script-credentials.md ("How a script gets it") and the fleet README | 200 |
+The file is wrapped with Windows **CurrentUser** DPAPI. Only the user who minted it, on that machine, can unprotect it, so the task must run **as the same
+Windows user that runs the host**; `SYSTEM` or another account fails closed (`refused`).
+- **Q-run-1 (design):** keep CurrentUser DPAPI (no format change; assumed here), or machine-scope so a `SYSTEM` task can read it? Machine scope lets every local
+  account decrypt it and is a **format change**, so out of scope unless the owner asks.
+- **Q-run-2 (owner):** how the task's user is registered. "Run only when the user is logged on" needs no stored password; "whether logged on or not" needs the user's
+  password stored by the scheduler, which is the owner's decision and which no agent sets.
+- **Q-run-4 (owner or Chief):** who registers and edits the admin-locked task with no terminal step. Default proposed: the app's task-bound mint press creates it
+  through the elevated step of Q-run-3, from what the person names in the press (task name, script, user), and shows them exactly what will run.
 
-Nothing here changes the credential format, the stored hash, the scope rules or who may press mint, rotate and revoke.
+## 9. Slices, order and acceptance (each its own sensitive PR, each under the 400-line cap)
 
-## 8. Not in this note
+3a (the expiry warning, #4428) is UI only and independent of everything below.
+
+| Order | Slice | Delivers | About | Acceptance and tests (RED first) |
+|---|---|---|---|---|
+| 1 | S3 | The Windows `IScriptTaskReader` (engine reads, task definition, ACL and file hashes) | 300 | Fakes plus real-Windows vectors: the engine is the `script-run` process; an intermediate engine is refused; an unlocked file is refused |
+| 2 | S1 | `script-run` launcher and `scripts.admit` | 300 | An unbound credential is never admitted; a non-descendant is refused; a refused or unwritable audit stops it; a relative command, PowerShell without `-NoProfile`, and PATH lookup refused; `125` mapping; host-down fails closed; the token is in no argument, log or audit row |
+| 3 | S2 | The app's task-bound mint press, the launcher install and re-pin (needs Q-run-3, Q-run-4) | 350 | The press shows the person the task, user, program and files; a host update does not invalidate it; an unlocked program is refused at mint |
+| 4 | S4 | The canary test (profile, logs, audit, task output, a forced-crash dump folder); doc updates (section 7 of script-credentials.md, host-config.md, local-pipe.md, the fleet README); a review of the dispatcher scripts for what they hand on | 200 | The planted token is found nowhere; a script that passes its environment to an untrusted child fails the review |
+
+S2 uses the real reader of S3, so S3 comes first; S1 can be built with S3's fakes. Nothing here changes the credential format, the stored hash, the scope rules or who
+may press mint, rotate and revoke.
+
+## 10. Not in this note
 
 Machine-scope DPAPI (Q-run-1), storing a task password (Q-run-2), automatic renewal (a person approves every rotation), a remote mint, any change to the
 `launch:fleet` tick, and any non-Windows host.
