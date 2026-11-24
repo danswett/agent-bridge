@@ -96,6 +96,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
         public int RosterInFlight;
+        // Enforce only: the key is not in the roster. No control messages, no presence; it answers only a device that sent to it first.
+        public volatile bool Pending;
+        public readonly ConcurrentDictionary<string, byte> HeardFrom = new();
         public TokenBucket? RegistryReads;
         public volatile bool RegistrySubscribed;
         RegistryOutbox? registryOutbox;
@@ -190,6 +193,21 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             return;
         }
         if (conn is null) { return; }
+        var admission = await deviceRoster.AdmissionAsync(conn.Account.Id, conn.DeviceId);
+        if (admission == DeviceRoster.Admission.Removed)
+        {
+            metrics.Refused(CloseCodes.Removed);
+            await conn.CloseAsync(CloseCodes.Removed, "removed");
+            return;
+        }
+        // A latched account's store could not answer: turned away to try again, never served as if it were not in enforce.
+        if (admission == DeviceRoster.Admission.Unavailable)
+        {
+            metrics.Refused(CloseCodes.Restarting);
+            await conn.CloseAsync(CloseCodes.Restarting, "try-later");
+            return;
+        }
+        conn.Pending = admission == DeviceRoster.Admission.Pending;
 
         var devices = accounts.GetOrAdd(conn.Account.Id, _ => new());
         // Check and register under one lock: two admissions racing near the cap must not
@@ -311,6 +329,17 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 }
                 JsonElement m;
                 try { m = JsonDocument.Parse(data).RootElement; } catch (JsonException) { continue; }
+                // A pending device (enforce) gets no push, blobs, feedback, roster, forget or registry.
+                if (conn.Pending) { continue; }
+                if (m.TryGetProperty("t", out var et) && et.GetString() == "roster-enforce")
+                {
+                    var eid = m.TryGetProperty("id", out var eip) && eip.TryGetInt64(out var en) ? en : 0;
+                    var done = PersonKinds.Contains(conn.Kind) && await deviceRoster.EnforceAsync(conn.Account.Id, conn.DeviceId);
+                    await conn.SendJsonAsync(done ? new { t = "roster-enforce-result", id = eid, mode = (string?)DeviceRoster.Enforce, error = (string?)null }
+                        : new { t = "roster-enforce-result", id = eid, mode = (string?)null, error = (string?)"not-approved" });
+                    if (done) { await ReclassifyAsync(conn.Account.Id); }
+                    continue;
+                }
                 if (m.TryGetProperty("t", out var t) && t.GetString() == "push" && m.TryGetProperty("id", out var pid) && pid.TryGetInt64(out var id))
                 {
                     var c = conn;
@@ -396,6 +425,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 metrics.Undeliverable();
                 await conn.SendJsonAsync(new { t = "undeliverable", to });
                 continue;
+            }
+            // Enforce: a pending device answers only a device that has sent to it; only a person's approved device may start.
+            if (conn.Pending && !conn.HeardFrom.ContainsKey(to)) { continue; }
+            if (target.Pending)
+            {
+                if (conn.Pending || !PersonKinds.Contains(conn.Kind)) { continue; }
+                target.HeardFrom[from] = 0;
             }
             var outFrame = new byte[data.Length];
             outFrame[0] = Wire.DataFrame;
@@ -544,9 +580,26 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             return new { t = "roster-append-result", id, error = "bad-request" };
         }
         var results = await deviceRoster.AppendAsync(c.Account.Id, [.. arr.EnumerateArray().Select(e => e.GetString()!)]);
+        // An approval or a removal changes who is pending or removed (a no-op while the account is in observe).
+        if (results is not null && results.Any(r => r.Verdict is "accepted" or "quarantined")) { await ReclassifyAsync(c.Account.Id); }
         return results is null
             ? new { t = "roster-append-result", id, error = "unavailable" }
             : DeviceRoster.AppendReply(id, results);
+    }
+
+    // Re-tags the account's connected devices after a roster change: an approved one stops being pending, a removed one is closed.
+    async Task ReclassifyAsync(string accountId)
+    {
+        if (!accounts.TryGetValue(accountId, out var devices)) { return; }
+        foreach (var c in devices.Values.ToArray())
+        {
+            var admission = await deviceRoster.AdmissionAsync(accountId, c.DeviceId);
+            // A failed read keeps every current tag.
+            if (admission == DeviceRoster.Admission.Unavailable) { continue; }
+            c.Pending = admission == DeviceRoster.Admission.Pending;
+            if (admission == DeviceRoster.Admission.Removed) { await c.CloseAsync(CloseCodes.Removed, "removed"); }
+        }
+        await BroadcastPresenceAsync(accountId);
     }
 
     // Roster requests one connection may have running at once; more get "unavailable" at once.
@@ -600,7 +653,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 : new { t = "presence", devices = list };
             message = JsonSerializer.SerializeToUtf8Bytes(snapshot);
         }
-        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(message, version, hasRoster)));
+        // A pending device (enforce) is told nothing of the account but that it is pending.
+        var pending = JsonSerializer.SerializeToUtf8Bytes(new { t = "presence", devices = Array.Empty<object>(), pending = true });
+        await Task.WhenAll(to.Select(c => c.SendPresenceAsync(c.Pending ? pending : message, version, hasRoster && !c.Pending)));
     }
 
     static string Clean(string? name)

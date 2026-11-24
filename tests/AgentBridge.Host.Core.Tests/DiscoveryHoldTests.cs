@@ -901,6 +901,100 @@ public class DiscoveryHoldTests
         Assert.Equal(authStatus, CommandLine.IsClaudeAuthStatus(commandLine));
     }
 
+    // #3933 option (c): discovery does not hold for an invocation that cannot open a session. Only what prints
+    // information or runs one of the agent's own management commands, written out exactly; everything else, an
+    // unfamiliar option or word included, is false and holds as before. The command lines here are synthetic.
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude --version", true)]
+    [InlineData(AgentKind.Claude, "claude -v", true)]
+    [InlineData(AgentKind.Claude, "claude --help", true)]
+    [InlineData(AgentKind.Claude, "claude -h", true)]
+    [InlineData(AgentKind.Claude, "claude.exe update", true)]
+    [InlineData(AgentKind.Claude, "claude doctor", true)]
+    [InlineData(AgentKind.Claude, "\"C:\\Users\\u\\.local\\bin\\claude.exe\"   --version", true)]
+    [InlineData(AgentKind.Claude, "node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js --version", true)]
+    [InlineData(AgentKind.Copilot, "copilot --version", true)]
+    [InlineData(AgentKind.Copilot, "copilot --help", true)]
+    [InlineData(AgentKind.Copilot, "copilot.exe login", true)]
+    [InlineData(AgentKind.Codex, "codex --version", true)]
+    [InlineData(AgentKind.Codex, "codex -V", true)]
+    [InlineData(AgentKind.Codex, "codex --help", true)]
+    [InlineData(AgentKind.Codex, "codex login", true)]
+    // Anything that works or may be a session: a prompt, print mode, exec, resume, a model run, a bare start.
+    [InlineData(AgentKind.Claude, "claude", false)]
+    [InlineData(AgentKind.Claude, "claude fix the build", false)]
+    [InlineData(AgentKind.Claude, "claude -p \"hello\"", false)]
+    [InlineData(AgentKind.Claude, "claude --print hello --output-format json", false)]
+    [InlineData(AgentKind.Claude, "claude --resume abc", false)]
+    [InlineData(AgentKind.Claude, "claude --model opus", false)]
+    [InlineData(AgentKind.Claude, "claude --version --resume abc", false)]
+    [InlineData(AgentKind.Codex, "codex exec fix the build", false)]
+    [InlineData(AgentKind.Codex, "codex resume", false)]
+    [InlineData(AgentKind.Copilot, "copilot --prompt hi", false)]
+    // A subcommand word is only a subcommand as the first and only argument: a prompt that starts with it is a prompt
+    // (macOS's ps flattens quoting), and a word after an option is its value.
+    [InlineData(AgentKind.Claude, "claude update the docs", false)]
+    [InlineData(AgentKind.Claude, "claude doctor my code", false)]
+    [InlineData(AgentKind.Claude, "claude --model update", false)]
+    [InlineData(AgentKind.Claude, "claude -- update", false)]
+    [InlineData(AgentKind.Codex, "codex login now", false)]
+    // The wrong agent's words, case, near misses.
+    [InlineData(AgentKind.Claude, "claude login", false)]
+    [InlineData(AgentKind.Codex, "codex doctor", false)]
+    [InlineData(AgentKind.Copilot, "copilot -v", false)]
+    [InlineData(AgentKind.Claude, "claude --VERSION", false)]
+    [InlineData(AgentKind.Claude, "claude --versions", false)]
+    // Fail open: nothing to read, or nothing it recognises.
+    [InlineData(AgentKind.Claude, null, false)]
+    [InlineData(AgentKind.Claude, "", false)]
+    [InlineData(AgentKind.Claude, "   ", false)]
+    public void An_invocation_that_cannot_open_a_session_is_known_by_its_exact_arguments(AgentKind agent, string? commandLine, bool helper)
+    {
+        Assert.Equal(helper, CommandLine.IsNonSessionInvocation(agent, commandLine));
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude.exe --version")]
+    [InlineData(AgentKind.Claude, "claude.exe doctor")]
+    [InlineData(AgentKind.Copilot, "copilot.exe --version")]
+    [InlineData(AgentKind.Codex, "codex.exe login")]
+    public async Task A_process_that_only_prints_information_or_runs_a_management_command_does_not_hold_discovery(AgentKind agent, string commandLine)
+    {
+        using var f = new Fixture();
+        Directory.CreateDirectory(f.ClaudeRegistrations);
+        f.Processes.Run(agent, 620, commandLine);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Empty(source.Snapshot());
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude.exe fix the build", "claude")]
+    [InlineData(AgentKind.Claude, "claude.exe -p \"summarise\" --output-format json", "claude")]
+    [InlineData(AgentKind.Copilot, "copilot.exe --prompt hi", "copilot")]
+    [InlineData(AgentKind.Codex, "codex.exe exec fix the build", "codex")]
+    public async Task A_process_that_may_be_a_session_or_does_work_still_holds_discovery(AgentKind agent, string commandLine, string name)
+    {
+        using var f = new Fixture();
+        Directory.CreateDirectory(f.ClaudeRegistrations);
+        f.Processes.Run(agent, 621, commandLine);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        if (agent == AgentKind.Codex)
+        {
+            // Codex's own rule (#144): an exec run is no session and never held; unchanged here.
+            Assert.Null(source.Held);
+            return;
+        }
+
+        Assert.Equal($"an unrecognised {name} process (pid 621)", source.Held?.Reason);
+    }
+
     [Fact]
     public void A_process_is_the_hosts_own_only_when_the_host_or_the_cmd_it_started_is_its_parent_and_it_began_after_the_host()
     {
