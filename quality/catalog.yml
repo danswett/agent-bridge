@@ -45,6 +45,10 @@
 #   tier_jobs     required with tier: post-merge: the exact ci.yml job display names it makes
 #                 post-merge ("pwa-ui (webkit 1/3)"), each a job its where names. Any post-merge
 #                 suite naming a job makes it post-merge; a renamed job blocks again
+#   lane          fast (the default) | full (S2, #4104, quality/README.md §4.7). A fast suite's where names
+#                 ci.yml jobs, the merge gate; a full suite's where names full.yml jobs, the FULL lane that
+#                 never gates a merge. check reports an unknown lane (it counts as fast), a full suite whose
+#                 where names ci.yml or no full.yml job, and a fast suite whose where names full.yml
 #
 # A suite with select: affected needs project, builds or triggers, or nothing can select it.
 #
@@ -603,6 +607,22 @@ suites:
     where: ci.yml light
     # planned until the ci.yml step lands (patches/ci-speed-step-4104.patch, applied by Quality): until then only a local run tests it.
     # Flip to exists with that patch.
+    status: planned
+
+  - id: full-red-script
+    validation_plan: native
+    kind: unit
+    ring: 0
+    select: affected
+    # The alert for a red FULL lane (S2, #4104): one open issue per red job, labelled full-red, with the blocking and the waived (Arm64
+    # self-test, tests, installer) red jobs apart, on a stub gh. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/full-red.ps1, quality/test-full-red.ps1]
+    command: pwsh -NoProfile -File quality/test-full-red.ps1
+    where: ci.yml light
+    # planned until full-red.yml and its ci.yml step land (patches/ci-s2-piece7a-full-red-4104.patch, applied by Quality). Flip to
+    # exists, and add full-red.yml report to the where, with that patch.
     status: planned
 
   - id: arm64-waiver-script

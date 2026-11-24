@@ -857,8 +857,16 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
   `0.1.<that run's number>` and the version stays above every release: a workflow of its own would count from 1, below them all); a newer push
   cancels an older FULL run (the latest wins); hourly, for the newest `main` commit that has no FULL run (a `workflow_dispatch`
   with the commit and its CI run's number); and when the release train dispatches it for a commit it wants to publish.
-* **A red FULL lane is to open an issue** (`full-red.yml`: one per commit, label `full-red`, the failed jobs and their links) and
-  **never holds a merge**: merges continue.
+* **A red FULL lane is to open an issue** (`full-red.yml`: **one open issue per red job**, label `full-red`, a comment on it for each later red commit) and
+  **never holds a merge**: merges continue. Its script is written and tested (piece 7, `quality/full-red.ps1`, `quality/test-full-red.ps1`; the
+  workflow that runs it is a patch for Quality). It acts only on a Full run **of this repository, on main, started by `workflow_run` or by hand**: a fork's run, a
+  pull request's, and a fork's branch named `main` are passed over, in the script and again in the workflow's `if:`. It finds a job's open issue by the hidden marker
+  `<!-- full-red-job:<name> -->` in its body, never by label (Quality may change labels), so a persistently red job is one issue with a comment per commit, not a
+  flood; a re-run of a recorded commit adds nothing, and when the job passes again it comments once that it is green and leaves the closing to a person. It lists
+  **Blocking** red jobs (x64 anything, the Arm64 pack, any other job) apart from **Waived** ones (the Arm64 self-test, tests and installer: recorded in an issue
+  though the run succeeded, publish continues). The aggregates are never a cause; a run that failed with no failed job behind it (a startup failure, a skipped or
+  cancelled job) is red as `(whole run)`. Job names are cut to a safe alphabet, the only label is `full-red`, and any API error fails the run (only "the label
+  already exists" is let through). The workflow queues its runs (`queue: max`) so a burst of Full completions drops no alert.
 * **What is to read which.** The merge rule's `main_green.jobs` and `main-red` are to name the FAST jobs only, and the catalog is to mark the FULL
   suites `lane: full` with their `full.yml` job names (the validators then read both workflows). The ruleset keeps requiring only
   `quality-gate` and the merge-rule status.
@@ -875,7 +883,7 @@ Linux), `ha-integration`, `light`, and `app (win-x64)` as a **build only** (it c
 * **Before go-live** (the train relying on FULL): a real `workflow_dispatch` of `full.yml` proves that the run found by `head_sha` is the run that tested
   that commit (its jobs' checkouts are that sha), and the first train run is read by a person.
 * **Delivered in pieces** (each at most 400 whole lines, tests and this text first): (1) the selector and this text, done (#4217); (2) the selector's conditions
-  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows; (4) `spikes` and `spikes-linux` to
+  (Arm64 pack, SBOMs, `full-gate`, `head_sha`) and this wording; (3) the catalog's `lane` and the validators reading both workflows, done: a suite's `lane` is `fast` (the default; its `where` names `ci.yml` jobs) or `full` (its `where` names `full.yml` jobs), `check` reports a mismatch, and once `full.yml` exists it is checked too (it may trigger only on `workflow_run`, `schedule` and `workflow_dispatch`; its `full-gate` must need every other job, run `if: always()` and read `toJSON(needs)`); (4) `spikes` and `spikes-linux` to
   `full.yml`; (5) `pwa-ui` and `pwa-e2e`; (6) the `app` job split into the FAST build and the FULL self-test, pack and installers, with `full-gate`;
   (7) `full-red.yml`, `main_green` and `main-red` on the FAST names. Quality alone pushes `ci.yml`, `full.yml` and the merge rule: from (4) on, a piece is a patch.
 **Main's concurrency: one group per commit, nothing cancelled.** Main pushes use the group `ci-main-<sha>` with
