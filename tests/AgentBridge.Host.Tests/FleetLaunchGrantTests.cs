@@ -195,6 +195,36 @@ public sealed class FleetLaunchGrantTests : IDisposable
         Assert.Equal("rate-limited", overflow.Reason);
     }
 
+    // The #4459 read: a launch refused for a cap is on an audit row, with the limits in force (the intent row only says "reserved").
+    [Fact]
+    public async Task A_fleet_launch_refused_for_a_cap_is_audited_with_the_limits_in_force()
+    {
+        var audit = new AgentAuditLog(folder);
+        var sessions = new SessionService(null!, new("machine", "fixture", "windows", "1"), launcher: new CappedLauncher()) { FleetLaunchSwitch = () => true };
+        var request = Request;
+        var result = await sessions.LaunchFleetAsync(request, "script:machine/dispatcher", audit, () => null, _ => null);
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        var rows = File.ReadAllLines(Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentAuditLog.FolderName), "agents-*.jsonl")));
+        var row = Assert.Single(rows, r => r.Contains("fleet.launch.cap"));
+        Assert.Contains("limits in force: 8 an hour, 6 live", row);
+        Assert.Contains(request.Request, row);
+        Assert.Contains("refused", row);
+    }
+
+    sealed class CappedLauncher : ISessionLauncher
+    {
+        public bool Available => true;
+        public LaunchConfig FleetConfig => LaunchConfig.Default;
+        public Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<LaunchResult> LaunchFleetAsync(LaunchRequest request, string principal, Func<Guid, Action<string>?> prepare, CancellationToken cancellationToken = default)
+        {
+            prepare(Guid.NewGuid());
+            return Task.FromResult(new LaunchResult(LaunchOutcome.Refused,
+                "fleet launch limit: 8 an hour on this machine; the next slot opens when the oldest of them is an hour old (limits in force: 8 an hour, 6 live)"));
+        }
+    }
+
     sealed class AdmissionLauncher(int live) : ISessionLauncher
     {
         public int Dispatches;

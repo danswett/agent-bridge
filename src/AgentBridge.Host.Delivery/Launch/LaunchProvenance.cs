@@ -84,9 +84,9 @@ internal sealed class LaunchProvenance
                 .Select(e => e.Value).ToList();
             var windowStart = now - TimeSpan.FromHours(1);
             if (fleet.Count(o => o.Process?.StartedAt is not { } at || at > windowStart) >= limits.PerHour)
-            { return $"fleet launch limit: {limits.PerHour} an hour on this machine; the next slot opens when the oldest of them is an hour old"; }
+            { return $"fleet launch limit: {limits.PerHour} an hour on this machine; the next slot opens when the oldest of them is an hour old (limits in force: {limits.PerHour} an hour, {limits.Live} live)"; }
             if (fleet.Count(o => o.Process is null || o.Session.Length > 0 && processOf(o.Session) == o.Process) >= limits.Live)
-            { return $"fleet launch limit: {limits.Live} live fleet workers on this machine; one must end first"; }
+            { return $"fleet launch limit: {limits.Live} live fleet workers on this machine; one must end first (limits in force: {limits.PerHour} an hour, {limits.Live} live)"; }
             origins[request] = new(session, null, "fleet", role, now);
             Save();
             return null;

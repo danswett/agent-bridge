@@ -114,6 +114,9 @@ public sealed class SessionService
         if (Check() is { } problem) { return new(LaunchOutcome.Refused, problem); }
         var result = await GateLaunchAudit.LaunchAsync(launcher, request, principal, audit, new("local", "agent", principal, null),
             fleet: true, refusal: Check);
+        // A refusal for a cap names the cap and the limits in force, on a row of its own (the launch intent row only says "reserved"); best effort, the refusal stands.
+        if (result is { Outcome: LaunchOutcome.Refused, Reason: { } why } && why.StartsWith("fleet launch limit:", StringComparison.Ordinal))
+        { audit.Append(new AgentAuditEntry("local", request.Request ?? "", principal, [], "fleet.launch.cap", request.Request ?? "", "refused", why) { Grant = "fleet" }); }
         return result with { Trust = null, Launched = result.Launched is { } launched ? launched with { Cwd = null, Profile = null } : null };
     }
 
