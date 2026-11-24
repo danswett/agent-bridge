@@ -158,7 +158,8 @@ public sealed partial class SessionView
         var rows = HistoryDraw.Rows(turns.Skip(from).Take(end - from).ToArray(), null, openPrompts);
         var scroll = ConversationScroll;
         var atEnd = HistoryAtEnd();
-        var offset = scroll?.VerticalOffset ?? 0;
+        // Where the view is going, not where an earlier prepend's correction has animated to (ConversationKeep.PrependBaseline).
+        var offset = ConversationKeep.PrependBaseline(anchoring, scroll?.VerticalOffset ?? 0);
         var extent = scroll?.ScrollableHeight ?? 0;
         var reading = atEnd ? null : ReadingHistory();
         var (session, releases) = (shownHistory, pinReleases);
