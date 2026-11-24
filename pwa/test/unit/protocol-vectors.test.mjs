@@ -236,7 +236,7 @@ const READS = {
   // for progress sends (#600): read as the service gets them.
   DeliveryProgress: { read: readProgress },
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
-  ReplyResult: { read: readReplyResult },
+  ReplyResult: { read: readReplyResult, unread: ['input'] },
   ReplyAttachmentBinding: { read: readReplyAttachmentBinding },
   StopResult: { read: readStopResult },
   // session.history's page and the records in it, as the history store gets them (#292).
@@ -514,6 +514,7 @@ const NOT_REPLAYED = {
   RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
   RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
   ClearedComposer: 'a guarded clear\'s host-only escrow: no producer or PWA presentation yet (#804)',
+  ComposerInput: 'what a refused reply shows of a full Copilot box: no PWA presentation yet (#804 slice 3)',
   DeliverySender: 'local authenticated sender helper, never accepted from the reply wire (#2568)',
   DeliveryHeader: 'local envelope metadata; the PWA has no delivery parser yet (#2568)',
   DeliveryEntry: 'local parser result; the PWA has no delivery parser yet (#2568)',

@@ -1076,11 +1076,12 @@ public sealed partial class ReplyService : ISessionReplier
     // What went wrong goes to the host's log only: the person is given fixed words, never an
     // exception's text (#802, #995).
     ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e)) { Refusal = ReplyRefusal.ComposerUnverified };
-    static ReplyResult Unverified(string reason, CopilotInputBoxState? box = null) => Refused(reason) with
+    static ReplyResult Unverified(string reason, CopilotInputBoxState? box = null)
     {
-        Refusal = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 }
-            ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
-    };
+        var occupied = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 };
+        // The refusal shows what is there (#804); it is only shown, never cleared by this reply.
+        return Refused(reason) with { Refusal = occupied ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified, Input = occupied ? ComposerInput.From(box!.Content) : null };
+    }
 
     string Logged(string what, Exception e)
     {

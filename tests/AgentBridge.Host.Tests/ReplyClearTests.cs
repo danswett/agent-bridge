@@ -39,6 +39,25 @@ public sealed class ReplyClearTests
         Assert.DoesNotContain("handoffText", JsonSerializer.Serialize(request, ProtocolJson.Options));
     }
 
+    [Fact]
+    public async Task A_reply_refused_for_a_full_copilot_box_shows_the_box_and_offers_no_clear()
+    {
+        await using var h = await Harness.Create(); h.Draft = "rerun the tests";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
+        Assert.Equal((AnswerOutcome.Refused, ReplyRefusal.Occupied), (result.Outcome, result.Refusal));
+        Assert.Equal(("rerun the tests", ComposerInput.From("rerun the tests").Digest), (result.Input!.Text, result.Input.Digest));
+        Assert.False(result.Input!.Clearable);
+        Assert.Equal(0, h.Replies);
+    }
+
+    [Fact]
+    public async Task An_empty_box_has_no_input_to_show()
+    {
+        await using var h = await Harness.Create(); h.Draft = "";
+        var result = await h.Replier.ReplyAsync(h.Request() with { ClearConfirmation = null, ClearDraftSource = null, StillCurrent = () => true });
+        Assert.Null(result.Input);
+    }
+
     [Theory]
     [InlineData("remote", false)]
     [InlineData("remote", true)]
