@@ -1,0 +1,217 @@
+From dc938dfe15c5eff57584b26a6d64741a300a48fa Mon Sep 17 00:00:00 2001
+From: SG Quality Lead R8 <danswett@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 04:23:38 -0800
+Subject: [PATCH] CI: the scheduled stale-PWA alarm: stale-pwa.yml, its ci.yml
+ step, the catalog flip (Part of #4369 and #4104)
+
+PATCH BRANCH: sg-patch/ci-s2-stale-pwa-alarm-4369 (danswett/agent-bridge); the file is patches/ci-s2-stale-pwa-alarm-4369.patch.
+APPLY ON: PR #4466's branch ci/stale-pwa-alarm-4369 (it needs quality/stale-pwa.ps1 from there): git apply patches/ci-s2-stale-pwa-alarm-4369.patch
+FOR: Quality (workflow files).
+
+.github/workflows/stale-pwa.yml runs every 4 hours and by hand: two read-only GETs (curl of https://app.slipgates.com/config.js, and the job's own read-only token listing the newest
+commit on main that changed pwa/), then quality/stale-pwa.ps1 on what it read, so the run is RED when the served build is more than 24 h older than that commit or when either read fails
+(a failed read leaves no file and the script fails closed). contents: read, no secrets, no write token, no continue-on-error. ci.yml's light job runs the script's tests; the catalog suite
+flips to exists and names the job; the merge rule's exempt list names the workflow (a schedule on main that judges no pull request).
+
+Tests: StalePwaWorkflowTests (schedule and dispatch only, read-only permissions, only two GETs and no secret, a failed read leaves no file, the script's failure cannot be swallowed) with
+four breaks caught (a push trigger, a curl write, a swallowed failure, continue-on-error). actionlint and zizmor are clean.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml                      |  6 ++
+ .github/workflows/stale-pwa.yml               | 41 +++++++++++
+ quality/catalog.yml                           |  6 +-
+ .../MergeRuleTests.cs                         |  3 +-
+ .../StalePwaWorkflowTests.cs                  | 72 +++++++++++++++++++
+ 5 files changed, 123 insertions(+), 5 deletions(-)
+ create mode 100644 .github/workflows/stale-pwa.yml
+ create mode 100644 tests/AgentBridge.Quality.Tests/StalePwaWorkflowTests.cs
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 57d59bf1f..85f6f766f 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1402,6 +1402,7 @@ jobs:
+     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+     #  - post-receipt-script: the receipts App's posting script, refusals and a dry run, offline;
+     #  - red-minutes-script: the red-minutes figure's spell counting, offline (quality/red-minutes.ps1);
++    #  - stale-pwa-script: the stale-PWA alarm's decision on files, offline (quality/stale-pwa.ps1);
+     #  - arm64-waiver-script: quality-gate's time-boxed win-arm64 waiver, offline (quality/arm64-waiver.ps1);
+     #  - rerun-known-flakes: the automatic re-run of a known flake on main, refusals included, offline;
+     #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+@@ -1454,6 +1455,11 @@ jobs:
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'red-minutes-script')) }}
+         shell: pwsh
+         run: pwsh -NoProfile -File quality/test-red-minutes.ps1
++      - name: The stale-PWA alarm fails when the served build is over 24 hours behind main and fails closed on anything unreadable
++        # Fixed files: no request, no token, nothing reaches GitHub or the site.
++        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'stale-pwa-script')) }}
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/test-stale-pwa.ps1
+       - name: "The waiver covers exactly three named jobs: app (win-arm64), app-installer (win-arm64), product (windows-11-arm), with no switch and no expiry"
+         # Fixed needs and jobs JSON: nothing reaches GitHub.
+         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'arm64-waiver-script')) }}
+diff --git a/.github/workflows/stale-pwa.yml b/.github/workflows/stale-pwa.yml
+new file mode 100644
+index 000000000..795284985
+--- /dev/null
++++ b/.github/workflows/stale-pwa.yml
+@@ -0,0 +1,41 @@
++name: Stale PWA alarm
++
++# #4369 Fix 3 (Part of #4104). app.slipgates.com served a 12-day-old build (Nov 12 to 24) while every Pages run showed green, because a fail-closed rollback fence held the
++# deploys and nothing was loud about it. This is the check that notices: it reads the served config.js (APP_VERSION is the deployed commit, BUILT_AT its time) and main's
++# newest commit that changed pwa/, and the run goes RED when the served build is more than 24 hours older than that commit, or when either cannot be read (quality/stale-pwa.ps1
++# decides, offline and tested). Two read-only GETs, no secrets: the job's own read-only token lists commits, and config.js is a public file. A deliberate rollback alarms too.
++on:
++  schedule:
++    - cron: '23 */4 * * *'
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++concurrency:
++  group: stale-pwa-alarm
++  cancel-in-progress: false
++
++jobs:
++  check:
++    if: github.repository == 'danswett/agent-bridge'
++    runs-on: ubuntu-latest
++    timeout-minutes: 5
++    steps:
++      # The default branch's own copy of the script (a schedule runs there); nothing of a pull request.
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++          sparse-checkout: quality
++      - name: Read the served build and main's newest PWA change
++        shell: bash
++        env:
++          GH_TOKEN: ${{ github.token }}
++          REPO: ${{ github.repository }}
++        run: |
++          # A failed read leaves no file, and the script then fails closed (an unreadable site or history never reads as fresh).
++          curl --fail --silent --show-error --max-time 30 --retry 2 --output "$RUNNER_TEMP/config.js" https://app.slipgates.com/config.js || rm -f "$RUNNER_TEMP/config.js"
++          gh api "repos/$REPO/commits?sha=main&path=pwa&per_page=1" --jq 'if length == 0 then empty else .[0] | {sha: .sha, date: .commit.committer.date} end' > "$RUNNER_TEMP/newest.json" || rm -f "$RUNNER_TEMP/newest.json"
++      - name: Is the served build more than 24 hours behind main's newest PWA change?
++        shell: pwsh
++        run: pwsh -NoProfile -File quality/stale-pwa.ps1 -ConfigPath "$env:RUNNER_TEMP/config.js" -NewestPath "$env:RUNNER_TEMP/newest.json"
+diff --git a/quality/catalog.yml b/quality/catalog.yml
+index 41fc0b2d8..e375d6b6a 100644
+--- a/quality/catalog.yml
++++ b/quality/catalog.yml
+@@ -641,10 +641,8 @@ suites:
+     runner: local
+     triggers: [quality/stale-pwa.ps1, quality/test-stale-pwa.ps1]
+     command: pwsh -NoProfile -File quality/test-stale-pwa.ps1
+-    where: ci.yml light
+-    # planned until stale-pwa.yml and its ci.yml step land (patches/ci-s2-stale-pwa-alarm-4369.patch, applied by Quality). Flip to exists,
+-    # and add stale-pwa.yml check to the where, with that patch.
+-    status: planned
++    where: ci.yml light, stale-pwa.yml check
++    status: exists
+   - id: arm64-waiver-script
+     validation_plan: native
+     kind: unit
+diff --git a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+index 5e8406988..7cb3b7852 100644
+--- a/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
++++ b/tests/AgentBridge.Quality.Tests/MergeRuleTests.cs
+@@ -1083,12 +1083,13 @@ public class MergeRuleTests
+     //   verdict and a finished one needn't re-judge anything, #2454),
+     //   Release feed deploy (dispatch only, main only: it deploys the release feed Worker and judges no pull request).
+     //   ab-ci smoke (dispatch only: proves an ab-ci runner's environment by hand, judges no pull request, #4104).
++    //   Stale PWA alarm (schedule every 4 h and dispatch, on main: reads the served site and main's history, judges no pull request, #4369).
+     //   Publish pending release (schedule every 5 min, dispatch: re-runs a deferred publish job of main's, judges no pull
+     //   request; docs/app-windows.md, "Spacing").
+     static readonly string[] OnlyOnTheDefaultBranchOrByHand =
+     [
+         "ab-ci smoke", "ARM64 self-test loop (non-gating)", "Beta acceptance", "Flake hunt", "Lab nightly (held)", "Lab release verification (held)",
+-        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Update gap",
++        "Merge rule sweep", "Ops probe", "Pages", "Publish pending release", "Release feed deploy", "Revert culprit", "Stale PWA alarm", "Update gap",
+     ];
+ 
+     static YamlMappingNode LoadWorkflow(string file)
+diff --git a/tests/AgentBridge.Quality.Tests/StalePwaWorkflowTests.cs b/tests/AgentBridge.Quality.Tests/StalePwaWorkflowTests.cs
+new file mode 100644
+index 000000000..32da2b495
+--- /dev/null
++++ b/tests/AgentBridge.Quality.Tests/StalePwaWorkflowTests.cs
+@@ -0,0 +1,72 @@
++using YamlDotNet.RepresentationModel;
++
++namespace AgentBridge.Quality.Tests;
++
++/// <summary>
++/// stale-pwa.yml (#4369 Fix 3, Part of #4104): the scheduled check that turns a PWA site left behind main into a RED run. It must be what it says: read-only (two GETs,
++/// no secrets, no write token), scheduled and by hand only, run quality/stale-pwa.ps1 on what it read, and never swallow that script's failure.
++/// </summary>
++public class StalePwaWorkflowTests
++{
++    const string File = ".github/workflows/stale-pwa.yml";
++
++    static string Raw => System.IO.File.ReadAllText(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), File));
++
++    static YamlMappingNode Workflow()
++    {
++        var stream = new YamlStream();
++        stream.Load(new StringReader(Raw));
++        return (YamlMappingNode)stream.Documents[0].RootNode;
++    }
++
++    static string Scalar(YamlNode node, string key) => ((YamlScalarNode)((YamlMappingNode)node)[key]).Value!;
++
++    static List<YamlMappingNode> Steps() => ((YamlSequenceNode)((YamlMappingNode)((YamlMappingNode)Workflow()["jobs"])["check"])["steps"]).Children.OfType<YamlMappingNode>().ToList();
++
++    [Fact]
++    public void It_runs_on_a_schedule_and_by_hand_only_with_read_only_permissions_and_one_job()
++    {
++        var workflow = Workflow();
++
++        Assert.Equal(["schedule", "workflow_dispatch"], ((YamlMappingNode)workflow["on"]).Children.Keys.Select(k => k.ToString()).Order(StringComparer.Ordinal));
++        Assert.Equal(["contents"], ((YamlMappingNode)workflow["permissions"]).Children.Keys.Select(k => k.ToString()));
++        Assert.Equal("read", Scalar(workflow["permissions"], "contents"));
++        Assert.Equal(["check"], ((YamlMappingNode)workflow["jobs"]).Children.Keys.Select(k => k.ToString()));
++        // a day is the limit, so a check at least every six hours notices within a quarter of it; and it is not so often that it floods the API
++        var cron = Scalar(((YamlSequenceNode)((YamlMappingNode)workflow["on"])["schedule"]).Children[0], "cron");
++        Assert.Matches(@"^\d+ \*/([1-6]) \* \* \*$", cron);
++    }
++
++    [Fact]
++    public void Its_two_reads_are_GETs_with_no_secret_and_a_failed_read_leaves_no_file_for_the_script_to_fail_closed_on()
++    {
++        var read = Steps().Single(s => s.Children.ContainsKey("run") && Scalar(s, "run").Contains("curl", StringComparison.Ordinal));
++        var script = Scalar(read, "run");
++
++        Assert.Contains("https://app.slipgates.com/config.js", script, StringComparison.Ordinal);
++        Assert.Contains("commits?sha=main&path=pwa&per_page=1", script, StringComparison.Ordinal);
++        var commands = script.Split('\n').Where(l => l.StartsWith("curl ", StringComparison.Ordinal) || l.StartsWith("gh api ", StringComparison.Ordinal)).Select(l => l.Split("||")[0]).ToList();
++        Assert.Equal(2, commands.Count);
++        foreach (var write in new[] { " -X ", "--request", "--data", " -d ", " -F ", " -f ", "--method", "--input", "--form" })
++            Assert.All(commands, c => Assert.DoesNotContain(write, c, StringComparison.Ordinal));
++        Assert.DoesNotContain("secrets.", Raw, StringComparison.Ordinal);
++        Assert.Equal(2, script.Split("|| rm -f", StringSplitOptions.None).Length - 1);
++        Assert.Equal("${{ github.token }}", Scalar(read["env"], "GH_TOKEN"));
++        Assert.False(read.Children.ContainsKey("continue-on-error"));
++    }
++
++    [Fact]
++    public void It_runs_the_decision_on_what_it_read_and_nothing_can_swallow_its_failure()
++    {
++        var steps = Steps();
++        var decide = steps[^1];
++
++        Assert.Contains("quality/stale-pwa.ps1", Scalar(decide, "run"), StringComparison.Ordinal);
++        Assert.Contains("-ConfigPath \"$env:RUNNER_TEMP/config.js\" -NewestPath \"$env:RUNNER_TEMP/newest.json\"", Scalar(decide, "run"), StringComparison.Ordinal);
++        Assert.All(steps, s => Assert.False(s.Children.ContainsKey("continue-on-error")));
++        Assert.DoesNotContain("|| true", Raw, StringComparison.Ordinal);
++        var checkout = steps.Single(s => s.Children.ContainsKey("uses") && Scalar(s, "uses").StartsWith("actions/checkout@", StringComparison.Ordinal));
++        Assert.Equal("false", Scalar(checkout["with"], "persist-credentials"));
++        Assert.False(((YamlMappingNode)checkout["with"]).Children.ContainsKey("ref"));
++    }
++}
+-- 
+2.56.1.windows.1
+
