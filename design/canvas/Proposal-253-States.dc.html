@@ -37,11 +37,11 @@ button,input,textarea{font:inherit}
       <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; overflow: hidden">
         <div style="display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid {{t.stroke}}">
           <span style="height: 36px; line-height: 36px; color: {{t.text2}}">All</span>
-          <span style="position: relative; height: 36px; line-height: 36px; font-weight: 600">ULTRA<span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></span>
-          <span style="height: 36px; line-height: 36px; color: {{t.text2}}">DEV-VM1</span>
+          <span style="position: relative; height: 36px; line-height: 36px; font-weight: 600">Machine B<span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></span>
+          <span style="height: 36px; line-height: 36px; color: {{t.text2}}">Machine A</span>
         </div>
         <div style="padding: 12px">
-          <button aria-pressed="true" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.sel}}; color: {{t.text}}; font-size: 14px; text-align: left"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; font-weight: 600">Needs you&#160;· 3</span><span style="font-size: 12px; color: {{t.text2}}">1 on ULTRA</span></button>
+          <button aria-pressed="true" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.sel}}; color: {{t.text}}; font-size: 14px; text-align: left"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; font-weight: 600">Needs you&#160;· 3</span><span style="font-size: 12px; color: {{t.text2}}">1 on Machine B</span></button>
           <div style="display: flex; gap: 12px; padding: 10px 12px; margin-top: 4px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex"><span style="flex: 1">Ship 0.1.691 prerelease</span><span style="font-size: 12px; color: {{t.text2}}">2m</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.amberText}}">Waiting on you</div></div></div>
           <button style="margin: 4px 0 0 40px; height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.subtle}}; color: {{t.text}}; font-size: 14px">2 more on other machines</button>
         </div>
@@ -50,7 +50,7 @@ button,input,textarea{font:inherit}
       <div style="font-size: 12px; color: {{t.text2}}">On, all answered: a row stays put until you leave the filter</div>
       <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 12px">
         <button aria-pressed="true" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.sel}}; color: {{t.text}}; font-size: 14px; text-align: left"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Glyph" kind="idle" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; font-weight: 600">Needs you&#160;· 0</span></button>
-        <div style="display: flex; gap: 12px; padding: 10px 12px; margin-top: 4px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="flex: 1; min-width: 0"><div>Release notes for 0.1.691</div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Working&#160;· DEV-VM1</div></div></div>
+        <div style="display: flex; gap: 12px; padding: 10px 12px; margin-top: 4px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="flex: 1; min-width: 0"><div>Release notes for 0.1.691</div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Working&#160;· Machine A</div></div></div>
         <div style="padding: 4px 12px 0 40px; font-size: 12px; color: {{t.text2}}">Nothing else needs you</div>
       </div>
 
@@ -73,7 +73,7 @@ button,input,textarea{font:inherit}
         </div>
         </sc-for>
       </div>
-      <div style="font-size: 12px; line-height: 18px; color: {{t.text2}}">A row never carries the question's words. Screen readers hear the row as today: "Release notes for 0.1.691, waiting on you, DEV-VM1".</div>
+      <div style="font-size: 12px; line-height: 18px; color: {{t.text2}}">A row never carries the question's words. Screen readers hear the row as today: "Release notes for 0.1.691, waiting on you, Machine A".</div>
     </div>
 
     <!-- 3. The question, in the conversation -->
@@ -101,7 +101,7 @@ button,input,textarea{font:inherit}
         <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.amberHead}}">Delegate Check ubuntu CI asks</span><span style="color: {{t.text2}}">9m</span></div>
         <p style="margin: 0">Can I drop the v8 theme shim from Theme.tsx?</p>
         <div style="font-size: 14px; line-height: 20px; color: {{t.text2}}">Yes · No · Keep it until 0.2</div>
-        <div style="font-size: 14px; line-height: 20px; font-weight: 600; color: {{t.amberText}}">Answer at the machine&#160;· DEV-VM1</div>
+        <div style="font-size: 14px; line-height: 20px; font-weight: 600; color: {{t.amberText}}">Answer at the machine&#160;· Machine A</div>
       </section>
 
       <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Resolved: kept across turns, quiet, with this device&#8217;s answer record (or &#8220;No longer waiting&#8221; with none)</div>
@@ -169,11 +169,11 @@ class Component extends DCLogic {
     return {
       theme, t, mono: "'Slipgates Mono', 'Cascadia Mono', ui-monospace, monospace",
       rows: [
-        row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'DEV-VM1', '4m', 'The session asks (§2.2 rule 1)'),
-        row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'DEV-VM1', '9m', 'A delegate asks (rule 2)'),
-        row('Rotate the relay key', 'needs', 'Waiting on you', 'ULTRA', '12m', 'answerAtMachine: the question says so, not the row'),
-        row('Port the hooks to Codex', 'needs', '2 questions waiting', 'ULTRA', '6m', 'If a host ever sends two: one row, counted twice'),
-        row('Release notes for 0.1.691', 'working', 'Working', 'DEV-VM1', 'now', 'Answered while the filter is on: stays put', false)
+        row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'Machine A', '4m', 'The session asks (§2.2 rule 1)'),
+        row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'Machine A', '9m', 'A delegate asks (rule 2)'),
+        row('Rotate the relay key', 'needs', 'Waiting on you', 'Machine B', '12m', 'answerAtMachine: the question says so, not the row'),
+        row('Port the hooks to Codex', 'needs', '2 questions waiting', 'Machine B', '6m', 'If a host ever sends two: one row, counted twice'),
+        row('Release notes for 0.1.691', 'working', 'Working', 'Machine A', 'now', 'Answered while the filter is on: stays put', false)
       ]
     };
   }

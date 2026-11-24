@@ -26,8 +26,8 @@ button,input,textarea{font:inherit}
   </header>
   <div role="tablist" aria-label="Machine" style="display: flex; gap: 24px; padding: 4px 20px 0">
     <button role="tab" aria-selected="true" style="position: relative; height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text}}; font-weight: 600; font-size: 15px">All<span style="position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></button>
-    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">ULTRA</button>
-    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">DEV-VM1</button>
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">Machine B</button>
+    <button role="tab" aria-selected="false" style="height: 40px; padding: 0; border: 0; background: transparent; color: {{t.text2}}; font-size: 15px">Machine A</button>
   </div>
 
   <div style="flex: 1; overflow: hidden; background: {{t.layer}}; border-top: 1px solid {{t.stroke}}; padding: 16px 12px 0; display: flex; flex-direction: column">
@@ -35,11 +35,11 @@ button,input,textarea{font:inherit}
     <div style="padding: 0 8px 8px; display: flex; align-items: center; font-size: 13px; line-height: 18px; font-weight: 600; color: {{t.amberHead}}"><span style="flex: 1">Needs you · 3</span><span style="width: 18px; height: 18px; border-radius: 9px; background: {{t.mark}}; color: #FFFFFF; font-size: 11px; line-height: 18px; font-weight: 700; text-align: center">1</span></div>
     <div style="display: flex; flex-direction: column; gap: 8px">
       <div style="padding: 14px 16px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; flex-direction: column; gap: 12px">
-        <div style="display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Ship 0.1.691 prerelease</span><span style="font-size: 13px; color: {{t.text2}}">2m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Allow Copilot to run this command?</div><code style="display: block; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 13px; line-height: 18px">git push origin release/0.1.691</code><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}; margin-top: 4px">ULTRA · Copilot</div></div></div>
+        <div style="display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Ship 0.1.691 prerelease</span><span style="font-size: 13px; color: {{t.text2}}">2m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Allow Copilot to run this command?</div><code style="display: block; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 13px; line-height: 18px">git push origin release/0.1.691</code><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}; margin-top: 4px">Machine B · Copilot</div></div></div>
         <div style="display: flex; gap: 8px; padding-left: 30px"><button style="flex: 1; height: 44px; border-radius: 6px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-weight: 600; font-size: 15px">Approve once</button><button style="flex: 1; height: 44px; border-radius: 6px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 15px">Deny</button></div>
       </div>
-      <div style="padding: 12px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Release notes for 0.1.691</span><span style="font-size: 13px; color: {{t.text2}}">4m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Which channel should the 0.1.691 notes go to?</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">DEV-VM1 · Copilot</div></div></div>
-      <div style="padding: 12px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Fluent V8 to V9 migration</span><span style="font-size: 13px; color: {{t.text2}}">9m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Can I drop the v8 theme shim from Theme.tsx?</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">DEV-VM1 · Delegate Check ubuntu CI asks</div><div style="font-size: 14px; font-weight: 600; color: {{t.amberText}}">Answer at the machine</div></div></div>
+      <div style="padding: 12px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Release notes for 0.1.691</span><span style="font-size: 13px; color: {{t.text2}}">4m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Which channel should the 0.1.691 notes go to?</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">Machine A · Copilot</div></div></div>
+      <div style="padding: 12px 16px; border-radius: 8px; background: {{t.amberFill}}; display: flex; gap: 12px"><span style="padding-top: 1px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex; gap: 8px"><span style="flex: 1; font-weight: 600">Fluent V8 to V9 migration</span><span style="font-size: 13px; color: {{t.text2}}">9m</span></div><div style="font-size: 14px; line-height: 20px; margin-top: 2px">Can I drop the v8 theme shim from Theme.tsx?</div><div style="font-size: 13px; line-height: 18px; color: {{t.text2}}">Machine A · Delegate Check ubuntu CI asks</div><div style="font-size: 14px; font-weight: 600; color: {{t.amberText}}">Answer at the machine</div></div></div>
     </div>
     </sc-if>
 
@@ -76,7 +76,7 @@ button,input,textarea{font:inherit}
     <a href="#" aria-label="Back to sessions" style="width: 44px; height: 44px; display: grid; place-items: center; color: {{t.text}}"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import></a>
     <div style="flex: 1; min-width: 0">
       <div style="font-weight: 600; font-size: 17px; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Ship 0.1.691 prerelease</div>
-      <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: {{t.text2}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span><span style="color: {{t.amberText}}">Waiting on you</span>&#160;· ULTRA</span></div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; color: {{t.text2}}"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import><span><span style="color: {{t.amberText}}">Waiting on you</span>&#160;· Machine B</span></div>
     </div>
     <button aria-label="More actions" style="width: 44px; height: 44px; border-radius: 6px; border: 0; background: transparent; color: {{t.text}}; display: grid; place-items: center"><dc-import name="Icon" icon="more" size="20" hint-size="20px,20px"></dc-import></button>
   </header>
@@ -133,12 +133,12 @@ class Component extends DCLogic {
       statusColor: o.statusColor ?? t.text2, mark: !!o.mark, needs: glyph === 'needs'
     });
     const all = [
-      row('Ship 0.1.691 prerelease', 'needs', 'Waiting on you', 'ULTRA', '2m', { statusColor: t.amberText, mark: before }),
-      row('Fix trust-wait banner', 'working', 'Editing LaunchView.xaml.cs', 'ULTRA', '', { unread: true }),
-      row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'DEV-VM1', '4m', { statusColor: t.amberText }),
-      row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'DEV-VM1', '9m', { statusColor: t.amberText }),
-      row('Nightly issue triage', 'idle', 'Driven by an agent', 'ULTRA', '1h', { driven: true, statusColor: t.violetText }),
-      row('Testing code functionality', 'idle', 'Idle', 'ULTRA', '32m')
+      row('Ship 0.1.691 prerelease', 'needs', 'Waiting on you', 'Machine B', '2m', { statusColor: t.amberText, mark: before }),
+      row('Fix trust-wait banner', 'working', 'Editing LaunchView.xaml.cs', 'Machine B', '', { unread: true }),
+      row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'Machine A', '4m', { statusColor: t.amberText }),
+      row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'Machine A', '9m', { statusColor: t.amberText }),
+      row('Nightly issue triage', 'idle', 'Driven by an agent', 'Machine B', '1h', { driven: true, statusColor: t.violetText }),
+      row('Testing code functionality', 'idle', 'Idle', 'Machine B', '32m')
     ];
     return {
       theme, t, mono: "'Slipgates Mono', 'Cascadia Mono', ui-monospace, monospace",

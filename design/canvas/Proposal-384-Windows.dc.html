@@ -406,7 +406,7 @@ class Component extends DCLogic {
     // Agent rows reused across the flow. The demo machine has Copilot CLI and Agency; Claude Code and Codex CLI are not installed.
     let title = '', sub = '', chip = '', blocks = [], tabs = null, headBtns = [], footReason = null;
     let footBtns = [B('Back'), B('Continue', 'accent')];
-    let machineLine = 'ULTRA · Windows 11';
+    let machineLine = 'Machine B · Windows 11';
     const codexConsent = (state) => C(() => {
       if (state === 'consent') return [
         kv('Source', 'npm registry · @openai/codex, published by OpenAI'),
@@ -437,7 +437,7 @@ class Component extends DCLogic {
       const migrated = screen === 'discover-migrated';
       title = 'Discover'; sub = 'Read only: nothing on this machine changes until you choose';
       footBtns = [B('Back', 'dis'), B('Continue', 'accent')];
-      if (migrated) machineLine = 'DEV-VM1 · Windows 11';
+      if (migrated) machineLine = 'Machine A · Windows 11';
       blocks = migrated ? [
         info('info', 'Earlier setup found', 'agent-ha-bridge 1.3.22 set up this machine. Its working settings are kept.', [['Review migration', 'std']]),
         section('Managed by agent-ha-bridge'),
@@ -490,7 +490,7 @@ class Component extends DCLogic {
     if (screen === 'accounts' || screen === 'accounts-expired') {
       title = 'Accounts'; sub = 'Agent Bridge first, then each agent through its own sign-in';
       const expired = screen === 'accounts-expired';
-      if (expired) machineLine = 'DEV-VM1 · Windows 11';
+      if (expired) machineLine = 'Machine A · Windows 11';
       blocks = [
         section('Agent Bridge', '', true),
         expired
@@ -645,7 +645,7 @@ class Component extends DCLogic {
       return { label, sel, current: sel ? 'page' : 'false', g, fill: sel ? t.railSel : 'transparent', color: sel ? t.railSelText : t.text };
     }) : [];
     if (screen === 'settings-overview') {
-      title = 'Overview'; sub = 'ULTRA · checked 14:52';
+      title = 'Overview'; sub = 'Machine B · checked 14:52';
       headBtns = [B('Check again'), B('Diagnostics')];
       blocks = [
         info('needs', 'Setup isn\'t finished', 'Verify hasn\'t run for Codex CLI.', [['Resume setup', 'accent']]),
@@ -695,13 +695,13 @@ class Component extends DCLogic {
       ];
     }
     if (screen === 'settings-accounts') {
-      title = 'Accounts'; sub = 'ULTRA';
+      title = 'Accounts'; sub = 'Machine B';
       blocks = [
         section('Agent Bridge', '', true),
         C(() => [
           row({ title: 'GitHub account', meta: 'danswett', st: 'ok', words: 'Signed in', btns: [['Switch account', 'subtle'], ['Sign out', 'subtle']] }),
           row({ title: 'Relay', meta: 'wss://relay.example.net · connected 14:52', st: 'ok', words: 'Working', btns: [['Reconnect', 'subtle']] }),
-          row({ title: 'This machine\'s name on your devices', field: 'ULTRA' })
+          row({ title: 'This machine\'s name on your devices', field: 'Machine B' })
         ]),
         section('Agents'),
         C(() => [
@@ -721,7 +721,7 @@ class Component extends DCLogic {
       blocks = workspaceBlocks(true);
     }
     if (screen === 'settings-general') {
-      title = 'General'; sub = 'DEV-VM1 · Dev Box';
+      title = 'General'; sub = 'Machine A · Dev Box';
       blocks = [
         section('Bridge Host', '', true),
         C(() => [
