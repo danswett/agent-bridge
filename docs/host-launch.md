@@ -45,7 +45,15 @@ proof survives reopening the store, but conflicting person/process records, unfi
 launches and corrupt storage fail closed. Names and caller-supplied fields are not proof.
 This reconciles the predecessor provenance work for
 [agent stopping](https://github.com/danswett/agent-bridge/issues/2741) with the current
-host-owned fleet grant; it does not itself enable stopping or fleet launch admission.
+host-owned fleet grant; it does not itself enable fleet launch admission.
+
+Stopping (#2741): `fleet.end` with the all-zero grant id ends a session with no grant, only when
+`IsFleetWorker` holds, that is, this launch record shows an agent started this exact process through the
+fleet route. A person-started session, no record, an unfinished or unreadable record, a derived (16-hex)
+or unknown id, a held host, a kill switch or an excluded workspace refuses (`scope`, `policy`,
+`kill-switch`) before anything is typed. The same gates apply as for a grant: one press, never
+`person-required` confirmation, audited under the agent's principal. The plain `session.stop` stays
+person-only.
 
 ## Answering `launch.options` without waiting for Agency (#1527)
 
