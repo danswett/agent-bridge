@@ -112,6 +112,8 @@ section 3's activation. Any failure refuses the succession and leaves section 3'
 2. Whether `presentation: inherit` may ever be part of a grant (proposed: no).
 3. Whether an agent's request for a succession may start the drain before the grant is checked (proposed: the grant is
    checked first, so no drain starts without a valid one).
+4. Accepting or rejecting the residual risk stated in S1.5 (the online authority can activate a successor with no person
+   present, inside the grant's bounds). Approving S1 is accepting it; if the owner rejects it, per-successor approval stays.
 
 ### S1.5 Interaction with the person enrollment (slice 2) and the published claim
 
@@ -132,7 +134,9 @@ section 3's activation. Any failure refuses the succession and leaves section 3'
   claim's `assignmentDigest` then binds the grant use: the digest of the grant body, its use number, and the exact
   predecessor and successor tuples; `assignmentVersion` still increases by one per use and never resets. Readers verify the
   pinned grant signature, the use against `maxUses`, the host add and both proofs, as they verify an assignment today.
-- **Online authority, residual risk.** Today the relay authority acts only after a person has signed the exact successor in
+- **Online authority, residual risk.** **Residual risk: with a grant, the online relay authority can activate a successor with no
+  person present (one role, bounded in time and count, requires host proof and a confirmed predecessor stop). The OWNER accepts
+  or rejects this risk when approving this CHANGE.** Today the relay authority acts only after a person has signed the exact successor in
   the last 60 seconds. Under a grant it can activate a successor with no person present, inside the grant's role, time and
   count. A compromised authority key could therefore use an open grant, but only for one role, within the bounds, and only
   with an enrolled host's possession proof and a confirmed stop of the old holder; revoking or letting the grant lapse
