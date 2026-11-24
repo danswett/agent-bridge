@@ -14,12 +14,13 @@ export function turnMarker(session) {
   return createHash('sha256').update(`${session?.activity?.turnCount ?? ''}|${response}`, 'utf8').digest('hex').slice(0, 16);
 }
 
+// The default list: status and metadata, without the working folder (cwd), which is a host path. title, repository and branch stay (owner
+// decision, Nov 23, 2026); the path and the latest answer and question come only with include "content".
 function typed(session) {
   return {
     id: session.id,
     agent: session.agent,
     title: session.title,
-    cwd: session.cwd,
     repository: session.repository,
     branch: session.branch,
     model: session.model,
@@ -37,7 +38,7 @@ export async function listSessions(host, { include } = {}) {
   do {
     const page = await host.request('sessions.list', cursor ? { cursor } : {});
     for (const s of page.sessions ?? []) {
-      sessions.push(include === 'content' ? { ...typed(s), activity: s.activity, question: s.question } : typed(s));
+      sessions.push(include === 'content' ? { ...typed(s), cwd: s.cwd, activity: s.activity, question: s.question } : typed(s));
     }
     discoveryHeld ||= Boolean(page.discoveryHeld);
     cursor = page.next;
@@ -135,6 +136,22 @@ export async function launchSession(host, ledger, options = {}) {
   const answer = { request: data.request, outcome: result.outcome, ...(result.reason ? { reason: result.reason } : {}), ...(result.session ? { session: result.session } : {}) };
   ledger.remember(data.request, answer);
   return answer;
+}
+
+const NO_GRANT = '00000000-0000-0000-0000-000000000000';
+
+// Ends a session the host's own launch record shows an agent started (#2741), by the host's fleet.end with no grant.
+// Thin on purpose: every rule (provenance, own session, unpushed work, kill switch) is the host's. A lost answer is
+// 'unknown' and keeps its request id: send the same request again, never a new one, to learn what happened.
+export async function endSession(host, id, request = randomUUID()) {
+  let receipt;
+  try {
+    receipt = await host.request('fleet.end', { version: 1, request, grant: NO_GRANT, session: id });
+  } catch (error) {
+    if (!(error instanceof PipeError)) throw error;
+    return { id, request, outcome: error.kind === 'unavailable' ? 'unknown' : 'refused', reason: error.message };
+  }
+  return { id, request, outcome: receipt.outcome, ...(receipt.reason ? { reason: receipt.reason } : {}) };
 }
 
 export const getLaunchOptions = (host) => host.request('launch.options', {});

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Host.Fleet;
+using AgentBridge.Host.Lite;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -15,6 +16,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
     readonly AgentCredentials credentials;
     readonly Channel channel = new();
     readonly List<string> logs = [];
+    readonly Sender sender = new();
 
     public ScriptCredentialScopeTests() =>
         credentials = new(fixture.Root, "machine1", clock, logs.Add);
@@ -25,7 +27,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
 
     Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler() =>
         LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.App, "fixture app")),
-            credentials: credentials, log: logs.Add, fleet: new FleetList(credentials, new Roster()),
+            credentials: credentials, log: logs.Add, fleet: new FleetList(credentials, new Roster()), lite: sender,
             audit: new AgentAuditLog(fixture.Root));
 
     [Theory]
@@ -36,7 +38,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         if (!OperatingSystem.IsWindows()) { return; }
         var issued = credentials.MintScript("collector").Credential;
         var hello = credentials.Accept(channel, issued);
-        Assert.Equal(AgentProtocol.ScopeRead, hello.Scope);
+        Assert.Equal(AgentProtocol.ScopeReadReply, hello.Scope);
         var result = await Handler()(channel, op, Body(new
         {
             sessionId = "agent_bridge_1234567890abcdef",
@@ -45,29 +47,35 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         }));
         Assert.NotNull(result);
         Assert.Equal(issued, credentials.Of(channel));
-        var refusal = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            Handler()(channel, "agent.send", Body(new { })));
-        Assert.Contains("fleet.list and fleet.find", refusal.Message);
+        Assert.Empty(sender.Calls);
     }
 
     [Theory]
-    [InlineData("agent.send")]
     [InlineData("session.reply")]
     [InlineData("session.launch")]
     [InlineData("session.answer")]
     [InlineData("host.config.set")]
     [InlineData("scripts.add")]
+    [InlineData("scripts.revoke")]
+    [InlineData("scripts.grant-fleet")]
+    [InlineData("scripts.revoke-fleet")]
     [InlineData("agent.adopt")]
+    [InlineData("agent.revoke")]
+    [InlineData("agent.credential")]
     [InlineData("agent.hello")]
     [InlineData("future.operation")]
-    public async Task A_script_is_refused_every_non_read_operation_even_when_classified_as_the_app(string op)
+    public async Task A_script_is_refused_operations_outside_read_and_reply_even_when_classified_as_the_app(string op)
     {
         var issued = credentials.MintScript("collector").Credential;
         credentials.Accept(channel, issued);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             Handler()(channel, op, Body(new { scope = AgentProtocol.ScopeReadReplyLaunch })));
-        Assert.Contains("fleet.list and fleet.find", error.Message);
+        Assert.Contains("read+reply", error.Message);
+        Assert.Contains("fleet.list, fleet.find and agent.send", error.Message);
         Assert.Equal(issued, credentials.Of(channel));
+        Assert.False(credentials.Of(channel)!.FleetLaunch);
+        Assert.Equal(1, credentials.Count);
+        Assert.Empty(sender.Calls);
         Assert.Contains(logs, line => line.Contains("script:machine1/collector", StringComparison.Ordinal));
     }
 
@@ -88,7 +96,7 @@ public sealed class ScriptCredentialScopeTests : IDisposable
 
         var error = Assert.Throws<InvalidOperationException>(() => credentials.Accept(channel, replacement));
 
-        Assert.Contains("fleet.list and fleet.find", error.Message);
+        Assert.Contains("read+reply", error.Message);
         Assert.Equal(state == "live" ? script : null, credentials.Of(channel));
         Assert.True(credentials.IsLive(replacement));
     }
@@ -98,7 +106,9 @@ public sealed class ScriptCredentialScopeTests : IDisposable
     [InlineData("fleet.list", true)]
     [InlineData("fleet.find", false)]
     [InlineData("fleet.find", true)]
-    public async Task A_script_loses_even_its_read_operations_after_expiry_or_revocation(string op, bool revoke)
+    [InlineData("agent.send", false)]
+    [InlineData("agent.send", true)]
+    public async Task A_script_loses_read_and_reply_after_expiry_or_revocation(string op, bool revoke)
     {
         credentials.Accept(channel, credentials.MintScript("collector", TimeSpan.FromMinutes(1)).Credential);
         if (revoke) { credentials.RevokeScript("collector"); }
@@ -106,6 +116,70 @@ public sealed class ScriptCredentialScopeTests : IDisposable
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             Handler()(channel, op, Body(new { name = "worker" })));
         Assert.Contains("no longer live", error.Message);
+        Assert.Empty(sender.Calls);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.App)]
+    [InlineData(CallerKind.HostCli)]
+    [InlineData(CallerKind.Other)]
+    public async Task A_script_can_send_a_message_as_itself_without_raising_its_scope(CallerKind classification)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var issued = credentials.MintScript("collector").Credential;
+        credentials.Accept(channel, issued);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(classification, "fixture")),
+            credentials: credentials, lite: sender, audit: new AgentAuditLog(fixture.Root));
+
+        var result = Assert.IsType<LiteSendReply>(await handler(channel, LiteAgentSend.Op, Body(new
+        {
+            machine = "33333333333333333333333333333333",
+            session = "agent_bridge_1111111111111111",
+            text = "please read this",
+            scope = AgentProtocol.ScopeReadReplyLaunch,
+            principal = "person:local",
+            fleetLaunch = true,
+        })));
+
+        Assert.Equal("delivered", result.Outcome);
+        var sent = Assert.Single(sender.Calls);
+        Assert.Equal(issued, sent.Caller);
+        Assert.Equal(new LiteSendInput("33333333333333333333333333333333", "agent_bridge_1111111111111111", "please read this"), sent.Input);
+        Assert.Equal(issued, credentials.Of(channel));
+        Assert.False(credentials.Of(channel)!.FleetLaunch);
+        var audit = Directory.GetFiles(Path.Combine(fixture.Root, AgentAuditLog.FolderName), "*.jsonl")
+            .SelectMany(File.ReadAllLines).Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+            .Where(row => row.TryGetProperty("action", out _)).ToArray();
+        Assert.Equal(new[] { "attempted", "delivered" }, audit.Select(row => row.GetProperty("outcome").GetString()));
+        Assert.All(audit, row =>
+            Assert.Equal(issued.Principal, row.GetProperty("principal").GetString()));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            handler(channel, "scripts.grant-fleet", Body(new { name = "collector" })));
+        Assert.Contains("read+reply", error.Message);
+        Assert.False(credentials.Of(channel)!.FleetLaunch);
+    }
+
+    [Fact]
+    public async Task A_script_reply_is_refused_without_an_audit_before_anything_is_sent()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        credentials.Accept(channel, credentials.MintScript("collector").Credential);
+        var handler = LocalApi.Handler(null!, null!, new FixedCallerGuard(new(CallerKind.Other, "fixture")),
+            credentials: credentials, lite: sender);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => handler(channel, LiteAgentSend.Op,
+            Body(new { machine = "33333333333333333333333333333333", session = "agent_bridge_1111111111111111", text = "hello" })));
+        Assert.Contains("auditUnwritable", error.Message);
+        Assert.Empty(sender.Calls);
+    }
+
+    sealed class Sender : ILiteSender
+    {
+        public readonly List<(AgentCredential Caller, LiteSendInput Input)> Calls = [];
+        public Task<LiteOutcome> SendAsync(AgentCredential caller, LiteSendInput input, CancellationToken ct)
+        {
+            Calls.Add((caller, input));
+            return Task.FromResult(new LiteOutcome(LiteKind.Delivered, null, "fixture-request"));
+        }
     }
 
     sealed class Roster : IScopedFleetRoster

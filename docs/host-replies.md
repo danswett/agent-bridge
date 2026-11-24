@@ -297,6 +297,28 @@ prompt (`promptSource: "queued"`) repeats it and confirms nothing. Codex: an
 `item_completed` `UserMessage` whose text is the line (an older `user_message` event is read
 too). Each record confirms one reply. Anything else is `unconfirmed`.
 
+**Long text (Claude).** Claude takes a long burst of typed keys for a paste: one of 1000 characters
+arrived as about 300 typed and a `[Pasted text]` block, and one of 4514 lost its head (a console input
+the host wrote whole, in one `WriteConsoleInput`). Replies, Lite and relay messages alike are therefore
+typed as chunks of at most 100 UTF-16 units (`AgentReply.ChunkUnits`, never ending inside a surrogate
+pair), 40 ms apart (`ChunkPauseMs`), the Enter only on the last. They go to the worker as one plan
+(`agent-bridge-keys 2`, unchanged: each chunk is a `send` with its pause), the screen check on the first
+send only. 4500 characters took about 3 s and arrived whole in the probe below. Copilot and Codex are
+typed as before, and a reply of 100 units or fewer is one send. Bracketed paste was not used: Claude
+would hold a `[Pasted text]` placeholder, and the recorded prompt could no longer be matched to the
+reply. **Owner-approved CHANGE, Nov 23 (Part of #2568).** The probe is
+`ops/tools/claude-typing-probe.ps1`: synthetic marker text typed into the builder's own session
+without Enter, read back from the screen and cleared; never another person's session. Claude's paste
+detection depends on timing, so a machine that still folds a chunked reply shows it there first.
+
+**Long text (Codex), probed Nov 23 on a fleet machine in an idle Codex session, synthetic text, no Enter, cleared:** it does
+not need chunking. A single burst of 400 characters shows as typed; of 1000, as typed; of 2500 and of 4500, as
+`[Pasted Content 2500 chars]` and `[Pasted Content 4500 chars]` with the whole count, which Codex shows only after
+its own paste buffering, two to four seconds later (nothing at 1.5 s). Chunked 100/40 ended the same. A reader of
+the box a second after typing therefore sees it empty. Codex also ignores a control character sent as a character
+(the injector's Ctrl+U, Backspace): only real key events (virtual-key code set) edit its box, so the probe clears it
+with those.
+
 **Enter again.** Claude takes a long burst as a paste and can swallow the Enter after it
 (the reason for `Confirm-DaemonClaudeSubmit`); Codex was seen live to make it a new line in
 the box instead. If nothing is recorded within 1.5 s, the host reads the screen and presses
@@ -350,7 +372,14 @@ In order, for every reply:
    an unready launch stays refused; there is no timeout release. A window seen ready, or
    registration by an agent that registers only once ready, remains readiness evidence.
    Visible trust/startup questions and open transcript `ask_user`, `permission.requested` or
-   trust questions still refuse replies, even after activity; the checks below still apply.
+   trust questions still refuse replies, even after activity; the checks below still apply. A
+   session whose own transcript shows activity since the launch and has such a question open (a
+   helper's `ask_user` included: it keeps replies refused for as long as it is open, by design,
+   since a typed reply could answer it) is refused with words that say so
+   (`FirstReplyWords.WaitingForAnAnswer`: "is waiting for an answer to a question or permission
+   request, so it can't take a reply yet. Answer that first, then send this again"), never as
+   "still starting" or "never showed it was ready", which a working session was told for minutes
+   (#3538). A stale question a resume left from a killed CLI keeps the old words.
    Owner-approved change ([#3634](https://github.com/danswett/agent-bridge/issues/3634)):
    owner `ask_user` answer "release on any transcript activity", relayed by Chief S10,
    Nov 21, 2026, ~22:30 PT. The attachments are staged (below).
@@ -378,8 +407,8 @@ In order, for every reply:
    With the trust question showing it is `refused` with words for the phone (`FirstReplyWords`):
    answer it first, from the phone where the host allows that for a session it launched
    (#947), else at the machine. With the window unreadable or not drawn yet it is `refused`
-   as "the session is still starting, so it can't take a reply yet. Send it again in a moment"
-   (Creative's words; the clients read it as "The machine refused this reply: {reason}."), and nothing is typed. For a
+   as "the machine could not read the session's screen to tell it is ready for a reply" or "the machine does not see the session's input box yet, so it can't take a reply" (each ending "Send it again in a moment"; they
+   name the check that failed, #3538; the clients read a reason as "The machine refused this reply: {reason}."), and nothing is typed. For a
    launch the bridge follows it names Needs you ("If it asks whether to trust its folder, that shows in Needs you")
    only where remote folder trust is on with a device approved, so a reason never promises a place that is not coming.
    A refused reply stays in the sender's box (only a delivered one comes out), so sending again costs a tap. So a session launched
@@ -518,3 +547,12 @@ That is the unchanged AP5-lite contract, not the mode-capable queue-reply v1 pat
 - **No prefix.** The same escaping applies, and a leading digit or letter gets one leading space so it cannot answer an option prompt.
 
 This is hygiene, not a security boundary: a model may ignore the marker, and a sender's words may still persuade (design/agent-principals.md §6.4).
+
+### What a refused reply shows (#804 slice 2)
+
+A reply refused because a complete, non-shell Copilot box holds words (refusal `Occupied`)
+also returns `input`: the box as the host shows it (hidden characters escaped, host `marks`),
+capped at 500 characters, `truncated`, `mode: "text"`, the SHA-256 `digest` of the whole
+escaped box, and `clearable`. Only a reply classified as a person's (the same `Steer` provenance the clear requires) gets `input` and the draft in `reason`; an agent, an MCP child or an unclassified sender gets the reason with the draft's length only (`ReplyReasons.Shared`). **Lite never shows the box:** the Lite refusal stays the content-free `composerNotEmpty`, because the box may hold a person's draft that an agent must not read; it may later say only that a person can clear it. This cut only shows: `clearable` is always `false`, no key is
+sent, and nothing is cleared. A cut never splits an escape or a surrogate pair. Shell mode,
+Claude and Codex boxes carry no `input` yet. The signed clear and policy follow in later slices.

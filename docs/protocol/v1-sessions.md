@@ -647,7 +647,7 @@ Home Assistant status line did). An agent is held when:
 |---|---|
 | Its processes could not be listed at all | `the copilot processes could not be listed` |
 | The runtime (`node`, `bun`) a live session ran in could not be read this time, by pid and start time; or a Copilot lock or a registration names a runtime that could not be read and was written by it, not by an earlier process with its pid | `a copilot process that could not be read (pid 4120)` |
-| An agent process no session or registration accounts for, for its first 2 minutes. A registration accounts only for the process that wrote it, not a later one given its pid. A session registers within seconds, so one still unaccounted for after that is not a session: the host carries on without it and logs that once. One whose start time cannot be read is never carried on without, since a new session given its pid could not be told from it. A process that only starts the agent's own executable and waits on it is counted as that executable, not as one more, while the executable runs: npm's node loader (`npm-loader.js`, `codex.js`), and VS Code's copilot shim (which Agency runs), known by its program's folder, `copilot-shim\copilot.exe`, when its child is the real CLI, given the same arguments, and the shim started no later than that child. A real CLI that starts another is never taken for a launcher. Scout's embedded `copilot --headless`, Codex's `app-server`, a host's Claude usage probe, and the `claude auth status` this host started before one ([v1-usage.md](v1-usage.md)) are nobody's session and never hold | `an unrecognised copilot process (pid 4120)` |
+| An agent process no session or registration accounts for, for its first 2 minutes. A registration accounts only for the process that wrote it, not a later one given its pid. A session registers within seconds, so one still unaccounted for after that is not a session: the host carries on without it and logs that once. One whose start time cannot be read is never carried on without, since a new session given its pid could not be told from it. A process that only starts the agent's own executable and waits on it is counted as that executable, not as one more, while the executable runs: npm's node loader (`npm-loader.js`, `codex.js`), and VS Code's copilot shim (which Agency runs), known by its program's folder, `copilot-shim\copilot.exe`, when its child is the real CLI, given the same arguments, and the shim started no later than that child. A real CLI that starts another is never taken for a launcher. Scout's embedded `copilot --headless`, Codex's `app-server`, a host's Claude usage probe, and the `claude auth status` this host started before one ([v1-usage.md](v1-usage.md)) are nobody's session and never hold. Nor does an invocation that cannot open a session (#3933): the program, or a runtime and its script, with exactly one argument that only prints information or runs a management command. Claude: `--version`, `-v`, `--help`, `-h`, `update`, `doctor`, `install`. Copilot: `--version`, `--help`, `login`. Codex: `--version`, `-V`, `--help`, `-h`, `login`. Anything else, a prompt, print mode, `exec`, a resume, a model, a second argument, a word after an option, another case, or a command line that cannot be read, is not exempt and holds as before: an unfamiliar shape fails open to a hold, never to a missed session | `an unrecognised copilot process (pid 4120)` |
 | A registration (Claude, Codex) that cannot be read (its details included), is a link, is not named for its own session, names no process, or changed while it was read | `a claude registration changed while it was read` |
 | An unended Codex registration that names no process (its hooks fired before they could tell which Codex was theirs) holds for 2 minutes after its `Updated` (the file's write time when it has none) and while the Codex processes cannot be listed. Past that, it holds only while a Codex process nothing accounts for could be its session and have written it, and for at most an hour after its `Updated`. Such a process is an interactive one by its subcommand (none, a prompt, `resume` or `fork`; a server's name as a prompt or an option's value does not count, nor does a node or bun preload named codex; under npx or bunx the first argument named codex or naming `@openai/codex` at any version is Codex, as is the command in npx's `-c`), or one whose command line could not be read, never a server (`app-server`, `mcp-server`) or `exec` run; it is no launcher (npx, bunx, `pnpm dlx`, a version manager's shim: a `codex` whose own folder is `shims`, or Volta's `bin`; not a Codex that started another through its shell tool) of an interactive Codex executable it started, which is the session if any is and is counted itself (what started what is read up the executable's ancestry only as far as each process started no later than the one below it, so a reused parent pid ends it, and a process whose start time cannot be read launched nothing); and it started no later than one second after the registration's `Updated` (the slack the host allows elsewhere for start times the OS rounds; a wall clock stepped back by more than that between the Codex starting and its hook firing can let the grace end while it still waits), or its start time cannot be read. The reason then names that process, and the host logs once that it holds for it. Past both, no running Codex is taken for its session (one that exited before its `SessionEnd` left it behind): the host carries on without it and logs that once. A session left waiting on its hooks-trust question for more than the hour is carried on without too. A Claude registration that names no process holds as above | `a codex registration names no process`, or past the grace `a codex registration names no process (codex pid 960 could have written it)` |
 | Claude Code's own `sessions/<pid>.json` for a running Claude process (of its generation) that cannot be read whole, unless that process is a host's usage probe known by its exact options, which is set aside before its file is read. One that says the run is not interactive (SDK, print mode), or whose process is a host's usage probe (which Claude Code 2.1.316 records as interactive), accounts for its process as nobody's session | `a claude session file could not be read (pid 4120)` |
@@ -690,8 +690,8 @@ A field's value, by type:
 | `text` | A string |
 | `number` | A number |
 
-Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
-16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text, in `text` or `other`, is at most 16 KiB of UTF-8 (`Limits.AnswerText`, the same as a reply's); the whole request is at most
+17 KiB (`Limits.AnswerRequest`: that text plus `Limits.AnswerEnvelope`, 1 KiB, for the ids and flags around it). A host from before this (4 KiB) refuses a longer answer as "longer than 4 KiB" and never truncates it. A host collapses control characters and line breaks to spaces before typing.
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
@@ -700,6 +700,8 @@ An empty or blank value for a `required` `text` field is `refused` as needing an
 or text that is empty once its control characters (Cc) are made spaces, as a host types them,
 and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
 nothing records no answer, and blank text might be recorded trimmed to nothing.
+An empty array for a `required` `multi` is `refused` as needing an answer: a required multi-select needs at least one
+choice, for every agent (owner decision, Nov 23). An optional `multi` may be empty, where its `minItems` allows it.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
@@ -1079,6 +1081,8 @@ foreign replay receives no escrow or progress. There is no wire confirmation fie
 production clear producer or capability in this cut. Signed person relay confirmation,
 policy and PWA/app presentation follow separately; existing clients are unchanged.
 
+A reply refused because a Copilot box holds words also carries optional `input: { text, marks, truncated, mode, digest, clearable }`: the box escaped as the host shows it (host `[start, length]` marks), at most 500 characters, `digest` the SHA-256 of the whole escaped box, `mode` `"text"`, and `clearable` always `false` in this cut (see [host replies](../host-replies.md)). Sent only to a reply the host classified as a person's; absent for agents, MCP children, Lite and any other refusal, whose `reason` carries only the draft's length. Clients that ignore it behave as before.
+
 `attachments: [{ "id": "<client attachment UUID>", "ref": "@<staged absolute path>" }]`
 binds each attachment to exactly the reference token in the recorded prompt, in the
 request's attachment order. It is returned only for **delivered Copilot and Claude**
@@ -1435,7 +1439,9 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
   "endpoint": "https://web.push.apple.com/QGuQyavXutnMhZ…",
   "keys": { "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV…", "auth": "BTBZMqHH6r4Tts7J_aSIgg" },
   "app": "https://danswett.github.io/agent-bridge/app/",
-  "device": "iPhone · Slipgates"
+  "device": "iPhone · Slipgates",
+  "notify": { "questions": true, "pinned": true, "all": false, "deliveryFailures": false,
+              "pinnedSessions": ["3f9c0a52-1d7e-4b8a-9c11-0a5e7d2b6f40"] }
 }
 ```
 
@@ -1444,6 +1450,7 @@ subscription, or a browser that renewed it, is brought up to date. Request `data
 | `endpoint`, `keys` | Exactly what the browser's `PushSubscription.toJSON()` gives, for a subscription made with the relay's VAPID key (`GET /v1/push/key`). `endpoint` is https; `p256dh` is a base64url P-256 point, `auth` 16 base64url bytes |
 | `app` | The client's own URL (https): where a tap on a notification opens it |
 | `device` | Optional. How `push.list` names this device; the channel's peer name otherwise |
+| `notify` | Optional. This device's notification filters (below). Absent means no filtering: question and finished-turn notices as before |
 
 Result: `{ "subscribed": true, "count": 2 }`, `count` being how many devices the host now
 notifies. A host keeps **one subscription per device** (the channel's peer id) and per
@@ -1458,6 +1465,31 @@ relay's account-scoped routing, so the host keeps the account boundary itself: i
 lists the peer among that account's devices, and refuses anything else. It saves
 subscriptions with the account they belong to, and drops them all if the profile signs
 in as another account.
+
+**Notification filters (`notify`).** Decided by the owner (option a, relayed by the Engineering Lead,
+Nov 22 2026, #1396). Four booleans and a set, kept **with this device's subscription**, so the
+**host filters when it sends**; the service worker never drops a push, because a browser requires a
+visible notification for every push it receives. A flag left out takes its default shown here.
+
+| Field | Default | Effect |
+|---|---|---|
+| `questions` | true | `question` notices (a session waiting on an answer). `resolved` follows the question it withdraws and is not filtered separately |
+| `pinned` | true | `finished` notices for the sessions in `pinnedSessions` |
+| `all` | false | `finished` notices for every session; it covers `pinned` |
+| `deliveryFailures` | false | A count-only notice, debounced to one per 60 s and always visible, for messages a lane could not deliver. A host that does not send it ignores the flag |
+| `pinnedSessions` | `[]` | The device's pinned session ids on this host: a **set**, not an order, at most 300 ids of 1 to 128 characters each; a request with more, or with an empty or longer id, fails as a request. An id the host does not know is ignored |
+
+A client sends `push.subscribe` again, with the whole current `notify`, whenever a flag or a
+pin changes while notifications are on; the host replaces the device's filters. The pinned set
+leaves the device only in this request, only to hosts of the account (the rule above), is
+stored with the subscription and removed with it, and is not returned by `push.list`. Only `failures` is decided by its own flag (`deliveryFailures`, off for a device that sent no `notify`); sign-in
+and the other notice kinds are not filtered. An older host that does not know `notify` ignores it
+and keeps sending everything. A request with a `notify` of the wrong shape fails as a request.
+A launched agent that waits on a folder-trust answer for two minutes (`TrustWaitAfter`, documented here, not a setting) is told to the owner by the host
+itself, once per question: the `question` kind in the `needsYou` class, with host-built words (the agent's name, the machine's name, and "A launched session is
+waiting for a folder-trust answer"), nothing the agent said and no folder, opening the machine's Needs you. It is not a new kind and not a planner: nothing
+sends a tap, and a question answered or gone first is forgotten without a notice. It follows the device's own `notify` filters for the `question` kind.
+A device that filters a session's finished turns is still told when a question it was shown is no longer waiting: the host sends it the `resolved` notice, and drops a question not yet sent, when the turn ends.
 
 ### `push.unsubscribe`
 
@@ -1728,6 +1760,7 @@ silently (ui.md §7.0; later #913 work).
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
 | `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
+| `failures` | **New (S2b of the push filters).** The machine's delivery lane dropped messages, or could not confirm a handoff, in the last 60 s window: `data.failures` is how many. One per machine per window, a count only (never a session, id or text), sent at the end of the window and only to a device whose `notify.deliveryFailures` is on, always alerting (a device in use is told too, and a count still waiting for a device is replaced by the next; a window no device wants leaves no count behind). It opens the machine; an older client reads it as a question and does the same | Delivery lane |
 | `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
@@ -1750,7 +1783,7 @@ before the push would go. Then:
   a device in use shows its very card (`open` is its session and `openQuestion` its id): then it
   goes to none of them but a device still showing an earlier question's notice of that session,
   which it replaces. Its reminder still comes due 15 minutes on and is judged the same way;
-- `resolved`, `group`, `signIn` and `restored` go as before.
+- `resolved`, `group`, `signIn`, `restored` and `failures` go as before.
 
 This is judged as each push goes, not when it was made, and no delay is added to wait for a
 `sessions.focus`: one that reaches the host first wins. A device that never said, gave no
@@ -1859,9 +1892,9 @@ Every notice about one session on one machine shares:
   `<machine id>:signin:<agent>:<first 8 hex of SHA-256 of the account>` (of the empty string when
   the host does not know the account), one per machine, agent and account, so its hourly repeat
   replaces it. A `group` notice's, and its withdrawal's, is `<machine id>:~needsyou`, one per
-  machine.
+  machine. A `failures` notice's is `<machine id>:~failures`, one per machine, so each window's count replaces the last.
 * a **topic** (RFC 8030 `Topic`), the first 24 bytes of SHA-256 of
-  `agent-bridge-push|<machine id>|<session id>` (for `signIn` and `group`, the tag's part after the
+  `agent-bridge-push|<machine id>|<session id>` (for `signIn`, `group` and `failures`, the tag's part after the
   machine id in place of the session id), base64url (32 characters; Apple refuses
   other lengths, spike S5 finding 6): the push service replaces an undelivered push with
   the newer one, so a phone that was offline gets one notice per session, not a backlog.
@@ -1873,6 +1906,7 @@ Every notice about one session on one machine shares:
 | `signIn` | 6 h | `high` |
 | `restored` | 24 h | `normal` |
 | `group` | 24 h | `high`; `normal` when it changes silently or is withdrawn |
+| `failures` | 6 h | `normal` |
 | `hostGone` (#970, proposed) | 6 h | `high` |
 | `hostBack` (#970, proposed) | 6 h | `normal` |
 
@@ -1898,13 +1932,14 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). `group`: "Needs you", never changed by its updates, and its withdrawal's too. At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. `group`: "`<machine>` · *n* sessions waiting on you" ("1 session waiting on you" once the rest are answered); its withdrawal "`<machine>` · no longer waiting". Creative owns these words (#913, 6690989275). Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
-| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. `group` and its withdrawal: `host` and `needsyou=1`, built as `restored`'s (any `host`, `session` and `question` in `app` replaced), opening Needs you; an older client opens the machine. A client opens that machine and session, and the question ready to answer |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). `group`: "Needs you", never changed by its updates, and its withdrawal's too. At most 120 bytes `failures`: "Messages not delivered" (the machine is named in the body). |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. `group`: "`<machine>` · *n* sessions waiting on you" ("1 session waiting on you" once the rest are answered); its withdrawal "`<machine>` · no longer waiting". Creative owns these words (#913, 6690989275). Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB `failures`: "`<machine>` · *N* messages not delivered" ("1 message not delivered" for one): the count only, never a session, id or message text. |
+| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. `group` and its withdrawal: `host` and `needsyou=1`, built as `restored`'s (any `host`, `session` and `question` in `app` replaced), opening Needs you; an older client opens the machine. A client opens that machine and session, and the question ready to answer `failures`: the machine only, as for `restored` (`host`, never `session` or `question`). |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again, for a `group` changed in place after its first push, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
-| `data.kind` | `question`, `finished`, `resolved`, `signIn`, `restored` or `group` (**new, #913**) (and, proposed, `hostGone` and `hostBack`: [Host gone](#host-gone-970)). A client reads a kind it doesn't know as `question`. A `group` has no approve or answer controls (#253) and no agent text (#263): `data.session` is empty, `data.question` absent, `data.sessions` its count; its withdrawal is a `resolved` with its tag, `data.session` empty. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the bridge stopped` (Creative, #1022: "bridge", never "host", in copy; the built string changes in #970 slice 3), its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore` (proposed, #970: to a device that was sent a `hostGone` in this episode, the gone notice's tag and topic instead, [Host gone](#host-gone-970)), and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
+| `data.kind` | `question`, `finished`, `resolved`, `signIn`, `restored`, `group` (**new, #913**) or `failures` (**new, S2b**) (and, proposed, `hostGone` and `hostBack`: [Host gone](#host-gone-970)). A client reads a kind it doesn't know as `question`. A `group` has no approve or answer controls (#253) and no agent text (#263): `data.session` is empty, `data.question` absent, `data.sessions` its count; its withdrawal is a `resolved` with its tag, `data.session` empty. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the bridge stopped` (Creative, #1022: "bridge", never "host", in copy; the built string changes in #970 slice 3), its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore` (proposed, #970: to a device that was sent a `hostGone` in this episode, the gone notice's tag and topic instead, [Host gone](#host-gone-970)), and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
 | `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
 | `data.agent`, `data.sessions` | `signIn`: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it. `group`: `sessions` only, how many sessions it stands for |
+| `data.failures` | `failures` only: how many messages the machine's delivery lane could not deliver in the window, a whole number of 1 or more. Never a session, id or text |
 | `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question`, `group` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host (proposed, #970: except one that replaces a `hostGone` on its tag, which is `needsYou` whatever its cause), and from an older host, whose push a client handles as today. Unknown reads as absent |
 | `data.reminder` | **New (#913 rule 5).** `true` on a question's one reminder ([Bursts and the reminder](#bursts-and-the-reminder-913)); absent otherwise. A client may word or sound it as a reminder; one that ignores it shows the question again |
 | `data.at` | When the host sent it |
@@ -2313,10 +2348,10 @@ to be the owner's answer. The next known assistant cycle reestablishes attributi
 | `history` | ToolCall[]? | Only in `session.get`: the latest 50 tool calls, oldest first |
 | `userMessage` | string? | The latest user message, at most 2 KiB |
 | `userMessageFrom` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **New (#489).** Who wrote `userMessage` when it was not the person typing: `schedule`, a prompt the agent's own scheduler sent; `agent`, one another agent sent, including a reply an agent sent through the bridge (`driver: agent` for the turn it started); `other`, anything else that is not someone typing. Absent means the person, and so does `person`. An unknown value reads as `other`, never as the person's. Absent whenever `userMessage` is |
-| `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is. A relay message from an agent (#1365) is typed into the session behind a line `[Slipgates · from an agent on <machine> · session <id> · request <id> · not typed by your user]`, so a host may send it as `person` with no label: a client that finds that line first in `userMessage` draws the message as an agent's ("From: <session> on <machine>", cleaned and capped like a label, the line itself removed from the body) and leaves any other text as it is |
+| `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is. A relay message from an agent (#1365) is typed into the session behind a line `[Slipgates · from an agent on <machine> · session <id> · request <id> · not typed by your user]`. A host that verified the sender sends it as `agent` with the sender's label, and a client takes the attribution from `userMessageFrom` and `userMessageLabel` alone: a header typed by a person stays that person's text, never an agent's. Only when a host sends neither field and the text begins with exactly that line, a client draws a neutral "Unverified sender" disclosure with the full text kept, never as the agent's ([agent-principals.md](../design/agent-principals.md)) |
 | `turn` | string? | **New (#292).** The id of the latest turn, which `userMessage`, `reasoning`, `currentTool` and `question` belong to: the same id [`session.history`](v1-history.md#live-turns-and-history) gives it, so a client merging live activity with history pages draws it once. Absent before the first prompt, when the host could not read where the latest turn began, and after a record that may have started a turn but could not be read, until the next readable prompt. Never trimmed by the session budget |
 | `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply (`own.response`, else `response`) was written in: `turn` once the latest turn has replied, an earlier turn's until then, so a client never draws the last turn's reply under a new prompt ([v1-history.md](v1-history.md#live-turns-and-history)). Absent with no such reply or when its turn is not known. Never trimmed |
-| `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude/Codex replies: the latest main reply's `session.history` response-part id (record hash plus part index). Different ids retain successive replies within one turn; the same id updates one streaming slot. Stored parts replace that slot by id, without duplicating it. Absent with no known reply or ambiguous identity, such as the first message of a window that opens mid-turn ([rules](v1-history.md#live-turns-and-history)); unidentified Codex records and older hosts keep the legacy single-live-reply fallback. Older clients ignore this field and keep reading `response`/`own.response` unchanged |
+| `responseId` | string? | Optional (#2667, #3649), Copilot and unambiguous Claude/Codex replies: the latest main reply's `session.history` response-part id (record hash plus part index). Different ids retain successive replies within one turn; the same id updates one streaming slot. Stored parts replace that slot by id, without duplicating it. A Claude reply whose text grew across a thinking block, a tool or a notice (one message) keeps its first part's id. Absent with no known reply or ambiguous identity, such as the first message of a window that opens mid-turn ([rules](v1-history.md#live-turns-and-history)); unidentified Codex records and older hosts keep the legacy single-live-reply fallback, which updates only an id-less last part: a reply with no id after an identified one starts a new part on the client and never rewrites that one (#3649). Older clients ignore this field and keep reading `response`/`own.response` unchanged |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
@@ -2331,7 +2366,7 @@ both are sent.
 | Field | Type | Notes |
 |---|---|---|
 | `agents` | number | Background agents still working: Copilot `task` agents started in background mode, including one woken again by a later message, at any depth. One between runs (a `subagents` entry `idle`) is not counted |
-| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background |
+| `shells` | number | Background shell commands still running: started async, or started sync and left running in the background. A shell counts from its latest start or "still running" mark, from the session's current process only, and stops counting once that mark is 4 hours old. Copilot refreshes a mark each time it says the command is "still running"; **Claude Code writes no such mark, so a Claude command is never refreshed and stops counting 4 hours after its start, running or not** (`Limits.BackgroundShellStale`): one whose end the transcript never shows would otherwise keep a finished session out of `idle` for ever, and a stuck reader still clears the same day (#1108, #1396). The host drops it only when both clocks agree: the wall clock against the mark, and the host's own monotonic clock against when it first saw that mark, so a clock step (a resumed VM, a time sync) can never end a running shell and a host that starts late counts it until it has watched the limit pass itself; nothing is written to the transcript. **Risk, accepted:** a command that runs silently for more than 4 hours, with no new start or "still running" mark, stops counting and its session reads `idle`. The host adds no process check (a transcript holds no shell process id), and an agent's End still needs the launcher's or Quality's attestation; what a person's End then stops is the person's decision. **What stays unaged:** the shown, relayed and busy-checked `background` is aged, but an AGENT's End (`StopService`, the `person-required` rule) still reads the host-only, never-sent `Session.BackgroundUnaged` and refuses a session holding a shell that merely aged out, so a command that still runs is never ended by an agent as idle |
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
 `background` says why it is not finished. A client shows a session that is `idle` with
@@ -2449,15 +2484,15 @@ that default is the only answer it can be given from another device, a client le
 out of an answer, and a required field's is refused as blank. A default with something visible
 in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
 whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
-a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (16 KiB), a
 `number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
-number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+number; a form whose smallest answer exceeds 17 KiB in the largest envelope a host takes (a
 256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
 default (a number as the number it holds, written the longer of the ways JavaScript and .NET
 write it), and every other default and every required field
 at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
 `multipleOf` and `integer` allow, past an exclusive bound; a required `text`
-at its `minLength`, which past 4 KiB no answer can meet); and a form with
+at its `minLength`, which past 16 KiB no answer can meet); and a form with
 half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
 must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
 does not solve a pattern for its shortest match, so such a form may be offered and its answer
@@ -2552,7 +2587,7 @@ that added `background`).
   quoted text (a command printing a transcript, say) and are ignored. Detached shells
   (`started in detached background`) are services meant to outlive the session and are
   not counted. A subagent's shells are its own work, covered by its agent, and do not
-  report their ends to the session.
+  report their ends to the session. A shell whose latest start or "still running" mark is `Limits.BackgroundShellStale` (4 h) old stops counting in what is shown (see `background` above); an agent's End still sees it.
 * **Nothing outlives its CLI process.** `session.shutdown` ends everything, and work
   that began before the session's current process started is dropped: a CLI that was
   replaced can never report back what it started.
@@ -2612,7 +2647,7 @@ command); the shapes are in `tests/fixtures/claude`.
   its `description` and `prompt`, `model` its `resolvedModel`. 2.1.316 launches every
   `Agent` call that way; a result of any other shape lists nothing.
 * **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
-  `run_in_background`) starts one, counted in `background.shells`.
+  `run_in_background`) starts one, counted in `background.shells`. Claude writes no "still running" mark, so it is never refreshed: it stops counting 4 h (`Limits.BackgroundShellStale`) after its start, and a command that runs longer shows as idle there. An agent's End still refuses a session holding it (host-only `Session.BackgroundUnaged`, never sent).
 * **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
   Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
   (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's

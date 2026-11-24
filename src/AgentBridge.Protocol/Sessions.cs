@@ -110,9 +110,16 @@ public static class Limits
     public const int OptionId = 64;
     public const int QuestionMessage = 8 * 1024;
     public const int History = 50;
-    // Free text in an answer (session.answer's text, or a field's other), and the request.
-    public const int AnswerText = 4 * 1024;
-    public const int AnswerRequest = 16 * 1024;
+    // activity.background.shells (v1-sessions.md "Background"): a shell whose latest start or "still running"
+    // mark is older than this stops counting, so a finished session whose shell never reported back reads idle (#1108).
+    public static readonly TimeSpan BackgroundShellStale = TimeSpan.FromHours(4);
+    // Free text in an answer (session.answer's text, or a field's other) is as long as a reply (#2752): a person can paste diagnostics. The request
+    // is that text plus an envelope for what is around it (the ids, the request UUID, the flags), so a maximum answer fits whole.
+    public const int AnswerText = ReplyText;
+    public const int AnswerEnvelope = 1024;
+    public const int AnswerRequest = AnswerText + AnswerEnvelope;
+    // The client-reported card target (AnswerRequest.CardTarget): its own cap, outside the AnswerRequest budget above.
+    public const int CardTarget = 64;
     // The text of a session.reply.
     public const int ReplyText = 16 * 1024;
     // A sub-agent's entry (docs/design/subagents.md §5): its label, the start of the prompt
@@ -397,6 +404,11 @@ public sealed class SessionFinishedEvidence
 
 public sealed record Session
 {
+    // Host-only, never sent: the background work counted WITHOUT the stale-shell limit (Limits.BackgroundShellStale),
+    // set only when that limit dropped a shell from activity.background. What is shown, relayed and busy-checked is aged;
+    // what an AGENT's End asks (StopService) stays the unaged count, so a silent command that still runs is never read as idle (#1396).
+    [JsonIgnore]
+    public Background? BackgroundUnaged { get; init; }
     [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     [Strict(Strictness.Identity)]
@@ -791,6 +803,9 @@ public sealed record AnswerRequest
     public required string Request { get; init; }
     public IReadOnlyDictionary<string, JsonElement>? Fields { get; init; }
     public string? Text { get; init; }
+    // The session id the person's card showed, as the CLIENT reports it (ha-audit-client-field.md, owner decision on #4044). Evidence only:
+    // the host records it in the audit row and never reads it for a decision. Older hosts ignore it.
+    public string? CardTarget { get; init; }
     // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
     // result, and the result carries Timings. Absent, nothing about the exchange changes.
     public bool? Progress { get; init; }
@@ -863,6 +878,9 @@ public sealed record ReplyRequest
     // Host-only condition for Lite's Copilot delivery, never accepted from session.reply.
     [JsonIgnore]
     public bool RequireIdle { get; init; }
+    // Host-only, with claudeBusyQueue (#3828, slice C): Claude's box must be positively empty or show exactly the known queued hint; never from a protocol caller.
+    [JsonIgnore]
+    public bool RequireEmptyBox { get; init; }
     // Host-only final-effect fence; never supplied by a protocol caller.
     [JsonIgnore]
     public Func<bool>? StillCurrent { get; init; }
@@ -893,6 +911,24 @@ public sealed record ReplyRequest
 
 public sealed record ClearedComposer(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated = false);
 
+// What a refused reply shows of a full Copilot box (#804): the words escaped as the host shows them, capped, and the
+// digest of the whole escaped box that a later clear confirmation must name. Clearable stays false until the signed
+// person confirmation and the policy exist, so this cut only shows; it never offers or performs a clear.
+public sealed record ComposerInput(string Text, IReadOnlyList<IReadOnlyList<int>> Marks, bool Truncated, string Mode, string Digest, bool Clearable)
+{
+    public const int Cap = 500;
+    public static ComposerInput From(string content)
+    {
+        var (shown, marks) = ShownText.RevealMarked(content, rightToLeft: true);
+        var cut = Math.Min(shown.Length, Cap);
+        // A cut inside one of the host's escapes would show half of it unboxed, so it moves back to where that escape starts.
+        foreach (var m in marks) { if (m.Start < cut && m.Start + m.Length > cut) cut = m.Start; }
+        if (cut > 0 && cut < shown.Length && char.IsHighSurrogate(shown[cut - 1])) cut--;
+        return new(shown[..cut], [.. marks.Where(m => m.Start + m.Length <= cut).Select(m => (IReadOnlyList<int>)[m.Start, m.Length])],
+            cut < shown.Length, "text", EscapedApproval.Shown(shown), false);
+    }
+}
+
 // The same outcomes as an answer, read the same way.
 public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
@@ -903,8 +939,11 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
     public DeliveryTimings? Timings { get; init; }
     public IReadOnlyList<ReplyAttachmentBinding>? Attachments { get; init; }
     public ClearedComposer? Cleared { get; init; }
+    public ComposerInput? Input { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ReplyRefusal Refusal { get; init; }
+    [JsonIgnore]
+    public ReplyKeyDisposition KeyDisposition { get; init; }
     // Refusal is advice to callers, not part of the result's identity.
     public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Mode == other.Mode && Stage == other.Stage && Equals(Timings, other.Timings) && Equals(Attachments, other.Attachments) && Equals(Cleared, other.Cleared);
     public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Mode, Stage, Timings, Attachments, Cleared);
@@ -912,6 +951,10 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 
 [UnknownAs(Other)]
 public enum ReplyRefusal { Other, Asking, ComposerUnverified, Busy, Occupied }
+
+// Whether any key could have reached the session (docs/design/reply-deduplication.md "Preserve delivery outcomes"). Host-only, never on the wire.
+// MayHaveBeenSent is the default and the zero value: NoKeysSent is set only where the code proves no key could have gone, never inferred from a refusal.
+public enum ReplyKeyDisposition { MayHaveBeenSent = 0, NoKeysSent }
 
 public static class Ops
 {

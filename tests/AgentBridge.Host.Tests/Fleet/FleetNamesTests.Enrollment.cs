@@ -34,6 +34,7 @@ public sealed partial class FleetNamesTests
         var result = await CallAsync(new { id = Id, name = " SG Quality Lead ", machine = "away" });
         Assert.Equal(expected, result.GetProperty("duplicateStatus").GetString());
         Assert.Equal(1, roster.Reads);
+        Assert.Equal([true], roster.Fresh); // a name-uniqueness check never reads the shared registry read (#1396)
         Assert.Equal(["duplicateStatus", "id", "name"], result.EnumerateObject().Select(p => p.Name).Order().ToArray());
     }
 
@@ -142,7 +143,8 @@ public sealed partial class FleetNamesTests
         public int Reads;
         public CancellationToken Token;
         public Func<CancellationToken, Task<FleetRosterSnapshot>> Read = _ => Task.FromResult(new FleetRosterSnapshot("scope", []));
-        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { Reads++; Token = ct; return Read(ct); }
+        public List<bool> Fresh { get; } = [];
+        public Task<FleetRosterSnapshot> ReadScopedAsync(CancellationToken ct) { Reads++; Token = ct; Fresh.Add(RegistryReads.FreshRequested); return Read(ct); }
         public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => (await ReadScopedAsync(ct)).Machines;
     }
 }

@@ -132,7 +132,7 @@ public sealed partial class ReplyService : ISessionReplier
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         this.attachments = attachments;
-        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, Busy);
+        requests = new OutcomeMemory<ReplyResult>(options.Time, options.RememberFor, this.gate, () => Busy() with { KeyDisposition = ReplyKeyDisposition.NoKeysSent });
         if (options.PreRead && options.PlatformSupported)
         {
             source.Changed += OnSessionChanged;
@@ -233,13 +233,34 @@ public sealed partial class ReplyService : ISessionReplier
         // authority cannot inherit escrow, even with the same device and request UUID.
         var owner = (peer ?? "", request.Id, request.ClearConfirmation, request.ClearDraftSource,
             request.ClearConfirmation is null ? null : request.IntentSource,
-            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText);
+            request.ClearConfirmation is null ? ReplyIntent.Unknown : request.Intent, request.HandoffText,
+            // The caller class: a refusal that shows a person the box is never replayed from the cache to anyone else (#804).
+            request.Intent == ReplyIntent.Steer);
         return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({ReplyReasons.Shared(result.Reason)})")}"),
-            owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request")));
+            owner: owner, foreign: () => Task.FromResult(Refused("the request belongs to another sender, target or authorization; use a new request") with { KeyDisposition = ReplyKeyDisposition.NoKeysSent }));
+    }
+
+    // Whether any key could have reached the session while a reply is delivered (docs/design/reply-deduplication.md "Preserve delivery outcomes").
+    sealed class KeyTrack
+    {
+        public bool MayHaveBeenSent;
+        // The host's keys-going callback ran: from then a key may have gone, whatever fails next.
+        public bool KeysGoingFired;
+        public Action? Watch(Action? keysGoing) => keysGoing is null ? null : () => { KeysGoingFired = true; keysGoing(); };
     }
 
     async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
+    {
+        var track = new KeyTrack();
+        var result = await DeliverCoreAsync(request, key, peer, timeline, track);
+        // NoKeysSent only where the code proves no key went: every return before a typing attempt, and an attempt that reports KeysWent false. An
+        // exception inside an attempt leaves it MayHaveBeenSent. Never inferred from the refusal or its reason.
+        // A result that already says NoKeysSent (the catch below, which only runs before a key) keeps it.
+        return result with { KeyDisposition = track.MayHaveBeenSent && result.KeyDisposition != ReplyKeyDisposition.NoKeysSent ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
+    }
+
+    async Task<ReplyResult> DeliverCoreAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline, KeyTrack track)
     {
         Typed typed;
         IReadOnlyList<ReplyAttachmentBinding>? bindings = null;
@@ -278,10 +299,12 @@ public sealed partial class ReplyService : ISessionReplier
                     (claim, var problem) = attachments!.Claim(peer, refs);
                     if (problem is not null) { return Refused(problem); }
                 }
+                track.MayHaveBeenSent = true;   // from here a key could go; an attempt that reports KeysWent false narrows it again
                 var outcome = session.Agent == AgentKind.Copilot
                     ? await CopilotAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request, value => cleared = value)
-                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, request.KeysGoing);
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline, request.RequireIdle, request.StillCurrent, track.Watch(request.KeysGoing), request.RequireEmptyBox);
                 keysWent = outcome.KeysWent;
+                track.MayHaveBeenSent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result with { Cleared = cleared }; }
                 typed = outcome.Typed!;
                 if (claim is not null && session.Agent is AgentKind.Copilot or AgentKind.Claude)
@@ -308,7 +331,7 @@ public sealed partial class ReplyService : ISessionReplier
         {
             // Only reached before anything was typed: CopilotAsync owns its own failures
             // once a key may have gone.
-            return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e) with { Cleared = cleared };
+            return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e) with { Cleared = cleared, KeyDisposition = track.KeysGoingFired ? ReplyKeyDisposition.MayHaveBeenSent : ReplyKeyDisposition.NoKeysSent };
         }
 
         // The session is free again once the keys have gone: a question it asks next can be
@@ -417,7 +440,7 @@ public sealed partial class ReplyService : ISessionReplier
         // refused here: a screen without one may be asking something (a permission prompt, or
         // the folder-trust question before a transcript exists), which the checks in the turn
         // name better, and still refuse before any key.
-        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(early, occupied.State)); }
+        if (await InputBoxAsync(pid) is { Seen: true, Problem: { } early } occupied && request.ClearConfirmation is null) { return Done(Unverified(request, early, occupied.State)); }
         // Caught up before the typing turn is taken, so the first reply to a session with a
         // long transcript reads it without holding up every other delivery; the read in the
         // turn only covers what has been written since.
@@ -496,9 +519,9 @@ public sealed partial class ReplyService : ISessionReplier
             Func<string?>? clearFence = null;
             if (box is null)
             {
-                if (request.ClearConfirmation is null) { return Done(Unverified(problem!, state)); }
+                if (request.ClearConfirmation is null) { return Done(Unverified(request, problem!, state)); }
                 (box, problem, clearFence) = await ClearComposerAsync(session, pid, process, input, request, state, rememberClear, Freshness);
-                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(problem!)); }
+                if (box is null) { return Done(retryChanged ? Stale(retryChangedReason) : Unverified(request, problem!)); }
             }
             // Both are held to the footer's mode too, in the same read: the box's rows read the same
             // empty, in vim's normal mode, or in shell mode holding only a space ('!' then a space),
@@ -664,9 +687,9 @@ public sealed partial class ReplyService : ISessionReplier
         catch (Exception e)
         {
             log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
-            return Active() ? null : FirstReplyWords.WaitingToStart;
+            return Active() ? null : FirstReplyWords.ScreenUnreadable;
         }
-        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.WaitingToStart; }
+        if (screen.Rows is not { } rows) { return Active() ? null : FirstReplyWords.ScreenUnreadable; }
         switch (StartupQuestions.Read(rows))
         {
             case StartupQuestion.None: break;
@@ -675,7 +698,7 @@ public sealed partial class ReplyService : ISessionReplier
         }
         // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
         // is named by the check that types, which comes next.
-        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.WaitingToStart;
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } || Active() ? null : FirstReplyWords.NoInputBox;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
@@ -697,7 +720,7 @@ public sealed partial class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline, bool requireIdle = false, Func<bool>? stillCurrent = null, Action? keysGoing = null, bool requireEmptyBox = false)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -766,6 +789,8 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt in an empty box, which a screen read cannot tell from typed words, so its
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
+            // claudeBusyQueue (#3828, slice C): Claude's suggestion cannot be told from typed words, so the box must be positively empty or show exactly the known hint.
+            if (agent == AgentKind.Claude && requireEmptyBox && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine, or it shows words that cannot be told from a draft; send or clear it there first") with { Refusal = ReplyRefusal.Occupied }); }
             if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
             // A box whose words start with / or ! holds a command waiting for Enter, and a reply
             // typed after it would send it, with whatever the reply adds. Claude Code drops
@@ -781,8 +806,9 @@ public sealed partial class ReplyService : ISessionReplier
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);
             result = new InjectionResult(InjectionStatus.Typed, "ok");
-            foreach (var send in plan.Sends)
+            for (var next = 0; next < plan.Sends.Count;)
             {
+                var send = plan.Sends[next];
                 if (send.After is { } after)
                 {
                     try { box = await AwaitBoxAsync(agent, pid, after); }
@@ -797,7 +823,11 @@ public sealed partial class ReplyService : ISessionReplier
                         return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
-                var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]) { Proceed = stillCurrent is not null && !sent ? Fence : null };
+                // The sends that follow with no wait for the box (a long Claude reply's chunks) go to the worker as one plan,
+                // each attached, typed and paused in turn, the screen check on the first only: nothing has changed it but its own keys.
+                var group = new List<KeySend> { AgentReply.Key(send, box.Rows) };
+                for (next++; next < plan.Sends.Count && plan.Sends[next].After is null; next++) { group.Add(AgentReply.Key(plan.Sends[next], null)); }
+                var keys = new KeyPlan(group) { Proceed = stillCurrent is not null && !sent ? Fence : null };
                 described.Add(keys.Describe());
                 timeline.InjectStart();
                 // Once, with the typing slot held and every fence passed, just before the first key (the Copilot path's call).
@@ -946,7 +976,8 @@ public sealed partial class ReplyService : ISessionReplier
                 if (plan.Attached(prompt))
                 {
                     timeline.Confirmed();
-                    return new ReplyResult(AnswerOutcome.Delivered);
+                    // Confirmed by an enqueue row: accepted into the agent's queue, not yet taken (docs/message-delivery.md, #3856).
+                    return new ReplyResult(AnswerOutcome.Delivered) { Stage = prompt.Queued ? ReplyStage.Queued : null };
                 }
                 // Codex records its images with the prompt: missing then is missing for good.
                 if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it"); }
@@ -1054,11 +1085,19 @@ public sealed partial class ReplyService : ISessionReplier
     // What went wrong goes to the host's log only: the person is given fixed words, never an
     // exception's text (#802, #995).
     ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e)) { Refusal = ReplyRefusal.ComposerUnverified };
-    static ReplyResult Unverified(string reason, CopilotInputBoxState? box = null) => Refused(reason) with
+    // The refusal for a box that is not ready. Only a reply classified as a person's (never an agent's, an MCP child's or an
+    // unclassified sender's) is told what the box holds, in the reason and in input; everyone else gets the draft's length
+    // only, as a log or Home Assistant does (#804).
+    static ReplyResult Unverified(ReplyRequest request, string reason, CopilotInputBoxState? box = null)
     {
-        Refusal = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 }
-            ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
-    };
+        var person = request.Intent == ReplyIntent.Steer;
+        var occupied = box is { Main: true, Complete: true, Shell: false, Vim: not CopilotVimMode.Normal, Content.Length: > 0 };
+        return Refused(person ? reason : ReplyReasons.Shared(reason)) with
+        {
+            Refusal = occupied ? ReplyRefusal.Occupied : ReplyRefusal.ComposerUnverified,
+            Input = occupied && person ? ComposerInput.From(box!.Content) : null,
+        };
+    }
 
     string Logged(string what, Exception e)
     {

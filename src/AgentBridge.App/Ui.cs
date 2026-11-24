@@ -1,5 +1,6 @@
 using AgentBridge.App.Core;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -55,6 +56,7 @@ public static class Ui
         {
             return brush;
         }
+
         return Brush(key);
     }
 
@@ -71,6 +73,20 @@ public static class Ui
     };
 
     public static Brush WordsBrush(StatusTone tone) => Brush(WordsKey(tone));
+}
+
+public sealed class PromptStyleConverter : IValueConverter
+{
+    public Style? Normal { get; set; }
+    public Style? Unverified { get; set; }
+
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        if (value is not bool unverified) { throw new ArgumentException("Expected a prompt provenance flag.", nameof(value)); }
+        return (unverified ? Unverified : Normal) ?? throw new InvalidOperationException("Prompt styles are not configured.");
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }
 
 // Restart to update, from the banner or Settings (#516): when a session here is waiting on the

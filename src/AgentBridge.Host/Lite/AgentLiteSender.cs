@@ -9,6 +9,8 @@ namespace AgentBridge.Host.Lite;
 
 // The relay raised Undeliverable, or the peer could not be reached at all: nothing was sent.
 public sealed class LitePeerOfflineException(string message) : Exception(message);
+// A present host that is not a trusted own-account peer (G9c2): the sender refuses it as peer-not-trusted and sends nothing.
+public sealed class LitePeerNotTrustedException(string message) : Exception(message);
 
 // What the sender needs of the relay link: who this host is, who is present, and one request to a peer.
 // The real one is RelayLiteLink; tests use a fake channel. SendAsync must honour `ct`: the 10 s limit and
@@ -32,6 +34,7 @@ public sealed class AgentLiteSender(
     public const string TimedOut = "timeout", ModeSwitchedOff = "mode switched off", ChannelLost = "channel lost", BadAck = "unreadable acknowledgement";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
+    readonly string machine = Wire.DeviceId(staticPublic);
     readonly TimeSpan ackTimeout = ackTimeout ?? TimeSpan.FromSeconds(10);
     readonly TimeSpan watchEvery = watchEvery ?? TimeSpan.FromMilliseconds(500);
     readonly string instance = Codec.Base64Url(RandomNumberGenerator.GetBytes(12));
@@ -47,7 +50,7 @@ public sealed class AgentLiteSender(
         var data = Encoding.UTF8.GetBytes(input.Text);
         // Checked afresh, before anything is signed: a credential revoked or expired since the pipe call signs nothing.
         var script = caller.Kind == "script";
-        if ((script ? !AgentCredentials.ValidScript(caller, link.Self)
+        if ((script ? !AgentCredentials.ValidScript(caller, machine)
             : caller.Kind != "session" || string.IsNullOrEmpty(caller.Session) || caller.Principal is not null)
             || !credentialLive(caller)) { return Out(LiteKind.Refused, NoCredential); }
 
@@ -70,7 +73,8 @@ public sealed class AgentLiteSender(
             Codec.Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(caller.Id))[..16]), script ? "" : "agent", script ? "" : "agent-bridge",
             script ? "script" : "agent", script ? caller.Principal : null);
         byte[] envelope;
-        try { envelope = LiteProfile.Seal(from, new LiteTarget(peerId, input.Session, Zero12), request, data, time.GetUtcNow().ToUnixTimeSeconds(), key.Sign); }
+        var issuedAt = time.GetUtcNow().ToUnixTimeSeconds();
+        try { envelope = LiteProfile.Seal(from, new LiteTarget(peerId, input.Session, Zero12), request, data, issuedAt, key.Sign); }
         catch (EnvelopeException) { return Out(LiteKind.Refused, Malformed); }
 
         using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -92,7 +96,7 @@ public sealed class AgentLiteSender(
         flight.CancelAfter(ackTimeout);
         try
         {
-            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point) }, flight.Token);
+            var ack = await link.SendAsync(peerId, account, new { envelope = Codec.Base64Url(envelope), text = input.Text, killEpoch = mode.KillEpoch, signPoint = Codec.Base64Url(key.Point), sentAt = Math.Min(input.SentAt ?? issuedAt, issuedAt) }, flight.Token);
             if (ack.KillEpoch > mode.KillEpoch) { mode.RaiseEpoch(ack.KillEpoch); }
             if (ack.Request != request) { return Out(LiteKind.Unconfirmed, BadAck); }
             return ack.Status switch
@@ -147,7 +151,7 @@ public sealed class AgentLiteSender(
 }
 
 // The link on the live relay connection, attached and detached as the host connects and disconnects.
-public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink
+public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? localStatic = null, Func<string>? localAccount = null) : ILiteLink, IFleetLaunchLink
 {
     sealed record Current(RelayClient Relay, ChannelHub Hub);
     Current? now;
@@ -158,6 +162,28 @@ public sealed class RelayLiteLink(LiteReceiver? localReceiver = null, byte[]? lo
     public string Self => now?.Relay.DeviceId ?? localId;
     public string Account => now?.Relay.AccountId ?? localAccount?.Invoke() ?? "";
     public IReadOnlyList<PresenceEntry> Presence => now?.Relay.Presence ?? [];
+
+    // G9c2: one request to a present host of this account on its own channel, judged by the same own-peer rule as a lite send.
+    // Nothing is sent to a peer the rule refuses; the channel is always closed; a failure after the send is the caller's to treat as unconfirmed.
+    public async Task<JsonElement> RequestAsync(string peerId, string account, string op, JsonElement request, CancellationToken ct)
+    {
+        var l = Volatile.Read(ref now) ?? throw new LitePeerOfflineException("not connected to the relay");
+        if (peerId == l.Relay.DeviceId) { throw new LitePeerOfflineException("not another host"); }
+        SecureChannel ch;
+        try { ch = await l.Hub.OpenAsync(peerId, TimeSpan.FromSeconds(10)); }
+        catch (IOException e) { throw new LitePeerOfflineException(e.Message); }
+        try
+        {
+            var c = LiteChannel.Of(ch);
+            if ((c.Account != account ? LiteReceiver.NotSameAccount : c.Untrusted) is { } why) { throw new LitePeerNotTrustedException($"not a present host of this account ({why})"); }
+            var response = await ch.RequestAsync(op, request, TimeSpan.FromSeconds(30), ct);
+            // The channel wraps a served reply as { ok, result }; the sender reads the bare result. Anything else is a lost answer.
+            if (!response.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True || !response.TryGetProperty("result", out var result))
+            { throw new IOException("the peer did not answer the launch"); }
+            return result.Clone();
+        }
+        finally { await l.Hub.CloseAsync(ch); }
+    }
 
     public async Task<LiteAck> SendAsync(string peerId, string account, object request, CancellationToken ct)
     {

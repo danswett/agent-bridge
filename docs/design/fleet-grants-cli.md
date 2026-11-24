@@ -177,6 +177,7 @@ Refusals exit 5 unless noted. Each is a stable lowercase kebab-case string.
 | `duplicate-store-full` | The 4096-id store is full of unexpired bindings |
 | `target-offline` | The target node is unreachable; nothing was sent that could have acted |
 | `kill-switch` | Account-wide kill switch, `launch.enabled` off or equivalent off state |
+| `diskLow` | Under 1 GiB free on the profile's disk; nothing was started (free space that cannot be read does not refuse). Written camelCase as agent-launch-scope.md names it; a CLI older than this change rejects an unknown reason as an invalid receipt |
 | `peer-not-trusted` | The target is not a trusted own peer (same-account relay presence bound to the device key) |
 | `person-required` | The existing stopper needs person confirmation; the agent never obtains `--confirm` |
 | `audit-unavailable` | Audit intent could not be written; no action taken |
@@ -280,3 +281,18 @@ Wrapper rules, all mandatory:
 - Never retry exit 7 automatically or with a fresh id; surface the request id.
 - Pass the exit code and JSON through unchanged. Multi-session wrappers report each
   result; one refusal neither stops nor retries the others.
+
+### G11 slices
+
+G11 lands the mapping above as two separate, plain PRs (each at most 250 lines, tests first,
+sensitive). Neither removes a wrapper or its HA path: removal is G12, after cutover evidence.
+
+| Slice | Wrapper | Waits for |
+|---|---|---|
+| A | `launch-remote.ps1` local and remote launch call `fleet launch` (`--target` for remote); the wrapper keeps only policy: grant, target, name, explicit permissions | The remote launch op (G9c2) and Quality/SRE Host-transport evidence for the default flip |
+| B | `end-one.ps1`, `end-many.ps1`, `end-sessions.ps1` call `fleet end`, one verb and one fresh `--request` per session | Remote stop (G10) |
+
+Each slice's tests prove the wrapper rules: a refusal, offline, unavailable or exit 7 never reaches
+HA; no grant is created or reused from a person; `--confirm` is never passed; exit 7 is surfaced with
+its request id and never retried; the wrapper's exit code and JSON equal the verb's. Until a slice
+lands, its wrapper is unchanged.
